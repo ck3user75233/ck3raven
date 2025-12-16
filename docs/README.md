@@ -1,73 +1,117 @@
-# CK3 Game State Emulator - Project Overview
+# ck3raven Documentation
 
-This folder contains design documents and notes from AI-assisted discussions about building a CK3 game state emulator tool.
+Design documents and specifications for the CK3 Game State Emulator.
 
 ## Document Index
 
-| File | Description |
-|------|-------------|
-| [00_ORIGINAL_CONCEPT.md](00_ORIGINAL_CONCEPT.md) | The original idea: feed a playset, get a resolved game directory with source annotations |
-| [01_PARSER_AND_MERGER_CONCEPTS.md](01_PARSER_AND_MERGER_CONCEPTS.md) | What is a parser? What is a merger? Why not regex? |
-| [02_EXISTING_TOOLS_AND_FEASIBILITY.md](02_EXISTING_TOOLS_AND_FEASIBILITY.md) | What tools exist, how hard is this, can AI help build it? |
-| [03_TRADITION_RESOLVER_V0_DESIGN.md](03_TRADITION_RESOLVER_V0_DESIGN.md) | Concrete v0 design for a tradition-only resolver with full architecture |
-| [04_VIRTUAL_MERGE_EXPLAINED.md](04_VIRTUAL_MERGE_EXPLAINED.md) | What is a virtual merge and why it matters for compatch development |
-| [05_ACCURATE_MERGE_OVERRIDE_RULES.md](05_ACCURATE_MERGE_OVERRIDE_RULES.md) | Corrected understanding of CK3's nuanced merge/override behavior |
-| [06_CONTAINER_MERGE_OVERRIDE_TABLE.md](06_CONTAINER_MERGE_OVERRIDE_TABLE.md) | Complete reference table for all CK3 container types and their merge behavior |
-| [07_TEST_MOD_AND_LOGGING_COMPATCH.md](07_TEST_MOD_AND_LOGGING_COMPATCH.md) | Bonus ideas for auto-generated test harnesses and logging instrumentation |
+| Doc | Description |
+|-----|-------------|
+| [00_ORIGINAL_CONCEPT](00_ORIGINAL_CONCEPT.md) | Original vision: feed a playset, get resolved game state |
+| [01_PARSER_AND_MERGER_CONCEPTS](01_PARSER_AND_MERGER_CONCEPTS.md) | What is parsing? Why regex-free? |
+| [02_EXISTING_TOOLS_AND_FEASIBILITY](02_EXISTING_TOOLS_AND_FEASIBILITY.md) | Tool landscape, feasibility analysis |
+| [03_TRADITION_RESOLVER_V0_DESIGN](03_TRADITION_RESOLVER_V0_DESIGN.md) | Initial prototype architecture |
+| [04_VIRTUAL_MERGE_EXPLAINED](04_VIRTUAL_MERGE_EXPLAINED.md) | Multi-source comparison concept |
+| [05_ACCURATE_MERGE_OVERRIDE_RULES](05_ACCURATE_MERGE_OVERRIDE_RULES.md) | CK3's actual merge behavior (corrected) |
+| [06_CONTAINER_MERGE_OVERRIDE_TABLE](06_CONTAINER_MERGE_OVERRIDE_TABLE.md) | Complete reference by folder/content type |
+| [07_TEST_MOD_AND_LOGGING_COMPATCH](07_TEST_MOD_AND_LOGGING_COMPATCH.md) | Testing and instrumentation ideas |
 
 ---
 
-## Project Status
+## Project Status (December 2024)
 
-**Status:** ✅ **IMPLEMENTED** - Working prototype at `C:\Users\Nathan\Documents\AI Workspace\ck3_parser\`
+### ✅ Phase 1: Foundation - COMPLETE
 
-**Implementation:** The v0 game state emulator is now functional with:
-- Full parser/lexer for CK3 script files
-- Playset loader with proper mod ordering
-- Content registry supporting 13 content types
-- Conflict detection and resolution
-- Export with provenance annotations
-- CLI interface for queries and reports
+| Module | Status | Key Features |
+|--------|--------|--------------|
+| `parser/` | ✅ | 100% regex-free, 100% vanilla parse rate, handles all edge cases |
+| `resolver/` | ✅ | 4 merge policies, 15+ content types, conflict detection |
+| `db/` | ✅ | SQLite, content dedup, AST cache, FTS search, playsets, cryo |
 
-See the implementation at: [ck3_parser/README.md](../ck3_parser/README.md)
+### 🔲 Phase 2: Game State Emulator - NEXT
 
----
+The emulator module will:
+1. Load a playset (vanilla + mods in order)
+2. Resolve all content folders using appropriate policies
+3. Build complete game state with provenance tracking
+4. Export resolved files with source annotations
 
-## Key Insights
+### 🔲 Phase 3: Developer Tools
 
-### CK3's Actual Merge Rules (Not the Myth)
-
-* **Containers** (traditions, events, decisions, etc.) → **Last definition wins**
-* **on_actions** → **Container merges**, but sub-blocks with same key overwrite
-* **Lists** (`events = {}`) → **Append/merge**
-* **Blocks** (`effect = {}`, `trigger = {}`) → **Override**
-
-### What This Tool Would Solve
-
-1. "Which mod's definition actually wins?"
-2. Silent overwrites where Mod B nukes Mod A's changes
-3. Compatch development - see exactly what needs reconciling
-4. Diff final playset state vs vanilla
-
-### Technical Approach
-
-1. Build a proper **lexer/parser** for Paradox script → AST
-2. Apply **per-type merge policies** (whole-block-override vs container-merge)
-3. Track **provenance** (which mod contributed each block)
-4. Export **resolved files** + **conflict reports**
+- CLI for parse/resolve/search/export
+- Vanilla diff tool for parser updates
+- Conflict reporter (HTML/markdown)
+- Compatch suggester
 
 ---
 
-## When to Start This Project
+## Key Specifications
 
-This is a **serious engineering effort**, not a weekend script. Best approached when:
+### Parser Specifications
+- **Lexer**: Character-by-character state machine, no regex
+- **Tokens**: IDENTIFIER, STRING, NUMBER, OPERATOR, LBRACE, RBRACE, EQUALS, etc.
+- **AST Nodes**: RootNode, BlockNode, AssignmentNode, ValueNode, ListNode
+- **Edge Cases Handled**:
+  - `29%` - percent as part of number
+  - `-$AMOUNT$` - negative parameter reference
+  - `<= >= != ==` as value tokens (not operators)
+  - BOM handling (UTF-8-BOM, UTF-16)
+  - Single quotes in Jomini files
 
-* You have several hours to dedicate to the initial parser/lexer
-* You have real test cases (actual conflicting mods) to validate against
-* You're ready to iterate with AI assistance on edge cases
+### Merge Policy Specifications
 
-The documents here provide the complete design blueprint. An agent AI can help bootstrap the code, but human review/testing is essential.
+| Policy | Behavior | Content Types |
+|--------|----------|---------------|
+| `OVERRIDE` | Last definition wins entirely | traditions, events, decisions, traits, cultures, religions, buildings, scripted_effects, scripted_triggers, character_interactions, schemes, focuses, perks, lifestyles, dynasties, artifacts, court_positions, casus_belli, laws, governments |
+| `CONTAINER_MERGE` | Container merges, sublists append | on_actions only |
+| `PER_KEY_OVERRIDE` | Each key independent | localization, defines |
+| `FIOS` | First definition wins | GUI types/templates |
+
+### Database Specifications
+- **Storage**: SQLite with WAL mode
+- **Deduplication**: SHA256 content hash, same file stored once
+- **Version Identity**: Root hash = SHA256(sorted (relpath, content_hash) pairs)
+- **AST Cache Key**: (content_hash, parser_version_id)
+- **Parser Version**: Semantic versioning with git commit tracking
+- **FTS**: SQLite FTS5 for content, symbols, references
+- **Playsets**: Max 5 active (enforced in code)
+- **Cryo**: Gzipped JSON export with manifest and checksum
 
 ---
 
-*These documents originated from AI-assisted discussions about CK3 modding tool development.*
+## Architecture Overview
+
+```
+User Playset
+     │
+     ▼
+┌─────────────────────────────────────────────────────────┐
+│                     ck3raven                             │
+│                                                          │
+│  ┌──────────┐   ┌───────────┐   ┌──────────────────┐    │
+│  │ parser/  │──▶│ resolver/ │──▶│    emulator/     │    │
+│  │          │   │           │   │   (Phase 2)      │    │
+│  │ lexer.py │   │ policies  │   │                  │    │
+│  │ parser.py│   │ resolver  │   │ • Load playset   │    │
+│  └──────────┘   └───────────┘   │ • Resolve all    │    │
+│       │                         │ • Track sources  │    │
+│       ▼                         │ • Export state   │    │
+│  ┌──────────────────────────────┴──────────────────┐    │
+│  │                    db/                           │    │
+│  │  schema • models • content • ingest • ast_cache  │    │
+│  │  symbols • search • playsets • cryo              │    │
+│  └──────────────────────────────────────────────────┘    │
+│                          │                               │
+│                          ▼                               │
+│                    ┌──────────┐                          │
+│                    │ SQLite   │                          │
+│                    │ Database │                          │
+│                    └──────────┘                          │
+└─────────────────────────────────────────────────────────┘
+     │
+     ▼
+Resolved Game State + Conflict Reports
+```
+
+---
+
+*These documents originated from AI-assisted design discussions.*

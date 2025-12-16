@@ -40,16 +40,21 @@ class SubBlockPolicy(Enum):
 
 @dataclass
 class ContentTypeConfig:
-    """Configuration for how a content type handles merging."""
+    """
+    Configuration for how a content type handles merging.
     
-    # Glob pattern for matching files
-    file_glob: str
+    Note: Key identification is done via parsed AST (BlockNode.name),
+    not via pattern matching. The folder path determines the policy.
+    """
     
-    # Regex pattern for identifying container keys (e.g., "^tradition_")
-    key_pattern: str
+    # Folder path for matching (e.g., "common/culture/traditions")
+    folder_path: str
+    
+    # File extension filter
+    file_extension: str = ".txt"
     
     # Primary merge strategy
-    policy: MergePolicy
+    policy: MergePolicy = MergePolicy.OVERRIDE
     
     # For CONTAINER_MERGE: rules for each sub-block type
     sub_rules: Optional[Dict[str, SubBlockPolicy]] = None
@@ -61,22 +66,17 @@ class ContentTypeConfig:
 # Default content type configurations
 CONTENT_TYPE_CONFIGS: Dict[str, ContentTypeConfig] = {
     "tradition": ContentTypeConfig(
-        file_glob="common/culture/traditions/*.txt",
-        key_pattern=r"^tradition_",
-        policy=MergePolicy.OVERRIDE,
+        folder_path="common/culture/traditions",
         description="Cultural traditions - last definition wins"
     ),
     
     "culture": ContentTypeConfig(
-        file_glob="common/culture/cultures/*.txt",
-        key_pattern=r"^[a-z_]+$",
-        policy=MergePolicy.OVERRIDE,
+        folder_path="common/culture/cultures",
         description="Cultures - last definition wins"
     ),
     
     "on_action": ContentTypeConfig(
-        file_glob="common/on_action/*.txt",
-        key_pattern=r"^on_",
+        folder_path="common/on_action",
         policy=MergePolicy.CONTAINER_MERGE,
         sub_rules={
             "events": SubBlockPolicy.APPEND_LIST,
@@ -94,57 +94,46 @@ CONTENT_TYPE_CONFIGS: Dict[str, ContentTypeConfig] = {
     ),
     
     "event": ContentTypeConfig(
-        file_glob="events/*.txt",
-        key_pattern=r"^[a-zA-Z0-9_.]+$",
-        policy=MergePolicy.OVERRIDE,
+        folder_path="events",
         description="Events - last definition wins"
     ),
     
     "decision": ContentTypeConfig(
-        file_glob="common/decisions/*.txt",
-        key_pattern=r"^[a-z_]+$",
-        policy=MergePolicy.OVERRIDE,
+        folder_path="common/decisions",
         description="Decisions - last definition wins"
     ),
     
     "scripted_effect": ContentTypeConfig(
-        file_glob="common/scripted_effects/*.txt",
-        key_pattern=r"^[a-z_]+$",
-        policy=MergePolicy.OVERRIDE,
+        folder_path="common/scripted_effects",
         description="Scripted effects - last definition wins"
     ),
     
     "scripted_trigger": ContentTypeConfig(
-        file_glob="common/scripted_triggers/*.txt",
-        key_pattern=r"^[a-z_]+$",
-        policy=MergePolicy.OVERRIDE,
+        folder_path="common/scripted_triggers",
         description="Scripted triggers - last definition wins"
     ),
     
     "trait": ContentTypeConfig(
-        file_glob="common/traits/*.txt",
-        key_pattern=r"^[a-z_]+$",
-        policy=MergePolicy.OVERRIDE,
+        folder_path="common/traits",
         description="Traits - last definition wins"
     ),
     
     "localization": ContentTypeConfig(
-        file_glob="localization/**/*.yml",
-        key_pattern=r"^[a-zA-Z0-9_]+:",
+        folder_path="localization",
+        file_extension=".yml",
         policy=MergePolicy.PER_KEY_OVERRIDE,
         description="Localization - per-key override"
     ),
     
     "defines": ContentTypeConfig(
-        file_glob="common/defines/*.txt",
-        key_pattern=r"^[A-Z][A-Za-z]+$",
+        folder_path="common/defines",
         policy=MergePolicy.PER_KEY_OVERRIDE,
         description="Defines - per-key override within categories"
     ),
     
     "gui_type": ContentTypeConfig(
-        file_glob="gui/**/*.gui",
-        key_pattern=r"^type\s+",
+        folder_path="gui",
+        file_extension=".gui",
         policy=MergePolicy.FIOS,
         description="GUI types - first definition wins (use 00_ prefix)"
     ),

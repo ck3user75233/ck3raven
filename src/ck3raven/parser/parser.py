@@ -519,7 +519,7 @@ class Parser:
             )
     
     def _parse_value(self) -> ValueNode:
-        """Parse a simple value (identifier, string, number, bool, param)."""
+        """Parse a simple value (identifier, string, number, bool, param, or operator-as-value)."""
         token = self._current()
         
         if token is None:
@@ -540,6 +540,25 @@ class Parser:
         elif token.type == TokenType.PARAM:
             self._advance()
             return ValueNode(value=token.value, value_type='param', line=token.line, column=token.column)
+        elif token.type == TokenType.MINUS:
+            # Handle -$PARAM$ or -@value (negative expression)
+            self._advance()
+            next_token = self._current()
+            if next_token and next_token.type == TokenType.PARAM:
+                self._advance()
+                return ValueNode(value='-' + next_token.value, value_type='param', line=token.line, column=token.column)
+            elif next_token and next_token.type == TokenType.AT:
+                self._advance()
+                ident = self._expect(TokenType.IDENTIFIER, "Expected identifier after @")
+                return ValueNode(value=f"-@{ident.value}", value_type='scripted_value', line=token.line, column=token.column)
+            else:
+                # Standalone minus - treat as identifier value
+                return ValueNode(value='-', value_type='identifier', line=token.line, column=token.column)
+        elif token.type in (TokenType.LESS_EQUAL, TokenType.GREATER_EQUAL, TokenType.LESS_THAN, 
+                            TokenType.GREATER_THAN, TokenType.NOT_EQUAL, TokenType.COMPARE_EQUAL):
+            # Operators can appear as values (e.g., OPERATOR = <=)
+            self._advance()
+            return ValueNode(value=token.value, value_type='operator', line=token.line, column=token.column)
         elif token.type == TokenType.AT:
             self._advance()
             next_token = self._current()
@@ -598,7 +617,8 @@ class Parser:
                 self._advance()
                 break
             
-            if token.type in (TokenType.COMMENT, TokenType.NEWLINE):
+            if token.type in (TokenType.COMMENT, TokenType.NEWLINE, TokenType.COMMA):
+                # Skip comments, newlines, and commas (commas appear in some defines lists)
                 self._advance()
                 continue
             
@@ -618,9 +638,16 @@ def parse_source(source: str, filename: str = "<unknown>") -> RootNode:
 
 
 def parse_file(filepath: str) -> RootNode:
-    """Parse a file into AST."""
-    with open(filepath, 'r', encoding='utf-8-sig') as f:
-        source = f.read()
+    """Parse a file into AST. Handles encoding fallback."""
+    # Try UTF-8 with BOM first, then UTF-8, then latin-1 (which always succeeds)
+    for encoding in ['utf-8-sig', 'utf-8', 'latin-1']:
+        try:
+            with open(filepath, 'r', encoding=encoding) as f:
+                source = f.read()
+            break
+        except UnicodeDecodeError:
+            continue
+    
     return parse_source(source, filepath)
 
 

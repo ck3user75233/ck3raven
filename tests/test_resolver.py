@@ -53,7 +53,7 @@ class TestContentTypeConfig:
         config = get_content_config("tradition")
         assert config is not None
         assert config.policy == MergePolicy.OVERRIDE
-        assert "tradition" in config.file_glob
+        assert "tradition" in config.folder_path
     
     def test_on_action_config(self):
         """On-action config should have sub-rules."""

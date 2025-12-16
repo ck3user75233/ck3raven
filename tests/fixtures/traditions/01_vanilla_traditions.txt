@@ -1,0 +1,43 @@
+# Simulated vanilla traditions file
+# Load order: 1 (first)
+
+tradition_mountain_homes = {
+    category = realm
+    
+    parameters = {
+        mountain_trait_bonuses = yes
+    }
+    
+    province_modifier = {
+        defender_advantage = 5
+    }
+    
+    culture_modifier = {
+        cultural_acceptance_gain_mult = 0.1
+    }
+}
+
+tradition_warrior_culture = {
+    category = combat
+    
+    parameters = {
+        martial_education_bonus = yes
+    }
+    
+    character_modifier = {
+        prowess = 2
+        knight_effectiveness_mult = 0.1
+    }
+}
+
+tradition_seafaring = {
+    category = regional
+    
+    parameters = {
+        can_build_longships = yes
+    }
+    
+    province_modifier = {
+        embarkation_cost_mult = -0.5
+    }
+}

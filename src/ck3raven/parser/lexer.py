@@ -39,6 +39,7 @@ class TokenType(Enum):
     NEWLINE = auto()         # \n
     EOF = auto()             # End of file
     BOOL = auto()            # yes, no
+    COMMA = auto()           # , (used in some defines like { "a", "b" })
 
 
 @dataclass
@@ -78,7 +79,8 @@ class Lexer:
     # Note: ' (apostrophe) can appear in some barony names (b_mansa'l-kharaz)
     # Note: / is used in sound paths (event:/SFX/Events/...)
     # Note: Unicode letters allowed for names like Linnéa, Θ (theta), etc.
-    IDENT_SPECIAL = set("_.|&'-:/")  # Special chars allowed in identifiers
+    # Note: % can appear in identifiers (SUCCESS_%) and number suffixes (29%)
+    IDENT_SPECIAL = set("_.|&'-:/%")  # Special chars allowed in identifiers
     
     @staticmethod
     def _is_ident_start(ch: str) -> bool:
@@ -128,8 +130,8 @@ class Lexer:
         while self._current() in (' ', '\t', '\r'):
             self._advance()
     
-    def _read_string(self) -> str:
-        """Read a quoted string, handling escapes."""
+    def _read_string(self, quote_char: str = '"') -> str:
+        """Read a quoted string, handling escapes. Supports both " and ' quotes."""
         start_line = self.line
         start_col = self.column
         
@@ -141,7 +143,7 @@ class Lexer:
             ch = self._current()
             if ch is None:
                 raise LexerError("Unterminated string", start_line, start_col)
-            if ch == '"':
+            if ch == quote_char:
                 self._advance()  # Skip closing quote
                 break
             if ch == '\\':
@@ -152,8 +154,8 @@ class Lexer:
                     result.append('\n')
                 elif esc == 't':
                     result.append('\t')
-                elif esc == '"':
-                    result.append('"')
+                elif esc == quote_char:
+                    result.append(quote_char)
                 elif esc == '\\':
                     result.append('\\')
                 else:
@@ -206,6 +208,11 @@ class Lexer:
             else:
                 break
         
+        # Check for trailing % (e.g., 29% in GUI position values)
+        if self._current() == '%':
+            result.append('%')
+            self._advance()
+        
         return ''.join(result)
     
     def _read_comment(self) -> str:
@@ -254,9 +261,14 @@ class Lexer:
                     yield Token(TokenType.COMMENT, comment, start_line, start_col)
                 continue
             
-            # String
+            # String (double or single quoted)
             if ch == '"':
-                value = self._read_string()
+                value = self._read_string('"')
+                yield Token(TokenType.STRING, value, start_line, start_col)
+                continue
+            
+            if ch == "'":
+                value = self._read_string("'")
                 yield Token(TokenType.STRING, value, start_line, start_col)
                 continue
             
@@ -285,7 +297,7 @@ class Lexer:
                     self._advance()
                     yield Token(TokenType.NOT_EQUAL, '!=', start_line, start_col)
                 else:
-                    # Standalone ! is rare in CK3, treat as identifier start
+                    # Standalone ! is not valid in CK3 script syntax
                     raise LexerError(f"Unexpected character '!'", start_line, start_col)
                 continue
             
@@ -366,6 +378,12 @@ class Lexer:
                 yield Token(TokenType.SLASH, '/', start_line, start_col)
                 continue
             
+            # Comma (used in some defines like { "friend", "rival" })
+            if ch == ',':
+                self._advance()
+                yield Token(TokenType.COMMA, ',', start_line, start_col)
+                continue
+            
             # Parameter substitution: $PARAM$
             if ch == '$':
                 self._advance()
@@ -407,9 +425,16 @@ class Lexer:
 
 
 def tokenize_file(filepath: str, **kwargs) -> List[Token]:
-    """Tokenize a file and return all tokens."""
-    with open(filepath, 'r', encoding='utf-8-sig') as f:
-        source = f.read()
+    """Tokenize a file and return all tokens. Handles encoding fallback."""
+    # Try UTF-8 with BOM first, then UTF-8, then latin-1 (which always succeeds)
+    for encoding in ['utf-8-sig', 'utf-8', 'latin-1']:
+        try:
+            with open(filepath, 'r', encoding=encoding) as f:
+                source = f.read()
+            break
+        except UnicodeDecodeError:
+            continue
+    
     lexer = Lexer(source, filename=filepath)
     return lexer.tokenize_all(**kwargs)
 

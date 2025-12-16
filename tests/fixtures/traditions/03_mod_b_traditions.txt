@@ -1,0 +1,47 @@
+# Mod B traditions file (zzz prefix = loads last)
+# Load order: 3 (after mod A)
+# Overrides: tradition_mountain_homes (different approach)
+# Overrides: tradition_warrior_culture (nerfs it)
+
+tradition_mountain_homes = {
+    category = realm
+    
+    # MOD B CHANGE: Completely different take
+    parameters = {
+        mountain_trait_bonuses = yes
+        mod_b_approach = yes
+    }
+    
+    province_modifier = {
+        defender_advantage = 8  # Compromise value
+        supply_limit_mult = 0.2  # New addition
+    }
+    
+    culture_modifier = {
+        cultural_acceptance_gain_mult = 0.12
+    }
+    
+    # MOD B: Added cost
+    cost = {
+        prestige = 500
+    }
+}
+
+tradition_warrior_culture = {
+    category = combat
+    
+    # MOD B: Nerfed version
+    parameters = {
+        martial_education_bonus = yes
+    }
+    
+    character_modifier = {
+        prowess = 1  # Was 2 in vanilla
+        knight_effectiveness_mult = 0.05  # Was 0.1
+    }
+    
+    # MOD B: Added drawback
+    culture_modifier = {
+        diplomacy_per_prestige_level = -1
+    }
+}

@@ -1,0 +1,43 @@
+# Simulated vanilla on_actions file
+# Load order: 1 (first)
+
+on_birthday = {
+    trigger = {
+        is_alive = yes
+    }
+    
+    events = {
+        birthday.0001
+        birthday.0002
+    }
+    
+    effect = {
+        add_prestige = 10
+    }
+}
+
+on_death = {
+    trigger = {
+        is_ruler = yes
+    }
+    
+    events = {
+        death.0001
+    }
+    
+    on_actions = {
+        on_heir_inherits
+    }
+    
+    effect = {
+        # Vanilla death cleanup
+        remove_character_flag = some_flag
+    }
+}
+
+on_war_started = {
+    events = {
+        war.0001
+        war.0002
+    }
+}

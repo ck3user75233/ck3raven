@@ -1,0 +1,43 @@
+# Mod A on_actions file
+# Load order: 2 (after vanilla)
+# Adds events to: on_birthday, on_death
+# Has conflicting: effect on on_birthday
+
+on_birthday = {
+    # MOD A: Additional birthday events
+    events = {
+        mod_a_birthday.0001
+        mod_a_birthday.0002
+        mod_a_birthday.0003
+    }
+    
+    # MOD A: Custom trigger (CONFLICTS with vanilla)
+    trigger = {
+        is_alive = yes
+        has_mod_a_flag = yes
+    }
+    
+    # MOD A: Different effect (CONFLICTS with vanilla)
+    effect = {
+        add_prestige = 25  # Mod A gives more prestige
+        add_piety = 5
+    }
+}
+
+on_death = {
+    # MOD A: Additional death events
+    events = {
+        mod_a_death.0001
+    }
+    
+    on_actions = {
+        mod_a_special_inheritance
+    }
+}
+
+on_mod_a_special = {
+    # MOD A: Brand new on_action
+    events = {
+        mod_a_special.0001
+    }
+}

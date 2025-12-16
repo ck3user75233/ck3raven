@@ -7,117 +7,192 @@
 
 ## What is ck3raven?
 
-ck3raven is a modding tool that:
+ck3raven answers the question: **"What does the game actually see?"**
 
-1. **Parses** CK3/Paradox script files into an AST (100% regex-free lexer/parser)
-2. **Resolves** conflicts between vanilla and mod files using accurate merge rules
-3. **Emulates** the game's final state for any playset combination
-4. **Generates** compatibility patches and conflict reports
+Given a playset (vanilla + mods in load order), ck3raven:
 
-Think of it as "what does the game actually see?" - crucial for compatch authors and complex mod setups.
+1. **Parses** all CK3/Paradox script files into AST (100% regex-free)
+2. **Resolves** conflicts using accurate merge rules (OVERRIDE/MERGE/FIOS)
+3. **Stores** everything in a deduplicated database for fast queries
+4. **Emulates** the final game state with full provenance tracking
 
-## Features
+Essential for compatch authors, mod compatibility analysis, and understanding complex mod interactions.
 
-- 🔍 **Pure Python Parser** - No regex, handles all CK3 syntax including edge cases
-- 📦 **Accurate Merge Rules** - Implements LIOS/FIOS, container merging, on_action special rules
-- 🗂️ **Content Type Aware** - Knows traditions override, on_actions merge, GUI uses FIOS, etc.
-- 📊 **Conflict Detection** - Identifies which mods override which keys
-- 🔄 **Virtual Merge** - See vanilla vs mod vs final state side-by-side
+---
+
+## Current Status
+
+| Module | Status | Description |
+|--------|--------|-------------|
+| `parser/` | ✅ Complete | 100% regex-free lexer/parser, 100% vanilla parse rate |
+| `resolver/` | ✅ Complete | 4 merge policies, conflict detection, per-content-type rules |
+| `db/` | ✅ Complete | SQLite with content-addressed storage, AST cache, FTS search |
+| `emulator/` | 🔲 Not Started | Full game state building from playset |
+| CLI | 🔲 Minimal | Basic structure only |
+
+---
+
+## Architecture
+
+```
+ck3raven/
+├── src/ck3raven/
+│   ├── parser/           # Lexer + Parser → AST
+│   │   ├── lexer.py      # Token stream (100% regex-free)
+│   │   └── parser.py     # AST: RootNode, BlockNode, AssignmentNode, ValueNode, ListNode
+│   │
+│   ├── resolver/         # Merge/Override Resolution
+│   │   ├── policies.py   # 4 merge policies + 15 content type configs
+│   │   └── resolver.py   # Conflict resolution engine with provenance
+│   │
+│   ├── db/               # Database Storage Layer
+│   │   ├── schema.py     # SQLite schema (17 tables, FTS5)
+│   │   ├── models.py     # 13 dataclass models
+│   │   ├── content.py    # Content-addressed storage (SHA256 dedup)
+│   │   ├── ingest.py     # Vanilla/mod ingestion with incremental updates
+│   │   ├── parser_version.py  # Parser versioning for AST cache invalidation
+│   │   ├── ast_cache.py  # AST cache keyed by (content_hash, parser_version)
+│   │   ├── symbols.py    # Symbol/reference extraction from AST
+│   │   ├── search.py     # FTS5 search (symbols, refs, content)
+│   │   ├── playsets.py   # Playset management (max 5 active)
+│   │   └── cryo.py       # Snapshot export/import for offline analysis
+│   │
+│   ├── emulator/         # (Future) Full game state building
+│   └── cli.py            # Command-line interface
+│
+├── docs/                 # Design documentation (8 docs)
+├── tests/                # Test suite
+└── scripts/              # Utility scripts
+```
+
+---
+
+## Key Specifications
+
+### Parser
+- **100% regex-free** lexer using character-by-character state machine
+- **100% vanilla parse rate** on CK3 1.13.x
+- **99.8% mod parse rate** (remaining 0.2% are mod syntax bugs)
+- Handles edge cases: `29%`, `-$PARAM$`, `<=` as values, BOM, single quotes in Jomini
+
+### Merge Policies
+
+| Policy | Behavior | Used By |
+|--------|----------|---------|
+| `OVERRIDE` | Last definition wins completely | ~95% of content |
+| `CONTAINER_MERGE` | Container merges, sublists append | on_actions only |
+| `PER_KEY_OVERRIDE` | Each key independent, last wins | localization, defines |
+| `FIOS` | First definition wins | GUI types/templates |
+
+### Database Storage
+- **Content-addressed**: SHA256 hash, same content stored once across all mods
+- **Version identity**: Root hash = SHA256 of sorted (relpath, content_hash) pairs
+- **AST cache**: Keyed by (content_hash, parser_version) - no redundant parsing
+- **FTS5 search**: Full-text search across content, symbols, references
+- **Playsets**: Max 5 active to conserve resources
+- **Cryo snapshots**: Export/import frozen state for sharing
+
+---
 
 ## Installation
 
 ```bash
-# Clone the repository
-git clone https://github.com/ck3user75233/ck3raven.git
+git clone https://github.com/youruser/ck3raven.git
 cd ck3raven
-
-# Install in development mode
-pip install -e .
-
-# Or install with dev dependencies for testing
 pip install -e ".[dev]"
 ```
 
 ## Quick Start
 
-### Parse a CK3 File
+### Parse a File
 
 ```python
 from ck3raven.parser import parse_file, parse_source
 
-# Parse a file
 ast = parse_file("path/to/traditions.txt")
-
-# Get all tradition blocks
-for block in ast.get_blocks("tradition_"):
-    print(f"Found tradition: {block.name}")
-
-# Parse a string
-ast = parse_source('''
-tradition_mountain_homes = {
-    category = regional
-    parameters = { mountain_trait_bonuses = yes }
-}
-''')
+for block in ast.children:
+    if hasattr(block, 'name') and block.name.startswith("tradition_"):
+        print(f"Found: {block.name}")
 ```
 
-### Resolve Tradition Conflicts
+### Resolve Conflicts
 
 ```python
-from ck3raven.resolver import TraditionResolver
+from ck3raven.resolver import resolve_folder, SourceFile
 
-resolver = TraditionResolver(
-    vanilla_path="path/to/game/common/culture/traditions",
-    mod_paths=["path/to/mod1", "path/to/mod2"]
-)
+sources = [
+    SourceFile(Path("vanilla/common/culture/traditions"), "vanilla", 0),
+    SourceFile(Path("mod1/common/culture/traditions"), "mod1", 1),
+    SourceFile(Path("mod2/common/culture/traditions"), "mod2", 2),
+]
 
-# Get final state
-final_traditions = resolver.resolve()
+state = resolve_folder("common/culture/traditions", sources)
 
-# Get conflict report
-conflicts = resolver.get_conflicts()
-for key, sources in conflicts.items():
-    print(f"{key}: defined in {len(sources)} sources")
+for conflict in state.conflicts:
+    print(f"{conflict.key}: {conflict.winner.source.source_name} wins over {[l.source.source_name for l in conflict.losers]}")
 ```
 
-## Project Structure
+### Database Operations
 
+```python
+from ck3raven.db import init_database, ingest_vanilla, search_all, SearchScope
+
+conn = init_database()
+ingest_vanilla(conn, Path("path/to/game"), "1.13.2")
+
+# Search for anything mentioning "brave"
+results = search_all(conn, "brave", scope=SearchScope.ALL)
+for r in results:
+    print(f"{r.kind}: {r.name} in {r.file_path}")
 ```
-ck3raven/
-├── src/ck3raven/
-│   ├── parser/          # Lexer + Parser (AST generation)
-│   ├── resolver/        # Merge/override resolution logic
-│   └── emulator/        # Full game state building
-├── docs/                # Design documentation
-├── tests/               # Test suite
-└── scripts/             # CLI tools
-```
+
+---
 
 ## Documentation
 
-See the `docs/` folder for detailed documentation:
+| Doc | Description |
+|-----|-------------|
+| [00_ORIGINAL_CONCEPT](docs/00_ORIGINAL_CONCEPT.md) | Original vision and goals |
+| [01_PARSER_AND_MERGER_CONCEPTS](docs/01_PARSER_AND_MERGER_CONCEPTS.md) | What is parsing? Why not regex? |
+| [02_EXISTING_TOOLS_AND_FEASIBILITY](docs/02_EXISTING_TOOLS_AND_FEASIBILITY.md) | Landscape analysis |
+| [03_TRADITION_RESOLVER_V0_DESIGN](docs/03_TRADITION_RESOLVER_V0_DESIGN.md) | Initial prototype design |
+| [04_VIRTUAL_MERGE_EXPLAINED](docs/04_VIRTUAL_MERGE_EXPLAINED.md) | Multi-source comparison concept |
+| [05_ACCURATE_MERGE_OVERRIDE_RULES](docs/05_ACCURATE_MERGE_OVERRIDE_RULES.md) | CK3's actual merge behavior |
+| [06_CONTAINER_MERGE_OVERRIDE_TABLE](docs/06_CONTAINER_MERGE_OVERRIDE_TABLE.md) | Complete reference by folder |
+| [07_TEST_MOD_AND_LOGGING_COMPATCH](docs/07_TEST_MOD_AND_LOGGING_COMPATCH.md) | Testing and instrumentation ideas |
 
-- [Merge/Override Rules](docs/05_ACCURATE_MERGE_OVERRIDE_RULES.md) - How CK3 handles conflicts
-- [Content Type Table](docs/06_CONTAINER_MERGE_OVERRIDE_TABLE.md) - Rules for every folder
-- [Virtual Merge Explained](docs/04_VIRTUAL_MERGE_EXPLAINED.md) - Multi-source comparison
+---
 
-## Key Concepts
+## Roadmap
 
-### Merge Policies
+### Phase 1: Foundation ✅ Complete
+- [x] Parser/lexer with 100% vanilla coverage
+- [x] Merge policy definitions (4 policies, 15+ content types)
+- [x] Conflict resolution engine with provenance
+- [x] Database storage layer with content dedup
+- [x] AST caching with parser versioning
+- [x] Symbol/reference extraction
+- [x] FTS search infrastructure
+- [x] Playset management
+- [x] Cryo snapshot export/import
 
-ck3raven implements the same merge rules as the CK3 engine:
+### Phase 2: Game State Emulator (Next)
+- [ ] `emulator/` module: load playset → resolve all folders → final state
+- [ ] Full provenance tracking: which mod contributed each definition
+- [ ] Export resolved files with source annotations
+- [ ] Conflict report generation
 
-| Policy | Behavior | Used By |
-|--------|----------|---------|
-| **OVERRIDE** | Last definition wins | ~95% of content (traditions, events, decisions...) |
-| **CONTAINER_MERGE** | Container merges, sublists append | on_actions |
-| **PER_KEY_OVERRIDE** | Each key independent | localization, defines |
-| **FIOS** | First definition wins | GUI types/templates |
+### Phase 3: Developer Tools
+- [ ] CLI for common operations (parse, resolve, search, export)
+- [ ] Vanilla diff tool: compare versions for parser updates
+- [ ] Conflict reporter: human-readable HTML/markdown reports
+- [ ] Compatch suggester: auto-generate patch candidates
 
-### File-Level Behavior
+### Phase 4: Integration
+- [ ] VS Code extension for in-editor conflict highlighting
+- [ ] MCP server for AI-assisted modding workflows
 
-- **Same filename** = Complete file replacement
-- **Different filename** = Key-level merge with policies above
+---
 
 ## Credits
 
@@ -129,10 +204,6 @@ Inspired by:
 ## License
 
 MIT License - see [LICENSE](LICENSE)
-
-## Contributing
-
-Contributions welcome! Please read the docs first to understand CK3's merge behavior.
 
 ---
 

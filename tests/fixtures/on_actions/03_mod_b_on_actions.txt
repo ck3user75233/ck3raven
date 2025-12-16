@@ -1,0 +1,49 @@
+# Mod B on_actions file (zzz prefix = loads last)
+# Load order: 3 (after mod A)
+# Adds events to: on_birthday
+# Has conflicting: effect on on_birthday (wins!)
+# Adds to: on_war_started
+
+on_birthday = {
+    # MOD B: Even more birthday events (appended to vanilla + mod A)
+    events = {
+        mod_b_birthday.0001
+    }
+    
+    # MOD B: Override effect (THIS WINS - last definition)
+    effect = {
+        add_prestige = 50  # Mod B is generous
+        add_gold = 10
+        trigger_event = mod_b_birthday.celebration
+    }
+    
+    # MOD B: Also has random_events
+    random_events = {
+        100 = mod_b_birthday.random_gift
+        50 = mod_b_birthday.random_visitor
+    }
+}
+
+on_war_started = {
+    # MOD B: Additional war events
+    events = {
+        mod_b_war.0001
+        mod_b_war.0002
+    }
+    
+    # MOD B: War effect (no vanilla effect, so no conflict)
+    effect = {
+        add_character_flag = mod_b_war_tracking
+    }
+}
+
+on_mod_b_unique = {
+    # MOD B: Brand new on_action
+    trigger = {
+        has_trait = brave
+    }
+    
+    events = {
+        mod_b_unique.0001
+    }
+}

@@ -1,0 +1,35 @@
+# Mod A traditions file
+# Load order: 2 (after vanilla)
+# Overrides: tradition_mountain_homes (buffs it)
+# Adds: tradition_mod_a_new
+
+tradition_mountain_homes = {
+    category = realm
+    
+    # MOD A CHANGE: Increased defender advantage
+    parameters = {
+        mountain_trait_bonuses = yes
+        mod_a_special = yes
+    }
+    
+    province_modifier = {
+        defender_advantage = 10  # Was 5 in vanilla
+    }
+    
+    culture_modifier = {
+        cultural_acceptance_gain_mult = 0.15  # Was 0.1
+    }
+}
+
+tradition_mod_a_new = {
+    category = societal
+    
+    parameters = {
+        mod_a_unique_feature = yes
+    }
+    
+    character_modifier = {
+        diplomacy = 1
+        learning = 1
+    }
+}

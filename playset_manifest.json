@@ -1,0 +1,19 @@
+{
+  "mods": [
+    {
+      "id": "MSC",
+      "name": "Mini Super Compatch",
+      "path": "C:/Users/Nathan/Documents/Paradox Interactive/Crusader Kings III/mod/Mini Super Compatch"
+    },
+    {
+      "id": "CrashFixes",
+      "name": "CrashFixes",
+      "path": "C:/Users/Nathan/Documents/Paradox Interactive/Crusader Kings III/mod/CrashFixes"
+    },
+    {
+      "id": "LocalizationPatch",
+      "name": "LocalizationPatch",
+      "path": "C:/Users/Nathan/Documents/Paradox Interactive/Crusader Kings III/mod/LocalizationPatch"
+    }
+  ]
+}
