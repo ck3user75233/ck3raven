@@ -27,8 +27,24 @@ Essential for compatch authors, mod compatibility analysis, and understanding co
 | `parser/` | ✅ Complete | 100% regex-free lexer/parser, 100% vanilla parse rate |
 | `resolver/` | ✅ Complete | 4 merge policies, conflict detection, per-content-type rules |
 | `db/` | ✅ Complete | SQLite with content-addressed storage, AST cache, FTS search |
-| `emulator/` | 🔲 Not Started | Full game state building from playset |
+| `tools/ck3lens_mcp/` | ✅ Phase 1 | MCP server with 20 tools for AI agent integration |
+| `emulator/` | 🔲 Stubs Only | Full game state building from playset |
 | CLI | 🔲 Minimal | Basic structure only |
+
+### CK3 Lens MCP Server
+
+The `tools/ck3lens_mcp/` directory contains a Model Context Protocol server that exposes ck3raven's capabilities to AI agents (GitHub Copilot, etc.):
+
+- **20 MCP tools** for symbol search, file access, conflict detection, live mod editing
+- **Adjacency search** - automatic pattern expansion for fuzzy symbol matching
+- **Sandboxed writes** - only whitelisted mods can be modified
+- **Git integration** - status, diff, commit, push/pull for live mods
+
+See [tools/ck3lens_mcp/docs/](tools/ck3lens_mcp/docs/) for:
+- [SETUP.md](tools/ck3lens_mcp/docs/SETUP.md) - Installation and configuration
+- [TESTING.md](tools/ck3lens_mcp/docs/TESTING.md) - Validation procedures
+- [TOOLS.md](tools/ck3lens_mcp/docs/TOOLS.md) - Complete tool reference
+- [DESIGN.md](tools/ck3lens_mcp/docs/DESIGN.md) - V1 architecture specification
 
 ---
 
@@ -176,21 +192,34 @@ for r in results:
 - [x] Playset management
 - [x] Cryo snapshot export/import
 
+### Phase 1.5: MCP Integration ✅ Complete
+- [x] CK3 Lens MCP server (20 tools)
+- [x] Adjacency search with pattern expansion
+- [x] Live mod file operations (sandboxed)
+- [x] Git operations for live mods
+- [x] CK3 script validation (parse + AST)
+- [x] Complete documentation (SETUP, TESTING, TOOLS, DESIGN)
+
 ### Phase 2: Game State Emulator (Next)
 - [ ] `emulator/` module: load playset → resolve all folders → final state
 - [ ] Full provenance tracking: which mod contributed each definition
 - [ ] Export resolved files with source annotations
 - [ ] Conflict report generation
 
-### Phase 3: Developer Tools
-- [ ] CLI for common operations (parse, resolve, search, export)
-- [ ] Vanilla diff tool: compare versions for parser updates
-- [ ] Conflict reporter: human-readable HTML/markdown reports
-- [ ] Compatch suggester: auto-generate patch candidates
+### Phase 3: Explorer UI
+- [ ] VS Code extension with Activity Bar
+- [ ] Sidebar webview (Explorer, Compatch, Reports tabs)
+- [ ] Node detail panel (Syntax ⇄ AST toggle)
+- [ ] Provenance timeline view
+- [ ] Uncertainty badges and filtering
 
-### Phase 4: Integration
-- [ ] VS Code extension for in-editor conflict highlighting
-- [ ] MCP server for AI-assisted modding workflows
+### Phase 4: Compatch Helper
+- [ ] Conflict unit extraction and grouping
+- [ ] Risk scoring algorithm
+- [ ] Decision card UI (winner selection)
+- [ ] Merge editor (guided + AI-assisted)
+- [ ] Patch file generation with audit log
+- [ ] Validation pipeline
 
 ---
 
