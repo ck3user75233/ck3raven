@@ -44,9 +44,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/YOUR_USERNAME/ck3raven"
-Repository = "https://github.com/YOUR_USERNAME/ck3raven"
-Issues = "https://github.com/YOUR_USERNAME/ck3raven/issues"
+Homepage = "https://github.com/ck3user75233/ck3raven"
+Repository = "https://github.com/ck3user75233/ck3raven"
+Issues = "https://github.com/ck3user75233/ck3raven/issues"
 
 [project.scripts]
 ck3raven = "ck3raven.cli:main"

@@ -28,7 +28,7 @@ Think of it as "what does the game actually see?" - crucial for compatch authors
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/ck3raven.git
+git clone https://github.com/ck3user75233/ck3raven.git
 cd ck3raven
 
 # Install in development mode
