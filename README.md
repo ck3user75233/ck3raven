@@ -25,9 +25,9 @@ Essential for compatch authors, mod compatibility analysis, and understanding co
 | Module | Status | Description |
 |--------|--------|-------------|
 | `parser/` | ✅ Complete | 100% regex-free lexer/parser, 100% vanilla parse rate |
-| `resolver/` | ✅ Complete | 4 merge policies, conflict detection, per-content-type rules |
+| `resolver/` | ✅ Complete | 4 merge policies, file/symbol/unit-level conflict detection |
 | `db/` | ✅ Complete | SQLite with content-addressed storage, AST cache, FTS search |
-| `tools/ck3lens_mcp/` | ✅ Phase 1 | MCP server with 20 tools for AI agent integration |
+| `tools/ck3lens_mcp/` | ✅ Phase 1.5 | MCP server with 25+ tools for AI agent integration |
 | `emulator/` | 🔲 Stubs Only | Full game state building from playset |
 | CLI | 🔲 Minimal | Basic structure only |
 
@@ -35,7 +35,8 @@ Essential for compatch authors, mod compatibility analysis, and understanding co
 
 The `tools/ck3lens_mcp/` directory contains a Model Context Protocol server that exposes ck3raven's capabilities to AI agents (GitHub Copilot, etc.):
 
-- **20 MCP tools** for symbol search, file access, conflict detection, live mod editing
+- **25+ MCP tools** for symbol search, file access, conflict detection, live mod editing
+- **Unit-level conflict analysis** with risk scoring and resolution tracking
 - **Adjacency search** - automatic pattern expansion for fuzzy symbol matching
 - **Sandboxed writes** - only whitelisted mods can be modified
 - **Git integration** - status, diff, commit, push/pull for live mods
@@ -58,11 +59,13 @@ ck3raven/
 │   │   └── parser.py     # AST: RootNode, BlockNode, AssignmentNode, ValueNode, ListNode
 │   │
 │   ├── resolver/         # Merge/Override Resolution
-│   │   ├── policies.py   # 4 merge policies + 15 content type configs
-│   │   └── resolver.py   # Conflict resolution engine with provenance
+│   │   ├── policies.py           # 4 merge policies + 15 content type configs
+│   │   ├── sql_resolver.py       # File-level and symbol-level resolution
+│   │   ├── contributions.py      # Data contracts (ContributionUnit, ConflictUnit)
+│   │   └── conflict_analyzer.py  # Unit-level conflict extraction and risk scoring
 │   │
 │   ├── db/               # Database Storage Layer
-│   │   ├── schema.py     # SQLite schema (17 tables, FTS5)
+│   │   ├── schema.py     # SQLite schema (20+ tables, FTS5)
 │   │   ├── models.py     # 13 dataclass models
 │   │   ├── content.py    # Content-addressed storage (SHA256 dedup)
 │   │   ├── ingest.py     # Vanilla/mod ingestion with incremental updates
@@ -76,10 +79,12 @@ ck3raven/
 │   ├── emulator/         # (Future) Full game state building
 │   └── cli.py            # Command-line interface
 │
-├── docs/                 # Design documentation (8 docs)
+├── docs/                 # Design documentation (9 docs + ARCHITECTURE.md)
 ├── tests/                # Test suite
 └── scripts/              # Utility scripts
 ```
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed architecture documentation.
 
 ---
 
@@ -214,8 +219,9 @@ for r in results:
 - [ ] Uncertainty badges and filtering
 
 ### Phase 4: Compatch Helper
-- [ ] Conflict unit extraction and grouping
-- [ ] Risk scoring algorithm
+- [x] Conflict unit extraction and grouping
+- [x] Risk scoring algorithm
+- [x] Unit-level MCP tools (scan, list, detail, resolve)
 - [ ] Decision card UI (winner selection)
 - [ ] Merge editor (guided + AI-assisted)
 - [ ] Patch file generation with audit log

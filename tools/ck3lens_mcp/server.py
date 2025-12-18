@@ -745,6 +745,1007 @@ def ck3_git_log(
 
 
 # ============================================================================
+# Playset Management Tools
+# ============================================================================
+
+@mcp.tool()
+def ck3_get_active_playset() -> dict:
+    """
+    Get information about the currently active playset.
+    
+    Returns:
+        Playset details including name, mod count, and mod list with load order
+    """
+    db = _get_db()
+    trace = _get_trace()
+    playset_id = _get_playset_id()
+    
+    # Get playset info
+    playset = db.conn.execute("""
+        SELECT playset_id, name, description, is_active, created_at, updated_at
+        FROM playsets WHERE playset_id = ?
+    """, (playset_id,)).fetchone()
+    
+    if not playset:
+        return {"error": "No active playset found"}
+    
+    # Get mods in playset with load order
+    mods = db.conn.execute("""
+        SELECT pm.load_order_index, mp.name, mp.workshop_id, cv.file_count
+        FROM playset_mods pm
+        JOIN content_versions cv ON pm.content_version_id = cv.content_version_id
+        JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+        WHERE pm.playset_id = ? AND pm.enabled = 1
+        ORDER BY pm.load_order_index
+    """, (playset_id,)).fetchall()
+    
+    result = {
+        "playset_id": playset[0],
+        "name": playset[1],
+        "description": playset[2],
+        "is_active": bool(playset[3]),
+        "mod_count": len(mods),
+        "mods": [
+            {"load_order": m[0], "name": m[1], "workshop_id": m[2], "file_count": m[3]}
+            for m in mods
+        ]
+    }
+    
+    trace.log("ck3.get_active_playset", {}, {"mod_count": len(mods)})
+    
+    return result
+
+
+@mcp.tool()
+def ck3_list_playsets() -> dict:
+    """
+    List all available playsets in the database.
+    
+    Returns:
+        List of playsets with basic info
+    """
+    db = _get_db()
+    trace = _get_trace()
+    
+    playsets = db.conn.execute("""
+        SELECT p.playset_id, p.name, p.description, p.is_active,
+               COUNT(pm.content_version_id) as mod_count
+        FROM playsets p
+        LEFT JOIN playset_mods pm ON p.playset_id = pm.playset_id AND pm.enabled = 1
+        GROUP BY p.playset_id
+        ORDER BY p.is_active DESC, p.updated_at DESC
+    """).fetchall()
+    
+    result = {
+        "playsets": [
+            {
+                "playset_id": p[0],
+                "name": p[1],
+                "description": p[2],
+                "is_active": bool(p[3]),
+                "mod_count": p[4]
+            }
+            for p in playsets
+        ]
+    }
+    
+    trace.log("ck3.list_playsets", {}, {"count": len(playsets)})
+    
+    return result
+
+
+@mcp.tool()
+def ck3_search_mods(
+    query: str,
+    search_by: Literal["name", "workshop_id", "any"] = "any",
+    fuzzy: bool = True,
+    limit: int = 20
+) -> dict:
+    """
+    Search for mods in the database by name, workshop ID, or both.
+    
+    Supports fuzzy matching for name searches (handles abbreviations).
+    
+    Args:
+        query: Search term (mod name, abbreviation, or workshop ID)
+        search_by: Search field - "name", "workshop_id", or "any"
+        fuzzy: Enable fuzzy name matching (catches abbreviations like "EPE" for "Ethnicities and Portraits Expanded")
+        limit: Maximum results
+    
+    Returns:
+        List of matching mods with details
+    """
+    db = _get_db()
+    trace = _get_trace()
+    
+    results = []
+    
+    if search_by in ("workshop_id", "any") and query.isdigit():
+        # Exact workshop ID match
+        rows = db.conn.execute("""
+            SELECT mp.mod_package_id, mp.name, mp.workshop_id, mp.source_path,
+                   cv.content_version_id, cv.file_count
+            FROM mod_packages mp
+            LEFT JOIN content_versions cv ON cv.mod_package_id = mp.mod_package_id
+            WHERE mp.workshop_id = ?
+            ORDER BY cv.ingested_at DESC
+        """, (query,)).fetchall()
+        for r in rows:
+            results.append({
+                "mod_package_id": r[0], "name": r[1], "workshop_id": r[2],
+                "source_path": r[3], "content_version_id": r[4], "file_count": r[5],
+                "match_type": "exact_id"
+            })
+    
+    if search_by in ("name", "any"):
+        # Name matching
+        patterns = [
+            (f"%{query}%", "contains"),
+        ]
+        
+        if fuzzy:
+            # Abbreviation matching: "EPE" -> "E%P%E%"
+            if query.isupper() and len(query) <= 5:
+                abbrev_pattern = "%".join(query) + "%"
+                patterns.append((abbrev_pattern, "abbreviation"))
+            
+            # Token matching for underscore/space separated
+            tokens = query.replace("_", " ").split()
+            if len(tokens) > 1:
+                token_pattern = "%".join(tokens)
+                patterns.append((f"%{token_pattern}%", "tokens"))
+        
+        seen_ids = {r["mod_package_id"] for r in results}
+        
+        for pattern, match_type in patterns:
+            rows = db.conn.execute("""
+                SELECT mp.mod_package_id, mp.name, mp.workshop_id, mp.source_path,
+                       cv.content_version_id, cv.file_count
+                FROM mod_packages mp
+                LEFT JOIN content_versions cv ON cv.mod_package_id = mp.mod_package_id
+                WHERE LOWER(mp.name) LIKE LOWER(?)
+                ORDER BY cv.ingested_at DESC
+                LIMIT ?
+            """, (pattern, limit)).fetchall()
+            
+            for r in rows:
+                if r[0] not in seen_ids:
+                    seen_ids.add(r[0])
+                    results.append({
+                        "mod_package_id": r[0], "name": r[1], "workshop_id": r[2],
+                        "source_path": r[3], "content_version_id": r[4], "file_count": r[5],
+                        "match_type": match_type
+                    })
+    
+    trace.log("ck3.search_mods", {"query": query, "search_by": search_by, "fuzzy": fuzzy},
+              {"result_count": len(results)})
+    
+    return {"results": results[:limit], "query": query}
+
+
+@mcp.tool()
+def ck3_add_mod_to_playset(
+    mod_identifier: str,
+    position: Optional[int] = None,
+    before_mod: Optional[str] = None,
+    after_mod: Optional[str] = None
+) -> dict:
+    """
+    Add a mod to the active playset, with full ingestion and symbol extraction.
+    
+    This is a comprehensive operation that:
+    1. Finds the mod (by workshop ID, name, or path)
+    2. Ingests files if not already indexed
+    3. Extracts symbols for search
+    4. Adds to playset at specified position
+    
+    Args:
+        mod_identifier: Workshop ID, mod name, or filesystem path
+        position: Explicit load order position (0-indexed)
+        before_mod: Insert before this mod (by name or workshop ID)
+        after_mod: Insert after this mod (by name or workshop ID)
+    
+    Returns:
+        Success status with mod details
+    """
+    db = _get_db()
+    trace = _get_trace()
+    playset_id = _get_playset_id()
+    
+    # Import ck3raven modules for ingestion
+    from ck3raven.db.ingest import ingest_mod, get_or_create_mod_package
+    from ck3raven.parser import parse_source
+    from ck3raven.db.symbols import extract_symbols_from_ast
+    
+    # Step 1: Find the mod
+    mod_path = None
+    workshop_id = None
+    mod_name = None
+    
+    # Check if it's a workshop ID
+    if mod_identifier.isdigit():
+        workshop_id = mod_identifier
+        # Check if already in database
+        existing = db.conn.execute(
+            "SELECT mod_package_id, name, source_path FROM mod_packages WHERE workshop_id = ?",
+            (workshop_id,)
+        ).fetchone()
+        if existing:
+            mod_name = existing[1]
+            mod_path = Path(existing[2]) if existing[2] else None
+        else:
+            # Look for it in workshop folder
+            workshop_path = Path("C:/Program Files (x86)/Steam/steamapps/workshop/content/1158310") / workshop_id
+            if workshop_path.exists():
+                mod_path = workshop_path
+                mod_name = f"Workshop Mod {workshop_id}"
+    
+    # Check if it's a path
+    elif "/" in mod_identifier or "\\" in mod_identifier:
+        mod_path = Path(mod_identifier)
+        if mod_path.exists():
+            mod_name = mod_path.name
+            # Try to extract workshop ID from path
+            if "1158310" in str(mod_path):
+                parts = str(mod_path).split("1158310")
+                if len(parts) > 1:
+                    potential_id = parts[1].strip("/\\").split("/")[0].split("\\")[0]
+                    if potential_id.isdigit():
+                        workshop_id = potential_id
+    
+    # Otherwise search by name
+    else:
+        search_result = db.conn.execute("""
+            SELECT mod_package_id, name, workshop_id, source_path
+            FROM mod_packages WHERE LOWER(name) LIKE LOWER(?)
+            ORDER BY mod_package_id LIMIT 1
+        """, (f"%{mod_identifier}%",)).fetchone()
+        if search_result:
+            mod_name = search_result[1]
+            workshop_id = search_result[2]
+            mod_path = Path(search_result[3]) if search_result[3] else None
+    
+    if not mod_path or not mod_path.exists():
+        return {"error": f"Could not find mod: {mod_identifier}"}
+    
+    # Step 2: Ingest if needed
+    mod_pkg, ingest_result = ingest_mod(
+        conn=db.conn,
+        mod_path=mod_path,
+        name=mod_name,
+        workshop_id=workshop_id,
+        force=False
+    )
+    
+    # Get content_version_id
+    cv_row = db.conn.execute("""
+        SELECT content_version_id, file_count FROM content_versions
+        WHERE mod_package_id = ? ORDER BY ingested_at DESC LIMIT 1
+    """, (mod_pkg.mod_package_id,)).fetchone()
+    
+    if not cv_row:
+        return {"error": "Failed to ingest mod files"}
+    
+    content_version_id = cv_row[0]
+    file_count = cv_row[1]
+    
+    # Step 3: Extract symbols if not already done
+    existing_symbols = db.conn.execute(
+        "SELECT COUNT(*) FROM symbols WHERE content_version_id = ?",
+        (content_version_id,)
+    ).fetchone()[0]
+    
+    symbols_extracted = 0
+    if existing_symbols == 0:
+        # Extract symbols
+        rows = db.conn.execute("""
+            SELECT f.file_id, f.relpath, f.content_hash FROM files f
+            WHERE f.content_version_id = ? AND f.relpath LIKE '%.txt'
+        """, (content_version_id,)).fetchall()
+        
+        batch = []
+        for row in rows:
+            content_row = db.conn.execute(
+                "SELECT COALESCE(content_text, content_blob) as content FROM file_contents WHERE content_hash = ?",
+                (row[2],)
+            ).fetchone()
+            if not content_row:
+                continue
+            
+            content = content_row[0]
+            if isinstance(content, bytes):
+                content = content.decode('utf-8', errors='replace')
+            if content.startswith('\ufeff'):
+                content = content[1:]
+            
+            try:
+                ast = parse_source(content, filename=row[1])
+                for sym in extract_symbols_from_ast(ast.to_dict(), row[1], row[2]):
+                    batch.append((sym.kind, sym.name, sym.scope, None, row[0], 
+                                 content_version_id, None, sym.line, None))
+            except:
+                pass
+        
+        if batch:
+            db.conn.executemany("""
+                INSERT INTO symbols (symbol_type, name, scope, defining_ast_id, defining_file_id,
+                                    content_version_id, ast_node_path, line_number, metadata_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, batch)
+        symbols_extracted = len(batch)
+    else:
+        symbols_extracted = existing_symbols
+    
+    # Step 4: Determine load order position
+    if before_mod:
+        # Find the mod to insert before
+        ref_row = db.conn.execute("""
+            SELECT pm.load_order_index FROM playset_mods pm
+            JOIN content_versions cv ON pm.content_version_id = cv.content_version_id
+            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            WHERE pm.playset_id = ? AND (mp.name LIKE ? OR mp.workshop_id = ?)
+        """, (playset_id, f"%{before_mod}%", before_mod)).fetchone()
+        if ref_row:
+            position = ref_row[0]
+    elif after_mod:
+        # Find the mod to insert after
+        ref_row = db.conn.execute("""
+            SELECT pm.load_order_index FROM playset_mods pm
+            JOIN content_versions cv ON pm.content_version_id = cv.content_version_id
+            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            WHERE pm.playset_id = ? AND (mp.name LIKE ? OR mp.workshop_id = ?)
+        """, (playset_id, f"%{after_mod}%", after_mod)).fetchone()
+        if ref_row:
+            position = ref_row[0] + 1
+    
+    if position is None:
+        # Add at end
+        max_order = db.conn.execute(
+            "SELECT MAX(load_order_index) FROM playset_mods WHERE playset_id = ?",
+            (playset_id,)
+        ).fetchone()[0]
+        position = (max_order or -1) + 1
+    
+    # Shift existing mods if inserting in the middle
+    db.conn.execute("""
+        UPDATE playset_mods SET load_order_index = load_order_index + 1
+        WHERE playset_id = ? AND load_order_index >= ?
+    """, (playset_id, position))
+    
+    # Insert the new mod
+    db.conn.execute("""
+        INSERT OR REPLACE INTO playset_mods (playset_id, content_version_id, load_order_index, enabled)
+        VALUES (?, ?, ?, 1)
+    """, (playset_id, content_version_id, position))
+    
+    db.conn.commit()
+    
+    trace.log("ck3.add_mod_to_playset", {
+        "mod_identifier": mod_identifier, "position": position
+    }, {
+        "mod_name": mod_name, "files": file_count, "symbols": symbols_extracted
+    })
+    
+    return {
+        "success": True,
+        "mod_name": mod_name,
+        "workshop_id": workshop_id,
+        "content_version_id": content_version_id,
+        "load_order_position": position,
+        "files_indexed": file_count,
+        "symbols_extracted": symbols_extracted,
+        "was_already_indexed": ingest_result.stats.content_reused if ingest_result else False
+    }
+
+
+@mcp.tool()
+def ck3_remove_mod_from_playset(
+    mod_identifier: str
+) -> dict:
+    """
+    Remove a mod from the active playset.
+    
+    Note: This only removes from the playset, not from the database.
+    The mod's files and symbols remain indexed for potential re-use.
+    
+    Args:
+        mod_identifier: Workshop ID or mod name
+    
+    Returns:
+        Success status
+    """
+    db = _get_db()
+    trace = _get_trace()
+    playset_id = _get_playset_id()
+    
+    # Find the content_version_id for this mod
+    if mod_identifier.isdigit():
+        row = db.conn.execute("""
+            SELECT pm.content_version_id, mp.name, pm.load_order_index
+            FROM playset_mods pm
+            JOIN content_versions cv ON pm.content_version_id = cv.content_version_id
+            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            WHERE pm.playset_id = ? AND mp.workshop_id = ?
+        """, (playset_id, mod_identifier)).fetchone()
+    else:
+        row = db.conn.execute("""
+            SELECT pm.content_version_id, mp.name, pm.load_order_index
+            FROM playset_mods pm
+            JOIN content_versions cv ON pm.content_version_id = cv.content_version_id
+            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            WHERE pm.playset_id = ? AND LOWER(mp.name) LIKE LOWER(?)
+        """, (playset_id, f"%{mod_identifier}%")).fetchone()
+    
+    if not row:
+        return {"error": f"Mod not found in playset: {mod_identifier}"}
+    
+    content_version_id = row[0]
+    mod_name = row[1]
+    removed_position = row[2]
+    
+    # Remove from playset
+    db.conn.execute("""
+        DELETE FROM playset_mods WHERE playset_id = ? AND content_version_id = ?
+    """, (playset_id, content_version_id))
+    
+    # Shift remaining mods down
+    db.conn.execute("""
+        UPDATE playset_mods SET load_order_index = load_order_index - 1
+        WHERE playset_id = ? AND load_order_index > ?
+    """, (playset_id, removed_position))
+    
+    db.conn.commit()
+    
+    trace.log("ck3.remove_mod_from_playset", {"mod_identifier": mod_identifier},
+              {"mod_name": mod_name, "position": removed_position})
+    
+    return {
+        "success": True,
+        "mod_name": mod_name,
+        "removed_from_position": removed_position
+    }
+
+
+# ============================================================================
+# Conflict Analysis Tools (Unit-Level)
+# ============================================================================
+
+@mcp.tool()
+def ck3_scan_unit_conflicts(
+    folder_filter: str | None = None,
+) -> dict:
+    """
+    Scan the active playset for unit-level conflicts.
+    
+    This is a comprehensive scan that:
+    1. Extracts all ContributionUnits from parsed ASTs
+    2. Groups them into ConflictUnits by unit_key
+    3. Computes risk scores and merge capabilities
+    
+    A "unit" is a separately-resolvable block (decision, trait, on_action, etc.)
+    
+    Args:
+        folder_filter: Optional folder path filter (e.g., "common/on_action")
+    
+    Returns:
+        Scan results with conflict summary
+    """
+    db = _get_db()
+    trace = _get_trace()
+    playset_id = _get_playset_id()
+    
+    try:
+        from ck3raven.resolver.conflict_analyzer import scan_playset_conflicts
+        
+        result = scan_playset_conflicts(
+            db.conn,
+            playset_id,
+            folder_filter=folder_filter,
+        )
+        
+        trace.log("ck3.scan_unit_conflicts", 
+                  {"folder_filter": folder_filter},
+                  {"conflicts_found": result["conflicts_found"]})
+        
+        return result
+        
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def ck3_get_conflict_summary() -> dict:
+    """
+    Get a summary of all unit-level conflicts in the active playset.
+    
+    Returns:
+        Summary with counts by risk level, domain, and resolution status
+    """
+    db = _get_db()
+    playset_id = _get_playset_id()
+    
+    try:
+        from ck3raven.resolver.conflict_analyzer import get_conflict_summary
+        
+        return get_conflict_summary(db.conn, playset_id)
+        
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def ck3_list_conflict_units(
+    risk_filter: str | None = None,
+    domain_filter: str | None = None,
+    status_filter: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """
+    List conflict units with optional filters.
+    
+    Args:
+        risk_filter: Filter by risk level (low, med, high)
+        domain_filter: Filter by domain (on_action, decision, trait, etc.)
+        status_filter: Filter by resolution status (unresolved, resolved, deferred)
+        limit: Maximum results to return
+        offset: Offset for pagination
+    
+    Returns:
+        List of conflict units with candidates
+    """
+    db = _get_db()
+    playset_id = _get_playset_id()
+    
+    try:
+        from ck3raven.resolver.conflict_analyzer import get_conflict_units
+        
+        conflicts = get_conflict_units(
+            db.conn,
+            playset_id,
+            risk_filter=risk_filter,
+            domain_filter=domain_filter,
+            status_filter=status_filter,
+            limit=limit,
+            offset=offset,
+        )
+        
+        return {
+            "playset_id": playset_id,
+            "count": len(conflicts),
+            "conflicts": conflicts,
+        }
+        
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def ck3_get_conflict_detail(conflict_unit_id: str) -> dict:
+    """
+    Get detailed information about a specific conflict unit.
+    
+    Includes full candidate information with file content previews.
+    
+    Args:
+        conflict_unit_id: The conflict unit ID
+    
+    Returns:
+        Detailed conflict information
+    """
+    db = _get_db()
+    
+    try:
+        from ck3raven.resolver.conflict_analyzer import get_conflict_unit_detail
+        
+        detail = get_conflict_unit_detail(db.conn, conflict_unit_id)
+        
+        if not detail:
+            return {"error": f"Conflict unit not found: {conflict_unit_id}"}
+        
+        return detail
+        
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def ck3_resolve_conflict(
+    conflict_unit_id: str,
+    decision_type: Literal["winner", "defer"],
+    winner_candidate_id: str | None = None,
+    notes: str | None = None,
+) -> dict:
+    """
+    Record a resolution decision for a conflict unit.
+    
+    Args:
+        conflict_unit_id: The conflict unit ID
+        decision_type: Type of resolution (winner = pick a winner, defer = handle later)
+        winner_candidate_id: Required if decision_type is "winner" - the candidate to use
+        notes: Optional notes explaining the decision
+    
+    Returns:
+        Resolution result
+    """
+    import hashlib
+    import json
+    from datetime import datetime
+    
+    db = _get_db()
+    trace = _get_trace()
+    
+    # Validate conflict exists
+    conflict = db.conn.execute("""
+        SELECT unit_key, domain FROM conflict_units WHERE conflict_unit_id = ?
+    """, (conflict_unit_id,)).fetchone()
+    
+    if not conflict:
+        return {"error": f"Conflict unit not found: {conflict_unit_id}"}
+    
+    if decision_type == "winner" and not winner_candidate_id:
+        return {"error": "winner_candidate_id is required when decision_type is 'winner'"}
+    
+    # Validate winner candidate exists
+    if winner_candidate_id:
+        candidate = db.conn.execute("""
+            SELECT source_name FROM conflict_candidates 
+            WHERE conflict_unit_id = ? AND candidate_id = ?
+        """, (conflict_unit_id, winner_candidate_id)).fetchone()
+        
+        if not candidate:
+            return {"error": f"Candidate not found: {winner_candidate_id}"}
+    
+    # Create resolution
+    resolution_id = hashlib.sha256(f"{conflict_unit_id}:{datetime.now().isoformat()}".encode()).hexdigest()[:16]
+    
+    db.conn.execute("""
+        INSERT INTO resolution_choices 
+        (resolution_id, conflict_unit_id, decision_type, winner_candidate_id, notes, applied_at, applied_by)
+        VALUES (?, ?, ?, ?, ?, datetime('now'), 'user')
+    """, (resolution_id, conflict_unit_id, decision_type, winner_candidate_id, notes))
+    
+    # Update conflict status
+    db.conn.execute("""
+        UPDATE conflict_units 
+        SET resolution_status = ?, resolution_id = ?
+        WHERE conflict_unit_id = ?
+    """, ('deferred' if decision_type == 'defer' else 'resolved', resolution_id, conflict_unit_id))
+    
+    db.conn.commit()
+    
+    trace.log("ck3.resolve_conflict", 
+              {"conflict_unit_id": conflict_unit_id, "decision_type": decision_type},
+              {"resolution_id": resolution_id})
+    
+    return {
+        "success": True,
+        "resolution_id": resolution_id,
+        "unit_key": conflict[0],
+        "domain": conflict[1],
+        "decision_type": decision_type,
+        "winner_candidate_id": winner_candidate_id,
+    }
+
+
+@mcp.tool()
+def ck3_get_unit_content(
+    unit_key: str,
+    source_filter: str | None = None,
+) -> dict:
+    """
+    Get the content for all candidates of a unit_key.
+    
+    Useful for comparing what different mods define for the same unit.
+    
+    Args:
+        unit_key: The unit key (e.g., "on_action:on_yearly_pulse")
+        source_filter: Optional filter by source name
+    
+    Returns:
+        All contributions for this unit_key with their content
+    """
+    db = _get_db()
+    playset_id = _get_playset_id()
+    
+    # Contributions are now per-content_version, so we need to join through
+    # playset_mods and vanilla to get only contributions in this playset
+    query = """
+        WITH playset_contribs AS (
+            -- Vanilla contributions
+            SELECT 
+                cu.contrib_id, cu.content_version_id, cu.file_id,
+                cu.domain, cu.unit_key, cu.relpath, cu.line_number,
+                cu.merge_behavior, cu.summary, cu.node_hash,
+                -1 as load_order_index, 'vanilla' as source_kind, 'vanilla' as source_name
+            FROM contribution_units cu
+            JOIN content_versions cv ON cu.content_version_id = cv.content_version_id
+            JOIN vanilla_versions vv ON cv.vanilla_version_id = vv.vanilla_version_id
+            JOIN playsets p ON p.vanilla_version_id = vv.vanilla_version_id
+            WHERE p.playset_id = ? AND cv.kind = 'vanilla'
+            
+            UNION ALL
+            
+            -- Mod contributions
+            SELECT 
+                cu.contrib_id, cu.content_version_id, cu.file_id,
+                cu.domain, cu.unit_key, cu.relpath, cu.line_number,
+                cu.merge_behavior, cu.summary, cu.node_hash,
+                pm.load_order_index, 'mod' as source_kind,
+                COALESCE(mp.name, 'Unknown Mod') as source_name
+            FROM contribution_units cu
+            JOIN playset_mods pm ON cu.content_version_id = pm.content_version_id
+            JOIN content_versions cv ON cu.content_version_id = cv.content_version_id
+            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            WHERE pm.playset_id = ? AND pm.enabled = 1
+        )
+        SELECT 
+            pc.contrib_id, pc.content_version_id, pc.file_id,
+            pc.domain, pc.relpath, pc.line_number, pc.merge_behavior, pc.summary,
+            pc.load_order_index, pc.source_kind, pc.source_name,
+            fc.content_text
+        FROM playset_contribs pc
+        LEFT JOIN files f ON pc.file_id = f.file_id
+        LEFT JOIN file_contents fc ON f.content_hash = fc.content_hash
+        WHERE pc.unit_key = ?
+    """
+    params = [playset_id, playset_id, unit_key]
+    
+    if source_filter:
+        query += " AND (pc.source_kind = ? OR LOWER(pc.source_name) LIKE LOWER(?))"
+        params.extend([source_filter, f"%{source_filter}%"])
+    
+    query += " ORDER BY load_order_index"
+    
+    contributions = []
+    for row in db.conn.execute(query, params).fetchall():
+        contributions.append({
+            "contrib_id": row[0],
+            "content_version_id": row[1],
+            "file_id": row[2],
+            "domain": row[3],
+            "relpath": row[4],
+            "line_number": row[5],
+            "merge_behavior": row[6],
+            "summary": row[7],
+            "load_order_index": row[8],
+            "source_kind": row[9],
+            "source_name": row[10],
+            "content": row[11][:5000] if row[11] else None,  # Limit content preview
+        })
+    
+    return {
+        "unit_key": unit_key,
+        "count": len(contributions),
+        "contributions": contributions,
+    }
+
+
+# ============================================================================
+# General Search Tools
+# ============================================================================
+
+@mcp.tool()
+def ck3_search_files(
+    pattern: str,
+    source_filter: Optional[str] = None,
+    limit: int = 100
+) -> dict:
+    """
+    Search for files by path pattern.
+    
+    Use this when you need to find files by name or path pattern,
+    NOT for symbol/definition search (use ck3_search_symbols for that).
+    
+    Args:
+        pattern: SQL LIKE pattern for file path (e.g., "%on_action%" or "common/traits/%")
+        source_filter: Filter by source ("vanilla", mod name, or mod ID)
+        limit: Maximum results to return
+    
+    Returns:
+        List of matching files with source info
+    """
+    db = _get_db()
+    trace = _get_trace()
+    playset_id = _get_playset_id()
+    
+    files = db.search_files(playset_id, pattern, source_filter, limit)
+    
+    trace.log("ck3.search_files", {
+        "pattern": pattern,
+        "source_filter": source_filter,
+    }, {"count": len(files)})
+    
+    return {"pattern": pattern, "count": len(files), "files": files}
+
+
+@mcp.tool()
+def ck3_search_content(
+    query: str,
+    file_pattern: Optional[str] = None,
+    source_filter: Optional[str] = None,
+    limit: int = 50
+) -> dict:
+    """
+    Search file contents for text matches (grep-style).
+    
+    Use this when you need to search for specific text inside files,
+    like finding where a specific effect or trigger is used.
+    
+    Args:
+        query: Text to search for (case-insensitive substring match)
+        file_pattern: SQL LIKE pattern to limit which files are searched
+        source_filter: Filter by source ("vanilla", mod name, or mod ID)
+        limit: Maximum results to return
+    
+    Returns:
+        List of matching files with context snippets
+    """
+    db = _get_db()
+    trace = _get_trace()
+    playset_id = _get_playset_id()
+    
+    results = db.search_content(playset_id, query, file_pattern, source_filter, limit)
+    
+    trace.log("ck3.search_content", {
+        "query": query,
+        "file_pattern": file_pattern,
+    }, {"count": len(results)})
+    
+    return {"query": query, "count": len(results), "results": results}
+
+
+# ============================================================================
+# Conflicts Report Tools
+# ============================================================================
+
+@mcp.tool()
+def ck3_generate_conflicts_report(
+    domains_include: Optional[list[str]] = None,
+    domains_exclude: Optional[list[str]] = None,
+    paths_filter: Optional[str] = None,
+    min_candidates: int = 2,
+    min_risk_score: int = 0,
+    output_format: Literal["summary", "json", "full"] = "summary"
+) -> dict:
+    """
+    Generate a complete conflicts report for the active playset.
+    
+    This analyzes all file-level and ID-level conflicts and produces
+    a deterministic, machine-readable report.
+    
+    Args:
+        domains_include: Only analyze these domains (None = all)
+        domains_exclude: Exclude these domains from analysis
+        paths_filter: SQL LIKE pattern for paths (e.g., "common/on_action%")
+        min_candidates: Minimum sources to count as conflict (default 2)
+        min_risk_score: Only include conflicts with risk >= this score
+        output_format: "summary" (CLI text), "json" (full JSON), "full" (both)
+    
+    Returns:
+        Conflicts report in requested format
+    """
+    from ck3raven.resolver.report import ConflictsReportGenerator, report_summary_cli
+    
+    db = _get_db()
+    trace = _get_trace()
+    playset_id = _get_playset_id()
+    
+    generator = ConflictsReportGenerator(db.conn)
+    report = generator.generate(
+        playset_id=playset_id,
+        domains_include=domains_include,
+        domains_exclude=domains_exclude,
+        paths_filter=paths_filter,
+        min_candidates=min_candidates,
+        min_risk_score=min_risk_score,
+    )
+    
+    trace.log("ck3.generate_conflicts_report", {
+        "domains_include": domains_include,
+        "paths_filter": paths_filter,
+    }, {
+        "file_conflicts": report.summary.file_conflicts if report.summary else 0,
+        "id_conflicts": report.summary.id_conflicts if report.summary else 0,
+    })
+    
+    result = {}
+    
+    if output_format in ("summary", "full"):
+        result["summary_text"] = report_summary_cli(report)
+    
+    if output_format in ("json", "full"):
+        result["report"] = report.to_dict()
+    
+    # Always include key stats
+    if report.summary:
+        result["stats"] = {
+            "file_conflicts": report.summary.file_conflicts,
+            "id_conflicts": report.summary.id_conflicts,
+            "high_risk": report.summary.high_risk_id_conflicts,
+            "uncertain": report.summary.uncertain_conflicts,
+        }
+    
+    return result
+
+
+@mcp.tool()
+def ck3_get_high_risk_conflicts(
+    domain: Optional[str] = None,
+    min_risk_score: int = 60,
+    limit: int = 20
+) -> dict:
+    """
+    Get the highest-risk conflicts for prioritized review.
+    
+    Args:
+        domain: Filter by domain (on_action, events, etc.)
+        min_risk_score: Minimum risk score (default 60 = high risk)
+        limit: Maximum conflicts to return
+    
+    Returns:
+        List of high-risk conflicts sorted by risk score
+    """
+    from ck3raven.resolver.report import ConflictsReportGenerator
+    
+    db = _get_db()
+    trace = _get_trace()
+    playset_id = _get_playset_id()
+    
+    generator = ConflictsReportGenerator(db.conn)
+    report = generator.generate(
+        playset_id=playset_id,
+        domains_include=[domain] if domain else None,
+        min_candidates=2,
+        min_risk_score=0,  # We'll filter ourselves
+    )
+    
+    # Combine and sort by risk
+    all_conflicts = []
+    
+    for fc in report.file_level:
+        if fc.risk and fc.risk.score >= min_risk_score:
+            all_conflicts.append({
+                "type": "file",
+                "key": fc.vpath,
+                "domain": fc.domain,
+                "risk_score": fc.risk.score,
+                "risk_bucket": fc.risk.bucket,
+                "reasons": fc.risk.reasons,
+                "candidate_count": len(fc.candidates),
+                "winner": fc.winner_by_load_order.source_name if fc.winner_by_load_order else None,
+            })
+    
+    for ic in report.id_level:
+        if ic.risk and ic.risk.score >= min_risk_score:
+            all_conflicts.append({
+                "type": "id",
+                "key": ic.unit_key,
+                "domain": ic.domain,
+                "container": ic.container_vpath,
+                "risk_score": ic.risk.score,
+                "risk_bucket": ic.risk.bucket,
+                "reasons": ic.risk.reasons,
+                "candidate_count": len(ic.candidates),
+                "winner": ic.engine_effective_winner.candidate_id if ic.engine_effective_winner else None,
+                "merge_semantics": ic.merge_semantics.expected if ic.merge_semantics else None,
+            })
+    
+    # Sort by risk score descending
+    all_conflicts.sort(key=lambda x: x["risk_score"], reverse=True)
+    
+    trace.log("ck3.get_high_risk_conflicts", {
+        "domain": domain,
+        "min_risk_score": min_risk_score,
+    }, {"count": len(all_conflicts)})
+    
+    return {
+        "count": len(all_conflicts),
+        "conflicts": all_conflicts[:limit],
+    }
+
+
+# ============================================================================
 # Main Entry Point
 # ============================================================================
 

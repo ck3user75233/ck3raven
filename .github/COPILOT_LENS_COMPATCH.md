@@ -6,6 +6,42 @@
 
 ---
 
+## ⚠️ CRITICAL: Database-Only Mode
+
+**ck3lens is a DATABASE-ONLY mode.** All information is accessed through MCP tools that query the ck3raven SQLite database.
+
+### ✅ ALLOWED Tools
+- `mcp_ck3lens_*` - All CK3 Lens MCP tools
+- Live file editing via MCP (`ck3_write_file`, `ck3_edit_file`)
+
+### ❌ FORBIDDEN Tools (Do NOT use these)
+- `run_in_terminal` - No terminal commands
+- `grep_search` - No filesystem grep
+- `file_search` - No filesystem search  
+- `read_file` - No direct file reads (use `ck3_get_file` or `ck3_read_live_file`)
+- `semantic_search` - No semantic search (use `ck3_search_symbols`)
+- `list_dir` - No directory listing (use `ck3_list_live_files`)
+
+### Why Database-Only?
+The ck3raven database contains:
+- **Parsed AST** of all CK3 script files
+- **Raw file content** (no need to read from disk)
+- **Symbol index** with fuzzy search
+- **Conflict detection** across load order
+- **Playset management** for mods
+
+Everything you need is in the database. If something is missing, use `ck3raven-dev` mode to add ingestion/extraction tools.
+
+---
+
+## VS Code Tool Set
+
+Select the **"CK3 Lens"** tool set in VS Code to restrict available tools:
+- Chat menu → Configure Tool Sets → Select "ck3lens"
+- Or use `Chat: Configure Tool Sets` command
+
+---
+
 ## Quick Identity Check
 
 **Am I in the right mode?**
@@ -14,6 +50,7 @@
 - ✅ You're writing compatibility patches for MSC/MSCRE/LRE
 - ✅ You're analyzing load order conflicts
 - ❌ If you're writing Python code for ck3raven → Switch to `ck3raven-dev` mode
+- ❌ If you used `grep_search`, `read_file`, or `run_in_terminal` → You're doing it wrong!
 
 ---
 
@@ -31,6 +68,27 @@ You have access to **CK3 Lens MCP tools** that query a 26+ GB indexed database:
 | `ck3_get_file` | Read indexed file content | Check vanilla/mod file content |
 | `ck3_get_conflicts` | Find load-order conflicts | Diagnosing override issues |
 | `ck3_parse_content` | Validate CK3 syntax | Before writing any file |
+
+### Playset Management Tools
+
+| Tool | Purpose | When to Use |
+|------|---------|-------------|
+| `ck3_get_active_playset` | Get current playset with mod list | Check what mods are loaded |
+| `ck3_list_playsets` | List all available playsets | See all playset options |
+| `ck3_search_mods` | Search mods by name/ID/abbreviation | Find a mod before adding |
+| `ck3_add_mod_to_playset` | Add mod (ingests+extracts symbols) | Add new mod to playset |
+| `ck3_remove_mod_from_playset` | Remove mod from playset | Remove mod from playset |
+
+### Unit-Level Conflict Analysis Tools
+
+| Tool | Purpose | When to Use |
+|------|---------|-------------|
+| `ck3_scan_unit_conflicts` | Full conflict scan of playset | Start of compatch session |
+| `ck3_get_conflict_summary` | Summary counts by risk/domain | Quick overview |
+| `ck3_list_conflict_units` | List conflicts with filters | Find high-risk conflicts |
+| `ck3_get_conflict_detail` | Full detail for one conflict | Analyze specific conflict |
+| `ck3_resolve_conflict` | Record resolution decision | After deciding winner |
+| `ck3_get_unit_content` | Compare all versions of a unit | See what each mod defines |
 
 ### Live Mod Operations
 

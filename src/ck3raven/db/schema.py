@@ -59,6 +59,12 @@ CREATE TABLE IF NOT EXISTS content_versions (
     file_count INTEGER NOT NULL DEFAULT 0,
     total_size INTEGER NOT NULL DEFAULT 0,
     ingested_at TEXT NOT NULL DEFAULT (datetime('now')),
+    -- Lifecycle tracking
+    downloaded_at TEXT,                      -- When mod was downloaded from workshop (for mods)
+    source_mtime TEXT,                       -- Latest mtime of source directory
+    symbols_extracted_at TEXT,               -- When symbols were extracted
+    contributions_extracted_at TEXT,         -- When contributions were extracted
+    is_stale INTEGER NOT NULL DEFAULT 1,     -- 1 = needs re-check, 0 = current
     FOREIGN KEY (vanilla_version_id) REFERENCES vanilla_versions(vanilla_version_id),
     FOREIGN KEY (mod_package_id) REFERENCES mod_packages(mod_package_id)
 );
@@ -198,6 +204,10 @@ CREATE TABLE IF NOT EXISTS playsets (
     vanilla_version_id INTEGER NOT NULL,     -- FK to vanilla_versions
     description TEXT,
     is_active INTEGER NOT NULL DEFAULT 0,    -- Max 5 active at once (enforced in code)
+    -- Contribution lifecycle tracking
+    contributions_hash TEXT,                 -- Hash of current contribution state
+    contributions_stale INTEGER NOT NULL DEFAULT 1,  -- 1 = needs rescan, 0 = up to date
+    contributions_scanned_at TEXT,           -- When last scanned
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (vanilla_version_id) REFERENCES vanilla_versions(vanilla_version_id)
@@ -311,6 +321,129 @@ CREATE TABLE IF NOT EXISTS db_metadata (
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- ============================================================================
+-- CONTRIBUTION & CONFLICT ANALYSIS
+-- ============================================================================
+
+-- Contribution Units - what each source (vanilla/mod) provides for a unit_key
+-- Extracted ONCE per content_version, NOT per playset
+-- This is the canonical "what does this mod define" data
+CREATE TABLE IF NOT EXISTS contribution_units (
+    contrib_id TEXT PRIMARY KEY,              -- SHA256[:16] of (cv_id, file_id, node_path)
+    content_version_id INTEGER NOT NULL,      -- FK to content_versions
+    file_id INTEGER NOT NULL,                 -- FK to files
+    domain TEXT NOT NULL,                     -- on_action, decision, trait, etc.
+    unit_key TEXT NOT NULL,                   -- on_action:on_yearly_pulse
+    node_path TEXT,                           -- JSON path to AST node
+    relpath TEXT NOT NULL,                    -- File path for display
+    line_number INTEGER,
+    merge_behavior TEXT NOT NULL,             -- replace, append, merge_by_id, unknown
+    symbols_json TEXT,                        -- JSON: symbols defined by this unit
+    refs_json TEXT,                           -- JSON: refs used by this unit
+    node_hash TEXT,                           -- Hash of AST node for diff detection
+    summary TEXT,                             -- Human-readable summary
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (content_version_id) REFERENCES content_versions(content_version_id),
+    FOREIGN KEY (file_id) REFERENCES files(file_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_contrib_cv ON contribution_units(content_version_id);
+CREATE INDEX IF NOT EXISTS idx_contrib_domain ON contribution_units(domain);
+CREATE INDEX IF NOT EXISTS idx_contrib_unit_key ON contribution_units(unit_key);
+CREATE INDEX IF NOT EXISTS idx_contrib_file ON contribution_units(file_id);
+
+-- Conflict Units - grouped conflicts for a specific playset
+-- Created by grouping contribution_units from playset's content_versions by unit_key
+CREATE TABLE IF NOT EXISTS conflict_units (
+    conflict_unit_id TEXT PRIMARY KEY,        -- SHA256[:16] of (playset_id, unit_key)
+    playset_id INTEGER NOT NULL,              -- FK to playsets
+    unit_key TEXT NOT NULL,                   -- on_action:on_yearly_pulse
+    domain TEXT NOT NULL,                     -- on_action
+    candidate_count INTEGER NOT NULL,
+    merge_capability TEXT NOT NULL,           -- winner_only, guided_merge, ai_merge
+    risk TEXT NOT NULL,                       -- low, med, high
+    risk_score INTEGER NOT NULL,              -- 0-100
+    uncertainty TEXT NOT NULL,                -- none, low, med, high
+    reasons_json TEXT,                        -- JSON array of risk reasons
+    resolution_status TEXT NOT NULL DEFAULT 'unresolved',  -- unresolved, resolved, deferred
+    resolution_id TEXT,                       -- FK to resolution if resolved
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (playset_id) REFERENCES playsets(playset_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_conflict_playset ON conflict_units(playset_id);
+CREATE INDEX IF NOT EXISTS idx_conflict_unit_key ON conflict_units(unit_key);
+CREATE INDEX IF NOT EXISTS idx_conflict_domain ON conflict_units(domain);
+CREATE INDEX IF NOT EXISTS idx_conflict_risk ON conflict_units(risk);
+CREATE INDEX IF NOT EXISTS idx_conflict_status ON conflict_units(resolution_status);
+
+-- Conflict Candidates - link conflict units to contribution units
+-- Each candidate is a contribution from a specific source in the playset
+CREATE TABLE IF NOT EXISTS conflict_candidates (
+    conflict_unit_id TEXT NOT NULL,
+    candidate_id TEXT NOT NULL,               -- Unique within conflict
+    contrib_id TEXT NOT NULL,                 -- FK to contribution_units
+    source_kind TEXT NOT NULL,                -- vanilla or mod
+    source_name TEXT NOT NULL,                -- Mod name
+    load_order_index INTEGER NOT NULL,
+    is_winner INTEGER NOT NULL DEFAULT 0,     -- 1 if this would win by load order
+    PRIMARY KEY (conflict_unit_id, candidate_id),
+    FOREIGN KEY (conflict_unit_id) REFERENCES conflict_units(conflict_unit_id),
+    FOREIGN KEY (contrib_id) REFERENCES contribution_units(contrib_id)
+);
+
+-- Resolution Choices - user decisions on how to handle conflicts
+CREATE TABLE IF NOT EXISTS resolution_choices (
+    resolution_id TEXT PRIMARY KEY,
+    conflict_unit_id TEXT NOT NULL,
+    decision_type TEXT NOT NULL,              -- winner, custom_merge, defer
+    winner_candidate_id TEXT,                 -- For winner type
+    merge_policy_json TEXT,                   -- For custom_merge type
+    notes TEXT,
+    applied_at TEXT,
+    applied_by TEXT NOT NULL DEFAULT 'user',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (conflict_unit_id) REFERENCES conflict_units(conflict_unit_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_resolution_conflict ON resolution_choices(conflict_unit_id);
+
+-- ============================================================================
+-- CHANGE LOG & UPDATE TRACKING
+-- ============================================================================
+
+-- Change Log - tracks all file changes when mods/vanilla are updated
+CREATE TABLE IF NOT EXISTS change_log (
+    change_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content_version_id INTEGER NOT NULL,      -- Which mod/vanilla was updated
+    previous_version_id INTEGER,              -- Previous content_version (if upgrade)
+    change_type TEXT NOT NULL,                -- 'initial', 'update', 'revert'
+    changed_at TEXT NOT NULL DEFAULT (datetime('now')),
+    summary TEXT,                             -- Human-readable summary
+    FOREIGN KEY (content_version_id) REFERENCES content_versions(content_version_id),
+    FOREIGN KEY (previous_version_id) REFERENCES content_versions(content_version_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_changelog_cv ON change_log(content_version_id);
+CREATE INDEX IF NOT EXISTS idx_changelog_time ON change_log(changed_at);
+
+-- File Changes - detailed per-file changes within a change_log entry
+CREATE TABLE IF NOT EXISTS file_changes (
+    file_change_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    change_id INTEGER NOT NULL,               -- FK to change_log
+    file_id INTEGER NOT NULL,                 -- FK to files
+    relpath TEXT NOT NULL,                    -- Path for display
+    change_type TEXT NOT NULL,                -- 'added', 'modified', 'deleted'
+    old_content_hash TEXT,                    -- Previous content hash
+    new_content_hash TEXT,                    -- New content hash
+    blocks_changed_json TEXT,                 -- JSON: [{name, type, change}] summary
+    FOREIGN KEY (change_id) REFERENCES change_log(change_id),
+    FOREIGN KEY (file_id) REFERENCES files(file_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_filechange_changeid ON file_changes(change_id);
+CREATE INDEX IF NOT EXISTS idx_filechange_relpath ON file_changes(relpath);
 """
 
 # FTS triggers for keeping indexes in sync

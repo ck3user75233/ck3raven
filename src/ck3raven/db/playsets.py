@@ -3,6 +3,12 @@ Playsets Management
 
 Create and manage mod playsets with load order.
 Enforces maximum of 5 active playsets to save resources.
+
+Contribution Lifecycle:
+- Contributions are marked "stale" when playset composition/order changes
+- The contributions_stale flag triggers rescan on next conflict analysis
+- Staleness is set by: add_mod, remove_mod, reorder_mods
+- Staleness is cleared by: ContributionsManager.refresh()
 """
 
 import sqlite3
@@ -16,6 +22,47 @@ from ck3raven.db.models import Playset, PlaysetMod, ContentVersion
 
 # Maximum number of active playsets
 MAX_ACTIVE_PLAYSETS = 5
+
+
+def _mark_contributions_stale(conn: sqlite3.Connection, playset_id: int) -> None:
+    """
+    Mark a playset's contribution data as stale.
+    Called automatically when playset composition or order changes.
+    """
+    conn.execute("""
+        UPDATE playsets 
+        SET contributions_stale = 1, updated_at = datetime('now')
+        WHERE playset_id = ?
+    """, (playset_id,))
+
+
+def mark_contributions_current(
+    conn: sqlite3.Connection,
+    playset_id: int,
+    contributions_hash: str
+) -> None:
+    """
+    Mark a playset's contribution data as current after a successful scan.
+    Called by ContributionsManager after refresh.
+    """
+    conn.execute("""
+        UPDATE playsets 
+        SET contributions_stale = 0, 
+            contributions_hash = ?,
+            contributions_scanned_at = datetime('now'),
+            updated_at = datetime('now')
+        WHERE playset_id = ?
+    """, (contributions_hash, playset_id))
+    conn.commit()
+
+
+def is_contributions_stale(conn: sqlite3.Connection, playset_id: int) -> bool:
+    """Check if a playset's contribution data needs refresh."""
+    row = conn.execute(
+        "SELECT contributions_stale FROM playsets WHERE playset_id = ?",
+        (playset_id,)
+    ).fetchone()
+    return row is None or bool(row['contributions_stale'])
 
 
 def create_playset(
@@ -213,6 +260,9 @@ def add_mod_to_playset(
         VALUES (?, ?, ?, 1)
     """, (playset_id, content_version_id, load_order_index))
     
+    # Mark contributions stale when playset changes
+    _mark_contributions_stale(conn, playset_id)
+    
     conn.commit()
     
     return PlaysetMod(
@@ -239,6 +289,10 @@ def remove_mod_from_playset(
         WHERE playset_id = ? AND content_version_id = ?
     """, (playset_id, content_version_id))
     
+    if cursor.rowcount > 0:
+        # Mark contributions stale when playset changes
+        _mark_contributions_stale(conn, playset_id)
+    
     conn.commit()
     return cursor.rowcount > 0
 
@@ -259,6 +313,10 @@ def set_mod_enabled(
         UPDATE playset_mods SET enabled = ?
         WHERE playset_id = ? AND content_version_id = ?
     """, (int(enabled), playset_id, content_version_id))
+    
+    if cursor.rowcount > 0:
+        # Mark contributions stale - enabled state affects conflict resolution
+        _mark_contributions_stale(conn, playset_id)
     
     conn.commit()
     return cursor.rowcount > 0
@@ -282,6 +340,9 @@ def reorder_mods(
             UPDATE playset_mods SET load_order_index = ?
             WHERE playset_id = ? AND content_version_id = ?
         """, (idx, playset_id, cvid))
+    
+    # Mark contributions stale - load order determines winners
+    _mark_contributions_stale(conn, playset_id)
     
     conn.commit()
 

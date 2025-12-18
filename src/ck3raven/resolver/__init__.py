@@ -6,6 +6,10 @@ Implements CK3's merge policies for resolving conflicts between mods.
 Two resolver implementations:
 - SQLResolver: Production resolver, operates on database (symbols/files tables)
 - Resolver: Legacy file-based resolver for testing only
+
+Contribution/Conflict Analysis:
+- ContributionsManager: Lifecycle-aware conflict analysis
+- ConflictAnalyzer: Unit-level extraction and grouping
 """
 
 from ck3raven.resolver.policies import MergePolicy, SubBlockPolicy, ContentTypeConfig
@@ -25,6 +29,13 @@ from ck3raven.resolver.sql_resolver import (
     OverriddenSymbol,
     FileOverride,
     ResolutionResult,
+)
+
+# Contributions Manager (LIFECYCLE-AWARE)
+from ck3raven.resolver.manager import (
+    ContributionsManager,
+    RefreshResult,
+    ConflictSummary,
 )
 
 # Legacy file-based resolver (DEPRECATED - for tests only)
@@ -63,6 +74,10 @@ __all__ = [
     "OverriddenSymbol",
     "FileOverride",
     "ResolutionResult",
+    # Contributions Manager (LIFECYCLE-AWARE)
+    "ContributionsManager",
+    "RefreshResult",
+    "ConflictSummary",
     # Legacy file-based (DEPRECATED)
     "SourceFile",
     "Definition",

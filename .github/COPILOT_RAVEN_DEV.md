@@ -25,7 +25,8 @@ Given a playset (vanilla + mods in load order), it:
 1. **Parses** CK3 script files into AST (100% regex-free)
 2. **Resolves** conflicts using accurate merge rules
 3. **Stores** everything in a deduplicated SQLite database
-4. **Emulates** the final game state with full provenance tracking
+4. **Analyzes** unit-level conflicts with risk scoring
+5. **Emulates** the final game state with full provenance tracking
 
 ---
 
@@ -33,33 +34,23 @@ Given a playset (vanilla + mods in load order), it:
 
 | Module | Status | Description |
 |--------|--------|-------------|
-| `parser/` | ⚠️ 99% Complete | 100% regex-free, 100% vanilla parse rate, **missing to_dict()** |
-| `resolver/` | ✅ Complete | 4 merge policies, 15+ content type configs |
+| `parser/` | ✅ Complete | 100% regex-free, 100% vanilla parse rate |
+| `resolver/` | ✅ Complete | 4 merge policies, file/symbol/unit-level resolution |
 | `db/` | ✅ Complete | SQLite with content-addressed storage, FTS5 search |
-| `tools/ck3lens_mcp/` | ⚠️ Phase 1 | 20 MCP tools, needs symbol population |
+| `tools/ck3lens_mcp/` | ✅ Phase 1.5 | 25+ MCP tools including conflict analyzer |
 | `emulator/` | 🔲 Stubs | Full game state building (Phase 2) |
 | CLI | 🔲 Minimal | Basic structure only |
-
-### Known Issues (Fix These)
-
-| Issue | Location | Problem | Solution |
-|-------|----------|---------|----------|
-| **AST Serialization** | `parser/parser.py` | AST nodes lack `to_dict()` method | Add `to_dict()` to RootNode, BlockNode, etc. |
-| ~~Version detection~~ | `scripts/build_database.py:43` | ~~Wrong path~~ | ✅ FIXED 2025-12-18 |
-| ~~Empty playsets~~ | Database | ~~0 rows~~ | ✅ FIXED 2025-12-18 (105 mods) |
-| Empty symbols | Database | `symbols` table has 0 rows | Blocked by AST serialization fix |
 
 ### Database Status
 
 | Table | Count | Notes |
 |-------|-------|-------|
-| vanilla_versions | 1 | Version shows 1.13.x (BUG - should be 1.18.2) |
-| mod_packages | 102 | ✅ All mods indexed |
-| content_versions | 106 | ✅ |
-| file_contents | 77,121 | ✅ 26 GB deduplicated |
-| files | 80,968 | ✅ |
-| playsets | 0 | ❌ Not created yet |
-| symbols | 0 | ❌ Not extracted yet |
+| mod_packages | ~105 | ✅ All mods indexed |
+| content_versions | ~110 | ✅ |
+| file_contents | ~80,000 | ✅ 26 GB deduplicated |
+| files | ~85,000 | ✅ |
+| symbols | ~1,200,000 | ✅ Extracted |
+| playsets | 1 | ✅ Active playset configured |
 
 ---
 
@@ -68,40 +59,42 @@ Given a playset (vanilla + mods in load order), it:
 ```
 ck3raven/
 ├── src/ck3raven/
-│   ├── parser/           # Lexer + Parser → AST
-│   │   ├── lexer.py      # Token stream (100% regex-free)
-│   │   └── parser.py     # RootNode, BlockNode, AssignmentNode, ValueNode, ListNode
+│   ├── parser/               # Lexer + Parser → AST
+│   │   ├── lexer.py          # 100% regex-free tokenizer
+│   │   └── parser.py         # AST nodes: RootNode, BlockNode, etc.
 │   │
-│   ├── resolver/         # Merge/Override Resolution
-│   │   ├── policies.py   # 4 merge policies + content type configs
-│   │   └── resolver.py   # Conflict resolution with provenance
+│   ├── resolver/             # Conflict Resolution Layer
+│   │   ├── policies.py           # 4 merge policies + content type configs
+│   │   ├── sql_resolver.py       # File-level and symbol-level resolution
+│   │   ├── contributions.py      # Data contracts (ContributionUnit, ConflictUnit)
+│   │   └── conflict_analyzer.py  # Unit extraction, grouping, risk scoring
 │   │
-│   ├── db/               # Database Storage Layer
-│   │   ├── schema.py     # SQLite schema, DEFAULT_DB_PATH, init_database()
-│   │   ├── models.py     # 13 dataclass models
-│   │   ├── content.py    # Content-addressed storage (SHA256)
-│   │   ├── ingest.py     # Vanilla/mod ingestion
-│   │   ├── ast_cache.py  # AST cache by (content_hash, parser_version)
-│   │   ├── symbols.py    # Symbol/ref extraction
-│   │   ├── search.py     # FTS5 search
-│   │   ├── playsets.py   # Playset management (max 5 active)
-│   │   └── cryo.py       # Snapshot export/import
+│   ├── db/                   # Database Storage Layer
+│   │   ├── schema.py         # SQLite schema, DEFAULT_DB_PATH
+│   │   ├── models.py         # Dataclass models
+│   │   ├── content.py        # Content-addressed storage (SHA256)
+│   │   ├── ingest.py         # Vanilla/mod ingestion
+│   │   ├── ast_cache.py      # AST cache by (content_hash, parser_version)
+│   │   ├── symbols.py        # Symbol/ref extraction
+│   │   ├── search.py         # FTS5 search
+│   │   ├── playsets.py       # Playset management
+│   │   └── cryo.py           # Snapshot export/import
 │   │
-│   └── emulator/         # (Phase 2) Full game state
+│   └── emulator/             # (Phase 2) Full game state
 │
-├── tools/ck3lens_mcp/    # MCP Server
-│   ├── server.py         # FastMCP with 20 tools
+├── tools/ck3lens_mcp/        # MCP Server
+│   ├── server.py             # FastMCP with 25+ tools
 │   └── ck3lens/
-│       ├── workspace.py  # Live mod whitelist
-│       └── db_queries.py # Query layer
+│       ├── workspace.py      # Live mod whitelist
+│       └── db_queries.py     # Query layer
 │
-├── scripts/              # Utility scripts
-│   ├── build_database.py
-│   ├── create_playset.py
-│   └── populate_symbols.py
+├── docs/                     # Design documentation
+│   └── ARCHITECTURE.md       # Comprehensive architecture guide
 │
-└── tests/                # Pytest suite
+└── tests/                    # Pytest suite
 ```
+
+See [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) for detailed documentation.
 
 ---
 
@@ -218,9 +211,11 @@ pytest tests/ -v
 - [ ] Sidebar webview (Explorer, Compatch, Reports)
 - [ ] Node detail panel (Syntax ⇄ AST toggle)
 
-### Phase 4: Compatch Helper
-- [ ] Conflict unit extraction
-- [ ] Risk scoring
+### Phase 4: Compatch Helper (IN PROGRESS)
+- [x] Conflict unit extraction and grouping
+- [x] Risk scoring algorithm
+- [x] Unit-level MCP tools (scan, list, detail, resolve)
+- [ ] Decision card UI (winner selection)
 - [ ] Merge editor with AI assistance
 - [ ] Patch file generation
 

@@ -14,18 +14,19 @@ This workspace contains the **CK3 Lens** ecosystem - a complete AI-powered toolk
 | Component | Path | Purpose |
 |-----------|------|---------|
 | **ck3raven** | `AI Workspace/ck3raven/` | Python parser, resolver, SQLite database |
-| **CK3 Lens MCP** | `ck3raven/tools/ck3lens_mcp/` | MCP server exposing 20 tools to Copilot |
+| **CK3 Lens MCP** | `ck3raven/tools/ck3lens_mcp/` | MCP server exposing 28+ tools to Copilot |
 | **CK3 Lens Explorer** | `ck3raven/tools/ck3lens-explorer/` | VS Code extension for human UI |
 | **CK3 Parser** | `AI Workspace/ck3_parser/` | Original standalone parser (100% vanilla pass rate) |
 
 ### Database
 - **Path:** `~/.ck3raven/ck3raven.db`
-- **Content:** 80,968 files, 106 content versions, 27.9 GB indexed
+- **Content:** ~85,000 files, 110+ content versions, 27.9 GB indexed
 - **Includes:** Vanilla CK3, Steam Workshop mods, local mods
+- **Symbols:** ~1.2 million extracted symbol definitions
 
 ---
 
-## MCP Tools Reference
+## MCP Tools Reference (28+ Tools)
 
 ### Session Management
 | Tool | Purpose | Usage |
@@ -36,12 +37,43 @@ This workspace contains the **CK3 Lens** ecosystem - a complete AI-powered toolk
 ### Symbol Search & Validation
 | Tool | Purpose | Critical Notes |
 |------|---------|----------------|
-| `ck3_search_symbols` | Find traits, decisions, events | Uses adjacency matching - "combat_skill" also finds "combat_*_skill" |
+| `ck3_search_symbols` | Find traits, decisions, events by name | Uses adjacency matching - "combat_skill" also finds "combat_*_skill" |
+| `ck3_search_files` | Find files by path pattern | Use SQL LIKE patterns: "%on_action%", "common/traits/%" |
+| `ck3_search_content` | Grep-style content search | Find text inside files, returns snippets |
 | `ck3_confirm_not_exists` | Verify symbol truly missing | **ALWAYS call before claiming something doesn't exist** |
 | `ck3_get_file` | Read indexed file content | Returns raw content + optional AST |
-| `ck3_get_conflicts` | Find load-order conflicts | Shows winner/loser mods |
 | `ck3_parse_content` | Parse script, return AST/errors | Use for syntax validation before writing |
 | `ck3_validate_patchdraft` | Validate patches before applying | Checks path policy + references |
+
+### Playset Management
+| Tool | Purpose |
+|------|---------|
+| `ck3_get_active_playset` | Get current playset with mod list |
+| `ck3_list_playsets` | List all available playsets |
+| `ck3_search_mods` | Fuzzy search mods by name/ID/abbreviation |
+| `ck3_add_mod_to_playset` | Full workflow: find → ingest → extract → add |
+| `ck3_remove_mod_from_playset` | Remove with load order adjustment |
+
+### Conflict Detection (File-Level)
+| Tool | Purpose |
+|------|---------|
+| `ck3_get_conflicts` | Find load-order conflicts by path |
+
+### Unit-Level Conflict Analysis (ID-Level)
+| Tool | Purpose |
+|------|---------|
+| `ck3_scan_unit_conflicts` | Scan playset for all unit-level conflicts |
+| `ck3_get_conflict_summary` | Summary counts by risk/domain |
+| `ck3_list_conflict_units` | List conflicts with filters |
+| `ck3_get_conflict_detail` | Full detail for one conflict |
+| `ck3_resolve_conflict` | Record resolution decision |
+| `ck3_get_unit_content` | Compare all versions of a unit |
+
+### Conflicts Report
+| Tool | Purpose |
+|------|---------|
+| `ck3_generate_conflicts_report` | Full file + ID conflict report (JSON or CLI) |
+| `ck3_get_high_risk_conflicts` | Get highest-risk conflicts for priority review |
 
 ### Live Mod Operations
 | Tool | Purpose |

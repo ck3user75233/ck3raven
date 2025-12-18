@@ -425,6 +425,164 @@ class DBQueries:
         
         return node_to_dict(ast)
     
+    def search_files(
+        self,
+        playset_id: int,
+        pattern: str,
+        source_filter: Optional[str] = None,
+        limit: int = 100
+    ) -> list[dict]:
+        """
+        Search for files by path pattern.
+        
+        Args:
+            playset_id: Active playset
+            pattern: SQL LIKE pattern for file path
+            source_filter: Filter by source ("vanilla", mod name, or mod ID)
+            limit: Maximum results
+        
+        Returns:
+            List of matching files with source info
+        """
+        vanilla_vid = self.conn.execute(
+            "SELECT vanilla_version_id FROM playsets WHERE playset_id = ?",
+            (playset_id,)
+        ).fetchone()[0]
+        
+        sql = """
+            SELECT 
+                f.file_id,
+                f.relpath,
+                fc.size as file_size,
+                cv.kind,
+                COALESCE(mp.name, 'vanilla') as source_name,
+                mp.mod_package_id
+            FROM files f
+            JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            LEFT JOIN playset_mods pm ON cv.content_version_id = pm.content_version_id
+                AND pm.playset_id = ? AND pm.enabled = 1
+            LEFT JOIN file_contents fc ON f.content_hash = fc.content_hash
+            WHERE (
+                (cv.kind = 'vanilla' AND cv.vanilla_version_id = ?)
+                OR pm.playset_id IS NOT NULL
+            )
+            AND LOWER(f.relpath) LIKE LOWER(?)
+        """
+        params = [playset_id, vanilla_vid, pattern]
+        
+        if source_filter:
+            sql += " AND (cv.kind = ? OR LOWER(mp.name) LIKE LOWER(?) OR CAST(mp.mod_package_id AS TEXT) = ?)"
+            params.extend([source_filter, f"%{source_filter}%", source_filter])
+        
+        sql += " ORDER BY f.relpath LIMIT ?"
+        params.append(limit)
+        
+        files = []
+        for row in self.conn.execute(sql, params).fetchall():
+            files.append({
+                "file_id": row["file_id"],
+                "relpath": row["relpath"],
+                "size": row["file_size"],
+                "source_kind": row["kind"],
+                "source_name": row["source_name"],
+                "mod_id": row["mod_package_id"],
+            })
+        
+        return files
+    
+    def search_content(
+        self,
+        playset_id: int,
+        query: str,
+        file_pattern: Optional[str] = None,
+        source_filter: Optional[str] = None,
+        limit: int = 50
+    ) -> list[dict]:
+        """
+        Search file contents for text matches (grep-style).
+        
+        Args:
+            playset_id: Active playset
+            query: Text to search for (case-insensitive)
+            file_pattern: SQL LIKE pattern to filter files
+            source_filter: Filter by source
+            limit: Maximum results
+        
+        Returns:
+            List of matching files with snippets
+        """
+        vanilla_vid = self.conn.execute(
+            "SELECT vanilla_version_id FROM playsets WHERE playset_id = ?",
+            (playset_id,)
+        ).fetchone()[0]
+        
+        sql = """
+            SELECT 
+                f.file_id,
+                f.relpath,
+                cv.kind,
+                COALESCE(mp.name, 'vanilla') as source_name,
+                fc.content_text
+            FROM files f
+            JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            LEFT JOIN playset_mods pm ON cv.content_version_id = pm.content_version_id
+                AND pm.playset_id = ? AND pm.enabled = 1
+            JOIN file_contents fc ON f.content_hash = fc.content_hash
+            WHERE (
+                (cv.kind = 'vanilla' AND cv.vanilla_version_id = ?)
+                OR pm.playset_id IS NOT NULL
+            )
+            AND LOWER(fc.content_text) LIKE LOWER(?)
+        """
+        params = [playset_id, vanilla_vid, f"%{query}%"]
+        
+        if file_pattern:
+            sql += " AND LOWER(f.relpath) LIKE LOWER(?)"
+            params.append(file_pattern)
+        
+        if source_filter:
+            sql += " AND (cv.kind = ? OR LOWER(mp.name) LIKE LOWER(?))"
+            params.extend([source_filter, f"%{source_filter}%"])
+        
+        sql += " LIMIT ?"
+        params.append(limit)
+        
+        results = []
+        for row in self.conn.execute(sql, params).fetchall():
+            content = row["content_text"] if row["content_text"] else ""
+            
+            # Find snippet around match
+            query_lower = query.lower()
+            content_lower = content.lower()
+            pos = content_lower.find(query_lower)
+            
+            if pos >= 0:
+                start = max(0, pos - 50)
+                end = min(len(content), pos + len(query) + 100)
+                snippet = content[start:end]
+                if start > 0:
+                    snippet = "..." + snippet
+                if end < len(content):
+                    snippet = snippet + "..."
+            else:
+                snippet = content[:150] + "..." if len(content) > 150 else content
+            
+            # Count occurrences
+            count = content_lower.count(query_lower)
+            
+            results.append({
+                "file_id": row["file_id"],
+                "relpath": row["relpath"],
+                "source_kind": row["kind"],
+                "source_name": row["source_name"],
+                "match_count": count,
+                "snippet": snippet,
+            })
+        
+        return results
+    
     def close(self):
         """Close database connection."""
         self.conn.close()
