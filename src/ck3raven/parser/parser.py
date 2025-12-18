@@ -47,6 +47,16 @@ class ValueNode(ASTNode):
         if self.value_type == 'string':
             return f'"{self.value}"'
         return str(self.value)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary representation."""
+        return {
+            '_type': 'value',
+            'value': self.value,
+            'value_type': self.value_type,
+            'line': self.line,
+            'column': self.column
+        }
 
 
 @dataclass
@@ -79,6 +89,24 @@ class AssignmentNode(ASTNode):
             return f"{ind}{key_str} {self.operator} {inner}"
         else:
             return f"{ind}{key_str} {self.operator} {self.value}"
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary representation."""
+        if hasattr(self.value, 'to_dict'):
+            value_dict = self.value.to_dict()
+        elif self.value is None:
+            value_dict = None
+        else:
+            value_dict = str(self.value)
+        
+        return {
+            '_type': 'assignment',
+            'key': self.key,
+            'operator': self.operator,
+            'value': value_dict,
+            'line': self.line,
+            'column': self.column
+        }
 
 
 @dataclass
@@ -114,6 +142,22 @@ class ListNode(ASTNode):
                 lines.append(item.to_pdx(indent=indent + 1))
         lines.append(f"{ind}}}")
         return "\n".join(lines)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary representation."""
+        items_list = []
+        for item in self.items:
+            if hasattr(item, 'to_dict'):
+                items_list.append(item.to_dict())
+            else:
+                items_list.append(str(item))
+        
+        return {
+            '_type': 'list',
+            'items': items_list,
+            'line': self.line,
+            'column': self.column
+        }
 
 
 @dataclass
@@ -157,8 +201,29 @@ class BlockNode(ASTNode):
         return "\n".join(lines)
     
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary representation."""
-        result = {'_name': self.name, '_type': 'block'}
+        """Convert to dictionary representation.
+        
+        Returns both semantic format (key-value pairs) AND AST-preserving
+        format (children list) for different use cases.
+        """
+        result = {
+            '_name': self.name,
+            '_type': 'block',
+            'name': self.name,  # Also include without underscore for consistency
+            'line': self.line,
+            'column': self.column,
+        }
+        
+        # AST-preserving children list (needed for symbol extraction)
+        children_list = []
+        for child in self.children:
+            if hasattr(child, 'to_dict'):
+                children_list.append(child.to_dict())
+            else:
+                children_list.append(str(child))
+        result['children'] = children_list
+        
+        # Also include semantic key-value format for convenience
         for child in self.children:
             if isinstance(child, AssignmentNode):
                 key = child.key
@@ -230,6 +295,23 @@ class RootNode(ASTNode):
             if isinstance(child, BlockNode) and child.name == name:
                 return child
         return None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary representation."""
+        children_list = []
+        for child in self.children:
+            if hasattr(child, 'to_dict'):
+                children_list.append(child.to_dict())
+            else:
+                children_list.append(str(child))
+        
+        return {
+            '_type': 'root',
+            'filename': self.filename,
+            'children': children_list,
+            'line': self.line,
+            'column': self.column
+        }
 
 
 class ParseError(Exception):

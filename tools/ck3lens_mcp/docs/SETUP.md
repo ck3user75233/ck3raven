@@ -29,17 +29,18 @@ Complete guide to setting up and using CK3 Lens MCP server with VS Code and GitH
 
 ### Required Data
 
-Before using CK3 Lens, you need a populated **ck3raven SQLite database** containing parsed mod content. This database is built by the ck3raven indexer:
+CK3 Lens requires a populated **ck3raven SQLite database** at:
 
 ```
 ~/.ck3raven/ck3raven.db    (default location)
 ```
 
-If you don't have this database yet, run the ck3raven indexer first:
+**Status: ✅ Database is built** with 80,968 files from vanilla CK3 and 105 active mods.
 
+To rebuild the database:
 ```bash
-cd /path/to/ck3raven
-python -m ck3raven.cli index --playset "Your Playset Name"
+cd "C:\Users\Nathan\Documents\AI Workspace\ck3raven"
+python scripts/build_database.py
 ```
 
 ---

@@ -1,0 +1,92 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Paradox Localization",
+  "scopeName": "source.paradox-localization",
+  "patterns": [
+    { "include": "#language-header" },
+    { "include": "#comments" },
+    { "include": "#entries" }
+  ],
+  "repository": {
+    "language-header": {
+      "patterns": [
+        {
+          "name": "keyword.control.language.paradox-loc",
+          "match": "^\\s*(l_english|l_french|l_german|l_spanish|l_simp_chinese|l_russian|l_korean|l_braz_por|l_polish|l_japanese)\\s*:"
+        }
+      ]
+    },
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.paradox-loc",
+          "match": "^\\s*#.*$"
+        }
+      ]
+    },
+    "entries": {
+      "patterns": [
+        {
+          "name": "meta.localization-entry.paradox-loc",
+          "begin": "^\\s*([a-zA-Z_][a-zA-Z0-9_\\.]*)\\s*:\\s*(\\d+)?\\s*\"",
+          "beginCaptures": {
+            "1": { "name": "entity.name.tag.localization-key.paradox-loc" },
+            "2": { "name": "constant.numeric.version.paradox-loc" }
+          },
+          "end": "\"",
+          "contentName": "string.quoted.double.paradox-loc",
+          "patterns": [
+            { "include": "#string-content" }
+          ]
+        }
+      ]
+    },
+    "string-content": {
+      "patterns": [
+        {
+          "name": "constant.character.escape.paradox-loc",
+          "match": "\\\\[nrt\\\\\"]"
+        },
+        {
+          "name": "variable.other.bracket-command.paradox-loc",
+          "begin": "\\[",
+          "end": "\\]",
+          "patterns": [
+            {
+              "name": "support.function.bracket-command.paradox-loc",
+              "match": "\\b(GetName|GetFirstName|GetHerHis|GetSheHe|GetHerHim|GetHersHis|GetHerself|GetWomanMan|GetLadyLord|GetDaughterSon|GetSisterBrother|GetNieceNephew|GetAuntUncle|GetWifeHusband|GetQueenKing|GetEmpressEmperor|GetDuchessDuke|GetCountessCount|GetBaronessBarron|GetPriestess|GetMother|GetFather|GetCulture|GetFaith|GetGovernment|GetPrimaryTitle|GetTitledFirstName|GetFullName|GetRegnal|GetAge|GetBirthDate|GetDeathDate|Custom|Loc|AddLocalization|Select)\\b"
+            },
+            {
+              "name": "entity.name.function.scope.paradox-loc",
+              "match": "[A-Za-z_][A-Za-z0-9_\\.]*"
+            }
+          ]
+        },
+        {
+          "name": "markup.bold.paradox-loc",
+          "match": "#(bold|B)\\s"
+        },
+        {
+          "name": "markup.italic.paradox-loc",
+          "match": "#(italic|I)\\s"
+        },
+        {
+          "name": "constant.other.color.paradox-loc",
+          "match": "#[A-Za-z_]+\\s"
+        },
+        {
+          "name": "support.constant.icon.paradox-loc",
+          "match": "@[a-zA-Z_][a-zA-Z0-9_]*!"
+        },
+        {
+          "name": "keyword.other.newline.paradox-loc",
+          "match": "\\\\n"
+        },
+        {
+          "name": "variable.parameter.data-binding.paradox-loc",
+          "match": "\\$[A-Za-z_][A-Za-z0-9_]*\\$"
+        }
+      ]
+    }
+  }
+}

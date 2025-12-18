@@ -23,7 +23,7 @@ Expected output:
 - ✅ All imports pass
 - ✅ 20 MCP tools registered
 - ✅ Session initializes
-- ⏭️ Database may be skipped (needs indexer)
+- ✅ Database connected (80,968 files indexed)
 - ✅ Live mods found
 - ✅ Validation works
 
@@ -124,7 +124,12 @@ pip install -e "C:\Users\Nathan\Documents\AI Workspace\ck3raven\tools\ck3lens_mc
 ```
 
 ### "Database not found"
-This is expected until the ck3raven indexer is run. The tools that require the database will return "db_path: None" but other tools (live mods, validation, git) will still work.
+The database should be at `~/.ck3raven/ck3raven.db`. If missing, run:
+```powershell
+cd "C:\Users\Nathan\Documents\AI Workspace\ck3raven"
+python scripts/build_database.py
+```
+This indexes vanilla CK3 (46,701 files) and all active mods from your playset.
 
 ---
 
@@ -151,13 +156,16 @@ Even without the ck3raven database indexed, these tools work:
 
 ---
 
-## Next: Building the Database
+## Database Status ✅
 
-To enable all search/query tools, run the ck3raven indexer:
+The database has been built with:
+- **106 content versions** (vanilla + 105 mods)
+- **80,968 files indexed**
+- **27.9 GB** of content
+- Located at: `~/.ck3raven/ck3raven.db`
 
+To rebuild the database:
 ```powershell
 cd "C:\Users\Nathan\Documents\AI Workspace\ck3raven"
-& ".venv/Scripts/python.exe" -m ck3raven.cli index --help
+python scripts/build_database.py
 ```
-
-This will parse all active mods and build the SQLite database.

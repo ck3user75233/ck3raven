@@ -37,27 +37,54 @@ mcp = FastMCP("ck3lens")
 _session: Optional[Session] = None
 _db: Optional[DBQueries] = None
 _trace: Optional[ToolTrace] = None
+_playset_id: Optional[int] = None
 
 
 def _get_session() -> Session:
     global _session
     if _session is None:
-        _session = Session()
+        from ck3lens.workspace import load_config
+        _session = load_config()
     return _session
 
 
 def _get_db() -> DBQueries:
     global _db
     if _db is None:
-        _db = DBQueries()
+        session = _get_session()
+        _db = DBQueries(db_path=session.db_path)
     return _db
+
+
+def _get_playset_id() -> int:
+    """Get active playset ID, auto-detecting if needed."""
+    global _playset_id
+    if _playset_id is None:
+        db = _get_db()
+        # Get the first active playset from the database
+        playsets = db.conn.execute(
+            "SELECT playset_id FROM playsets WHERE is_active = 1 ORDER BY updated_at DESC LIMIT 1"
+        ).fetchone()
+        if playsets:
+            _playset_id = playsets[0]
+        else:
+            # Fallback: get any playset
+            playsets = db.conn.execute(
+                "SELECT playset_id FROM playsets ORDER BY updated_at DESC LIMIT 1"
+            ).fetchone()
+            _playset_id = playsets[0] if playsets else 1
+    return _playset_id
 
 
 def _get_trace() -> ToolTrace:
     global _trace
     if _trace is None:
+        from ck3lens.workspace import DEFAULT_CK3_MOD_DIR
         session = _get_session()
-        _trace = ToolTrace(session.mod_root / "ck3lens_trace.jsonl")
+        mod_root = DEFAULT_CK3_MOD_DIR
+        if session.live_mods:
+            mod_root = session.live_mods[0].path.parent
+        _trace = ToolTrace(mod_root / "ck3lens_trace.jsonl")
     return _trace
 
 
@@ -80,21 +107,54 @@ def ck3_init_session(
     Returns:
         Session info including mod_root and live_mods list
     """
-    global _session, _db, _trace
+    from ck3lens.workspace import load_config, DEFAULT_DB_PATH, DEFAULT_CK3_MOD_DIR, LiveMod
     
-    _session = Session(live_mod_names=live_mods or DEFAULT_LIVE_MODS)
-    _db = DBQueries(db_path=Path(db_path) if db_path else None)
-    _trace = ToolTrace(_session.mod_root / "ck3lens_trace.jsonl")
+    global _session, _db, _trace, _playset_id
+    
+    # Reset playset
+    _playset_id = None
+    
+    # Use load_config to get default session with live mods
+    _session = load_config()
+    
+    # Override DB path if provided
+    if db_path:
+        _session.db_path = Path(db_path)
+    
+    # Override live mods if specific names provided
+    if live_mods:
+        _session.live_mods = [
+            LiveMod(mod_id=name, name=name, path=DEFAULT_CK3_MOD_DIR / name)
+            for name in live_mods
+            if (DEFAULT_CK3_MOD_DIR / name).exists()
+        ]
+    
+    _db = DBQueries(db_path=_session.db_path)
+    
+    # Get mod root from first live mod or default
+    mod_root = DEFAULT_CK3_MOD_DIR
+    if _session.live_mods:
+        mod_root = _session.live_mods[0].path.parent
+    _trace = ToolTrace(mod_root / "ck3lens_trace.jsonl")
     
     _trace.log("ck3.init_session", {"db_path": db_path, "live_mods": live_mods}, {
-        "mod_root": str(_session.mod_root),
+        "mod_root": str(mod_root),
         "live_mods_count": len(_session.live_mods)
     })
     
+    # Auto-detect playset
+    playset_id = _get_playset_id()
+    playset_info = _db.conn.execute(
+        "SELECT name, is_active FROM playsets WHERE playset_id = ?",
+        (playset_id,)
+    ).fetchone()
+    
     return {
-        "mod_root": str(_session.mod_root),
+        "mod_root": str(mod_root),
         "live_mods": [m.name for m in _session.live_mods],
-        "db_path": str(_db.db_path) if _db.db_path else None
+        "db_path": str(_db.db_path) if _db.db_path else None,
+        "playset_id": playset_id,
+        "playset_name": playset_info[0] if playset_info else None
     }
 
 
@@ -130,11 +190,12 @@ def ck3_search_symbols(
     """
     db = _get_db()
     trace = _get_trace()
+    playset_id = _get_playset_id()
     
     results = db.search_symbols(
+        playset_id=playset_id,
         query=query,
         symbol_type=symbol_type,
-        mod_filter=mod_filter,
         adjacency=adjacency,
         limit=limit
     )
@@ -170,8 +231,9 @@ def ck3_confirm_not_exists(
     """
     db = _get_db()
     trace = _get_trace()
+    playset_id = _get_playset_id()
     
-    result = db.confirm_not_exists(name, symbol_type)
+    result = db.confirm_not_exists(playset_id, name, symbol_type)
     
     trace.log("ck3.confirm_not_exists", {
         "name": name,
@@ -203,18 +265,19 @@ def ck3_get_file(
     """
     db = _get_db()
     trace = _get_trace()
+    playset_id = _get_playset_id()
     
-    result = db.get_file(file_path, include_ast=include_ast, max_bytes=max_bytes)
+    result = db.get_file(playset_id, relpath=file_path, include_ast=include_ast)
     
     trace.log("ck3.get_file", {
         "file_path": file_path,
         "include_ast": include_ast
     }, {
-        "found": result.get("found", False),
-        "content_length": len(result.get("content", ""))
+        "found": result is not None,
+        "content_length": len(result.get("content", "")) if result else 0
     })
     
-    return result
+    return result or {"error": f"File not found: {file_path}"}
 
 
 @mcp.tool()
@@ -236,10 +299,11 @@ def ck3_get_conflicts(
     """
     db = _get_db()
     trace = _get_trace()
+    playset_id = _get_playset_id()
     
     conflicts = db.get_conflicts(
-        path_pattern=path_pattern,
-        symbol_name=symbol_name,
+        playset_id=playset_id,
+        folder=path_pattern,
         symbol_type=symbol_type
     )
     

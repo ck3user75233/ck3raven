@@ -81,8 +81,8 @@ DEFAULT_LIVE_MODS = [
     ),
     LiveMod(
         mod_id="MRP",
-        name="More Raiding and Prisoners",
-        path=DEFAULT_CK3_MOD_DIR / "More Raiding and Prisoners"
+        name="More Raid and Prisoners",
+        path=DEFAULT_CK3_MOD_DIR / "More Raid and Prisoners"
     ),
 ]
 

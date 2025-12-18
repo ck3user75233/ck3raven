@@ -171,13 +171,18 @@ class Lexer:
         return ''.join(result)
     
     def _read_identifier(self) -> str:
-        """Read an identifier (including dotted names like scope.thing)."""
+        """Read an identifier (including dotted names like scope.thing).
+        
+        Note: Identifiers in CK3 can start with digits (e.g., 0_levels_above_expected_level)
+        so this may be called when current char is a digit.
+        """
         result = []
         while True:
             ch = self._current()
             if ch is None:
                 break
-            if self._is_ident_cont(ch):
+            # Allow digits and ident continuation chars
+            if self._is_ident_cont(ch) or ch.isdigit():
                 result.append(ch)
                 self._advance()
             else:
@@ -395,10 +400,19 @@ class Lexer:
                 yield Token(TokenType.PARAM, '$' + ''.join(param_name) + '$', start_line, start_col)
                 continue
             
-            # Number (positive numbers only - negative handled by MINUS token above)
+            # Number OR identifier starting with digit
+            # CK3 allows identifiers like 0_levels_above_expected_level
             if ch.isdigit():
-                value = self._read_number()
-                yield Token(TokenType.NUMBER, value, start_line, start_col)
+                # Look ahead: if followed by underscore or letter, it's an identifier
+                peek = self._peek()
+                if peek and (peek == '_' or peek.isalpha()):
+                    # Identifier starting with digit - read as identifier
+                    value = self._read_identifier()
+                    yield Token(TokenType.IDENTIFIER, value, start_line, start_col)
+                else:
+                    # Pure number
+                    value = self._read_number()
+                    yield Token(TokenType.NUMBER, value, start_line, start_col)
                 continue
             
             # Identifier (or yes/no boolean)

@@ -273,11 +273,11 @@ class DBQueries:
                 f.file_id,
                 f.relpath,
                 f.content_hash,
-                fc.content,
+                COALESCE(fc.content_text, fc.content_blob) as content,
                 COALESCE(mp.name, 'vanilla') as mod_name,
-                f.file_size
+                fc.size as file_size
             FROM files f
-            JOIN file_content fc ON f.content_hash = fc.content_hash
+            JOIN file_contents fc ON f.content_hash = fc.content_hash
             JOIN content_versions cv ON f.content_version_id = cv.content_version_id
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             LEFT JOIN playset_mods pm ON cv.content_version_id = pm.content_version_id

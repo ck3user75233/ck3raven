@@ -1,0 +1,212 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Paradox Script",
+  "scopeName": "source.paradox-script",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#operators" },
+    { "include": "#keywords" },
+    { "include": "#scopes" },
+    { "include": "#triggers" },
+    { "include": "#effects" },
+    { "include": "#modifiers" },
+    { "include": "#parameters" },
+    { "include": "#identifiers" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.paradox",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.paradox",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.paradox",
+              "match": "\\\\."
+            },
+            {
+              "name": "variable.other.placeholder.paradox",
+              "match": "\\[([^\\]]+)\\]"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.paradox",
+          "begin": "'",
+          "end": "'"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.paradox",
+          "match": "-?\\d+\\.\\d+"
+        },
+        {
+          "name": "constant.numeric.integer.paradox",
+          "match": "-?\\d+"
+        },
+        {
+          "name": "constant.numeric.percentage.paradox",
+          "match": "-?\\d+%"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.comparison.paradox",
+          "match": "\\b(>=|<=|!=|==|>|<)\\b"
+        },
+        {
+          "name": "keyword.operator.assignment.paradox",
+          "match": "="
+        },
+        {
+          "name": "keyword.operator.comparison.paradox",
+          "match": "\\?="
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.paradox",
+          "match": "\\b(if|else|else_if|while|limit|trigger|desc|modifier|effect|on_action|random|random_list|switch|fallback)\\b"
+        },
+        {
+          "name": "constant.language.boolean.paradox",
+          "match": "\\b(yes|no|true|false)\\b"
+        },
+        {
+          "name": "keyword.other.paradox",
+          "match": "\\b(namespace|scripted_effect|scripted_trigger|decision|event|trait|culture|religion|faith|government|law|building|holding|title|character|dynasty|artifact|scheme|secret|hook|story|activity|struggle|epidemic|travel|adventure|accolade|court_position|diarchy|legend|tax_slot|domicile)\\b"
+        }
+      ]
+    },
+    "scopes": {
+      "patterns": [
+        {
+          "name": "entity.name.tag.scope.paradox",
+          "match": "\\b(root|this|prev|from|scope|global_var|local_var|var|flag|event_target|saved_scope|target)\\b"
+        },
+        {
+          "name": "entity.name.tag.scope.character.paradox",
+          "match": "\\b(primary_title|primary_heir|player_heir|capital_province|capital_county|capital_barony|location|court|liege|top_liege|realm|host|employer|father|mother|spouse|primary_spouse|betrothed|killer|real_father|patriarch_or_matriarch|house|dynasty|faith|culture|cp:councillor_\\w+|designated_heir)\\b"
+        },
+        {
+          "name": "entity.name.tag.scope.title.paradox",
+          "match": "\\b(holder|previous_holder|heir|de_jure_liege|de_facto_liege|county|duchy|kingdom|empire|barony|title_province|title_capital_county)\\b"
+        },
+        {
+          "name": "entity.name.tag.scope.list.paradox",
+          "match": "\\b(every_|any_|random_|ordered_)(\\w+)\\b"
+        }
+      ]
+    },
+    "triggers": {
+      "patterns": [
+        {
+          "name": "support.function.trigger.paradox",
+          "match": "\\b(is_|has_|can_|exists|age|gold|piety|prestige|dread|stress|health|fertility|num_|count_|percent_|opinion|trait|culture_|faith_|government_|realm_size|domain_size|tier|highest_held_title_tier|vassal_count|sub_realm_size|max_|total_|yearly_|monthly_)\\w*\\b"
+        },
+        {
+          "name": "support.function.trigger.paradox",
+          "match": "\\b(NOT|AND|OR|NOR|NAND|always|trigger_if|trigger_else|trigger_else_if|custom_description|custom_tooltip)\\b"
+        }
+      ]
+    },
+    "effects": {
+      "patterns": [
+        {
+          "name": "support.function.effect.paradox",
+          "match": "\\b(add_|remove_|set_|change_|create_|destroy_|give_|take_|gain_|lose_|spawn_|trigger_event|fire_|send_|start_|end_|complete_|abort_|reveal_|hide_|show_|enable_|disable_|open_|close_|save_|clear_|copy_|move_|kill_|imprison_|release_|banish_|execute_|torture_|blind_|castrate_|recruit_|dismiss_|assign_)\\w*\\b"
+        },
+        {
+          "name": "support.function.effect.paradox",
+          "match": "\\b(hidden_effect|show_as_tooltip|random|random_list|switch|assert_if|assert_read|debug_log|debug_log_scopes|break|return|clamp|ceil|floor|round|min|max|abs)\\b"
+        }
+      ]
+    },
+    "modifiers": {
+      "patterns": [
+        {
+          "name": "variable.other.modifier.paradox",
+          "match": "\\b(\\w+_opinion|\\w+_modifier|monthly_\\w+|yearly_\\w+|\\w+_cost|\\w+_speed|\\w+_chance|\\w+_mult|\\w+_add|\\w+_factor|\\w+_gain|\\w+_loss|same_\\w+|different_\\w+|ai_\\w+)\\b"
+        }
+      ]
+    },
+    "parameters": {
+      "patterns": [
+        {
+          "name": "variable.parameter.paradox",
+          "match": "\\$[A-Za-z_][A-Za-z0-9_]*\\$"
+        },
+        {
+          "name": "variable.other.event-target.paradox",
+          "match": "\\bevent_target:[A-Za-z_][A-Za-z0-9_]*\\b"
+        },
+        {
+          "name": "variable.other.scope.paradox",
+          "match": "\\bscope:[A-Za-z_][A-Za-z0-9_]*\\b"
+        },
+        {
+          "name": "variable.other.flag.paradox",
+          "match": "\\bflag:[A-Za-z_][A-Za-z0-9_]*\\b"
+        },
+        {
+          "name": "variable.other.var.paradox",
+          "match": "\\bvar:[A-Za-z_][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "entity.name.type.paradox",
+          "match": "^\\s*([a-z_][a-z0-9_]*)\\s*=",
+          "captures": {
+            "1": { "name": "entity.name.type.definition.paradox" }
+          }
+        },
+        {
+          "name": "variable.other.reference.paradox",
+          "match": "\\b[a-z_][a-z0-9_]*\\b"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.section.block.begin.paradox",
+          "match": "\\{"
+        },
+        {
+          "name": "punctuation.section.block.end.paradox",
+          "match": "\\}"
+        },
+        {
+          "name": "punctuation.definition.list.begin.paradox",
+          "match": "\\["
+        },
+        {
+          "name": "punctuation.definition.list.end.paradox",
+          "match": "\\]"
+        }
+      ]
+    }
+  }
+}

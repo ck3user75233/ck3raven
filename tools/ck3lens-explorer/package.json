@@ -1,0 +1,342 @@
+{
+  "name": "ck3lens-explorer",
+  "displayName": "CK3 Lens Explorer",
+  "description": "CK3 mod development environment - game state explorer, conflict resolution, real-time linting powered by ck3raven",
+  "version": "0.1.0",
+  "publisher": "ck3-modding",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ck3user75233/ck3raven"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "ck3",
+    "crusader kings 3",
+    "paradox",
+    "clausewitz",
+    "modding",
+    "ck3raven",
+    "game state"
+  ],
+  "icon": "media/ck3lens-icon.png",
+  "activationEvents": [
+    "onLanguage:paradox-script",
+    "workspaceContains:**/common/**/*.txt",
+    "workspaceContains:**/events/**/*.txt",
+    "onView:ck3lens.explorerView",
+    "onView:ck3lens.conflictsView",
+    "onView:ck3lens.symbolsView"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "paradox-script",
+        "aliases": ["Paradox Script", "CK3 Script", "Clausewitz"],
+        "extensions": [".txt"],
+        "configuration": "./language-configuration.json",
+        "firstLine": "^#.*[Ee]vent|^#.*[Dd]ecision|^#.*[Tt]rait|^#.*[Cc]ulture"
+      },
+      {
+        "id": "paradox-localization",
+        "aliases": ["Paradox Localization", "CK3 Localization"],
+        "extensions": [".yml"],
+        "configuration": "./language-configuration.json",
+        "firstLine": "^l_english:|^l_french:|^l_german:|^l_spanish:|^l_simp_chinese:|^l_russian:|^l_korean:"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "paradox-script",
+        "scopeName": "source.paradox-script",
+        "path": "./syntaxes/paradox-script.tmLanguage.json"
+      },
+      {
+        "language": "paradox-localization",
+        "scopeName": "source.paradox-localization",
+        "path": "./syntaxes/paradox-localization.tmLanguage.json"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ck3lens",
+          "title": "CK3 Lens",
+          "icon": "media/ck3lens-sidebar.svg"
+        }
+      ]
+    },
+    "views": {
+      "ck3lens": [
+        {
+          "id": "ck3lens.explorerView",
+          "name": "Game State Explorer",
+          "type": "tree",
+          "contextualTitle": "CK3 Lens"
+        },
+        {
+          "id": "ck3lens.conflictsView",
+          "name": "Conflicts",
+          "type": "tree",
+          "contextualTitle": "CK3 Lens"
+        },
+        {
+          "id": "ck3lens.symbolsView",
+          "name": "Symbols",
+          "type": "tree",
+          "contextualTitle": "CK3 Lens"
+        },
+        {
+          "id": "ck3lens.liveModsView",
+          "name": "Live Mods",
+          "type": "tree",
+          "contextualTitle": "CK3 Lens"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "ck3lens.explorerView",
+        "contents": "No ck3raven database loaded.\n[Initialize CK3 Lens](command:ck3lens.initSession)\n\nMake sure you have built the ck3raven database first."
+      }
+    ],
+    "commands": [
+      {
+        "command": "ck3lens.initSession",
+        "title": "CK3 Lens: Initialize Session",
+        "icon": "$(database)"
+      },
+      {
+        "command": "ck3lens.refreshViews",
+        "title": "CK3 Lens: Refresh All Views",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "ck3lens.validateFile",
+        "title": "CK3 Lens: Validate Current File",
+        "icon": "$(check)"
+      },
+      {
+        "command": "ck3lens.validateWorkspace",
+        "title": "CK3 Lens: Validate Entire Workspace",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "ck3lens.searchSymbols",
+        "title": "CK3 Lens: Search Symbols",
+        "icon": "$(search)"
+      },
+      {
+        "command": "ck3lens.showConflicts",
+        "title": "CK3 Lens: Show Conflicts",
+        "icon": "$(git-compare)"
+      },
+      {
+        "command": "ck3lens.goToDefinition",
+        "title": "CK3 Lens: Go to Definition",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "ck3lens.findReferences",
+        "title": "CK3 Lens: Find All References",
+        "icon": "$(references)"
+      },
+      {
+        "command": "ck3lens.openInMergeEditor",
+        "title": "CK3 Lens: Open in Merge Editor",
+        "icon": "$(git-merge)"
+      },
+      {
+        "command": "ck3lens.buildDatabase",
+        "title": "CK3 Lens: Rebuild Database",
+        "icon": "$(database)"
+      },
+      {
+        "command": "ck3lens.setPlayset",
+        "title": "CK3 Lens: Select Playset",
+        "icon": "$(list-selection)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "ck3lens.refreshViews",
+          "when": "view =~ /ck3lens\\./",
+          "group": "navigation"
+        },
+        {
+          "command": "ck3lens.searchSymbols",
+          "when": "view == ck3lens.symbolsView",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "ck3lens.goToDefinition",
+          "when": "editorLangId == paradox-script",
+          "group": "navigation"
+        },
+        {
+          "command": "ck3lens.findReferences",
+          "when": "editorLangId == paradox-script",
+          "group": "navigation"
+        },
+        {
+          "command": "ck3lens.validateFile",
+          "when": "editorLangId == paradox-script",
+          "group": "ck3lens"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "ck3lens.initSession",
+          "when": "true"
+        },
+        {
+          "command": "ck3lens.validateFile",
+          "when": "editorLangId == paradox-script"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "CK3 Lens",
+      "properties": {
+        "ck3lens.databasePath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to ck3raven SQLite database. Leave empty for default (~/.ck3raven/ck3raven.db)"
+        },
+        "ck3lens.vanillaPath": {
+          "type": "string",
+          "default": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Crusader Kings III\\game",
+          "description": "Path to CK3 vanilla game folder"
+        },
+        "ck3lens.modRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Path to CK3 mod directory. Leave empty for default"
+        },
+        "ck3lens.pythonPath": {
+          "type": "string",
+          "default": "python",
+          "description": "Path to Python executable for ck3raven"
+        },
+        "ck3lens.ck3ravenPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to ck3raven installation. Leave empty to auto-detect"
+        },
+        "ck3lens.enableRealTimeLinting": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable real-time linting on file changes"
+        },
+        "ck3lens.lintOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Validate files when saved"
+        },
+        "ck3lens.lintDelay": {
+          "type": "number",
+          "default": 500,
+          "description": "Delay in milliseconds before linting after typing stops"
+        },
+        "ck3lens.showInlineHints": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show inline hints for symbol definitions"
+        },
+        "ck3lens.liveMods": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "List of mod folder names that can be edited (whitelist)"
+        },
+        "ck3lens.traceLevel": {
+          "type": "string",
+          "enum": ["off", "error", "info", "debug"],
+          "default": "info",
+          "description": "Logging level for CK3 Lens"
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "command": "ck3lens.goToDefinition",
+        "key": "f12",
+        "when": "editorLangId == paradox-script"
+      },
+      {
+        "command": "ck3lens.findReferences",
+        "key": "shift+f12",
+        "when": "editorLangId == paradox-script"
+      },
+      {
+        "command": "ck3lens.searchSymbols",
+        "key": "ctrl+shift+o",
+        "when": "editorLangId == paradox-script"
+      }
+    ],
+    "colors": [
+      {
+        "id": "ck3lens.conflictHighlight",
+        "description": "Background color for conflict highlights",
+        "defaults": {
+          "dark": "#ff990033",
+          "light": "#ff990033",
+          "highContrast": "#ff9900"
+        }
+      },
+      {
+        "id": "ck3lens.winnerHighlight",
+        "description": "Background color for winning definition",
+        "defaults": {
+          "dark": "#00ff0022",
+          "light": "#00ff0022",
+          "highContrast": "#00ff00"
+        }
+      },
+      {
+        "id": "ck3lens.loserHighlight",
+        "description": "Background color for overridden definition",
+        "defaults": {
+          "dark": "#ff000022",
+          "light": "#ff000022",
+          "highContrast": "#ff0000"
+        }
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "@vscode/test-electron": "^2.3.8",
+    "@vscode/vsce": "^2.22.0",
+    "eslint": "^8.54.0",
+    "typescript": "^5.3.2"
+  },
+  "dependencies": {
+    "jsonc-parser": "^3.2.0"
+  }
+}

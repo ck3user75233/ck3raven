@@ -3,11 +3,19 @@ Symbol and Reference Extraction
 
 Extracts definitions (symbols) and uses (references) from parsed AST.
 Populates the symbols and refs tables for cross-reference analysis.
+
+DESIGN PHILOSOPHY:
+- Extract EVERY top-level block as a symbol (exhaustive, not whitelisted)
+- Infer symbol type from file path when possible
+- Use 'definition' as fallback for unknown paths
+- Extract scripted values (@name = value) everywhere
+- Better to have "too many" symbols than miss definitions
 """
 
 import sqlite3
 import json
 import logging
+import re
 from typing import Optional, List, Dict, Any, Tuple, Set, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,37 +25,119 @@ from ck3raven.db.models import Symbol, Reference
 logger = logging.getLogger(__name__)
 
 
-# Pattern to identify scripted values/effects/triggers by path
-PATH_SYMBOL_PATTERNS = {
+# Path patterns for type inference (used for hints, NOT for filtering)
+# Maps path fragments to symbol types
+PATH_TYPE_HINTS = {
+    # Scripted code
     'common/scripted_effects': 'scripted_effect',
     'common/scripted_triggers': 'scripted_trigger',
     'common/scripted_modifiers': 'scripted_modifier',
+    'common/script_values': 'script_value',
     'common/on_action': 'on_action',
-    'common/buildings': 'building',
-    'common/decisions': 'decision',
-    'common/character_interactions': 'interaction',
-    'common/activities': 'activity',
-    'common/schemes': 'scheme',
+    
+    # Character-related
     'common/traits': 'trait',
+    'common/character_interactions': 'interaction',
+    'common/schemes': 'scheme',
+    'common/lifestyle': 'lifestyle',
+    'common/focuses': 'focus',
+    'common/perks': 'perk',
+    'common/nicknames': 'nickname',
+    'common/relations': 'relation',
+    
+    # Culture & Religion
     'common/culture/traditions': 'tradition',
+    'common/culture/pillars': 'cultural_pillar',
+    'common/culture/eras': 'cultural_era',
+    'common/culture/innovations': 'innovation',
     'common/religion/religions': 'religion',
-    'common/dynasties': 'dynasty',
+    'common/religion/holy_sites': 'holy_site',
+    'common/religion/doctrines': 'doctrine',
+    'common/religion/fervor_modifiers': 'fervor_modifier',
+    
+    # Realm & Titles
     'common/landed_titles': 'title',
     'common/governments': 'government',
     'common/laws': 'law',
+    'common/succession_election': 'election',
+    'common/vassal_contracts': 'vassal_contract',
+    'common/holdings': 'holding',
+    
+    # Buildings & Economy
+    'common/buildings': 'building',
+    'common/terrain_types': 'terrain',
+    'common/province_terrain': 'province_terrain',
+    'common/economic_values': 'economic_value',
+    
+    # Military
     'common/men_at_arms_types': 'maa_type',
-    'common/artifacts': 'artifact',
-    'common/important_actions': 'important_action',
+    'common/combat_phase_events': 'combat_event',
     'common/casus_belli_types': 'cb_type',
-    'common/lifestyles': 'lifestyle',
-    'common/focuses': 'focus',
-    'common/perks': 'perk',
-    'common/event_backgrounds': 'event_background',
+    'common/war_goals': 'war_goal',
+    
+    # Court & Activities
+    'common/activities': 'activity',
+    'common/council_positions': 'council_position',
     'common/court_positions': 'court_position',
-    'common/defines': 'define',
+    'common/court_types': 'court_type',
+    'common/diarchies': 'diarchy',
+    'common/domiciles': 'domicile',
+    
+    # Artifacts & Items
+    'common/artifacts': 'artifact',
+    'common/inspiration_types': 'inspiration',
+    
+    # Dynasties & Legacies
+    'common/dynasties': 'dynasty',
+    'common/dynasty_perks': 'dynasty_perk',
+    'common/dynasty_legacies': 'dynasty_legacy',
+    'common/dynasty_houses': 'dynasty_house',
+    
+    # Decisions & Events
+    'common/decisions': 'decision',
+    'common/important_actions': 'important_action',
     'events': 'event',
+    
+    # UI & Graphics (still useful to track)
+    'common/event_backgrounds': 'event_background',
+    'common/event_themes': 'event_theme',
+    'common/customizable_localization': 'custom_loc',
+    'common/flavorization': 'flavorization',
+    'common/named_colors': 'named_color',
     'gfx/portraits/portrait_modifiers': 'portrait_modifier',
+    'gfx/coat_of_arms': 'coa',
+    
+    # Modifiers
+    'common/modifiers': 'modifier',
+    'common/static_modifiers': 'static_modifier',
+    'common/triggered_modifiers': 'triggered_modifier',
+    'common/opinion_modifiers': 'opinion_modifier',
+    'common/event_modifiers': 'event_modifier',
+    
+    # Defines
+    'common/defines': 'define',
+    
+    # Misc
+    'common/bookmark_portraits': 'bookmark_portrait',
+    'common/bookmarks': 'bookmark',
+    'common/game_rules': 'game_rule',
+    'common/achievements': 'achievement',
+    'common/story_cycles': 'story_cycle',
+    'common/secret_types': 'secret_type',
+    'common/hooks': 'hook',
+    'common/travel': 'travel',
+    'common/struggle': 'struggle',
+    
+    # History (useful for reference)
+    'history/characters': 'historical_character',
+    'history/provinces': 'province_history',
+    'history/titles': 'title_history',
+    
+    # Localization
     'localization': 'localization_key',
+    
+    # GUI (for completeness)
+    'gui': 'gui_element',
 }
 
 # Keys that trigger effects/triggers
@@ -137,13 +227,101 @@ class ExtractedRef:
     context: str
 
 
-def get_symbol_kind_from_path(relpath: str) -> Optional[str]:
-    """Determine symbol kind based on file path."""
-    relpath_normalized = relpath.replace('\\', '/')
-    for pattern, kind in PATH_SYMBOL_PATTERNS.items():
+# Regex patterns for invalid symbol names
+_DATE_PATTERN = re.compile(r'^\d+\.\d+(\.\d+)?$')  # e.g., 867.1.1, 1066.9.15
+_NUMERIC_PATTERN = re.compile(r'^\.?\d+\.?\d*$')  # Pure numbers/decimals including .1, 1., 1.5
+
+# CK3 keywords that shouldn't be extracted as symbols
+_RESERVED_KEYWORDS = {
+    'namespace', 'yes', 'no', 'true', 'false', 'null', 'none',
+    'if', 'else', 'limit', 'trigger', 'effect', 'modifier',
+    'AND', 'OR', 'NOT', 'NOR', 'NAND',
+    'macro', 'scripted_trigger', 'scripted_effect',  # These are wrapper keywords, not symbols
+    'first_valid', 'random_valid', 'fallback',  # Localization wrappers
+    # GFX/portrait structural blocks (anonymous containers, not definitions)
+    'pattern_textures', 'pattern_layout', 'variation', 'object', 'cubemap',
+    'environment', 'lights', 'camera', 'assets', 'characters', 'artifacts',
+    'shadows_fade', 'shadows_strength', 'default_camera', 'visual_culture_level',
+    'support_type', 'audio_culture',
+    # GFX lighting/shader settings
+    'tonemap_function', 'layer', 'exposure_function', 'bright_threshold',
+    'bloom_width', 'bloom_scale', 'exposure', 'cubemap_intensity',
+    # History wrappers (actual ID is inside as name = "...")
+    'war', 'character',
+    # Common structural keys that appear in multiple contexts
+    'category',
+    # COA atlas configuration (anonymous repeated blocks)
+    'atlas',
+    # GFX post-effect and map object structural blocks
+    'posteffect_values', 'game_object_locator',
+}
+
+
+def _is_valid_symbol_name(name) -> bool:
+    """
+    Check if a name is a valid symbol (not garbage like dates or numeric fragments).
+    
+    Filters out:
+    - Non-string values (lists, dicts, etc.)
+    - Pure numbers: 123, 45.67
+    - Date patterns: 867.1.1, 1066.9.15
+    - Empty or very short names: "", "a"
+    - Reserved CK3 keywords: namespace, yes, no, etc.
+    """
+    # Must be a string
+    if not isinstance(name, str):
+        return False
+    
+    if not name or len(name) < 2:
+        return False
+    
+    # Skip reserved keywords
+    if name in _RESERVED_KEYWORDS:
+        return False
+    
+    # Skip date patterns (common in history files)
+    if _DATE_PATTERN.match(name):
+        return False
+    
+    # Skip pure numeric values
+    if _NUMERIC_PATTERN.match(name):
+        return False
+    
+    return True
+
+
+def get_symbol_kind_from_path(relpath: str) -> str:
+    """
+    Determine symbol kind based on file path.
+    
+    Returns the most specific type hint found, or 'definition' as fallback.
+    NEVER returns None - we always extract symbols.
+    """
+    relpath_normalized = relpath.replace('\\', '/').lower()
+    
+    # Find the most specific (longest) matching pattern
+    best_match = None
+    best_length = 0
+    
+    for pattern, kind in PATH_TYPE_HINTS.items():
         if pattern in relpath_normalized:
-            return kind
-    return None
+            if len(pattern) > best_length:
+                best_match = kind
+                best_length = len(pattern)
+    
+    if best_match:
+        return best_match
+    
+    # Fallback: try to infer from path structure
+    if '/common/' in relpath_normalized:
+        # Extract the subfolder under common/
+        parts = relpath_normalized.split('/common/')
+        if len(parts) > 1:
+            subfolder = parts[1].split('/')[0]
+            return subfolder.rstrip('s')  # e.g., 'traits' -> 'trait'
+    
+    # Generic fallback
+    return 'definition'
 
 
 def extract_symbols_from_ast(
@@ -154,11 +332,28 @@ def extract_symbols_from_ast(
     """
     Extract symbol definitions from serialized AST.
     
-    Symbols are top-level definitions like events, decisions, traits, etc.
+    EXHAUSTIVE EXTRACTION:
+    - Every top-level block is a symbol
+    - Scripted values (@name = value) are symbols
+    - Type is inferred from path, never filtered
     """
+    # Skip non-game-content files
+    relpath_lower = relpath.replace('\\', '/').lower()
+    skip_patterns = [
+        'checksum_manifest.txt',
+        'credit_portraits.txt',  # Credits metadata
+        'gfx/court_scene/',  # All court scene files (settings, environment, etc.)
+        'gfx/portraits/accessory_variations/',  # Anonymous texture blocks
+        'gfx/map/environment/',  # Map lighting/shader settings
+        'gfx/map/map_object_data/',  # Map object locators (anonymous repeated blocks)
+        'gfx/map/post_effects/',  # Post-effect settings (anonymous configuration)
+    ]
+    for pattern in skip_patterns:
+        if pattern in relpath_lower:
+            return  # Skip this file entirely
+    
+    # Get type hint from path (never None)
     kind = get_symbol_kind_from_path(relpath)
-    if kind is None:
-        return
     
     # Process children of root
     children = ast_dict.get('children', [])
@@ -167,11 +362,16 @@ def extract_symbols_from_ast(
         child_type = child.get('_type')
         
         if child_type == 'block':
-            name = child.get('name')
+            # Use _name (the block's identifier) not 'name' (which can be overwritten
+            # by nested name = {...} assignments creating a list collision)
+            name = child.get('_name') or child.get('name')
             line = child.get('line', 0)
             column = child.get('column', 0)
             
-            if name:
+            if name and _is_valid_symbol_name(name):
+                # Skip internal/namespace blocks that aren't real definitions
+                # (blocks inside other blocks are handled by reference extraction)
+                
                 # Try to extract signature/doc from children
                 signature = None
                 doc = None
@@ -180,7 +380,7 @@ def extract_symbols_from_ast(
                 for bc in block_children:
                     if bc.get('_type') == 'assignment':
                         key = bc.get('key')
-                        if key in ('desc', 'description'):
+                        if key in ('desc', 'description', 'title'):
                             val = bc.get('value', {})
                             if val.get('_type') == 'value':
                                 doc = str(val.get('value', ''))
@@ -196,18 +396,36 @@ def extract_symbols_from_ast(
                 )
         
         elif child_type == 'assignment':
-            # Top-level assignments can be symbols (defines, scripted values)
+            # Top-level assignments are symbols too
             key = child.get('key')
             line = child.get('line', 0)
             column = child.get('column', 0)
             
-            if kind == 'define' and key:
+            if key and _is_valid_symbol_name(key):
                 value = child.get('value', {})
-                val_str = str(value.get('value', '')) if value.get('_type') == 'value' else None
+                
+                # Skip @scripted_values - these are FILE-LOCAL constants, not global symbols
+                # Each file can define @my_var = 5 without conflicting with other files
+                if key.startswith('@'):
+                    continue
+                
+                # Determine specific type
+                if kind == 'define':
+                    sym_kind = 'define'
+                    sym_name = key
+                else:
+                    # Could be namespace assignment, variable, etc.
+                    sym_kind = kind
+                    sym_name = key
+                
+                # Get value as signature if it's simple
+                val_str = None
+                if value.get('_type') == 'value':
+                    val_str = str(value.get('value', ''))
                 
                 yield ExtractedSymbol(
-                    name=key,
-                    kind='define',
+                    name=sym_name,
+                    kind=sym_kind,
                     line=line,
                     column=column,
                     signature=val_str
