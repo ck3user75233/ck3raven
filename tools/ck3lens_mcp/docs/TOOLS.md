@@ -837,6 +837,14 @@ All symbol searches default to `adjacency="auto"` which expands queries:
 | `ck3_git_push` | ✅ Implemented |
 | `ck3_git_pull` | ✅ Implemented |
 | `ck3_git_log` | ✅ Implemented |
+| **Log Parsing Tools** | |
+| `ck3_get_error_summary` | ✅ Implemented |
+| `ck3_get_errors` | ✅ Implemented |
+| `ck3_search_errors` | ✅ Implemented |
+| `ck3_get_cascade_patterns` | ✅ Implemented |
+| `ck3_get_crash_reports` | ✅ Implemented |
+| `ck3_get_crash_detail` | ✅ Implemented |
+| `ck3_read_log` | ✅ Implemented |
 | **Session Tools** | |
 | `ck3_init_session` | ✅ Implemented |
 | `ck3_set_playset` | 🔲 Planned |

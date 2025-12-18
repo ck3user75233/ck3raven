@@ -1746,6 +1746,315 @@ def ck3_get_high_risk_conflicts(
 
 
 # ============================================================================
+# Log Parsing Tools
+# ============================================================================
+
+@mcp.tool()
+def ck3_get_error_summary() -> dict:
+    """
+    Get summary of errors from the current CK3 error.log.
+    
+    Parses the error log and returns:
+    - Total error count
+    - Errors grouped by priority (1=critical to 5=low)
+    - Errors grouped by category (script, encoding, missing reference, etc.)
+    - Errors grouped by mod
+    - Number of cascading error patterns detected
+    
+    Use this as the first step when diagnosing game issues.
+    
+    Returns:
+        Summary statistics from error.log
+    """
+    from ck3raven.logs.error_parser import CK3ErrorParser
+    
+    parser = CK3ErrorParser()
+    
+    try:
+        parser.parse_log()
+        parser.detect_cascading_errors()
+    except FileNotFoundError:
+        return {
+            "error": "error.log not found",
+            "hint": "Make sure CK3 has been run at least once",
+        }
+    
+    return parser.get_summary()
+
+
+@mcp.tool()
+def ck3_get_errors(
+    priority: int | None = None,
+    category: str | None = None,
+    mod_filter: str | None = None,
+    exclude_cascade_children: bool = True,
+    limit: int = 50,
+) -> dict:
+    """
+    Get filtered list of errors from the CK3 error.log.
+    
+    Args:
+        priority: Max priority to include (1=critical, 2=high, 3=medium, 4=low, 5=very low)
+        category: Filter by category (script_system_error, missing_reference, encoding_error, etc.)
+        mod_filter: Filter by mod name (partial match)
+        exclude_cascade_children: If True, exclude errors caused by cascade patterns
+        limit: Maximum errors to return
+    
+    Returns:
+        List of errors with details and fix hints
+    """
+    from ck3raven.logs.error_parser import CK3ErrorParser
+    
+    parser = CK3ErrorParser()
+    
+    try:
+        parser.parse_log()
+        parser.detect_cascading_errors()
+    except FileNotFoundError:
+        return {"error": "error.log not found"}
+    
+    errors = parser.get_errors(
+        category=category,
+        priority=priority,
+        mod_filter=mod_filter,
+        exclude_cascade_children=exclude_cascade_children,
+        limit=limit,
+    )
+    
+    # Convert to dicts with fix hints
+    from ck3raven.logs.error_parser import ERROR_CATEGORIES
+    
+    results = []
+    for error in errors:
+        cat = next((c for c in ERROR_CATEGORIES if c.name == error.category), None)
+        results.append({
+            **error.to_dict(),
+            "fix_hint": cat.fix_hint if cat else None,
+        })
+    
+    return {
+        "count": len(results),
+        "total_in_log": parser.stats['total_errors'],
+        "errors": results,
+    }
+
+
+@mcp.tool()
+def ck3_search_errors(
+    query: str,
+    limit: int = 30,
+) -> dict:
+    """
+    Search errors in the CK3 error.log by message or file path.
+    
+    Args:
+        query: Search query (case-insensitive, matches message or file path)
+        limit: Maximum results
+    
+    Returns:
+        Matching errors
+    """
+    from ck3raven.logs.error_parser import CK3ErrorParser
+    
+    parser = CK3ErrorParser()
+    
+    try:
+        parser.parse_log()
+    except FileNotFoundError:
+        return {"error": "error.log not found"}
+    
+    errors = parser.search_errors(query, limit=limit)
+    
+    return {
+        "query": query,
+        "count": len(errors),
+        "errors": [e.to_dict() for e in errors],
+    }
+
+
+@mcp.tool()
+def ck3_get_cascade_patterns() -> dict:
+    """
+    Get detected cascading error patterns from the error.log.
+    
+    Cascading errors are patterns where one root error causes many subsequent errors.
+    Fixing the root error can eliminate many downstream errors.
+    
+    Pattern types:
+    - script_parse_cascade: Script syntax error causing many "not defined" errors
+    - mod_load_cascade: Encoding error causing mod-wide issues
+    - repeated_error_spam: Same error repeated many times
+    
+    Returns:
+        List of cascade patterns with root errors and child counts
+    """
+    from ck3raven.logs.error_parser import CK3ErrorParser
+    
+    parser = CK3ErrorParser()
+    
+    try:
+        parser.parse_log()
+        parser.detect_cascading_errors()
+    except FileNotFoundError:
+        return {"error": "error.log not found"}
+    
+    cascades = [c.to_dict() for c in parser.cascade_patterns]
+    
+    return {
+        "cascade_count": len(cascades),
+        "total_errors": parser.stats['total_errors'],
+        "cascades": cascades,
+        "recommendation": "Fix root errors first - they can eliminate many child errors",
+    }
+
+
+@mcp.tool()
+def ck3_get_crash_reports(
+    limit: int = 5,
+) -> dict:
+    """
+    Get recent crash reports from CK3.
+    
+    Parses crash folders in the CK3 crashes directory, which contain:
+    - exception.txt (stack trace)
+    - meta.yml (crash metadata)
+    - logs/ (copies of logs at crash time)
+    
+    Args:
+        limit: Maximum number of crashes to return (default 5)
+    
+    Returns:
+        List of crash reports with details
+    """
+    from ck3raven.logs.crash_parser import get_recent_crashes
+    
+    crashes = get_recent_crashes(limit=limit)
+    
+    if not crashes:
+        return {
+            "count": 0,
+            "message": "No crash reports found",
+        }
+    
+    return {
+        "count": len(crashes),
+        "crashes": [c.to_dict() for c in crashes],
+    }
+
+
+@mcp.tool()
+def ck3_get_crash_detail(
+    crash_id: str,
+) -> dict:
+    """
+    Get detailed information about a specific crash.
+    
+    Args:
+        crash_id: Crash folder name (e.g., "ck3_20251217_060926")
+    
+    Returns:
+        Full crash report with logs and stack trace
+    """
+    from pathlib import Path
+    from ck3raven.logs.crash_parser import parse_crash_folder
+    
+    crashes_dir = (
+        Path.home() / "Documents" / "Paradox Interactive" / 
+        "Crusader Kings III" / "crashes"
+    )
+    
+    crash_path = crashes_dir / crash_id
+    
+    if not crash_path.exists():
+        return {
+            "error": f"Crash folder not found: {crash_id}",
+            "hint": "Use ck3_get_crash_reports to see available crashes",
+        }
+    
+    report = parse_crash_folder(crash_path)
+    
+    if not report:
+        return {"error": "Failed to parse crash folder"}
+    
+    return report.to_dict()
+
+
+@mcp.tool()
+def ck3_read_log(
+    log_type: str = "error",
+    lines: int = 100,
+    from_end: bool = True,
+    search: str | None = None,
+) -> dict:
+    """
+    Read content from a CK3 log file.
+    
+    Args:
+        log_type: Type of log to read: "error", "game", "debug", "setup", "gui_warnings"
+        lines: Number of lines to return (default 100)
+        from_end: If True, return last N lines; otherwise first N lines
+        search: Optional search filter (only return lines containing this text)
+    
+    Returns:
+        Log content
+    """
+    from pathlib import Path
+    
+    logs_dir = (
+        Path.home() / "Documents" / "Paradox Interactive" / 
+        "Crusader Kings III" / "logs"
+    )
+    
+    log_files = {
+        "error": "error.log",
+        "game": "game.log",
+        "debug": "debug.log",
+        "setup": "setup.log",
+        "gui_warnings": "gui_warnings.log",
+        "database_conflicts": "database_conflicts.log",
+    }
+    
+    if log_type not in log_files:
+        return {
+            "error": f"Unknown log type: {log_type}",
+            "available": list(log_files.keys()),
+        }
+    
+    log_path = logs_dir / log_files[log_type]
+    
+    if not log_path.exists():
+        return {
+            "error": f"Log file not found: {log_files[log_type]}",
+            "hint": "Make sure CK3 has been run",
+        }
+    
+    try:
+        content_lines = log_path.read_text(encoding='utf-8', errors='replace').splitlines()
+        
+        # Apply search filter if provided
+        if search:
+            search_lower = search.lower()
+            content_lines = [l for l in content_lines if search_lower in l.lower()]
+        
+        # Select lines
+        if from_end:
+            selected = content_lines[-lines:] if len(content_lines) > lines else content_lines
+        else:
+            selected = content_lines[:lines]
+        
+        return {
+            "log_type": log_type,
+            "total_lines": len(content_lines),
+            "returned_lines": len(selected),
+            "from_end": from_end,
+            "search": search,
+            "content": "\n".join(selected),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ============================================================================
 # Main Entry Point
 # ============================================================================
 

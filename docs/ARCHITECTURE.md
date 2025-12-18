@@ -354,6 +354,25 @@ ConflictUnit → User Decision → ResolutionChoice → Patch Generation
 
 ## Future Work
 
+### Update Detection System (Pending)
+- Detect when vanilla/mod source directories have changed (mtime comparison)
+- Mark content_versions as stale when source files are modified
+- Trigger automatic re-ingestion and re-extraction
+- Uses `source_mtime` and `is_stale` columns in content_versions table
+
+### Change Logging System (Pending)
+- Track when mods/vanilla are updated with detailed summaries
+- Record per-file changes with block-level diffs
+- Uses `change_log` and `file_changes` tables (schema ready)
+- Provides navigable/searchable change history
+
+### Log Parsing Module
+- Parse CK3's error.log into structured error data
+- Categorize errors by type and priority
+- Detect cascading error patterns
+- Parse crash folders for exception details
+- Located in `src/ck3raven/logs/`
+
 ### Emulator (Phase 2)
 - Full game state building from resolved content
 - Provenance tracking per definition
