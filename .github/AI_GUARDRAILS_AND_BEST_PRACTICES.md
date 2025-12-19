@@ -194,7 +194,7 @@ Before concluding something does NOT exist:
 NEVER conclude "doesn't exist" from a single failed search.
 ```
 
-#### Guardrail 6: Schema Awareness
+#### Guardrail 5: Schema Awareness
 **Rule:** Always verify column/table names against actual schema.
 
 ```markdown

@@ -184,6 +184,66 @@ def delete_file(session: Session, mod_id: str, relpath: str) -> dict:
         return {"success": False, "error": str(e)}
 
 
+def rename_file(
+    session: Session,
+    mod_id: str,
+    old_relpath: str,
+    new_relpath: str
+) -> dict:
+    """
+    Rename/move a file within a live mod.
+    
+    Args:
+        mod_id: Target mod
+        old_relpath: Current relative path within mod
+        new_relpath: New relative path within mod
+    """
+    mod = session.get_live_mod(mod_id)
+    if not mod:
+        return {"success": False, "error": f"Unknown mod_id: {mod_id}"}
+    
+    # Validate both paths
+    valid, err = validate_relpath(old_relpath)
+    if not valid:
+        return {"success": False, "error": f"old_relpath: {err}"}
+    
+    valid, err = validate_relpath(new_relpath)
+    if not valid:
+        return {"success": False, "error": f"new_relpath: {err}"}
+    
+    old_path = mod.path / old_relpath
+    new_path = mod.path / new_relpath
+    
+    # Security checks
+    if not session.is_path_allowed(old_path):
+        return {"success": False, "error": "Old path escapes sandbox"}
+    if not session.is_path_allowed(new_path):
+        return {"success": False, "error": "New path escapes sandbox"}
+    
+    if not old_path.exists():
+        return {"success": False, "error": f"File not found: {old_relpath}"}
+    
+    if new_path.exists():
+        return {"success": False, "error": f"Destination already exists: {new_relpath}"}
+    
+    try:
+        # Create parent directories if needed
+        new_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Rename/move the file
+        old_path.rename(new_path)
+        
+        return {
+            "success": True,
+            "mod_id": mod_id,
+            "old_relpath": old_relpath,
+            "new_relpath": new_relpath,
+            "full_path": str(new_path)
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def list_live_files(
     session: Session,
     mod_id: str,

@@ -487,6 +487,37 @@ def ck3_delete_file(
 
 
 @mcp.tool()
+def ck3_rename_file(
+    mod_name: str,
+    old_rel_path: str,
+    new_rel_path: str
+) -> dict:
+    """
+    Rename or move a file within a whitelisted live mod.
+    
+    Args:
+        mod_name: Name of the live mod
+        old_rel_path: Current relative path within the mod
+        new_rel_path: New relative path within the mod
+    
+    Returns:
+        Success status
+    """
+    session = _get_session()
+    trace = _get_trace()
+    
+    result = live_mods.rename_file(session, mod_name, old_rel_path, new_rel_path)
+    
+    trace.log("ck3.rename_file", {
+        "mod_name": mod_name,
+        "old_rel_path": old_rel_path,
+        "new_rel_path": new_rel_path
+    }, {"success": result.get("success", False)})
+    
+    return result
+
+
+@mcp.tool()
 def ck3_list_live_files(
     mod_name: str,
     path_prefix: Optional[str] = None,
@@ -2302,6 +2333,156 @@ def ck3_get_folder_contents(
         "files": files,
         "path": path
     }
+
+
+# ============================================================================
+# Mode & Configuration Tools
+# ============================================================================
+
+@mcp.tool()
+def ck3_get_mode_instructions(
+    mode: Literal["ck3lens", "ck3lens-live", "ck3raven-dev"]
+) -> dict:
+    """
+    Get the instruction content for a specific agent mode.
+    
+    Use this to understand what a mode does or to switch modes.
+    
+    Args:
+        mode: The mode to get instructions for:
+            - "ck3lens": Database-only CK3 modding (restricted tools)
+            - "ck3lens-live": Full CK3 modding with live file editing
+            - "ck3raven-dev": Full development mode for infrastructure
+    
+    Returns:
+        Mode instructions and configuration
+    """
+    from pathlib import Path
+    
+    # Map modes to instruction files
+    mode_files = {
+        "ck3lens": "COPILOT_LENS_COMPATCH.md",
+        "ck3lens-live": "COPILOT_LENS_COMPATCH.md",  # Same file, different tool access
+        "ck3raven-dev": "COPILOT_RAVEN_DEV.md",
+    }
+    
+    if mode not in mode_files:
+        return {
+            "error": f"Unknown mode: {mode}",
+            "available_modes": list(mode_files.keys()),
+        }
+    
+    # Find the instructions file
+    ck3raven_root = Path(__file__).parent.parent.parent
+    instructions_path = ck3raven_root / ".github" / mode_files[mode]
+    
+    if not instructions_path.exists():
+        return {
+            "error": f"Instructions file not found: {mode_files[mode]}",
+            "expected_path": str(instructions_path),
+        }
+    
+    try:
+        content = instructions_path.read_text(encoding="utf-8")
+        
+        # Add mode-specific notes
+        mode_notes = {
+            "ck3lens": "Restricted mode: Use only MCP tools, no filesystem access.",
+            "ck3lens-live": "Full CK3 modding: All MCP tools including live file operations.",
+            "ck3raven-dev": "Development mode: All tools available for infrastructure work.",
+        }
+        
+        return {
+            "mode": mode,
+            "note": mode_notes.get(mode, ""),
+            "instructions": content,
+            "source_file": str(instructions_path),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def ck3_get_workspace_config() -> dict:
+    """
+    Get the workspace configuration including tool sets and MCP settings.
+    
+    Use this to understand:
+    - Available modes/tool sets and what tools they enable
+    - MCP server configuration
+    - Live mod whitelist
+    - Database path
+    
+    Returns:
+        Complete workspace configuration
+    """
+    from pathlib import Path
+    import json
+    
+    session = _get_session()
+    
+    result = {
+        "database": {
+            "path": str(session.db_path),
+            "exists": session.db_path.exists(),
+        },
+        "live_mods": [
+            {"id": m.id, "name": m.name, "path": str(m.path)}
+            for m in (session.live_mods or [])
+        ],
+        "tool_sets": None,
+        "mcp_config": None,
+        "available_modes": [
+            {
+                "name": "ck3lens",
+                "description": "Database-only CK3 modding - searches, symbols, file content, conflict detection",
+                "use_case": "Fixing mod errors, compatibility patching",
+            },
+            {
+                "name": "ck3lens-live",
+                "description": "Full CK3 modding including live file editing and git operations",
+                "use_case": "Active mod development with file writes",
+            },
+            {
+                "name": "ck3raven-dev",
+                "description": "Full development mode - all tools for infrastructure work",
+                "use_case": "Python development, MCP server changes, database schema",
+            },
+        ],
+    }
+    
+    # Try to read toolSets.json
+    ai_workspace = Path(__file__).parent.parent.parent.parent
+    tool_sets_path = ai_workspace / ".vscode" / "toolSets.json"
+    
+    if tool_sets_path.exists():
+        try:
+            result["tool_sets"] = json.loads(tool_sets_path.read_text(encoding="utf-8"))
+            result["tool_sets_path"] = str(tool_sets_path)
+        except Exception as e:
+            result["tool_sets_error"] = str(e)
+    
+    # Try to read mcp.json
+    mcp_paths = [
+        ai_workspace / ".vscode" / "mcp.json",
+        ai_workspace / "ck3raven" / ".vscode" / "mcp.json",
+    ]
+    
+    for mcp_path in mcp_paths:
+        if mcp_path.exists():
+            try:
+                # Read as text and strip comments for JSONC
+                content = mcp_path.read_text(encoding="utf-8")
+                # Simple JSONC handling: remove // comments
+                lines = [l for l in content.splitlines() if not l.strip().startswith("//")]
+                clean_json = "\n".join(lines)
+                result["mcp_config"] = json.loads(clean_json)
+                result["mcp_config_path"] = str(mcp_path)
+                break
+            except Exception as e:
+                result["mcp_config_error"] = str(e)
+    
+    return result
 
 
 # ============================================================================

@@ -15,7 +15,19 @@
 
 ## How to Switch Modes
 
-### Option 1: Tell the Agent Directly
+### Option 1: Use Custom Agents (Recommended)
+
+Use `@lens` or `@raven` to invoke the appropriate agent:
+
+```
+@lens Fix the trait conflict between ModA and ModB
+```
+
+```
+@raven Add a new MCP tool for error parsing
+```
+
+### Option 2: Tell the Agent Directly
 
 ```
 Switch to ck3raven-dev mode. I need to work on the database schema.
@@ -25,7 +37,19 @@ Switch to ck3raven-dev mode. I need to work on the database schema.
 Switch to ck3lens mode. I need to fix a trait conflict in MSC.
 ```
 
-### Option 2: Reference the Instruction File
+### Option 3: Use MCP Tools (Works Even with Restricted Access)
+
+If you're in restricted mode, use the MCP tool to get instructions:
+
+```
+Use ck3_get_mode_instructions("ck3raven-dev") and follow those instructions.
+```
+
+```
+Use ck3_get_workspace_config() to understand the current configuration.
+```
+
+### Option 4: Reference the Instruction File
 
 ```
 @.github/COPILOT_RAVEN_DEV.md - Use this context for our session.
@@ -34,12 +58,6 @@ Switch to ck3lens mode. I need to fix a trait conflict in MSC.
 ```
 @.github/COPILOT_LENS_COMPATCH.md - Use this context for our session.
 ```
-
-### Option 3: VS Code Copilot Chat Participants
-
-Future enhancement: Create VS Code chat participants:
-- `@raven` - Automatically uses ck3raven-dev instructions
-- `@lens` - Automatically uses ck3lens instructions
 
 ---
 
