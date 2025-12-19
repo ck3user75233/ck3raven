@@ -2427,7 +2427,7 @@ def ck3_get_workspace_config() -> dict:
             "exists": session.db_path.exists(),
         },
         "live_mods": [
-            {"id": m.id, "name": m.name, "path": str(m.path)}
+            {"mod_id": m.mod_id, "name": m.name, "path": str(m.path)}
             for m in (session.live_mods or [])
         ],
         "tool_sets": None,
