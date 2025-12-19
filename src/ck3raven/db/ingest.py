@@ -209,18 +209,28 @@ def ingest_directory(
     logger.info(f"Root hash: {content_root_hash[:12]}... ({len(file_hashes)} files)")
     
     # Phase 3: Check if version already exists
-    if not force:
-        existing = find_content_version_by_hash(conn, content_root_hash)
-        if existing:
-            logger.info(f"Content version already exists: {existing.content_version_id}")
-            stats.content_reused = True
-            stats.files_unchanged = stats.files_scanned
-            return IngestResult(
-                content_version_id=existing.content_version_id,
-                content_root_hash=content_root_hash,
-                stats=stats,
-                errors=errors,
-            )
+    existing = find_content_version_by_hash(conn, content_root_hash)
+    
+    if existing and not force:
+        logger.info(f"Content version already exists: {existing.content_version_id}")
+        stats.content_reused = True
+        stats.files_unchanged = stats.files_scanned
+        return IngestResult(
+            content_version_id=existing.content_version_id,
+            content_root_hash=content_root_hash,
+            stats=stats,
+            errors=errors,
+        )
+    
+    # If force and existing, delete old version first
+    if existing and force:
+        logger.info(f"Force mode: deleting existing content version {existing.content_version_id}")
+        # Delete file records (cascade from content_version)
+        conn.execute("DELETE FROM files WHERE content_version_id = ?", (existing.content_version_id,))
+        # Delete the content version itself
+        conn.execute("DELETE FROM content_versions WHERE content_version_id = ?", (existing.content_version_id,))
+        # Note: file_contents are NOT deleted - they're content-addressed and may be shared
+        conn.commit()
     
     # Phase 4: Create content version
     total_size = sum(d[2] for d in file_data.values())

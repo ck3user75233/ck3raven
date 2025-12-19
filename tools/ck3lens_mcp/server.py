@@ -2055,6 +2055,256 @@ def ck3_read_log(
 
 
 # ============================================================================
+# Explorer Tools (for UI navigation)
+# ============================================================================
+
+@mcp.tool()
+def ck3_get_playset_mods() -> dict:
+    """
+    Get all mods in the active playset with load order.
+    
+    Returns list of mods with:
+    - name: Display name
+    - contentVersionId: For querying files
+    - loadOrder: Position (0=vanilla, 1=first mod, etc.)
+    - kind: 'vanilla' or 'mod'
+    - fileCount: Number of files
+    - sourcePath: Original source path (if known)
+    """
+    db = _get_db()
+    playset_id = _get_playset_id()
+    
+    rows = db.conn.execute("""
+        SELECT 
+            pm.load_order_index,
+            pm.content_version_id,
+            cv.kind,
+            cv.file_count,
+            vv.ck3_version,
+            mp.name as mod_name,
+            mp.source_path
+        FROM playset_mods pm
+        JOIN content_versions cv ON pm.content_version_id = cv.content_version_id
+        LEFT JOIN vanilla_versions vv ON cv.vanilla_version_id = vv.vanilla_version_id
+        LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+        WHERE pm.playset_id = ? AND pm.enabled = 1
+        ORDER BY pm.load_order_index
+    """, (playset_id,)).fetchall()
+    
+    mods = []
+    for row in rows:
+        name = row['mod_name'] if row['mod_name'] else f"Vanilla CK3 {row['ck3_version'] or ''}"
+        mods.append({
+            "name": name,
+            "contentVersionId": row['content_version_id'],
+            "loadOrder": row['load_order_index'],
+            "kind": row['kind'],
+            "fileCount": row['file_count'],
+            "sourcePath": row['source_path']
+        })
+    
+    return {"mods": mods, "playset_id": playset_id}
+
+
+@mcp.tool()
+def ck3_get_top_level_folders() -> dict:
+    """
+    Get top-level folders across all mods in the active playset.
+    
+    Returns unique folder names with file counts.
+    """
+    db = _get_db()
+    playset_id = _get_playset_id()
+    
+    rows = db.conn.execute("""
+        SELECT 
+            SUBSTR(f.relpath, 1, INSTR(f.relpath || '/', '/') - 1) as folder,
+            COUNT(*) as file_count
+        FROM files f
+        JOIN playset_mods pm ON f.content_version_id = pm.content_version_id
+        WHERE pm.playset_id = ? AND pm.enabled = 1 AND f.deleted = 0
+        GROUP BY folder
+        ORDER BY folder
+    """, (playset_id,)).fetchall()
+    
+    folders = [{"name": row['folder'], "fileCount": row['file_count']} for row in rows if row['folder']]
+    return {"folders": folders}
+
+
+@mcp.tool()
+def ck3_get_mod_folders(content_version_id: int) -> dict:
+    """
+    Get top-level folders within a specific mod.
+    
+    Args:
+        content_version_id: The content version to query
+    
+    Returns folders with file counts.
+    """
+    db = _get_db()
+    
+    rows = db.conn.execute("""
+        SELECT 
+            SUBSTR(f.relpath, 1, INSTR(f.relpath || '/', '/') - 1) as folder,
+            COUNT(*) as file_count
+        FROM files f
+        WHERE f.content_version_id = ? AND f.deleted = 0
+        GROUP BY folder
+        ORDER BY folder
+    """, (content_version_id,)).fetchall()
+    
+    folders = [{"name": row['folder'], "fileCount": row['file_count']} for row in rows if row['folder']]
+    return {"folders": folders}
+
+
+@mcp.tool()
+def ck3_get_folder_contents(
+    path: str,
+    content_version_id: Optional[int] = None,
+    folder_pattern: Optional[str] = None,
+    text_search: Optional[str] = None,
+    symbol_search: Optional[str] = None,
+    mod_filter: Optional[list[str]] = None,
+    file_type_filter: Optional[list[str]] = None
+) -> dict:
+    """
+    Get contents of a folder - subfolders and files.
+    
+    Args:
+        path: Folder path (e.g., "common/traits")
+        content_version_id: Limit to specific mod (optional)
+        folder_pattern: Filter by folder pattern
+        text_search: Filter by content text (FTS)
+        symbol_search: Filter by symbol name
+        mod_filter: Only show files from these mods
+        file_type_filter: Only show these file types
+    
+    Returns subfolders and files in the path.
+    """
+    db = _get_db()
+    playset_id = _get_playset_id()
+    
+    # Normalize path
+    path = path.strip('/').replace('\\', '/')
+    path_prefix = f"{path}/" if path else ""
+    
+    # Build query for subfolders
+    if content_version_id:
+        # Single mod query
+        subfolder_sql = """
+            SELECT DISTINCT
+                SUBSTR(f.relpath, ?, INSTR(SUBSTR(f.relpath, ?), '/')) as subfolder
+            FROM files f
+            WHERE f.content_version_id = ? 
+              AND f.relpath LIKE ?
+              AND f.deleted = 0
+              AND SUBSTR(f.relpath, ?, INSTR(SUBSTR(f.relpath, ?), '/')) != ''
+        """
+        prefix_len = len(path_prefix) + 1
+        subfolder_rows = db.conn.execute(subfolder_sql, (
+            prefix_len, prefix_len, content_version_id, f"{path_prefix}%", prefix_len, prefix_len
+        )).fetchall()
+    else:
+        # All mods in playset
+        subfolder_sql = """
+            SELECT DISTINCT
+                SUBSTR(f.relpath, ?, INSTR(SUBSTR(f.relpath, ?), '/')) as subfolder
+            FROM files f
+            JOIN playset_mods pm ON f.content_version_id = pm.content_version_id
+            WHERE pm.playset_id = ? 
+              AND pm.enabled = 1
+              AND f.relpath LIKE ?
+              AND f.deleted = 0
+              AND SUBSTR(f.relpath, ?, INSTR(SUBSTR(f.relpath, ?), '/')) != ''
+        """
+        prefix_len = len(path_prefix) + 1
+        subfolder_rows = db.conn.execute(subfolder_sql, (
+            prefix_len, prefix_len, playset_id, f"{path_prefix}%", prefix_len, prefix_len
+        )).fetchall()
+    
+    # Count files in each subfolder
+    subfolders = []
+    seen_folders = set()
+    for row in subfolder_rows:
+        if row['subfolder'] and row['subfolder'] not in seen_folders:
+            seen_folders.add(row['subfolder'])
+            subfolders.append({"name": row['subfolder']})
+    
+    # Build query for files in this exact folder (not subfolders)
+    if content_version_id:
+        file_sql = """
+            SELECT 
+                f.file_id,
+                f.relpath,
+                f.content_hash,
+                f.file_type,
+                cv.kind,
+                mp.name as mod_name,
+                mp.source_path
+            FROM files f
+            JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            WHERE f.content_version_id = ?
+              AND f.relpath LIKE ?
+              AND f.relpath NOT LIKE ?
+              AND f.deleted = 0
+            ORDER BY f.relpath
+        """
+        file_rows = db.conn.execute(file_sql, (
+            content_version_id, f"{path_prefix}%", f"{path_prefix}%/%"
+        )).fetchall()
+    else:
+        file_sql = """
+            SELECT 
+                f.file_id,
+                f.relpath,
+                f.content_hash,
+                f.file_type,
+                cv.kind,
+                mp.name as mod_name,
+                mp.source_path,
+                pm.load_order_index
+            FROM files f
+            JOIN playset_mods pm ON f.content_version_id = pm.content_version_id
+            JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            WHERE pm.playset_id = ?
+              AND pm.enabled = 1
+              AND f.relpath LIKE ?
+              AND f.relpath NOT LIKE ?
+              AND f.deleted = 0
+            ORDER BY pm.load_order_index, f.relpath
+        """
+        file_rows = db.conn.execute(file_sql, (
+            playset_id, f"{path_prefix}%", f"{path_prefix}%/%"
+        )).fetchall()
+    
+    # Build file list with absolute paths
+    files = []
+    for row in file_rows:
+        mod_name = row['mod_name'] if row['mod_name'] else f"Vanilla"
+        
+        # Determine absolute path
+        abs_path = None
+        if row['source_path']:
+            abs_path = str(Path(row['source_path']) / row['relpath'])
+        
+        files.append({
+            "relpath": row['relpath'],
+            "modName": mod_name,
+            "contentHash": row['content_hash'],
+            "fileType": row['file_type'] or 'text',
+            "absPath": abs_path
+        })
+    
+    return {
+        "folders": subfolders,
+        "files": files,
+        "path": path
+    }
+
+
+# ============================================================================
 # Main Entry Point
 # ============================================================================
 

@@ -96,3 +96,14 @@ learned_schema.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Local machine-specific config
+playset_manifest.json
+active_mod_paths.json
+local_config.py
+
+# Generated database (large, machine-specific)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

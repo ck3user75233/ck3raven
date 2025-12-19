@@ -203,7 +203,8 @@ def store_file_content(
     content_text = None
     if not is_binary:
         try:
-            content_text = data.decode(encoding.replace('-sig', ''))
+            # Use the full encoding name (including -sig suffix) to properly strip BOM
+            content_text = data.decode(encoding)
         except (UnicodeDecodeError, LookupError):
             pass
     

@@ -5,7 +5,7 @@ VS Code extension for CK3 mod development - Game state explorer, conflict resolu
 ## Features
 
 ### 🔍 Game State Explorer
-Browse the complete game state from your playset - see what the game actually sees after all mods are loaded.
+Browse the complete game state from your playset - see what the game actually sees after all mods are loaded. Database-driven navigation with provenance tracking (vanilla, mod name, or path).
 
 ### ⚔️ Conflict Detection
 Identify which mods are overriding each other and who "wins" for each definition.
@@ -14,7 +14,10 @@ Identify which mods are overriding each other and who "wins" for each definition
 Search for traits, events, decisions, and other symbols across all mods with fuzzy/adjacency matching.
 
 ### ✅ Real-Time Linting
-Get immediate feedback on syntax errors as you type, powered by ck3raven's 100% regex-free parser.
+Get immediate feedback on syntax errors as you type:
+- **Quick validation** (TypeScript): Instant feedback for brace matching, string termination
+- **Full validation** (Python parser): Complete syntax checking with recovery hints
+- **Status bar integration**: Shows error/warning count with click-to-view
 
 ### 🎯 Go to Definition / Find References
 Navigate your mod codebase like a real IDE - jump to definitions and find all usages.
@@ -25,8 +28,17 @@ Autocomplete for keywords, scopes, effects, triggers, and your custom symbols.
 ### 📝 Syntax Highlighting
 Proper syntax highlighting for Paradox script files (.txt) and localization (.yml).
 
+### 🎨 Studio Panel
+Create new CK3 files with templates:
+- Events, Decisions, Traits, Character Interactions
+- Cultures, Traditions, Buildings
+- Court Positions, Scripted Effects/Triggers, On-Actions
+
 ### 🔧 Live Mod Editing
 Write to whitelisted mods with syntax validation before save.
+
+### 📊 AST Viewer
+View and explore the Abstract Syntax Tree of any CK3 script file.
 
 ### 🔗 Git Integration
 Track changes, commit, and sync your mod repositories.
@@ -34,7 +46,8 @@ Track changes, commit, and sync your mod repositories.
 ## Requirements
 
 - VS Code 1.85.0+
-- Python 3.11+
+- Python 3.11+ (3.13 recommended)
+- Node.js 18+ (for development)
 - ck3raven database (built from your playset)
 
 ## Installation
@@ -43,8 +56,12 @@ Track changes, commit, and sync your mod repositories.
 
 ```bash
 cd ck3raven
+python -m venv .venv
+.venv\Scripts\activate  # Windows
+# or: source .venv/bin/activate  # macOS/Linux
+
 pip install -e .
-python scripts/build_database.py
+python -m ck3raven.cli ingest --vanilla "path/to/CK3/game"
 ```
 
 ### 2. Install extension dependencies
@@ -57,7 +74,17 @@ npm run compile
 
 ### 3. Launch extension
 
-Press F5 in VS Code to launch the Extension Development Host.
+**Option A: F5 (Debug Mode)**
+1. Open the `tools/ck3lens-explorer` folder in VS Code
+2. Press F5 to launch the Extension Development Host
+3. A new VS Code window opens with the extension loaded
+
+**Option B: Package and Install**
+```bash
+npm install -g @vscode/vsce
+vsce package
+code --install-extension ck3lens-explorer-0.1.0.vsix
+```
 
 ## Configuration
 
@@ -68,8 +95,8 @@ Press F5 in VS Code to launch the Extension Development Host.
   "ck3lens.pythonPath": "python",
   "ck3lens.enableRealTimeLinting": true,
   "ck3lens.lintOnSave": true,
-  "ck3lens.lintDelay": 500,
-  "ck3lens.liveMods": ["Mini Super Compatch", "MSCRE"]
+  "ck3lens.lintDelay": 300,
+  "ck3lens.liveMods": ["Mini Super Compatch", "MSCRE", "LowbornRiseExpanded"]
 }
 ```
 

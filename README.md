@@ -212,11 +212,23 @@ for r in results:
 - [ ] Conflict report generation
 
 ### Phase 3: Explorer UI
-- [ ] VS Code extension with Activity Bar
+- [x] VS Code extension with Activity Bar
+- [x] Database-driven tree navigation (mods in load order)
+- [x] AST Viewer panel (Syntax ⇄ AST toggle)
+- [x] Floating widget (lens/mode/agent status)
 - [ ] Sidebar webview (Explorer, Compatch, Reports tabs)
-- [ ] Node detail panel (Syntax ⇄ AST toggle)
+- [ ] Advanced filtering (symbol, text, folder patterns)
 - [ ] Provenance timeline view
 - [ ] Uncertainty badges and filtering
+
+### Phase 3.5: Studio (Create/Edit)
+- [x] Studio panel with template selection
+- [x] Create new file in live mod
+- [x] Real-time syntax validation (debounced)
+- [x] Copy from vanilla for overrides
+- [x] File templates (event, decision, trait, culture, tradition, etc.)
+- [ ] Symbol recognition + hover docs
+- [ ] Autocomplete for triggers/effects
 
 ### Phase 4: Compatch Helper
 - [x] Conflict unit extraction and grouping

@@ -1,6 +1,6 @@
 # ck3raven Architecture
 
-> **Last Updated:** December 18, 2025
+> **Last Updated:** December 19, 2025
 
 ## Overview
 
@@ -79,7 +79,21 @@ ck3raven/
 │   │       ├── TESTING.md
 │   │       └── DESIGN.md
 │   │
-│   └── ck3lens-explorer/         # VS Code Extension (WIP)
+│   └── ck3lens-explorer/         # VS Code Extension
+│       ├── src/
+│       │   ├── extension.ts      # Entry point, command registration
+│       │   ├── session.ts        # CK3LensSession lifecycle
+│       │   ├── bridge/           # Python JSON-RPC bridge
+│       │   ├── linting/          # Real-time validation
+│       │   │   ├── lintingProvider.ts   # Full Python validation
+│       │   │   └── quickValidator.ts    # Quick TS validation
+│       │   ├── views/            # UI panels
+│       │   │   ├── explorerView.ts      # Database-driven tree
+│       │   │   ├── astViewerPanel.ts    # AST viewer webview
+│       │   │   └── studioPanel.ts       # File creation studio
+│       │   └── widget/           # Floating widget
+│       └── bridge/
+│           └── server.py         # Python JSON-RPC server
 │
 ├── docs/                         # Design documentation
 ├── tests/                        # Pytest suite
@@ -378,12 +392,63 @@ ConflictUnit → User Decision → ResolutionChoice → Patch Generation
 - Provenance tracking per definition
 - Export resolved files with annotations
 
-### Explorer UI (Phase 3)
-- VS Code sidebar with tree views
-- Syntax ⇄ AST toggle
-- Provenance timeline
+---
+
+## VS Code Extension (`tools/ck3lens-explorer/`)
+
+The CK3 Lens Explorer extension provides an IDE-like experience for CK3 mod development.
+
+### Architecture
+
+```
+VS Code Extension (TypeScript)
+        │
+        │ JSON-RPC (stdio)
+        ▼
+Python Bridge Server (bridge/server.py)
+        │
+        ▼
+ck3raven Library (parser, database, resolver)
+```
+
+### Components
+
+| Component | File | Description |
+|-----------|------|-------------|
+| Entry Point | `extension.ts` | Activation, command registration |
+| Session | `session.ts` | Python bridge lifecycle |
+| Quick Validator | `linting/quickValidator.ts` | Instant TS-based syntax checks |
+| Linting Provider | `linting/lintingProvider.ts` | Full Python parser validation |
+| Explorer View | `views/explorerView.ts` | Database-driven file tree |
+| AST Viewer | `views/astViewerPanel.ts` | File content + AST webview |
+| Studio Panel | `views/studioPanel.ts` | Template-based file creation |
+| Widget | `widget/lensWidget.ts` | Mode switching, status overlay |
+
+### Validation Pipeline
+
+```
+User types → Quick TS validator (~10ms) → Show blocking errors
+           ↓ (300ms debounce)
+           Full Python parse (~200ms) → Complete diagnostics
+           ↓
+           Status bar updated (errors/warnings/valid)
+```
+
+### Templates (Studio Panel)
+
+11 templates for common CK3 content types:
+- Events, Decisions, Traits
+- Character Interactions
+- Cultures, Traditions, Buildings
+- Court Positions
+- Scripted Effects/Triggers, On-Actions
+
+See `tools/ck3lens-explorer/DESIGN.md` for full design documentation.
+
+---
 
 ### Compatch Helper (Phase 4)
 - Decision card UI
 - Guided merge editor
 - AI-assisted conflict resolution
+

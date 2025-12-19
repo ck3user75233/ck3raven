@@ -162,6 +162,56 @@
         "command": "ck3lens.setPlayset",
         "title": "CK3 Lens: Select Playset",
         "icon": "$(list-selection)"
+      },
+      {
+        "command": "ck3lens.openAstViewer",
+        "title": "CK3 Lens: Open AST Viewer",
+        "icon": "$(symbol-structure)"
+      },
+      {
+        "command": "ck3lens.openStudio",
+        "title": "CK3 Studio: Create/Edit File",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "ck3lens.toggleLens",
+        "title": "CK3 Lens: Toggle Lens On/Off",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "ck3lens.selectMode",
+        "title": "CK3 Lens: Select Mode",
+        "icon": "$(symbol-event)"
+      },
+      {
+        "command": "ck3lens.toggleAgentEngagement",
+        "title": "CK3 Lens: Toggle Agent Engagement",
+        "icon": "$(hubot)"
+      },
+      {
+        "command": "ck3lens.openWidget",
+        "title": "CK3 Lens: Open Widget Panel",
+        "icon": "$(window)"
+      },
+      {
+        "command": "ck3lens.hideWidget",
+        "title": "CK3 Lens: Hide Widget Panel",
+        "icon": "$(close)"
+      },
+      {
+        "command": "ck3lens.openLogs",
+        "title": "CK3 Lens: Open Logs",
+        "icon": "$(output)"
+      },
+      {
+        "command": "ck3lens.copyCurrentState",
+        "title": "CK3 Lens: Copy Current State to Clipboard",
+        "icon": "$(clippy)"
+      },
+      {
+        "command": "ck3lens.mcp.reconnect",
+        "title": "CK3 Lens: Reconnect MCP Server",
+        "icon": "$(plug)"
       }
     ],
     "menus": {
@@ -266,6 +316,40 @@
           "enum": ["off", "error", "info", "debug"],
           "default": "info",
           "description": "Logging level for CK3 Lens"
+        },
+        "ck3.widget.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable the CK3 Lens floating widget"
+        },
+        "ck3.widget.anchor": {
+          "type": "string",
+          "enum": ["bottomRight", "bottomLeft", "topRight", "topLeft"],
+          "default": "bottomRight",
+          "description": "Anchor position for the floating widget"
+        },
+        "ck3.widget.opacity": {
+          "type": "number",
+          "default": 0.95,
+          "minimum": 0.1,
+          "maximum": 1.0,
+          "description": "Widget opacity (0.1-1.0)"
+        },
+        "ck3.widget.startCollapsed": {
+          "type": "boolean",
+          "default": false,
+          "description": "Start the widget in collapsed state"
+        },
+        "ck3.agent.autoEngageOnLensEnable": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically engage the agent when lens is enabled"
+        },
+        "ck3.mode.default": {
+          "type": "string",
+          "enum": ["ck3lens", "ck3raven-dev", "ck3creator"],
+          "default": "ck3lens",
+          "description": "Default mode when starting CK3 Lens"
         }
       }
     },
@@ -284,6 +368,31 @@
         "command": "ck3lens.searchSymbols",
         "key": "ctrl+shift+o",
         "when": "editorLangId == paradox-script"
+      },
+      {
+        "command": "ck3lens.toggleLens",
+        "key": "ctrl+alt+l",
+        "when": "true"
+      },
+      {
+        "command": "ck3lens.selectMode",
+        "key": "ctrl+alt+m",
+        "when": "true"
+      },
+      {
+        "command": "ck3lens.toggleAgentEngagement",
+        "key": "ctrl+alt+a",
+        "when": "true"
+      },
+      {
+        "command": "ck3lens.openWidget",
+        "key": "ctrl+alt+w",
+        "when": "true"
+      },
+      {
+        "command": "ck3lens.openStudio",
+        "key": "ctrl+alt+n",
+        "when": "true"
       }
     ],
     "colors": [

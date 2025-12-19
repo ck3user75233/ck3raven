@@ -11,17 +11,21 @@ import { ExplorerViewProvider } from './views/explorerView';
 import { ConflictsViewProvider } from './views/conflictsView';
 import { SymbolsViewProvider } from './views/symbolsView';
 import { LiveModsViewProvider } from './views/liveModsView';
+import { AstViewerPanel } from './views/astViewerPanel';
+import { StudioPanel } from './views/studioPanel';
 import { LintingProvider } from './linting/lintingProvider';
 import { DefinitionProvider } from './language/definitionProvider';
 import { ReferenceProvider } from './language/referenceProvider';
 import { HoverProvider } from './language/hoverProvider';
 import { CompletionProvider } from './language/completionProvider';
 import { PythonBridge } from './bridge/pythonBridge';
+import { LensWidget } from './widget/lensWidget';
 import { Logger } from './utils/logger';
 
 // Global extension state
 let session: CK3LensSession | undefined;
 let pythonBridge: PythonBridge | undefined;
+let lensWidget: LensWidget | undefined;
 let logger: Logger;
 let outputChannel: vscode.OutputChannel;
 let diagnosticCollection: vscode.DiagnosticCollection;
@@ -58,6 +62,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.window.registerTreeDataProvider('ck3lens.symbolsView', symbolsProvider),
         vscode.window.registerTreeDataProvider('ck3lens.liveModsView', liveModsProvider)
     );
+
+    // Initialize the Lens Widget (status bar + panel)
+    lensWidget = new LensWidget(context, logger);
+    context.subscriptions.push(lensWidget);
+
+    // Connect widget to session state changes
+    lensWidget.onStateChange(state => {
+        logger.info(`Widget state changed: lens=${state.lensEnabled}, mode=${state.mode}, agent=${state.agent.status}`);
+    });
 
     // Register language features for paradox-script
     const paradoxSelector: vscode.DocumentSelector = { language: 'paradox-script' };
@@ -290,6 +303,63 @@ function registerCommands(
             vscode.window.showInformationMessage('Playset selection coming soon...');
         })
     );
+
+    // Open AST Viewer
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ck3lens.openAstViewer', async (fileUri?: vscode.Uri, modSource?: string) => {
+            // If no URI provided, use the current editor
+            let uri = fileUri;
+            let source = modSource;
+            
+            if (!uri) {
+                const editor = vscode.window.activeTextEditor;
+                if (editor && editor.document.languageId === 'paradox-script') {
+                    uri = editor.document.uri;
+                } else {
+                    // Prompt user to select a file from the explorer
+                    vscode.window.showWarningMessage('Open a Paradox script file or select from the Explorer');
+                    return;
+                }
+            }
+            
+            // Extract filename from path
+            const relpath = uri.fsPath.replace(/\\/g, '/');
+            const filename = relpath.split('/').pop() || 'unknown';
+            
+            // Create or reveal AST viewer panel
+            AstViewerPanel.createOrShow(context.extensionUri, session!, logger, {
+                relpath: filename,
+                mod: source || 'unknown',
+                content: undefined  // Will be loaded from file
+            });
+        })
+    );
+
+    // Register explorer item click to open AST viewer
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ck3lens.explorerItemClick', async (item: any) => {
+            if (item && item.data?.relpath) {
+                // Open in AST viewer
+                AstViewerPanel.createOrShow(
+                    context.extensionUri, 
+                    session!, 
+                    logger, 
+                    {
+                        relpath: item.data.relpath,
+                        mod: item.data.modName || 'vanilla',
+                        content: undefined
+                    }
+                );
+            }
+        })
+    );
+
+    // Open Studio panel for file creation/editing
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ck3lens.openStudio', () => {
+            StudioPanel.createOrShow(context.extensionUri, session!, logger);
+        })
+    );
 }
 
 /**
@@ -339,4 +409,5 @@ export function deactivate(): void {
     logger?.info('CK3 Lens Explorer deactivating...');
     session?.dispose();
     pythonBridge?.dispose();
+    lensWidget?.dispose();
 }

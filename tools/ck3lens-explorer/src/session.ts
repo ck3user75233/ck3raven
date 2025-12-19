@@ -54,6 +54,39 @@ export interface FileInfo {
     content?: string;
 }
 
+export interface PlaysetModInfo {
+    name: string;
+    contentVersionId: number;
+    loadOrder: number;
+    kind: string;
+    fileCount: number;
+    sourcePath?: string;
+}
+
+export interface FolderInfo {
+    name: string;
+    fileCount: number;
+}
+
+export interface FolderContents {
+    folders: FolderInfo[];
+    files: Array<{
+        relpath: string;
+        modName?: string;
+        contentHash?: string;
+        fileType?: string;
+        absPath?: string;
+    }>;
+}
+
+export interface ExplorerFilter {
+    folderPattern?: string;
+    textSearch?: string;
+    symbolSearch?: string;
+    modFilter?: string[];
+    fileTypeFilter?: string[];
+}
+
 export class CK3LensSession implements vscode.Disposable {
     private _initialized: boolean = false;
     private _sessionInfo: SessionInfo | null = null;
@@ -222,6 +255,91 @@ export class CK3LensSession implements vscode.Disposable {
         } catch (error) {
             this.logger.error('List files failed', error);
             return [];
+        }
+    }
+
+    /**
+     * Get mods in the active playset with load order
+     */
+    async getPlaysetMods(): Promise<PlaysetModInfo[]> {
+        if (!this._initialized) {
+            await this.initialize();
+        }
+
+        try {
+            const result = await this.pythonBridge.call('get_playset_mods', {});
+            return result.mods || [];
+        } catch (error) {
+            this.logger.error('Get playset mods failed', error);
+            return [];
+        }
+    }
+
+    /**
+     * Get top-level folders across all mods in playset
+     */
+    async getTopLevelFolders(): Promise<FolderInfo[]> {
+        if (!this._initialized) {
+            await this.initialize();
+        }
+
+        try {
+            const result = await this.pythonBridge.call('get_top_level_folders', {});
+            return result.folders || [];
+        } catch (error) {
+            this.logger.error('Get top level folders failed', error);
+            return [];
+        }
+    }
+
+    /**
+     * Get folders within a specific mod's content version
+     */
+    async getModFolders(contentVersionId: number): Promise<FolderInfo[]> {
+        if (!this._initialized) {
+            await this.initialize();
+        }
+
+        try {
+            const result = await this.pythonBridge.call('get_mod_folders', {
+                content_version_id: contentVersionId
+            });
+            return result.folders || [];
+        } catch (error) {
+            this.logger.error('Get mod folders failed', error);
+            return [];
+        }
+    }
+
+    /**
+     * Get contents of a folder - subfolders and files
+     */
+    async getFolderContents(
+        path: string,
+        contentVersionId?: number,
+        filter?: ExplorerFilter
+    ): Promise<FolderContents> {
+        if (!this._initialized) {
+            await this.initialize();
+        }
+
+        try {
+            const result = await this.pythonBridge.call('get_folder_contents', {
+                path,
+                content_version_id: contentVersionId,
+                folder_pattern: filter?.folderPattern,
+                text_search: filter?.textSearch,
+                symbol_search: filter?.symbolSearch,
+                mod_filter: filter?.modFilter,
+                file_type_filter: filter?.fileTypeFilter
+            });
+            return {
+                folders: result.folders || [],
+                files: result.files || []
+            };
+        } catch (error) {
+            this.logger.error('Get folder contents failed', error);
+            return { folders: [], files: [] };
         }
     }
 

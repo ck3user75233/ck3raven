@@ -18,13 +18,18 @@ sys.path.insert(0, str(CKRAVEN_ROOT / "src"))
 
 # Now we can import ck3raven
 try:
-    from ck3raven.parser import parse_source
+    from ck3raven.parser import parse_source, LexerError, ParseError
     from ck3raven.db.search import SearchEngine
     from ck3raven.db.models import DBSession
     CKRAVEN_AVAILABLE = True
 except ImportError as e:
     CKRAVEN_AVAILABLE = False
     IMPORT_ERROR = str(e)
+    # Define dummy exception types for when imports fail
+    class LexerError(Exception):
+        pass
+    class ParseError(Exception):
+        pass
 
 
 class CK3LensBridge:
@@ -118,53 +123,223 @@ class CK3LensBridge:
         }
     
     def parse_content(self, params: dict) -> dict:
-        """Parse CK3 script content and return AST or errors."""
+        """Parse CK3 script content and return AST or errors with rich diagnostics."""
         content = params.get("content", "")
         filename = params.get("filename", "inline.txt")
+        include_warnings = params.get("include_warnings", True)
         
         if not CKRAVEN_AVAILABLE:
             return {"errors": [{"line": 1, "message": "Parser not available"}]}
         
+        errors = []
+        warnings = []
+        
         try:
             ast = parse_source(content, filename)
+            
+            # Run additional semantic checks if parse succeeded
+            if include_warnings:
+                warnings = self._check_semantic_issues(content, ast, filename)
+            
             return {
                 "success": True,
                 "ast": self._ast_to_dict(ast),
-                "errors": []
+                "errors": [],
+                "warnings": warnings,
+                "stats": {
+                    "lines": len(content.split('\n')),
+                    "blocks": self._count_blocks(ast)
+                }
+            }
+        except LexerError as e:
+            # Lexer error - precise location info
+            return {
+                "success": False,
+                "errors": [{
+                    "line": e.line,
+                    "column": e.column,
+                    "message": str(e),
+                    "severity": "error",
+                    "code": "LEX001",
+                    "recovery_hint": self._get_recovery_hint("lexer", str(e))
+                }],
+                "warnings": []
+            }
+        except ParseError as e:
+            # Parse error - may have partial AST
+            line = getattr(e, 'line', 1)
+            column = getattr(e, 'column', 1)
+            return {
+                "success": False,
+                "errors": [{
+                    "line": line,
+                    "column": column,
+                    "message": str(e),
+                    "severity": "error",
+                    "code": "PARSE001",
+                    "recovery_hint": self._get_recovery_hint("parse", str(e))
+                }],
+                "warnings": []
             }
         except Exception as e:
-            # Extract line number from error if possible
+            # Generic error - try to extract location
             error_str = str(e)
             line = 1
+            column = 1
             if "line" in error_str.lower():
                 import re
                 match = re.search(r'line\s*(\d+)', error_str, re.I)
                 if match:
                     line = int(match.group(1))
+                col_match = re.search(r'column\s*(\d+)', error_str, re.I)
+                if col_match:
+                    column = int(col_match.group(1))
             
             return {
                 "success": False,
                 "errors": [{
                     "line": line,
-                    "column": 1,
+                    "column": column,
                     "message": error_str,
-                    "severity": "error"
-                }]
+                    "severity": "error",
+                    "code": "ERR001",
+                    "recovery_hint": self._get_recovery_hint("generic", error_str)
+                }],
+                "warnings": []
             }
     
+    def _check_semantic_issues(self, content: str, ast, filename: str) -> list:
+        """Check for semantic issues that aren't parse errors."""
+        warnings = []
+        lines = content.split('\n')
+        
+        # Check for common issues
+        for i, line in enumerate(lines, 1):
+            # Trailing whitespace
+            if line.rstrip() != line and line.strip():
+                pass  # Too noisy, skip
+            
+            # Very long lines (>200 chars)
+            if len(line) > 200:
+                warnings.append({
+                    "line": i,
+                    "column": 200,
+                    "message": f"Line exceeds 200 characters ({len(line)} chars)",
+                    "severity": "info",
+                    "code": "STYLE001"
+                })
+            
+            # Check for tabs vs spaces inconsistency (just report)
+            if '\t' in line and '    ' in line:
+                warnings.append({
+                    "line": i,
+                    "column": 1,
+                    "message": "Mixed tabs and spaces in indentation",
+                    "severity": "hint",
+                    "code": "STYLE002"
+                })
+        
+        # Check for unbalanced braces (sanity check)
+        open_braces = content.count('{')
+        close_braces = content.count('}')
+        if open_braces != close_braces:
+            warnings.append({
+                "line": 1,
+                "column": 1,
+                "message": f"Unbalanced braces: {open_braces} open, {close_braces} close",
+                "severity": "warning",
+                "code": "STRUCT001"
+            })
+        
+        return warnings
+    
+    def _get_recovery_hint(self, error_type: str, message: str) -> str:
+        """Generate recovery hints based on error type and message."""
+        msg_lower = message.lower()
+        
+        if "unterminated string" in msg_lower:
+            return "Add a closing quote (\") to complete the string"
+        elif "unexpected" in msg_lower and "}" in msg_lower:
+            return "Check for missing opening brace { or extra closing brace }"
+        elif "unexpected" in msg_lower and "{" in msg_lower:
+            return "Check for missing = before the opening brace"
+        elif "expected" in msg_lower and "=" in msg_lower:
+            return "Add = between the key and value"
+        elif "eof" in msg_lower or "end of file" in msg_lower:
+            return "Check for unclosed braces or incomplete blocks"
+        elif "invalid" in msg_lower and "character" in msg_lower:
+            return "Remove or escape the invalid character"
+        else:
+            return "Check syntax near the reported location"
+    
+    def _count_blocks(self, ast) -> int:
+        """Count total blocks in AST."""
+        if ast is None:
+            return 0
+        count = 1 if hasattr(ast, 'children') else 0
+        if hasattr(ast, 'children'):
+            for child in ast.children:
+                count += self._count_blocks(child)
+        if hasattr(ast, 'value') and hasattr(ast.value, 'children'):
+            count += self._count_blocks(ast.value)
+        return count
+    
     def lint_file(self, params: dict) -> dict:
-        """Lint a file - parse and optionally check references."""
+        """Lint a file - parse, validate structure, and optionally check references."""
         content = params.get("content", "")
         filename = params.get("filename", "inline.txt")
         check_references = params.get("check_references", False)
+        check_style = params.get("check_style", True)
         
-        # First, parse
-        parse_result = self.parse_content({"content": content, "filename": filename})
+        # First, parse with full diagnostics
+        parse_result = self.parse_content({
+            "content": content, 
+            "filename": filename,
+            "include_warnings": check_style
+        })
+        
         errors = parse_result.get("errors", [])
+        warnings = parse_result.get("warnings", [])
         
-        # TODO: Add reference checking when database is connected
+        # If parse succeeded and reference checking is enabled
+        if parse_result.get("success") and check_references and self.initialized:
+            ref_errors = self._check_references(content, filename)
+            for ref_error in ref_errors:
+                if ref_error.get("severity") == "error":
+                    errors.append(ref_error)
+                else:
+                    warnings.append(ref_error)
         
-        return {"errors": errors}
+        return {
+            "errors": errors,
+            "warnings": warnings,
+            "parse_success": parse_result.get("success", False),
+            "stats": parse_result.get("stats", {})
+        }
+    
+    def _check_references(self, content: str, filename: str) -> list:
+        """Check for undefined references in the content."""
+        issues = []
+        
+        # Known trigger/effect prefixes that should be validated
+        known_scopes = {
+            'root', 'this', 'scope', 'prev', 'from', 'faith', 'culture',
+            'liege', 'holder', 'realm', 'capital', 'county', 'duchy', 
+            'kingdom', 'empire', 'house', 'dynasty', 'primary_title'
+        }
+        
+        # Check for common reference patterns
+        import re
+        
+        # Check event references: event_id = namespace.number
+        event_refs = re.findall(r'\b(\w+\.\d+)\b', content)
+        # TODO: Validate against known events when database is connected
+        
+        # Check flag references: has_character_flag = my_flag
+        flag_refs = re.findall(r'has_(?:character|county|realm|dynasty|house|faith|culture)_flag\s*=\s*(\w+)', content)
+        # TODO: Cross-reference with flag definitions
+        
+        return issues
     
     def search_symbols(self, params: dict) -> dict:
         """Search for symbols in the database."""
