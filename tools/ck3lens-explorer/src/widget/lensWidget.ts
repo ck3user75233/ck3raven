@@ -747,6 +747,7 @@ export class LensWidget implements vscode.Disposable {
                         </div>
                         <div class="agent-actions">
                             <button class="btn-mode" data-agent-id="${agent.id}" data-action="changeMode" title="Switch to a different mode">Switch Mode</button>
+                            <button class="btn-mode" data-agent-id="${agent.id}" data-action="reinit" title="Re-initialize this agent">Re-init</button>
                         </div>
                     </div>
                 `;
@@ -1012,6 +1013,14 @@ export class LensWidget implements vscode.Disposable {
                 btn.addEventListener('click', function() {
                     const agentId = btn.getAttribute('data-agent-id');
                     vscode.postMessage({ command: 'changeAgentMode', agentId: agentId });
+                });
+            });
+            
+            // Agent re-init buttons (data-action="reinit")
+            document.querySelectorAll('[data-action="reinit"]').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    const agentId = btn.getAttribute('data-agent-id');
+                    vscode.postMessage({ command: 'reinitializeAgent', agentId: agentId });
                 });
             });
         });
