@@ -774,12 +774,48 @@ def generate_missing_asts(conn, logger: DaemonLogger, status: StatusWriter, forc
         if not rows:
             break
         
-        for content_hash, content, relpath in rows:
+        for idx, (content_hash, content, relpath) in enumerate(rows):
+            # Write heartbeat every 50 files to prevent stale detection
+            if idx % 50 == 0:
+                write_heartbeat()
+            
             if not content or len(content) > 2_000_000:
                 continue
             
+            # Skip known problematic file patterns
+            if any(skip in relpath for skip in ['/fonts/', '/licenses/', 'guids.txt', 'credits.txt']):
+                continue
+            
             try:
-                ast = parse_source(content, relpath)
+                # Use timeout for parsing (some files can hang the parser)
+                import signal
+                import threading
+                
+                parse_result = [None]
+                parse_error = [None]
+                
+                def parse_with_timeout():
+                    try:
+                        parse_result[0] = parse_source(content, relpath)
+                    except Exception as e:
+                        parse_error[0] = e
+                
+                parse_thread = threading.Thread(target=parse_with_timeout)
+                parse_thread.daemon = True
+                parse_thread.start()
+                parse_thread.join(timeout=30)  # 30 second timeout per file
+                
+                if parse_thread.is_alive():
+                    # Timeout - skip this file
+                    errors += 1
+                    if errors <= 30:
+                        logger.warning(f"Parse timeout (30s) for {relpath}")
+                    continue
+                
+                if parse_error[0]:
+                    raise parse_error[0]
+                
+                ast = parse_result[0]
                 
                 if ast:
                     # Convert to dict/JSON

@@ -445,7 +445,7 @@ export class LensWidget implements vscode.Disposable {
         // Open logs
         this.disposables.push(
             vscode.commands.registerCommand('ck3lens.openLogs', () => {
-                vscode.commands.executeCommand('workbench.action.output.show', 'CK3 Lens');
+                this.logger.show();
             })
         );
 
@@ -746,7 +746,7 @@ export class LensWidget implements vscode.Disposable {
                             ${activityHtml}
                         </div>
                         <div class="agent-actions">
-                            <button class="btn-mode" onclick="changeAgentMode('${agent.id}')" title="Switch to a different mode">Switch Mode</button>
+                            <button class="btn-mode" data-agent-id="${agent.id}" data-action="changeMode" title="Switch to a different mode">Switch Mode</button>
                         </div>
                     </div>
                 `;
@@ -933,13 +933,13 @@ export class LensWidget implements vscode.Disposable {
             ${this.state.mcp.latencyMs ? `<span style="color: var(--vscode-descriptionForeground)">(${this.state.mcp.latencyMs}ms)</span>` : ''}
         </div>
         ${this.state.mcp.serverName ? `<div style="font-size: 11px; color: var(--vscode-descriptionForeground)">Server: ${this.state.mcp.serverName}</div>` : ''}
-        ${this.state.mcp.status === 'disconnected' ? '<button class="secondary" onclick="reconnectMcp()">Reconnect</button>' : ''}
+        ${this.state.mcp.status === 'disconnected' ? '<button class="secondary" id="btn-reconnect">Reconnect</button>' : ''}
     </div>
 
     <div class="section">
         <div class="section-title">Agent Mode</div>
         ${agentsHtml}
-        ${this.state.agents.length === 0 ? '<button onclick="initializeAgent()">Initialize Agent Mode ▼</button>' : ''}
+        ${this.state.agents.length === 0 ? '<button id="btn-init-agent">Initialize Agent Mode ▼</button>' : ''}
     </div>
 
     ${this.state.recentActivity && this.state.recentActivity.length > 0 ? `
@@ -954,9 +954,9 @@ export class LensWidget implements vscode.Disposable {
     <div class="section">
         <div class="section-title">Quick Actions</div>
         <div class="quick-actions">
-            <button class="secondary" onclick="openLogs()">📋 Logs</button>
-            <button class="secondary" onclick="copyState()">📋 State</button>
-            <button class="secondary" onclick="openSettings()">⚙️ Settings</button>
+            <button class="secondary" id="btn-logs">📋 Logs</button>
+            <button class="secondary" id="btn-state">📋 State</button>
+            <button class="secondary" id="btn-settings">⚙️ Settings</button>
         </div>
     </div>
 
@@ -967,17 +967,54 @@ export class LensWidget implements vscode.Disposable {
     <script nonce="${nonce}">
         const vscode = acquireVsCodeApi();
         
-        function initializeAgent() { vscode.postMessage({ command: 'initializeAgent' }); }
-        function initializeSubAgent() { vscode.postMessage({ command: 'initializeSubAgent' }); }
-        function reinitializeAgent(agentId) { vscode.postMessage({ command: 'reinitializeAgent', agentId }); }
-        function changeAgentMode(agentId) { vscode.postMessage({ command: 'changeAgentMode', agentId }); }
-        function clearAgents() { vscode.postMessage({ command: 'clearAgents' }); }
-        function openLogs() { vscode.postMessage({ command: 'openLogs' }); }
-        function copyState() { vscode.postMessage({ command: 'copyState' }); }
-        function reconnectMcp() { vscode.postMessage({ command: 'reconnectMcp' }); }
-        function openSettings() { vscode.postMessage({ command: 'openSettings' }); }
-        function setupPlayset() { vscode.postMessage({ command: 'setupPlayset' }); }
-        function viewPlaysets() { vscode.postMessage({ command: 'viewPlaysets' }); }
+        // Add event listeners when DOM is ready
+        document.addEventListener('DOMContentLoaded', function() {
+            // Initialize Agent button
+            const initBtn = document.getElementById('btn-init-agent');
+            if (initBtn) {
+                initBtn.addEventListener('click', function() {
+                    vscode.postMessage({ command: 'initializeAgent' });
+                });
+            }
+            
+            // Reconnect MCP button
+            const reconnectBtn = document.getElementById('btn-reconnect');
+            if (reconnectBtn) {
+                reconnectBtn.addEventListener('click', function() {
+                    vscode.postMessage({ command: 'reconnectMcp' });
+                });
+            }
+            
+            // Quick action buttons
+            const logsBtn = document.getElementById('btn-logs');
+            if (logsBtn) {
+                logsBtn.addEventListener('click', function() {
+                    vscode.postMessage({ command: 'openLogs' });
+                });
+            }
+            
+            const stateBtn = document.getElementById('btn-state');
+            if (stateBtn) {
+                stateBtn.addEventListener('click', function() {
+                    vscode.postMessage({ command: 'copyState' });
+                });
+            }
+            
+            const settingsBtn = document.getElementById('btn-settings');
+            if (settingsBtn) {
+                settingsBtn.addEventListener('click', function() {
+                    vscode.postMessage({ command: 'openSettings' });
+                });
+            }
+            
+            // Agent mode switch buttons (data-action="changeMode")
+            document.querySelectorAll('[data-action="changeMode"]').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    const agentId = btn.getAttribute('data-agent-id');
+                    vscode.postMessage({ command: 'changeAgentMode', agentId: agentId });
+                });
+            });
+        });
     </script>
 </body>
 </html>`;
