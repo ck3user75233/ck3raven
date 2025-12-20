@@ -1,3 +1,6 @@
+# DEPRECATED: Use ck3raven.db.symbols instead
+# This module outputs JSON; symbols.py outputs to SQLite (canonical)
+# Kept for reference only - do not use in new code
 """
 Reference Database Tool
 
@@ -304,3 +307,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

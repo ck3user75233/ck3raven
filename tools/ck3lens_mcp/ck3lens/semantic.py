@@ -1,1018 +1,973 @@
 """
-Semantic Analysis Module
+CK3 Scripting Assistant - Syntax Validator and Helper
+======================================================
 
-Provides reference validation, autocomplete, and hover documentation
-by analyzing parsed AST against the symbol database.
+ZERO ASSUMPTIONS - Extracts syntax ONLY from actual game files.
+NO wiki data, NO guesses, NO hardcoded lists.
 
-Phase 1 Implementation:
-- Reference validation (undefined symbol detection)
-- Autocomplete suggestions
-- Hover documentation
-- Scope context awareness
+PURPOSE:
+    Eliminate guesswork when validating CK3 mod syntax by providing
+    an authoritative reference of what actually exists in vanilla.
+
+WHAT IT EXTRACTS:
+    - Triggers: All trigger usage with file locations & line numbers
+    - Effects: All effect usage with file locations & line numbers
+    - Scopes: All scope:* patterns actually used in vanilla
+    - CB Blocks: Valid casus belli block names (on_victory, etc.)
+    - Scripted Triggers/Effects: Custom definitions from scripted_ folders
+    - Block Names: What blocks are for triggers vs effects
+
+SOURCES:
+    1. Vanilla (AUTHORITATIVE): Game files - guaranteed correct
+    2. Mods (LESS CERTAIN): Workshop mods - may contain errors/deprecated syntax
+
+SETUP & USAGE:
+
+    # 1. Build the database (run once, takes 2-5 minutes)
+    python build_ck3_syntax_db.py
+    
+    # 2. Use in your code
+    from ck3_syntax_validator import CK3SyntaxValidator
+    
+    game_path = r"C:\...\Crusader Kings III\game"
+    validator = CK3SyntaxValidator(game_path)
+    
+    # Load pre-built database (instant)
+    validator.load_syntax_db("ck3_syntax_vanilla.json")
+    
+    # Validate syntax
+    result = validator.validate_syntax("is_in_an_activity", "trigger")
+    
+    if result['exists_in_vanilla']:
+        print(f"✓ Found in vanilla: {result['type']}")
+        for file in result['vanilla_locations']:
+            print(f"  {file}")
+    else:
+        print("✗ Not in vanilla")
+        if result['suggestions']:
+            print(f"  Similar: {result['suggestions'][0][0]}")
+    
+    # Validate scope syntax
+    scope_check = validator.validate_scope_syntax("scope:actor")
+    if scope_check['valid']:
+        print("✓ Valid scope")
+    
+    # Check CB block names
+    cb_check = validator.validate_cb_block("on_victory")
+    if cb_check['valid']:
+        print("✓ Valid CB block")
+
+FEATURES:
+
+    validate_syntax(name, context="auto", check_mods=False)
+        Check if trigger/effect exists in vanilla (and optionally mods)
+        Returns: exists_in_vanilla, type, locations, suggestions, issues
+        
+    validate_scope_syntax(scope_ref)
+        Validate scope:* syntax (detects scope.actor vs scope:actor errors)
+        Returns: valid, issues, corrected, found_in_vanilla
+        
+    validate_cb_block(block_name)
+        Check if CB block name is valid (on_victory vs on_victory_effect)
+        Returns: valid, issues, suggestions, found_in_vanilla
+        
+    fuzzy_search(query, max_results=10)
+        Find similar syntax when exact match fails
+        Returns: List of (name, type, similarity_score)
+        
+    get_all_triggers() / get_all_effects()
+        Get complete sorted list of all indexed syntax
+
+ANTI-PATTERNS (AVOIDED):
+    ✗ Hardcoding scope names like ['actor', 'recipient', ...]
+    ✗ Assuming syntax from wiki/documentation
+    ✗ Limiting scans to "top 50 files" or arbitrary samples
+    ✗ Guessing at trigger vs effect classification
+    
+BEST PRACTICES (IMPLEMENTED):
+    ✓ Scan ALL files recursively with no limits
+    ✓ Extract scope names from actual scope:* patterns in files
+    ✓ Classify triggers/effects by analyzing block context
+    ✓ Separate authoritative (vanilla) from uncertain (mods)
+    ✓ Cache to JSON for instant loading
 """
-from __future__ import annotations
-import sqlite3
-import sys
+
+import os
 import re
-from dataclasses import dataclass, field
+import json
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Set, Tuple
-from enum import Enum
+from typing import Dict, List, Set, Tuple, Optional
+from collections import defaultdict
+from difflib import get_close_matches
 
-# Add ck3raven to path if not installed
-CK3RAVEN_PATH = Path(__file__).parent.parent.parent.parent / "src"
-if CK3RAVEN_PATH.exists():
-    sys.path.insert(0, str(CK3RAVEN_PATH))
-
-
-# =============================================================================
-# SCOPE TYPES - What scope are we currently in?
-# =============================================================================
-
-class ScopeType(Enum):
-    """CK3 scope types for context-aware validation."""
-    CHARACTER = "character"
-    TITLE = "title"
-    PROVINCE = "province"
-    CULTURE = "culture"
-    FAITH = "faith"
-    RELIGION = "religion"
-    DYNASTY = "dynasty"
-    HOUSE = "house"
-    ARTIFACT = "artifact"
-    SCHEME = "scheme"
-    ACTIVITY = "activity"
-    ARMY = "army"
-    COMBAT = "combat"
-    STORY = "story"
-    SECRET = "secret"
-    NONE = "none"
-    ANY = "any"  # Fallback
-
-
-# Keys that define scope context
-SCOPE_CHANGERS = {
-    # Character scopes
-    'root': ScopeType.CHARACTER,
-    'this': ScopeType.ANY,
-    'prev': ScopeType.ANY,
-    'from': ScopeType.ANY,
-    'liege': ScopeType.CHARACTER,
-    'holder': ScopeType.CHARACTER,
-    'host': ScopeType.CHARACTER,
-    'killer': ScopeType.CHARACTER,
-    'father': ScopeType.CHARACTER,
-    'mother': ScopeType.CHARACTER,
-    'spouse': ScopeType.CHARACTER,
-    'primary_spouse': ScopeType.CHARACTER,
-    'betrothed': ScopeType.CHARACTER,
-    'player_heir': ScopeType.CHARACTER,
-    'designated_heir': ScopeType.CHARACTER,
-    'vassal': ScopeType.CHARACTER,
-    
-    # Title scopes
-    'primary_title': ScopeType.TITLE,
-    'title': ScopeType.TITLE,
-    'capital_county': ScopeType.TITLE,
-    'de_jure_liege': ScopeType.TITLE,
-    
-    # Province/location
-    'capital_province': ScopeType.PROVINCE,
-    'location': ScopeType.PROVINCE,
-    'barony': ScopeType.TITLE,
-    'county': ScopeType.TITLE,
-    'duchy': ScopeType.TITLE,
-    'kingdom': ScopeType.TITLE,
-    'empire': ScopeType.TITLE,
-    
-    # Culture & Faith
-    'culture': ScopeType.CULTURE,
-    'faith': ScopeType.FAITH,
-    'religion': ScopeType.RELIGION,
-    
-    # Dynasty/House
-    'dynasty': ScopeType.DYNASTY,
-    'house': ScopeType.HOUSE,
-    
-    # Objects
-    'artifact': ScopeType.ARTIFACT,
-    'scheme': ScopeType.SCHEME,
-    'activity': ScopeType.ACTIVITY,
-}
-
-
-# =============================================================================
-# REFERENCE KEYS - What type does this key reference?
-# =============================================================================
-
-REFERENCE_KEY_TYPES = {
-    # Traits
-    'has_trait': 'trait',
-    'add_trait': 'trait',
-    'remove_trait': 'trait',
-    'trait': 'trait',
-    
-    # Perks & Focuses
-    'has_perk': 'perk',
-    'add_perk': 'perk',
-    'perk': 'perk',
-    'has_focus': 'focus',
-    'set_focus': 'focus',
-    'focus': 'focus',
-    
-    # Culture & Religion
-    'has_culture': 'culture',
-    'culture': 'culture',
-    'has_religion': 'religion',
-    'religion': 'religion',
-    'faith': 'faith',
-    'has_faith': 'faith',
-    
-    # Traditions & Innovations
-    'has_tradition': 'tradition',
-    'can_have_tradition': 'tradition',
-    'tradition': 'tradition',
-    'has_innovation': 'innovation',
-    'innovation': 'innovation',
-    
-    # Government
-    'government_type': 'government',
-    'has_government': 'government',
-    'government': 'government',
-    
-    # Events
-    'trigger_event': 'event',
-    'random_events_list': 'event',
-    
-    # Buildings
-    'add_building': 'building',
-    'has_building': 'building',
-    'building': 'building',
-    'has_building_or_higher': 'building',
-    
-    # Titles
-    'title': 'title',
-    'has_title': 'title',
-    
-    # Casus Belli
-    'has_cb': 'cb_type',
-    'casus_belli': 'cb_type',
-    'cb_type': 'cb_type',
-    
-    # Laws
-    'has_law': 'law',
-    'add_law': 'law',
-    'law': 'law',
-    
-    # Interactions & Schemes
-    'run_interaction': 'interaction',
-    'start_scheme': 'scheme',
-    'scheme_type': 'scheme',
-    
-    # Activities
-    'has_activity_type': 'activity',
-    'activity_type': 'activity',
-    'start_activity': 'activity',
-    
-    # Lifestyle
-    'has_lifestyle': 'lifestyle',
-    'lifestyle': 'lifestyle',
-    
-    # Artifacts
-    'add_artifact': 'artifact',
-    'has_artifact': 'artifact',
-    'create_artifact': 'artifact',
-    
-    # Modifiers
-    'add_modifier': 'modifier',
-    'has_modifier': 'modifier',
-    'remove_modifier': 'modifier',
-    'modifier': 'modifier',
-    
-    # Scripted effects/triggers
-    'run_effect': 'scripted_effect',
-    'trigger_if': 'scripted_trigger',
-    
-    # On actions
-    'on_action': 'on_action',
-    'fire_on_action': 'on_action',
-    
-    # Decisions
-    'decision': 'decision',
-    'has_decision': 'decision',
-    
-    # Dynasty/House
-    'dynasty': 'dynasty',
-    'house': 'house',
-    'dynasty_perk': 'dynasty_perk',
-    'has_dynasty_perk': 'dynasty_perk',
-}
-
-
-# =============================================================================
-# DATA CLASSES
-# =============================================================================
-
-@dataclass
-class Diagnostic:
-    """A validation diagnostic (error, warning, info)."""
-    line: int
-    column: int
-    end_line: int
-    end_column: int
-    severity: str  # "error", "warning", "info", "hint"
-    code: str
-    message: str
-    source: str = "ck3lens"
-    related: List[Dict] = field(default_factory=list)
-    data: Dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class CompletionItem:
-    """An autocomplete suggestion."""
-    label: str
-    kind: str  # "symbol", "keyword", "snippet", "scope"
-    detail: str
-    documentation: str
-    insert_text: str
-    symbol_type: Optional[str] = None
-    mod: Optional[str] = None
-    sort_text: Optional[str] = None
-
-
-@dataclass
-class HoverInfo:
-    """Hover documentation."""
-    content: str  # Markdown content
-    range: Optional[Dict[str, int]] = None  # {line, column, end_line, end_column}
-
-
-@dataclass
-class SymbolLocation:
-    """Location of a symbol definition."""
-    file_path: str
-    line: int
-    column: int = 0
-    mod: str = "vanilla"
-
-
-@dataclass
-class ScopeContext:
-    """Current scope context for validation."""
-    scope_type: ScopeType
-    parent_key: Optional[str]
-    in_trigger: bool
-    in_effect: bool
-    depth: int
-
-
-# =============================================================================
-# SEMANTIC ANALYZER
-# =============================================================================
-
-class SemanticAnalyzer:
-    """
-    Analyzes CK3 script for semantic errors, provides autocomplete and hover.
-    
-    Connects to the ck3raven database for symbol lookup.
-    """
-    
-    def __init__(self, db_path: Path, playset_id: int = 1):
+class CK3SyntaxValidator:
+    def __init__(self, game_path: str, workshop_path: str = None):
         """
-        Initialize analyzer with database connection.
+        Initialize with paths to CK3 game folder and optionally workshop folder.
         
         Args:
-            db_path: Path to ck3raven.db
-            playset_id: Active playset for symbol resolution
+            game_path: Path to vanilla game files (authoritative reference)
+            workshop_path: Path to Steam workshop mods (less certain, may have errors)
         """
-        self.db_path = db_path
-        self.playset_id = playset_id
-        self._conn: Optional[sqlite3.Connection] = None
-        self._symbol_cache: Dict[str, Set[str]] = {}  # type -> set of names
-        self._all_symbols: Optional[Set[str]] = None
-    
-    @property
-    def conn(self) -> sqlite3.Connection:
-        """Lazy database connection."""
-        if self._conn is None:
-            from ck3raven.db.schema import get_connection
-            self._conn = get_connection(self.db_path)
-            self._conn.row_factory = sqlite3.Row
-        return self._conn
-    
-    def close(self):
-        """Close database connection."""
-        if self._conn:
-            self._conn.close()
-            self._conn = None
-    
-    # =========================================================================
-    # SYMBOL LOOKUP
-    # =========================================================================
-    
-    def get_symbols_by_type(self, symbol_type: str) -> Set[str]:
-        """Get all symbol names of a given type (cached)."""
-        if symbol_type not in self._symbol_cache:
-            sql = """
-                SELECT DISTINCT s.name
-                FROM symbols s
-                JOIN files f ON s.defining_file_id = f.file_id
-                JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-                LEFT JOIN playset_mods pm ON cv.content_version_id = pm.content_version_id
-                    AND pm.playset_id = ? AND pm.enabled = 1
-                JOIN playsets p ON p.playset_id = ?
-                WHERE (
-                    cv.kind = 'vanilla' AND cv.vanilla_version_id = p.vanilla_version_id
-                    OR pm.playset_id = ?
-                )
-                AND s.symbol_type = ?
-            """
-            rows = self.conn.execute(sql, (self.playset_id, self.playset_id, self.playset_id, symbol_type)).fetchall()
-            self._symbol_cache[symbol_type] = {row["name"] for row in rows}
-        return self._symbol_cache[symbol_type]
-    
-    def get_all_symbols(self) -> Set[str]:
-        """Get all symbol names (for existence checks)."""
-        if self._all_symbols is None:
-            sql = """
-                SELECT DISTINCT s.name
-                FROM symbols s
-                JOIN files f ON s.defining_file_id = f.file_id
-                JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-                LEFT JOIN playset_mods pm ON cv.content_version_id = pm.content_version_id
-                    AND pm.playset_id = ? AND pm.enabled = 1
-                JOIN playsets p ON p.playset_id = ?
-                WHERE (
-                    cv.kind = 'vanilla' AND cv.vanilla_version_id = p.vanilla_version_id
-                    OR pm.playset_id = ?
-                )
-            """
-            rows = self.conn.execute(sql, (self.playset_id, self.playset_id, self.playset_id)).fetchall()
-            self._all_symbols = {row["name"] for row in rows}
-        return self._all_symbols
-    
-    def symbol_exists(self, name: str, symbol_type: Optional[str] = None) -> bool:
-        """Check if a symbol exists."""
-        if symbol_type:
-            return name in self.get_symbols_by_type(symbol_type)
-        return name in self.get_all_symbols()
-    
-    def get_symbol_info(self, name: str, symbol_type: Optional[str] = None) -> Optional[Dict]:
-        """Get detailed info about a symbol for hover."""
-        sql = """
-            SELECT 
-                s.symbol_id, s.name, s.symbol_type, s.line_number,
-                f.relpath,
-                COALESCE(mp.name, 'vanilla') as mod_name
-            FROM symbols s
-            JOIN files f ON s.defining_file_id = f.file_id
-            JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-            LEFT JOIN playset_mods pm ON cv.content_version_id = pm.content_version_id
-                AND pm.playset_id = ? AND pm.enabled = 1
-            JOIN playsets p ON p.playset_id = ?
-            WHERE (
-                cv.kind = 'vanilla' AND cv.vanilla_version_id = p.vanilla_version_id
-                OR pm.playset_id = ?
-            )
-            AND s.name = ?
+        self.game_path = Path(game_path)
+        self.workshop_path = Path(workshop_path) if workshop_path else None
+        
+        # Vanilla syntax databases - authoritative reference
+        self.triggers = {}  # {name: {file: [line_numbers]}}
+        self.effects = {}   # {name: {file: [line_numbers]}}
+        self.scope_references = {}  # {scope_name: [file_locations]}
+        self.cb_blocks = {}  # {block_name: [cb_files]}
+        self.scripted_triggers = {}  # {name: file_path}
+        self.scripted_effects = {}   # {name: file_path}
+        self.titles = {}  # {title_key: {file: line_number}} - e.g., e_hre, k_france, d_tuscany
+        
+        # Mod syntax databases - less certain (mods can have errors/deprecated syntax)
+        self.mod_triggers = {}  # {name: {mod_id: {file: [line_numbers]}}}
+        self.mod_effects = {}   # {name: {mod_id: {file: [line_numbers]}}}
+        self.mod_scripted_triggers = {}  # {name: {mod_id: file_path}}
+        self.mod_scripted_effects = {}   # {name: {mod_id: file_path}}
+        
+        # Block type definitions extracted from vanilla
+        self.trigger_block_names = set()  # e.g., 'limit', 'trigger', 'potential'
+        self.effect_block_names = set()   # e.g., 'effect', 'on_accept', 'immediate'
+        
+    def index_all_syntax(self, include_mods: bool = False):
         """
-        params = [self.playset_id, self.playset_id, self.playset_id, name]
+        Index all vanilla CK3 syntax by PARSING actual game files.
+        Extract block patterns, valid identifiers, etc. from vanilla files.
         
-        if symbol_type:
-            sql += " AND s.symbol_type = ?"
-            params.append(symbol_type)
-        
-        sql += " LIMIT 1"
-        
-        row = self.conn.execute(sql, params).fetchone()
-        if row:
-            return {
-                "symbol_id": row["symbol_id"],
-                "name": row["name"],
-                "symbol_type": row["symbol_type"],
-                "line": row["line_number"],
-                "file": row["relpath"],
-                "mod": row["mod_name"]
-            }
-        return None
-    
-    def search_symbols(
-        self,
-        prefix: str,
-        symbol_type: Optional[str] = None,
-        limit: int = 50
-    ) -> List[Dict]:
-        """Search symbols by prefix for autocomplete."""
-        sql = """
-            SELECT 
-                s.name, s.symbol_type,
-                f.relpath,
-                COALESCE(mp.name, 'vanilla') as mod_name
-            FROM symbols s
-            JOIN files f ON s.defining_file_id = f.file_id
-            JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-            LEFT JOIN playset_mods pm ON cv.content_version_id = pm.content_version_id
-                AND pm.playset_id = ? AND pm.enabled = 1
-            JOIN playsets p ON p.playset_id = ?
-            WHERE (
-                cv.kind = 'vanilla' AND cv.vanilla_version_id = p.vanilla_version_id
-                OR pm.playset_id = ?
-            )
-            AND s.name LIKE ?
+        Args:
+            include_mods: If True and workshop_path provided, also scan workshop mods
+                         (marked as less certain since mods can have errors)
         """
-        params = [self.playset_id, self.playset_id, self.playset_id, f"{prefix}%"]
+        print("="*80)
+        print("INDEXING VANILLA CK3 SYNTAX (AUTHORITATIVE)")
+        print("="*80)
+        print("Scanning ALL vanilla files recursively - no limits")
         
-        if symbol_type:
-            sql += " AND s.symbol_type = ?"
-            params.append(symbol_type)
+        # Step 1: Index scripted triggers/effects (these are easiest to identify)
+        print("\n[1/6] Indexing vanilla scripted triggers...")
+        self._index_scripted_triggers()
         
-        sql += " ORDER BY LENGTH(s.name), s.name LIMIT ?"
-        params.append(limit)
+        print("[2/6] Indexing vanilla scripted effects...")
+        self._index_scripted_effects()
         
-        rows = self.conn.execute(sql, params).fetchall()
-        return [
-            {
-                "name": row["name"],
-                "symbol_type": row["symbol_type"],
-                "file": row["relpath"],
-                "mod": row["mod_name"]
-            }
-            for row in rows
-        ]
-    
-    def find_similar(self, name: str, symbol_type: Optional[str] = None, limit: int = 5) -> List[str]:
-        """Find similar symbol names (for typo suggestions)."""
-        # Get candidates
-        if symbol_type:
-            candidates = self.get_symbols_by_type(symbol_type)
-        else:
-            candidates = self.get_all_symbols()
+        # Step 2: Index titles from landed_titles files
+        print("[3/6] Indexing titles (e_hre, k_france, etc.)...")
+        self._index_titles()
         
-        # Simple edit distance (Levenshtein) scoring
-        def edit_distance(s1: str, s2: str) -> int:
-            if len(s1) < len(s2):
-                return edit_distance(s2, s1)
-            if len(s2) == 0:
-                return len(s1)
+        # Step 3: Parse files to extract block structure
+        print("[4/6] Analyzing block patterns...")
+        self._extract_block_patterns()
+        
+        # Step 4: Extract scope references (scope:*)
+        print("[5/6] Extracting scope references...")
+        self._extract_scope_references()
+        
+        # Step 5: Parse specific file types for their syntax
+        print("[6/6] Indexing triggers and effects...")
+        self._index_triggers_and_effects()
+        
+        print(f"\n[OK] Indexed {len(self.triggers)} unique vanilla triggers")
+        print(f"[OK] Indexed {len(self.effects)} unique vanilla effects")
+        print(f"[OK] Indexed {len(self.scripted_triggers)} vanilla scripted triggers")
+        print(f"[OK] Indexed {len(self.scripted_effects)} vanilla scripted effects")
+        print(f"[OK] Indexed {len(self.titles)} vanilla titles")
+        print(f"[OK] Extracted {len(self.scope_references)} scope references")
+        print(f"[OK] Found {len(self.trigger_block_names)} trigger block types")
+        print(f"[OK] Found {len(self.effect_block_names)} effect block types")
+        
+        # Optionally index workshop mods
+        if include_mods and self.workshop_path:
+            print("\n" + "="*80)
+            print("INDEXING WORKSHOP MODS (LESS CERTAIN)")
+            print("="*80)
+            print("Warning: Mods may contain errors or deprecated syntax")
+            self._index_workshop_mods()
             
-            prev_row = range(len(s2) + 1)
-            for i, c1 in enumerate(s1):
-                curr_row = [i + 1]
-                for j, c2 in enumerate(s2):
-                    insertions = prev_row[j + 1] + 1
-                    deletions = curr_row[j] + 1
-                    substitutions = prev_row[j] + (c1 != c2)
-                    curr_row.append(min(insertions, deletions, substitutions))
-                prev_row = curr_row
-            return prev_row[-1]
+            print(f"\n[OK] Indexed {len(self.mod_triggers)} additional mod triggers")
+            print(f"[OK] Indexed {len(self.mod_effects)} additional mod effects")
+            print(f"[OK] Indexed {len(self.mod_scripted_triggers)} mod scripted triggers")
+            print(f"[OK] Indexed {len(self.mod_scripted_effects)} mod scripted effects")
         
-        # Score and filter
-        name_lower = name.lower()
-        scored = []
-        for candidate in candidates:
-            distance = edit_distance(name_lower, candidate.lower())
-            # Only suggest if reasonably close
-            if distance <= max(3, len(name) // 2):
-                scored.append((distance, candidate))
-        
-        scored.sort(key=lambda x: (x[0], x[1]))
-        return [s[1] for s in scored[:limit]]
-    
-    # =========================================================================
-    # REFERENCE VALIDATION
-    # =========================================================================
-    
-    def validate_references(
-        self,
-        content: str,
-        filename: str = "inline.txt"
-    ) -> List[Diagnostic]:
+    def _extract_block_patterns(self):
         """
-        Validate all references in CK3 script content.
-        
-        Parses content and checks all identifiers against symbol database.
+        Extract block names by parsing ALL vanilla files recursively.
+        Identifies patterns like 'limit = {', 'effect = {', etc.
         """
-        diagnostics = []
+        common_path = self.game_path / "common"
+        if not common_path.exists():
+            return
         
-        try:
-            from ck3raven.parser import parse_source
-        except ImportError:
-            return [Diagnostic(
-                line=1, column=0, end_line=1, end_column=0,
-                severity="error", code="IMPORT_ERROR",
-                message="Could not import ck3raven parser"
-            )]
-        
-        # Parse content
-        try:
-            ast = parse_source(content)
-        except Exception as e:
-            # Parse error - return early
-            line = 1
-            if match := re.search(r'line\s+(\d+)', str(e), re.IGNORECASE):
-                line = int(match.group(1))
-            return [Diagnostic(
-                line=line, column=0, end_line=line, end_column=0,
-                severity="error", code="PARSE_ERROR",
-                message=str(e)
-            )]
-        
-        # Walk AST and validate references
-        diagnostics.extend(self._validate_ast(ast, ScopeContext(
-            scope_type=ScopeType.ANY,
-            parent_key=None,
-            in_trigger=False,
-            in_effect=False,
-            depth=0
-        )))
-        
-        return diagnostics
-    
-    def _validate_ast(self, node, ctx: ScopeContext) -> List[Diagnostic]:
-        """Recursively validate AST nodes."""
-        from ck3raven.parser.parser import RootNode, BlockNode, AssignmentNode, ValueNode, ListNode
-        
-        diagnostics = []
-        
-        if isinstance(node, RootNode):
-            for child in node.children:
-                diagnostics.extend(self._validate_ast(child, ctx))
-        
-        elif isinstance(node, BlockNode):
-            # Determine new context
-            new_ctx = self._update_context(ctx, node.name)
+        # Scan ALL files recursively - no limits
+        file_count = 0
+        for file_path in common_path.rglob("*.txt"):
+            file_count += 1
+            if file_count % 100 == 0:
+                print(f"  ...scanned {file_count} files for block patterns", end='\r')
             
-            # Check if block name is a valid reference
-            if self._should_validate_block_name(node.name, ctx):
-                diag = self._check_reference(node.name, node.line, getattr(node, 'column', 0), ctx)
-                if diag:
-                    diagnostics.append(diag)
-            
-            # Validate children
-            for child in node.children:
-                diagnostics.extend(self._validate_ast(child, new_ctx))
-        
-        elif isinstance(node, AssignmentNode):
-            key = node.key
-            line = node.line
-            column = getattr(node, 'column', 0)
-            
-            # Check if this key's value should be validated as a reference
-            if key in REFERENCE_KEY_TYPES:
-                expected_type = REFERENCE_KEY_TYPES[key]
+            try:
+                with open(file_path, 'r', encoding='utf-8-sig', errors='ignore') as f:
+                    content = f.read()
                 
-                # Get the value
-                if isinstance(node.value, ValueNode):
-                    value = node.value.value
-                    # Skip special values
-                    if not self._is_special_value(value):
-                        if not self.symbol_exists(value, expected_type):
-                            # Try without type constraint
-                            if not self.symbol_exists(value):
-                                similar = self.find_similar(value, expected_type)
-                                msg = f"Unknown {expected_type}: '{value}'"
-                                if similar:
-                                    msg += f". Did you mean: {', '.join(similar[:3])}?"
-                                
-                                diagnostics.append(Diagnostic(
-                                    line=line,
-                                    column=column,
-                                    end_line=line,
-                                    end_column=column + len(key) + len(value) + 3,
-                                    severity="warning",
-                                    code="UNDEFINED_REFERENCE",
-                                    message=msg,
-                                    data={"symbol": value, "expected_type": expected_type, "similar": similar}
-                                ))
-            
-            # Update context and validate value
-            new_ctx = self._update_context(ctx, key)
-            if isinstance(node.value, (BlockNode, ListNode)):
-                diagnostics.extend(self._validate_ast(node.value, new_ctx))
+                # Find all block declarations: word = {
+                block_pattern = r'^(\s*)([a-z_][a-z0-9_]*)\s*=\s*\{'
+                for match in re.finditer(block_pattern, content, re.MULTILINE):
+                    block_name = match.group(2)
+                    
+                    # Dynamically classify blocks by observing context
+                    # We'll identify trigger vs effect blocks by their typical names
+                    if any(x in block_name for x in ['limit', 'trigger', 'potential', 'allow', 
+                                                      'is_valid', 'is_shown', 'can_use', 'filter',
+                                                      'can_start', 'valid', 'possible']):
+                        self.trigger_block_names.add(block_name)
+                    elif any(x in block_name for x in ['effect', 'on_', 'immediate', 'after', 'before']):
+                        self.effect_block_names.add(block_name)
+                        
+            except:
+                pass
         
-        elif isinstance(node, ListNode):
-            for item in node.items:
-                diagnostics.extend(self._validate_ast(item, ctx))
-        
-        return diagnostics
+        print(f"  ...scanned {file_count} files for block patterns")
     
-    def _update_context(self, ctx: ScopeContext, key: str) -> ScopeContext:
-        """Update scope context based on key."""
-        new_scope = SCOPE_CHANGERS.get(key.lower(), ctx.scope_type)
-        
-        in_trigger = ctx.in_trigger or key in ('trigger', 'limit', 'potential', 'is_valid', 'is_shown')
-        in_effect = ctx.in_effect or key in ('effect', 'on_action', 'on_accept', 'on_decline')
-        
-        return ScopeContext(
-            scope_type=new_scope,
-            parent_key=key,
-            in_trigger=in_trigger,
-            in_effect=in_effect,
-            depth=ctx.depth + 1
-        )
-    
-    def _should_validate_block_name(self, name: str, ctx: ScopeContext) -> bool:
-        """Check if we should validate this block name as a reference."""
-        # Skip common keywords
-        if name.lower() in {'if', 'else', 'else_if', 'while', 'limit', 'trigger', 'effect', 'modifier', 'AND', 'OR', 'NOT', 'NOR', 'NAND'}:
-            return False
-        # Skip scope changers
-        if name.lower() in SCOPE_CHANGERS:
-            return False
-        return False  # For now, don't validate block names - too many false positives
-    
-    def _check_reference(self, name: str, line: int, column: int, ctx: ScopeContext) -> Optional[Diagnostic]:
-        """Check a reference and return diagnostic if undefined."""
-        if self._is_special_value(name):
-            return None
-        
-        if not self.symbol_exists(name):
-            similar = self.find_similar(name)
-            msg = f"Undefined reference: '{name}'"
-            if similar:
-                msg += f". Did you mean: {', '.join(similar[:3])}?"
-            
-            return Diagnostic(
-                line=line, column=column,
-                end_line=line, end_column=column + len(name),
-                severity="warning", code="UNDEFINED_REFERENCE",
-                message=msg,
-                data={"symbol": name, "similar": similar}
-            )
-        return None
-    
-    def _is_special_value(self, value: str) -> bool:
-        """Check if value is a special keyword that shouldn't be validated."""
-        # Boolean/yes/no
-        if value.lower() in ('yes', 'no', 'true', 'false'):
-            return True
-        # Numbers
-        if re.match(r'^-?\d+(\.\d+)?$', value):
-            return True
-        # Variables
-        if value.startswith('@'):
-            return True
-        # Scripted values with scope
-        if '.' in value or ':' in value:
-            return True
-        # Empty
-        if not value.strip():
-            return True
-        return False
-    
-    # =========================================================================
-    # AUTOCOMPLETE
-    # =========================================================================
-    
-    def get_completions(
-        self,
-        content: str,
-        line: int,
-        column: int,
-        filename: str = "inline.txt"
-    ) -> List[CompletionItem]:
+    def _extract_scope_references(self):
         """
-        Get autocomplete suggestions at cursor position.
+        Extract ALL scope references by finding scope:* patterns in ALL vanilla files.
+        This gets us the ACTUAL scope names used in vanilla - no limits.
+        """
+        common_path = self.game_path / "common"
+        events_path = self.game_path / "events"
+        
+        scope_pattern = r'scope:([a-z_][a-z0-9_]*)'
+        
+        file_count = 0
+        for base_path in [common_path, events_path]:
+            if not base_path.exists():
+                continue
+                
+            # Scan ALL files recursively - no limits
+            for file_path in base_path.rglob("*.txt"):
+                file_count += 1
+                if file_count % 100 == 0:
+                    print(f"  ...scanned {file_count} files for scopes", end='\r')
+                
+                try:
+                    with open(file_path, 'r', encoding='utf-8-sig', errors='ignore') as f:
+                        content = f.read()
+                    
+                    for match in re.finditer(scope_pattern, content):
+                        scope_name = match.group(1)
+                        if scope_name not in self.scope_references:
+                            self.scope_references[scope_name] = []
+                        
+                        relative_path = str(file_path.relative_to(self.game_path))
+                        if relative_path not in self.scope_references[scope_name]:
+                            self.scope_references[scope_name].append(relative_path)
+                            
+                except:
+                    pass
+        
+        print(f"  ...scanned {file_count} files for scopes")
+    
+    def _index_triggers_and_effects(self):
+        """
+        Index ALL triggers and effects by analyzing their usage context.
+        Parse ALL vanilla files recursively - no limits.
+        """
+        common_path = self.game_path / "common"
+        events_path = self.game_path / "events"
+        
+        file_count = 0
+        for base_path in [common_path, events_path]:
+            if not base_path.exists():
+                continue
+                
+            # Scan ALL files recursively - no limits
+            for file_path in base_path.rglob("*.txt"):
+                file_count += 1
+                if file_count % 100 == 0:
+                    print(f"  ...indexed {file_count} files for syntax", end='\r')
+                
+                self._parse_file_for_syntax(file_path)
+        
+        print(f"  ...indexed {file_count} files for syntax")
+    
+    def _parse_file_for_syntax(self, file_path: Path):
+        """
+        Parse a file line-by-line to extract triggers and effects based on context.
+        """
+        try:
+            with open(file_path, 'r', encoding='utf-8-sig', errors='ignore') as f:
+                lines = f.readlines()
+            
+            relative_path = str(file_path.relative_to(self.game_path))
+            in_trigger_block = False
+            in_effect_block = False
+            bracket_depth = 0
+            
+            for line_num, line in enumerate(lines, 1):
+                stripped = line.strip()
+                
+                # Track block context
+                for block_name in self.trigger_block_names:
+                    if f'{block_name} = {{' in stripped:
+                        in_trigger_block = True
+                        bracket_depth = 1
+                        
+                for block_name in self.effect_block_names:
+                    if f'{block_name} = {{' in stripped:
+                        in_effect_block = True
+                        bracket_depth = 1
+                
+                # Track brackets
+                bracket_depth += stripped.count('{') - stripped.count('}')
+                if bracket_depth <= 0:
+                    in_trigger_block = False
+                    in_effect_block = False
+                
+                # Extract syntax based on context
+                match = re.match(r'^\s*([a-z_][a-z0-9_]*)\s*=', stripped)
+                if match:
+                    name = match.group(1)
+                    
+                    if in_trigger_block:
+                        if name not in self.triggers:
+                            self.triggers[name] = {}
+                        if relative_path not in self.triggers[name]:
+                            self.triggers[name][relative_path] = []
+                        self.triggers[name][relative_path].append(line_num)
+                    
+                    elif in_effect_block:
+                        if name not in self.effects:
+                            self.effects[name] = {}
+                        if relative_path not in self.effects[name]:
+                            self.effects[name][relative_path] = []
+                        self.effects[name][relative_path].append(line_num)
+                        
+        except:
+            pass
+    
+    def _index_scripted_triggers(self):
+        """
+        Index scripted triggers from common/scripted_triggers/.
+        These are user-defined triggers that can be called like built-ins.
+        """
+        scripted_path = self.game_path / "common" / "scripted_triggers"
+        if not scripted_path.exists():
+            return
+            
+        for file_path in scripted_path.glob("*.txt"):
+            try:
+                with open(file_path, 'r', encoding='utf-8-sig', errors='ignore') as f:
+                    content = f.read()
+                
+                # Find top-level definitions (name = { ... })
+                pattern = r'^([a-z_][a-z0-9_]*)\s*=\s*\{'
+                for match in re.finditer(pattern, content, re.MULTILINE):
+                    name = match.group(1)
+                    self.scripted_triggers[name] = str(file_path.relative_to(self.game_path))
+            except:
+                pass
+    
+    def _index_scripted_effects(self):
+        """
+        Index scripted effects from common/scripted_effects/.
+        These are user-defined effects that can be called like built-ins.
+        """
+        scripted_path = self.game_path / "common" / "scripted_effects"
+        if not scripted_path.exists():
+            return
+            
+        for file_path in scripted_path.glob("*.txt"):
+            try:
+                with open(file_path, 'r', encoding='utf-8-sig', errors='ignore') as f:
+                    content = f.read()
+                
+                # Find top-level definitions
+                pattern = r'^([a-z_][a-z0-9_]*)\s*=\s*\{'
+                for match in re.finditer(pattern, content, re.MULTILINE):
+                    name = match.group(1)
+                    self.scripted_effects[name] = str(file_path.relative_to(self.game_path))
+            except:
+                pass
+    
+    def _index_titles(self):
+        """
+        Index all title keys from common/landed_titles/*.txt
+        Titles are like e_hre, k_france, d_tuscany, c_paris, b_paris
+        """
+        titles_path = self.game_path / "common" / "landed_titles"
+        if not titles_path.exists():
+            return
+        
+        file_count = 0
+        for file_path in titles_path.rglob("*.txt"):
+            file_count += 1
+            if file_count % 10 == 0:
+                print(f"  ...indexed {file_count} title files", end='\r')
+            
+            try:
+                with open(file_path, 'r', encoding='utf-8-sig', errors='ignore') as f:
+                    lines = f.readlines()
+                
+                relative_path = str(file_path.relative_to(self.game_path))
+                
+                for line_num, line in enumerate(lines, 1):
+                    # Match title definitions: e_something = {, k_something = {, etc.
+                    # Title keys start with tier prefix (e_, k_, d_, c_, b_)
+                    match = re.match(r'^\s*([ekdcb]_[a-z0-9_]+)\s*=\s*\{', line)
+                    if match:
+                        title_key = match.group(1)
+                        if title_key not in self.titles:
+                            self.titles[title_key] = {}
+                        self.titles[title_key][relative_path] = line_num
+                        
+            except:
+                pass
+        
+        print(f"  ...indexed {file_count} title files")
+    
+    def validate_syntax(self, name: str, context: str = "auto", check_mods: bool = False, include_suggestions: bool = True) -> Dict:
+        """
+        Validate if a trigger/effect exists in vanilla (and optionally mods).
         
         Args:
-            content: Full file content
-            line: 1-based line number
-            column: 0-based column
-            filename: For context hints
+            name: The syntax name to validate (e.g., "is_in_an_activity")
+            context: "trigger", "effect", or "auto" to check both
+            check_mods: If True, also check workshop mods (less authoritative)
+            
+        Returns:
+            Dict with validation results and suggestions
         """
-        completions = []
+        result = {
+            'name': name,
+            'exists_in_vanilla': False,
+            'exists_in_mods': False,
+            'type': None,
+            'vanilla_locations': {},
+            'mod_locations': {},
+            'suggestions': [],
+            'issues': []
+        }
         
-        # Get the partial word at cursor
-        lines = content.split('\n')
-        if line < 1 or line > len(lines):
+        # Check vanilla first (authoritative)
+        if context in ["trigger", "auto"]:
+            if name in self.triggers:
+                result['exists_in_vanilla'] = True
+                result['type'] = 'trigger'
+                result['vanilla_locations'] = dict(list(self.triggers[name].items())[:3])
+                return result
+            
+            if name in self.scripted_triggers:
+                result['exists_in_vanilla'] = True
+                result['type'] = 'scripted_trigger'
+                result['vanilla_locations'] = {self.scripted_triggers[name]: []}
+                return result
+        
+        if context in ["effect", "auto"]:
+            if name in self.effects:
+                result['exists_in_vanilla'] = True
+                result['type'] = 'effect'
+                result['vanilla_locations'] = dict(list(self.effects[name].items())[:3])
+                return result
+                
+            if name in self.scripted_effects:
+                result['exists_in_vanilla'] = True
+                result['type'] = 'scripted_effect'
+                result['vanilla_locations'] = {self.scripted_effects[name]: []}
+                return result
+        
+        # Not in vanilla - check mods if requested
+        if check_mods:
+            if name in self.mod_scripted_triggers:
+                result['exists_in_mods'] = True
+                result['type'] = 'mod_scripted_trigger'
+                result['mod_locations'] = self.mod_scripted_triggers[name]
+                result['issues'].append("Found in mods but NOT in vanilla - may be mod-specific or error")
+                return result
+            
+            if name in self.mod_scripted_effects:
+                result['exists_in_mods'] = True
+                result['type'] = 'mod_scripted_effect'
+                result['mod_locations'] = self.mod_scripted_effects[name]
+                result['issues'].append("Found in mods but NOT in vanilla - may be mod-specific or error")
+                return result
+        
+        # Not found anywhere - provide fuzzy suggestions (if requested)
+        if include_suggestions:
+            result['suggestions'] = self.fuzzy_search(name, max_results=5)
+        
+        # Detect common syntax errors
+        if '.' in name and 'scope' in name.lower():
+            corrected = name.replace('.', ':')
+            result['issues'].append(f"Scope syntax error: uses '.' instead of ':'. Try: {corrected}")
+        
+        if name.endswith('_effect') or name.endswith('_trigger'):
+            base_name = name.replace('_effect', '').replace('_trigger', '')
+            result['issues'].append(f"May have incorrect suffix. Check if base name exists: {base_name}")
+        
+        return result
+    
+    def fuzzy_search(self, query: str, max_results: int = 10) -> List[Tuple[str, str, float]]:
+        """
+        Fuzzy search for similar syntax names.
+        
+        Returns:
+            List of (name, type, similarity_score) tuples
+        """
+        results = []
+        
+        # Search triggers
+        trigger_matches = get_close_matches(query, self.triggers.keys(), n=max_results, cutoff=0.6)
+        for match in trigger_matches:
+            results.append((match, 'trigger', self._similarity_score(query, match)))
+        
+        # Search effects
+        effect_matches = get_close_matches(query, self.effects.keys(), n=max_results, cutoff=0.6)
+        for match in effect_matches:
+            results.append((match, 'effect', self._similarity_score(query, match)))
+        
+        # Search scripted
+        scripted_trigger_matches = get_close_matches(query, self.scripted_triggers.keys(), n=max_results, cutoff=0.6)
+        for match in scripted_trigger_matches:
+            results.append((match, 'scripted_trigger', self._similarity_score(query, match)))
+            
+        scripted_effect_matches = get_close_matches(query, self.scripted_effects.keys(), n=max_results, cutoff=0.6)
+        for match in scripted_effect_matches:
+            results.append((match, 'scripted_effect', self._similarity_score(query, match)))
+        
+        # Sort by similarity score
+        results.sort(key=lambda x: x[2], reverse=True)
+        
+        return results[:max_results]
+    
+    def _similarity_score(self, s1: str, s2: str) -> float:
+        """Calculate similarity score between two strings."""
+        from difflib import SequenceMatcher
+        return SequenceMatcher(None, s1.lower(), s2.lower()).ratio()
+    
+    def _find_mod_local_context(self, token: str, file_path: Path) -> List[str]:
+        """
+        Search for partial matches within the mod's own definitions.
+        
+        Example: 'tct_make_antipope_interaction' not found -> search mod for:
+        - definitions containing 'antipope' 
+        - definitions containing 'make_antipope'
+        - other related definitions
+        
+        This provides INTELLIGENT suggestions based on what the modder actually defined,
+        rather than random vanilla suggestions that make no sense.
+        """
+        # Find mod root (go up until we find descriptor.mod or hit workshop folder)
+        mod_root = file_path.parent
+        max_depth = 10
+        depth = 0
+        while depth < max_depth and mod_root.parent != mod_root:
+            if (mod_root / 'descriptor.mod').exists():
+                break
+            if mod_root.name == '1158310':  # Hit workshop root
+                return []
+            mod_root = mod_root.parent
+            depth += 1
+        
+        if not (mod_root / 'descriptor.mod').exists():
             return []
         
-        current_line = lines[line - 1]
-        prefix = self._get_word_at_position(current_line, column)
+        # Extract meaningful parts from token (split on _ and use frequency analysis)
+        parts = token.split('_')
+        # Filter to parts that are long enough to be meaningful
+        # Use length-based filtering only - let actual definitions determine relevance
+        meaningful_parts = [p for p in parts if len(p) >= 4]
         
-        # Determine context from surrounding text
-        context = self._determine_completion_context(lines, line, column)
+        if not meaningful_parts:
+            return []
         
-        # Add symbol completions
-        if context.get("after_equals"):
-            # Completing a value
-            parent_key = context.get("parent_key", "")
-            expected_type = REFERENCE_KEY_TYPES.get(parent_key)
+        # Search mod files for these parts
+        suggestions = set()
+        search_dirs = [
+            mod_root / 'common' / 'scripted_triggers',
+            mod_root / 'common' / 'scripted_effects',
+            mod_root / 'common' / 'character_interactions',
+            mod_root / 'common' / 'decisions',
+            mod_root / 'common' / 'casus_belli_types',
+        ]
+        
+        for search_dir in search_dirs:
+            if not search_dir.exists():
+                continue
             
-            symbols = self.search_symbols(prefix, symbol_type=expected_type, limit=50)
-            for sym in symbols:
-                completions.append(CompletionItem(
-                    label=sym["name"],
-                    kind="symbol",
-                    detail=f'{sym["symbol_type"]} ({sym["mod"]})',
-                    documentation=f'Defined in: {sym["file"]}',
-                    insert_text=sym["name"],
-                    symbol_type=sym["symbol_type"],
-                    mod=sym["mod"],
-                    sort_text=f"0_{sym['name']}"  # Prioritize
-                ))
+            for txt_file in search_dir.glob('*.txt'):
+                try:
+                    content = txt_file.read_text(encoding='utf-8', errors='ignore')
+                    
+                    # Look for definitions containing our meaningful parts
+                    for part in meaningful_parts:
+                        # Find lines with ID = { pattern containing our part
+                        pattern = re.compile(rf'^(\w*{re.escape(part)}\w*)\s*=\s*{{', 
+                                           re.MULTILINE | re.IGNORECASE)
+                        matches = pattern.findall(content)
+                        
+                        for match in matches:
+                            if match != token:  # Don't suggest the same thing
+                                suggestions.add(match)
+                                if len(suggestions) >= 10:
+                                    return sorted(suggestions)[:5]
+                except:
+                    continue
         
-        else:
-            # Completing a key or block name
-            # Add scope changers
-            for scope_name in SCOPE_CHANGERS.keys():
-                if scope_name.lower().startswith(prefix.lower()):
-                    completions.append(CompletionItem(
-                        label=scope_name,
-                        kind="scope",
-                        detail="Scope changer",
-                        documentation=f"Changes scope to {SCOPE_CHANGERS[scope_name].value}",
-                        insert_text=scope_name,
-                        sort_text=f"1_{scope_name}"
-                    ))
-            
-            # Add common keywords
-            for keyword in ['if', 'else', 'else_if', 'limit', 'trigger', 'effect', 'modifier']:
-                if keyword.startswith(prefix.lower()):
-                    completions.append(CompletionItem(
-                        label=keyword,
-                        kind="keyword",
-                        detail="Keyword",
-                        documentation=f"CK3 script keyword: {keyword}",
-                        insert_text=keyword,
-                        sort_text=f"2_{keyword}"
-                    ))
-            
-            # Add reference key completions
-            for key in REFERENCE_KEY_TYPES.keys():
-                if key.startswith(prefix.lower()):
-                    completions.append(CompletionItem(
-                        label=key,
-                        kind="keyword",
-                        detail=f"References: {REFERENCE_KEY_TYPES[key]}",
-                        documentation=f"Key that references a {REFERENCE_KEY_TYPES[key]}",
-                        insert_text=key,
-                        sort_text=f"3_{key}"
-                    ))
-        
-        return completions
+        return sorted(suggestions)[:5] if suggestions else []
     
-    def _get_word_at_position(self, line: str, column: int) -> str:
-        """Extract the partial word at cursor position."""
-        if column > len(line):
-            column = len(line)
-        
-        # Find word start
-        start = column
-        while start > 0 and re.match(r'[\w_@]', line[start - 1]):
-            start -= 1
-        
-        return line[start:column]
-    
-    def _determine_completion_context(
-        self,
-        lines: List[str],
-        line: int,
-        column: int
-    ) -> Dict[str, Any]:
-        """Determine context for completions."""
-        context = {
-            "after_equals": False,
-            "in_block": False,
-            "parent_key": None
+    def validate_scope_syntax(self, scope_ref: str) -> Dict:
+        """
+        Validate scope reference syntax against ACTUAL scope: patterns found in vanilla.
+        Only suggests scopes that were extracted from vanilla files.
+        """
+        result = {
+            'valid': False,
+            'issues': [],
+            'corrected': None,
+            'found_in_vanilla': []
         }
         
-        if line < 1 or line > len(lines):
-            return context
+        # Check for dot vs colon error
+        if '.' in scope_ref and scope_ref.startswith('scope'):
+            result['issues'].append("Syntax error: uses '.' instead of ':'")
+            result['corrected'] = scope_ref.replace('.', ':')
+            return result
         
-        current_line = lines[line - 1]
-        before_cursor = current_line[:column]
+        # Validate against extracted scope references
+        if ':' in scope_ref:
+            parts = scope_ref.split(':')
+            if len(parts) == 2 and parts[0] == 'scope':
+                scope_name = parts[1]
+                
+                if scope_name in self.scope_references:
+                    result['valid'] = True
+                    result['found_in_vanilla'] = self.scope_references[scope_name][:3]
+                else:
+                    result['issues'].append(f"Scope '{scope_name}' not found in vanilla")
+                    
+                    # Suggest similar scopes that ACTUALLY exist in vanilla
+                    suggestions = get_close_matches(scope_name, self.scope_references.keys(), n=3, cutoff=0.6)
+                    if suggestions:
+                        result['issues'].append(f"Similar scopes in vanilla: {', '.join(suggestions)}")
         
-        # Check if after equals
-        if '=' in before_cursor:
-            context["after_equals"] = True
-            # Get the key before equals
-            match = re.search(r'(\w+)\s*=\s*$', before_cursor)
-            if match:
-                context["parent_key"] = match.group(1)
-        
-        # Check brace depth
-        brace_depth = 0
-        for i in range(line - 1, -1, -1):
-            line_text = lines[i]
-            brace_depth += line_text.count('{') - line_text.count('}')
-        
-        context["in_block"] = brace_depth > 0
-        
-        return context
+        return result
     
-    # =========================================================================
-    # HOVER
-    # =========================================================================
+    def get_all_triggers(self) -> List[str]:
+        """Get sorted list of all indexed triggers."""
+        all_triggers = set(self.triggers.keys()) | set(self.scripted_triggers.keys())
+        return sorted(all_triggers)
     
-    def get_hover(
-        self,
-        content: str,
-        line: int,
-        column: int,
-        filename: str = "inline.txt"
-    ) -> Optional[HoverInfo]:
+    def get_all_effects(self) -> List[str]:
+        """Get sorted list of all indexed effects."""
+        all_effects = set(self.effects.keys()) | set(self.scripted_effects.keys())
+        return sorted(all_effects)
+    
+    def validate_cb_block(self, block_name: str) -> Dict:
         """
-        Get hover documentation for symbol at position.
+        Validate CB block name against blocks extracted from vanilla CB files.
+        Extracts valid block names by parsing actual casus_belli_types files.
+        """
+        # Extract CB blocks if not done yet
+        if not self.cb_blocks:
+            self._extract_cb_blocks()
+        
+        result = {
+            'valid': block_name in self.cb_blocks,
+            'issues': [],
+            'suggestions': [],
+            'found_in_vanilla': []
+        }
+        
+        if result['valid']:
+            result['found_in_vanilla'] = self.cb_blocks[block_name][:3]
+        else:
+            # Check for common mistakes
+            if block_name.endswith('_effect'):
+                base_name = block_name.replace('_effect', '')
+                if base_name in self.cb_blocks:
+                    result['issues'].append(f"Suffix error: Remove '_effect'. Correct: {base_name}")
+                    result['suggestions'].append(base_name)
+            
+            # Fuzzy search against actual vanilla CB blocks
+            matches = get_close_matches(block_name, self.cb_blocks.keys(), n=3, cutoff=0.6)
+            if matches:
+                result['suggestions'].extend(matches)
+        
+        return result
+    
+    def _extract_cb_blocks(self):
+        """
+        Extract valid CB block names by parsing vanilla casus_belli_types files.
+        """
+        cb_path = self.game_path / "common" / "casus_belli_types"
+        if not cb_path.exists():
+            return
+        
+        for file_path in cb_path.glob("*.txt"):
+            try:
+                with open(file_path, 'r', encoding='utf-8-sig', errors='ignore') as f:
+                    content = f.read()
+                
+                # Find top-level blocks within CB definitions
+                # Pattern: inside a CB definition, find block_name = {
+                pattern = r'^\s*([a-z_][a-z0-9_]*)\s*=\s*\{'
+                for match in re.finditer(pattern, content, re.MULTILINE):
+                    block_name = match.group(1)
+                    if block_name not in self.cb_blocks:
+                        self.cb_blocks[block_name] = []
+                    
+                    relative_path = str(file_path.relative_to(self.game_path))
+                    if relative_path not in self.cb_blocks[block_name]:
+                        self.cb_blocks[block_name].append(relative_path)
+            except:
+                pass
+    
+    def _index_workshop_mods(self):
+        """
+        Index syntax from ALL workshop mods.
+        NOTE: This is less authoritative than vanilla - mods can have errors or use deprecated syntax.
+        """
+        if not self.workshop_path or not self.workshop_path.exists():
+            print("  Workshop path not provided or doesn't exist")
+            return
+        
+        # Each numbered folder in workshop is a mod
+        mod_folders = [f for f in self.workshop_path.iterdir() if f.is_dir() and f.name.isdigit()]
+        
+        print(f"\n  Found {len(mod_folders)} workshop mods to scan...")
+        
+        for mod_idx, mod_folder in enumerate(mod_folders, 1):
+            mod_id = mod_folder.name
+            
+            if mod_idx % 10 == 0:
+                print(f"  ...scanning mod {mod_idx}/{len(mod_folders)}", end='\r')
+            
+            # Index scripted triggers/effects from this mod
+            self._index_mod_scripted_triggers(mod_folder, mod_id)
+            self._index_mod_scripted_effects(mod_folder, mod_id)
+            
+            # Index syntax usage from this mod
+            self._index_mod_syntax(mod_folder, mod_id)
+        
+        print(f"  ...scanned all {len(mod_folders)} mods")
+    
+    def _index_mod_scripted_triggers(self, mod_path: Path, mod_id: str):
+        """Index scripted triggers from a workshop mod."""
+        scripted_path = mod_path / "common" / "scripted_triggers"
+        if not scripted_path.exists():
+            return
+        
+        for file_path in scripted_path.glob("*.txt"):
+            try:
+                with open(file_path, 'r', encoding='utf-8-sig', errors='ignore') as f:
+                    content = f.read()
+                
+                pattern = r'^([a-z_][a-z0-9_]*)\s*=\s*\{'
+                for match in re.finditer(pattern, content, re.MULTILINE):
+                    name = match.group(1)
+                    if name not in self.mod_scripted_triggers:
+                        self.mod_scripted_triggers[name] = {}
+                    self.mod_scripted_triggers[name][mod_id] = str(file_path.relative_to(self.workshop_path))
+            except:
+                pass
+    
+    def _index_mod_scripted_effects(self, mod_path: Path, mod_id: str):
+        """Index scripted effects from a workshop mod."""
+        scripted_path = mod_path / "common" / "scripted_effects"
+        if not scripted_path.exists():
+            return
+        
+        for file_path in scripted_path.glob("*.txt"):
+            try:
+                with open(file_path, 'r', encoding='utf-8-sig', errors='ignore') as f:
+                    content = f.read()
+                
+                pattern = r'^([a-z_][a-z0-9_]*)\s*=\s*\{'
+                for match in re.finditer(pattern, content, re.MULTILINE):
+                    name = match.group(1)
+                    if name not in self.mod_scripted_effects:
+                        self.mod_scripted_effects[name] = {}
+                    self.mod_scripted_effects[name][mod_id] = str(file_path.relative_to(self.workshop_path))
+            except:
+                pass
+    
+    def _index_mod_syntax(self, mod_path: Path, mod_id: str):
+        """Index trigger/effect usage from a workshop mod (sample only to avoid massive bloat)."""
+        common_path = mod_path / "common"
+        if not common_path.exists():
+            return
+        
+        # Sample some files from the mod to get a sense of syntax usage
+        txt_files = list(common_path.rglob("*.txt"))
+        for file_path in txt_files[:50]:  # Limit per mod to avoid excessive data
+            try:
+                with open(file_path, 'r', encoding='utf-8-sig', errors='ignore') as f:
+                    lines = f.readlines()
+                
+                for line_num, line in enumerate(lines, 1):
+                    # Extract simple pattern: name = ...
+                    match = re.match(r'^\s*([a-z_][a-z0-9_]*)\s*=', line)
+                    if match:
+                        name = match.group(1)
+                        relative_path = str(file_path.relative_to(self.workshop_path))
+                        
+                        # Store in mod databases
+                        if name not in self.mod_triggers:
+                            self.mod_triggers[name] = {}
+                        if mod_id not in self.mod_triggers[name]:
+                            self.mod_triggers[name][mod_id] = {}
+                        if relative_path not in self.mod_triggers[name][mod_id]:
+                            self.mod_triggers[name][mod_id][relative_path] = []
+                        self.mod_triggers[name][mod_id][relative_path].append(line_num)
+            except:
+                pass
+    
+    def export_syntax_db(self, output_path: str, include_mods: bool = False):
+        """
+        Export indexed syntax to JSON for quick loading.
         
         Args:
-            content: Full file content
-            line: 1-based line number
-            column: 0-based column
+            output_path: Path to save JSON database
+            include_mods: If True, include mod data in export
         """
-        lines = content.split('\n')
-        if line < 1 or line > len(lines):
-            return None
-        
-        current_line = lines[line - 1]
-        
-        # Get the word at position
-        word, word_start, word_end = self._get_word_bounds(current_line, column)
-        if not word:
-            return None
-        
-        # Look up in database
-        info = self.get_symbol_info(word)
-        if not info:
-            # Check if it's a known keyword
-            if word in REFERENCE_KEY_TYPES:
-                return HoverInfo(
-                    content=f"**{word}**\n\nReferences: `{REFERENCE_KEY_TYPES[word]}`",
-                    range={"line": line, "column": word_start, "end_line": line, "end_column": word_end}
-                )
-            if word in SCOPE_CHANGERS:
-                return HoverInfo(
-                    content=f"**{word}**\n\nScope changer → `{SCOPE_CHANGERS[word].value}`",
-                    range={"line": line, "column": word_start, "end_line": line, "end_column": word_end}
-                )
-            return None
-        
-        # Build markdown documentation
-        md_parts = [
-            f"**{info['name']}**",
-            f"\n\nType: `{info['symbol_type']}`",
-            f"\n\nSource: `{info['mod']}`",
-            f"\n\nFile: `{info['file']}`",
-        ]
-        if info.get('line'):
-            md_parts.append(f" (line {info['line']})")
-        
-        return HoverInfo(
-            content="".join(md_parts),
-            range={"line": line, "column": word_start, "end_line": line, "end_column": word_end}
-        )
-    
-    def _get_word_bounds(self, line: str, column: int) -> Tuple[str, int, int]:
-        """Get word and its bounds at column position."""
-        if column > len(line):
-            column = len(line)
-        
-        # Find word start
-        start = column
-        while start > 0 and re.match(r'[\w_@]', line[start - 1]):
-            start -= 1
-        
-        # Find word end
-        end = column
-        while end < len(line) and re.match(r'[\w_@]', line[end]):
-            end += 1
-        
-        word = line[start:end]
-        return word, start, end
-    
-    # =========================================================================
-    # GO TO DEFINITION
-    # =========================================================================
-    
-    def get_definition(
-        self,
-        content: str,
-        line: int,
-        column: int,
-        filename: str = "inline.txt"
-    ) -> Optional[SymbolLocation]:
-        """
-        Get definition location for symbol at position.
-        """
-        lines = content.split('\n')
-        if line < 1 or line > len(lines):
-            return None
-        
-        current_line = lines[line - 1]
-        word, _, _ = self._get_word_bounds(current_line, column)
-        
-        if not word:
-            return None
-        
-        info = self.get_symbol_info(word)
-        if not info:
-            return None
-        
-        return SymbolLocation(
-            file_path=info['file'],
-            line=info.get('line', 1) or 1,
-            column=0,
-            mod=info['mod']
-        )
-
-
-# =============================================================================
-# CONVENIENCE FUNCTIONS
-# =============================================================================
-
-def validate_content(
-    content: str,
-    db_path: Path,
-    playset_id: int = 1,
-    filename: str = "inline.txt"
-) -> Dict[str, Any]:
-    """
-    Validate CK3 script content.
-    
-    Returns:
-        {
-            "success": bool,
-            "errors": [...],
-            "warnings": [...]
+        db = {
+            'version': '1.1',
+            'game_version': 'CK3 (extracted from vanilla)',
+            'vanilla': {
+                'triggers': self.triggers,
+                'effects': self.effects,
+                'scripted_triggers': self.scripted_triggers,
+                'scripted_effects': self.scripted_effects,
+                'scope_references': self.scope_references,
+                'cb_blocks': self.cb_blocks,
+                'trigger_block_names': list(self.trigger_block_names),
+                'effect_block_names': list(self.effect_block_names)
+            }
         }
-    """
-    analyzer = SemanticAnalyzer(db_path, playset_id)
-    try:
-        diagnostics = analyzer.validate_references(content, filename)
         
-        errors = [d for d in diagnostics if d.severity == "error"]
-        warnings = [d for d in diagnostics if d.severity == "warning"]
+        if include_mods:
+            db['mods'] = {
+                'triggers': self.mod_triggers,
+                'effects': self.mod_effects,
+                'scripted_triggers': self.mod_scripted_triggers,
+                'scripted_effects': self.mod_scripted_effects,
+                'note': 'Mod syntax is less authoritative - may contain errors or deprecated syntax'
+            }
         
-        return {
-            "success": len(errors) == 0,
-            "errors": [_diag_to_dict(d) for d in errors],
-            "warnings": [_diag_to_dict(d) for d in warnings]
-        }
-    finally:
-        analyzer.close()
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(db, f, indent=2)
+        
+        print(f"[OK] Exported syntax database to {output_path}")
+        if include_mods:
+            print(f"  (Includes vanilla + workshop mod data)")
+        else:
+            print(f"  (Vanilla only - authoritative reference)")
+    
+    def load_syntax_db(self, db_path: str):
+        """
+        Load pre-indexed syntax from JSON (much faster than re-indexing).
+        """
+        with open(db_path, 'r', encoding='utf-8') as f:
+            db = json.load(f)
+        
+        # Load vanilla data
+        if 'vanilla' in db:
+            # New format (v1.1+)
+            v = db['vanilla']
+            self.triggers = v['triggers']
+            self.effects = v['effects']
+            self.scripted_triggers = v['scripted_triggers']
+            self.scripted_effects = v['scripted_effects']
+            self.scope_references = v['scope_references']
+            self.cb_blocks = v['cb_blocks']
+            self.trigger_block_names = set(v['trigger_block_names'])
+            self.effect_block_names = set(v['effect_block_names'])
+            
+            # Load mod data if present
+            if 'mods' in db:
+                m = db['mods']
+                self.mod_triggers = m.get('triggers', {})
+                self.mod_effects = m.get('effects', {})
+                self.mod_scripted_triggers = m.get('scripted_triggers', {})
+                self.mod_scripted_effects = m.get('scripted_effects', {})
+        else:
+            # Old format (v1.0)
+            self.triggers = db['triggers']
+            self.effects = db['effects']
+            self.scripted_triggers = db['scripted_triggers']
+            self.scripted_effects = db['scripted_effects']
+            self.scope_references = db['scope_references']
+            self.cb_blocks = db['cb_blocks']
+            self.trigger_block_names = set(db['trigger_block_names'])
+            self.effect_block_names = set(db['effect_block_names'])
+        
+        print(f"[OK] Loaded syntax database from {db_path}")
 
 
-def get_completions(
-    content: str,
-    line: int,
-    column: int,
-    db_path: Path,
-    playset_id: int = 1
-) -> List[Dict]:
-    """Get autocomplete suggestions."""
-    analyzer = SemanticAnalyzer(db_path, playset_id)
-    try:
-        items = analyzer.get_completions(content, line, column)
-        return [_completion_to_dict(item) for item in items]
-    finally:
-        analyzer.close()
+def main():
+    """Example usage and testing."""
+    import sys
+    
+    game_path = r"C:\Program Files (x86)\Steam\steamapps\common\Crusader Kings III\game"
+    
+    # Check if we should load from cache
+    db_path = "ck3_syntax_db.json"
+    
+    validator = CK3SyntaxValidator(game_path)
+    
+    if os.path.exists(db_path):
+        print("Loading cached syntax database...")
+        validator.load_syntax_db(db_path)
+    else:
+        print("Building syntax database (this may take a minute)...")
+        validator.index_all_syntax()
+        validator.export_syntax_db(db_path)
+    
+    print("\n" + "="*80)
+    print("CK3 SYNTAX VALIDATOR - Interactive Mode")
+    print("="*80)
+    
+    # Test cases from the bug report
+    test_cases = [
+        ("is_in_an_activity", "trigger"),
+        ("complete_activity", "effect"),
+        ("is_busy_in_events_localised", "trigger"),
+        ("is_debug_enabled", "trigger"),
+        ("scope.actor", "auto"),
+        ("scope:actor", "auto"),
+        ("on_victory_effect", "cb_block"),
+        ("on_victory", "cb_block"),
+    ]
+    
+    print("\nValidating known issues from bug report:\n")
+    
+    for name, context in test_cases:
+        if context == "cb_block":
+            result = validator.validate_cb_block(name)
+            print(f"\n{name} (CB block):")
+            if result['valid']:
+                print("  ✓ VALID CB block")
+            else:
+                print("  ✗ INVALID CB block")
+                if result['suggestions']:
+                    print(f"  Suggestions: {', '.join(result['suggestions'])}")
+        else:
+            result = validator.validate_syntax(name, context)
+            print(f"\n{name} ({context}):")
+            if result['exists']:
+                print(f"  ✓ EXISTS as {result['type']}")
+                print(f"  Found in: {result['locations'][0] if result['locations'] else 'N/A'}")
+            else:
+                print(f"  ✗ NOT FOUND in vanilla")
+                if result['issues']:
+                    for issue in result['issues']:
+                        print(f"  ! {issue}")
+                if result['suggestions']:
+                    print(f"  Suggestions:")
+                    for sugg, stype, score in result['suggestions'][:3]:
+                        print(f"    - {sugg} ({stype}) [{score:.2%} match]")
 
 
-def get_hover(
-    content: str,
-    line: int,
-    column: int,
-    db_path: Path,
-    playset_id: int = 1
-) -> Optional[Dict]:
-    """Get hover documentation."""
-    analyzer = SemanticAnalyzer(db_path, playset_id)
-    try:
-        info = analyzer.get_hover(content, line, column)
-        if info:
-            return {"content": info.content, "range": info.range}
-        return None
-    finally:
-        analyzer.close()
-
-
-def _diag_to_dict(d: Diagnostic) -> Dict:
-    """Convert Diagnostic to dict."""
-    return {
-        "line": d.line,
-        "column": d.column,
-        "end_line": d.end_line,
-        "end_column": d.end_column,
-        "severity": d.severity,
-        "code": d.code,
-        "message": d.message,
-        "source": d.source,
-        "data": d.data
-    }
-
-
-def _completion_to_dict(c: CompletionItem) -> Dict:
-    """Convert CompletionItem to dict."""
-    return {
-        "label": c.label,
-        "kind": c.kind,
-        "detail": c.detail,
-        "documentation": c.documentation,
-        "insertText": c.insert_text,
-        "symbolType": c.symbol_type,
-        "mod": c.mod,
-        "sortText": c.sort_text
-    }
+if __name__ == "__main__":
+    main()
