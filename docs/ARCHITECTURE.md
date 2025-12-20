@@ -567,3 +567,121 @@ Creates: MSC/common/traits/zzz_msc_00_traits.txt
 | `ck3_get_conflict_detail(id)` | Get full content of all candidates |
 | `ck3_create_override_patch(path, target_mod, mode)` | Create override file in correct location |
 
+
+---
+
+## Validation Tool Architecture
+
+### Overview
+
+ck3raven has a layered validation architecture with distinct purposes:
+
+```
+                    
+                           Agent / User Request          
+                    -
+                                     
+        
+                                                                
+                                                                
+    
+   quickValidator       validate.py          semantic.py     
+   (TypeScript)         (Python)             (Python)        
+   ~10ms                ~200ms               ~50ms lookup    
+-    -
+                                                     
+                                                     
+    SYNTAX SCAN            FULL PARSE            SEMANTIC CHECK
+    - Brace balance        - AST generation      - Trigger exists?
+    - Unterminated ""      - Block structure     - Effect exists?
+    - Basic structure      - All syntax errors   - Scope valid?
+                                                 - Fuzzy suggest
+```
+
+### Components
+
+| Layer | File | Purpose | Performance |
+|-------|------|---------|-------------|
+| **Quick Scan** | `quickValidator.ts` | Immediate feedback while typing | ~10ms |
+| **Full Parse** | `validate.py` | Complete AST with all errors | ~200ms |
+| **Semantic** | `semantic.py` (TODO) | Validate names exist in vanilla | ~50ms |
+
+### Current State
+
+1. **quickValidator.ts** -  Implemented
+   - Located: `tools/ck3lens-explorer/src/linting/quickValidator.ts`
+   - Fast client-side checks for blocking errors
+
+2. **validate.py** -  Implemented  
+   - Located: `tools/ck3lens_mcp/ck3lens/validate.py`
+   - Uses ck3raven parser for full AST generation
+   - Called via Python bridge from VS Code extension
+
+3. **semantic.py** -  To Be Consolidated
+   - Currently exists as `AI Workspace/ck3_syntax_validator.py` (standalone)
+   - Validates trigger/effect names against vanilla database
+   - Provides fuzzy matching for typo suggestions
+   - **PLAN: Move into ck3raven as `tools/ck3lens_mcp/ck3lens/semantic.py`**
+
+### Consolidation Plan
+
+#### Phase 1: Move ck3_syntax_validator.py into ck3raven
+
+**From:** `AI Workspace/ck3_syntax_validator.py`
+**To:** `ck3raven/tools/ck3lens_mcp/ck3lens/semantic.py`
+
+Changes required:
+- Rename class to `SemanticValidator`
+- Update imports to use ck3raven modules
+- Add MCP tool wrappers (`validate_trigger`, `suggest_similar`)
+
+#### Phase 2: Integrate with symbols.py vs refdb.py
+
+**Key Question:** Two tools do similar things:
+
+| Tool | Output | Used By |
+|------|--------|---------|
+| `db/symbols.py` | SQLite (`symbols`, `refs` tables) | ck3lens database, MCP queries |
+| `tools/refdb.py` | JSON (`refdb.json`) | Standalone CLI, offline analysis |
+
+**Resolution:**
+- `symbols.py` is the **canonical implementation** (database-backed, incremental)
+- `refdb.py` is a **convenience CLI** that can export to JSON for offline use
+- **No code duplication** - refdb.py should import from symbols.py
+
+#### Phase 3: Versioned Vanilla Database
+
+**Problem:** Current databases have `game_version: "CK3 (extracted from vanilla)"` - no specific version.
+
+**Solution:**
+1. Extract CK3 version from game files at build time
+2. Store as `ck3_version: "1.14.0"` in database metadata
+3. Create versioned exports: `vanilla_syntax_1.14.0.json`
+4. When CK3 updates: freeze old version, create new version file
+
+**Version Detection:**
+```python
+# From launcher-settings.json or game files
+version_file = game_path / "launcher" / "launcher-settings.json"
+# Or parse from game binary/version file
+```
+
+### Database Files (Canonical Locations)
+
+| File | Location | Purpose | Keep? |
+|------|----------|---------|-------|
+| `ck3lens.db` | `ck3raven/data/` | Full SQLite database |  Canonical |
+| `ck3_syntax_db.json` | `AI Workspace/` | Trigger/effect lookup |  Keep for now |
+| `refdb.json` | Generated | Cross-reference export |  Regenerate as needed |
+
+### Tools to Archive/Remove
+
+These are superseded by ck3raven equivalents:
+
+| File | Status | Replacement |
+|------|--------|-------------|
+| `ck3_parser_ARCHIVED/` |  Archived | `ck3raven/src/ck3raven/parser/` |
+| `build_ck3_syntax_db.py` | Move to ck3raven | Integrate with ingest.py |
+| `ck3_syntax_validator.py` | Move to ck3raven | `ck3lens/semantic.py` |
+| `validator/` folder | Review | May merge useful parts |
+
