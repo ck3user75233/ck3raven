@@ -11,6 +11,8 @@ import { ExplorerViewProvider } from './views/explorerView';
 import { ConflictsViewProvider } from './views/conflictsView';
 import { SymbolsViewProvider } from './views/symbolsView';
 import { LiveModsViewProvider } from './views/liveModsView';
+import { PlaysetViewProvider } from './views/playsetView';
+import { IssuesViewProvider } from './views/issuesView';
 import { AstViewerPanel } from './views/astViewerPanel';
 import { StudioPanel } from './views/studioPanel';
 import { LintingProvider } from './linting/lintingProvider';
@@ -55,12 +57,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const conflictsProvider = new ConflictsViewProvider(session, logger);
     const symbolsProvider = new SymbolsViewProvider(session, logger);
     const liveModsProvider = new LiveModsViewProvider(session, logger);
+    const playsetProvider = new PlaysetViewProvider(session, logger);
+    const issuesProvider = new IssuesViewProvider(session, logger);
+
+    // Create playset tree view with drag-and-drop support
+    const playsetTreeView = vscode.window.createTreeView('ck3lens.playsetView', {
+        treeDataProvider: playsetProvider,
+        dragAndDropController: playsetProvider,
+        canSelectMany: false
+    });
 
     context.subscriptions.push(
         vscode.window.registerTreeDataProvider('ck3lens.explorerView', explorerProvider),
         vscode.window.registerTreeDataProvider('ck3lens.conflictsView', conflictsProvider),
         vscode.window.registerTreeDataProvider('ck3lens.symbolsView', symbolsProvider),
-        vscode.window.registerTreeDataProvider('ck3lens.liveModsView', liveModsProvider)
+        vscode.window.registerTreeDataProvider('ck3lens.liveModsView', liveModsProvider),
+        playsetTreeView,
+        vscode.window.registerTreeDataProvider('ck3lens.issuesView', issuesProvider)
     );
 
     // Initialize the Lens Widget (status bar + panel)
@@ -69,7 +82,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Connect widget to session state changes
     lensWidget.onStateChange(state => {
-        logger.info(`Widget state changed: lens=${state.lensEnabled}, mode=${state.mode}, agent=${state.agent.status}`);
+        const primaryMode = state.agents.length > 0 ? state.agents[0].mode : 'none';
+        logger.info(`Widget state changed: mcp=${state.mcp.status}, agents=${state.agents.length}, mode=${primaryMode}`);
     });
 
     // Register language features for paradox-script
@@ -113,7 +127,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     // Register commands
-    registerCommands(context, explorerProvider, conflictsProvider, symbolsProvider, liveModsProvider, lintingProvider);
+    registerCommands(context, explorerProvider, conflictsProvider, symbolsProvider, liveModsProvider, playsetProvider, issuesProvider, lintingProvider);
 
     // Register file watchers for real-time linting
     if (vscode.workspace.getConfiguration('ck3lens').get('enableRealTimeLinting', true)) {
@@ -121,6 +135,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     logger.info('CK3 Lens Explorer activated successfully');
+
+    // Auto-initialize session on startup if enabled (default: true)
+    if (vscode.workspace.getConfiguration('ck3lens').get('autoInitialize', true)) {
+        // Delay slightly to let UI finish loading
+        setTimeout(async () => {
+            try {
+                logger.info('Auto-initializing CK3 Lens session...');
+                await vscode.commands.executeCommand('ck3lens.initSession');
+            } catch (error) {
+                logger.error('Auto-initialization failed', error);
+                // Don't show error on auto-init failure - user can manually init
+            }
+        }, 1000);
+    }
 }
 
 /**
@@ -132,6 +160,8 @@ function registerCommands(
     conflictsProvider: ConflictsViewProvider,
     symbolsProvider: SymbolsViewProvider,
     liveModsProvider: LiveModsViewProvider,
+    playsetProvider: PlaysetViewProvider,
+    issuesProvider: IssuesViewProvider,
     lintingProvider: LintingProvider
 ): void {
     // Initialize session
@@ -139,6 +169,14 @@ function registerCommands(
         vscode.commands.registerCommand('ck3lens.initSession', async () => {
             try {
                 await session?.initialize();
+                
+                // Update widget to show connected status
+                if (lensWidget) {
+                    lensWidget.setMcpStatus('connected', undefined, 'ck3raven');
+                    lensWidget.setLensEnabled(true);
+                    lensWidget.setAgentStatus('idle'); // Clear any previous error
+                }
+                
                 vscode.window.showInformationMessage('CK3 Lens session initialized');
                 
                 // Refresh all views
@@ -146,8 +184,16 @@ function registerCommands(
                 conflictsProvider.refresh();
                 symbolsProvider.refresh();
                 liveModsProvider.refresh();
+                playsetProvider.refresh();
             } catch (error) {
                 logger.error('Failed to initialize session', error);
+                
+                // Update widget to show error status
+                if (lensWidget) {
+                    lensWidget.setMcpStatus('disconnected');
+                    lensWidget.setAgentStatus('error', `${error}`);
+                }
+                
                 vscode.window.showErrorMessage(`Failed to initialize CK3 Lens: ${error}`);
             }
         })
@@ -160,6 +206,7 @@ function registerCommands(
             conflictsProvider.refresh();
             symbolsProvider.refresh();
             liveModsProvider.refresh();
+            playsetProvider.refresh();
         })
     );
 
@@ -358,6 +405,208 @@ function registerCommands(
     context.subscriptions.push(
         vscode.commands.registerCommand('ck3lens.openStudio', () => {
             StudioPanel.createOrShow(context.extensionUri, session!, logger);
+        })
+    );
+
+    // ========================================================================
+    // Issues View Commands
+    // ========================================================================
+
+    // Refresh issues view
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ck3lens.refreshIssues', () => {
+            issuesProvider.loadIssues();
+        })
+    );
+
+    // Navigate to issue location
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ck3lens.navigateToIssue', async (filePath: string, line: number) => {
+            try {
+                const uri = vscode.Uri.file(filePath);
+                const doc = await vscode.workspace.openTextDocument(uri);
+                const editor = await vscode.window.showTextDocument(doc);
+                
+                const position = new vscode.Position(Math.max(0, line - 1), 0);
+                editor.selection = new vscode.Selection(position, position);
+                editor.revealRange(
+                    new vscode.Range(position, position),
+                    vscode.TextEditorRevealType.InCenter
+                );
+            } catch (error) {
+                vscode.window.showErrorMessage(`Failed to open file: ${filePath}`);
+                logger.error('Navigation failed', error);
+            }
+        })
+    );
+
+    // Show conflict detail
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ck3lens.showConflictDetail', async (conflictUnitId: string) => {
+            try {
+                if (!session?.isInitialized) {
+                    vscode.window.showWarningMessage('CK3 Lens not initialized');
+                    return;
+                }
+
+                const detail = await session.getConflictDetail(conflictUnitId);
+                if (!detail) {
+                    vscode.window.showErrorMessage('Conflict not found');
+                    return;
+                }
+
+                // Show in quick pick with candidates
+                const items = detail.candidates.map((c: any) => ({
+                    label: c.mod_name,
+                    description: c.file_path,
+                    detail: c.content_preview?.substring(0, 100) + '...',
+                    candidate: c
+                }));
+
+                const selected = await vscode.window.showQuickPick(items, {
+                    title: `Conflict: ${detail.unit_key}`,
+                    placeHolder: 'Select a candidate to view'
+                });
+
+                if (selected) {
+                    // Navigate to the selected candidate
+                    await vscode.commands.executeCommand(
+                        'ck3lens.navigateToIssue',
+                        selected.candidate.file_path,
+                        selected.candidate.line_number || 1
+                    );
+                }
+            } catch (error) {
+                logger.error('Show conflict detail failed', error);
+            }
+        })
+    );
+
+    // Playset setup - sends user to chat for guided playset configuration
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ck3lens.setupPlayset', async () => {
+            const prompt = `Help me set up my CK3 active playset.
+
+First, call ck3_list_playsets to show me my available playsets.
+Then call ck3_get_active_playset to show the current configuration.
+
+After that, ask me what I'd like to do:
+1. Add mods to the active playset
+2. Remove mods from the active playset
+3. Change the load order
+4. Switch to a different playset
+
+Use the appropriate tools (ck3_add_mod_to_playset, ck3_remove_mod_from_playset) based on my response.`;
+
+            // Send the prompt to the chat
+            await vscode.commands.executeCommand('workbench.action.chat.open', {
+                query: prompt
+            });
+        })
+    );
+
+    // View playsets - quick list of all playsets
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ck3lens.viewPlaysets', async () => {
+            if (!session?.isInitialized) {
+                vscode.window.showWarningMessage('CK3 Lens not initialized');
+                return;
+            }
+
+            try {
+                const playsets = await session.listPlaysets();
+                
+                if (!playsets || playsets.length === 0) {
+                    vscode.window.showInformationMessage('No playsets found in database');
+                    return;
+                }
+
+                const items = playsets.map((p: any) => ({
+                    label: p.is_active ? `$(check) ${p.name}` : p.name,
+                    description: p.is_active ? 'Active' : '',
+                    detail: `ID: ${p.id} | Mods: ${p.mod_count ?? 'unknown'}`,
+                    playset: p
+                }));
+
+                const selected = await vscode.window.showQuickPick(items, {
+                    title: 'Playsets',
+                    placeHolder: 'Select a playset to view details or set as active'
+                });
+
+                if (selected) {
+                    // Ask what to do with the playset
+                    const action = await vscode.window.showQuickPick([
+                        { label: 'Set as Active', value: 'activate' },
+                        { label: 'View in Chat', value: 'view' }
+                    ], {
+                        title: `Playset: ${selected.playset.name}`,
+                        placeHolder: 'What would you like to do?'
+                    });
+
+                    if (action?.value === 'view') {
+                        await vscode.commands.executeCommand('workbench.action.chat.open', {
+                            query: `Show me the details of the playset "${selected.playset.name}" (ID: ${selected.playset.id}). Call ck3_get_active_playset if it's the active one, or explain how to check its contents.`
+                        });
+                    }
+                    // Note: activate would need MCP tool call which requires agent
+                }
+            } catch (error) {
+                vscode.window.showErrorMessage(`Failed to list playsets: ${error}`);
+            }
+        })
+    );
+
+    // Create override patch from context menu
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ck3lens.createOverridePatch', async (item: any) => {
+            if (!session?.isInitialized) {
+                vscode.window.showWarningMessage('CK3 Lens not initialized');
+                return;
+            }
+
+            // Get source path from item
+            const sourcePath = item?.issue?.filePath || item?.filePath;
+            if (!sourcePath) {
+                vscode.window.showErrorMessage('No file path available');
+                return;
+            }
+
+            // Ask for target mod
+            const liveMods = await session.getLiveMods();
+            const modItems = liveMods.map(m => ({
+                label: m.name,
+                description: m.modId,
+                modId: m.modId
+            }));
+
+            const selectedMod = await vscode.window.showQuickPick(modItems, {
+                title: 'Select Target Mod',
+                placeHolder: 'Choose which mod to create the patch in'
+            });
+
+            if (!selectedMod) {return;}
+
+            // Ask for mode
+            const mode = await vscode.window.showQuickPick([
+                { label: 'Override Patch', description: 'Creates zzz_msc_[name].txt for partial override', value: 'override_patch' as const },
+                { label: 'Full Replace', description: 'Creates [name].txt for complete replacement', value: 'full_replace' as const }
+            ], {
+                title: 'Select Patch Mode',
+                placeHolder: 'How should the patch be created?'
+            });
+
+            if (!mode) {return;}
+
+            // Create the patch
+            const result = await session.createOverridePatch(sourcePath, selectedMod.modId, mode.value);
+
+            if (result.success && result.full_path) {
+                const doc = await vscode.workspace.openTextDocument(result.full_path);
+                await vscode.window.showTextDocument(doc);
+                vscode.window.showInformationMessage(`Created: ${result.created_path}`);
+            } else {
+                vscode.window.showErrorMessage(`Failed to create patch: ${result.error}`);
+            }
         })
     );
 }

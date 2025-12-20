@@ -3,6 +3,7 @@
  */
 
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { CK3LensSession, LiveModInfo } from '../session';
 import { Logger } from '../utils/logger';
 
@@ -23,6 +24,15 @@ export class LiveModTreeItem extends vscode.TreeItem {
                 break;
             case 'file':
                 this.iconPath = new vscode.ThemeIcon('file');
+                // Set command to open file on click
+                if (data?.fullPath) {
+                    this.command = {
+                        command: 'vscode.open',
+                        title: 'Open File',
+                        arguments: [vscode.Uri.file(data.fullPath)]
+                    };
+                    this.tooltip = data.fullPath;
+                }
                 break;
             case 'category':
                 this.iconPath = new vscode.ThemeIcon('folder');
@@ -162,13 +172,16 @@ export class LiveModsViewProvider implements vscode.TreeDataProvider<LiveModTree
             // Show git changes
             const status = element.data.gitStatus;
             const items: LiveModTreeItem[] = [];
+            const modPath = element.mod?.path || '';
 
             for (const file of status.staged) {
+                const fullPath = path.join(modPath, file);
                 const item = new LiveModTreeItem(
                     file,
                     vscode.TreeItemCollapsibleState.None,
                     'file',
-                    element.mod
+                    element.mod,
+                    { fullPath }
                 );
                 item.iconPath = new vscode.ThemeIcon('check', new vscode.ThemeColor('gitDecoration.addedResourceForeground'));
                 item.description = 'staged';
@@ -176,11 +189,13 @@ export class LiveModsViewProvider implements vscode.TreeDataProvider<LiveModTree
             }
 
             for (const file of status.unstaged) {
+                const fullPath = path.join(modPath, file);
                 const item = new LiveModTreeItem(
                     file,
                     vscode.TreeItemCollapsibleState.None,
                     'file',
-                    element.mod
+                    element.mod,
+                    { fullPath }
                 );
                 item.iconPath = new vscode.ThemeIcon('edit', new vscode.ThemeColor('gitDecoration.modifiedResourceForeground'));
                 item.description = 'modified';
@@ -188,11 +203,13 @@ export class LiveModsViewProvider implements vscode.TreeDataProvider<LiveModTree
             }
 
             for (const file of status.untracked) {
+                const fullPath = path.join(modPath, file);
                 const item = new LiveModTreeItem(
                     file,
                     vscode.TreeItemCollapsibleState.None,
                     'file',
-                    element.mod
+                    element.mod,
+                    { fullPath }
                 );
                 item.iconPath = new vscode.ThemeIcon('question', new vscode.ThemeColor('gitDecoration.untrackedResourceForeground'));
                 item.description = 'untracked';
@@ -203,9 +220,51 @@ export class LiveModsViewProvider implements vscode.TreeDataProvider<LiveModTree
         }
 
         if (element.itemType === 'category' && element.data?.folder && element.mod) {
-            // TODO: List actual files in this folder
-            // For now, return empty - this would require file listing from the mod
-            return [];
+            // List actual files in this folder
+            const modPath = element.mod.path;
+            const folderPath = path.join(modPath, element.data.folder);
+            
+            try {
+                const uri = vscode.Uri.file(folderPath);
+                const entries = await vscode.workspace.fs.readDirectory(uri);
+                
+                const items: LiveModTreeItem[] = [];
+                
+                for (const [name, type] of entries) {
+                    const fullPath = path.join(folderPath, name);
+                    
+                    if (type === vscode.FileType.Directory) {
+                        const subItem = new LiveModTreeItem(
+                            name,
+                            vscode.TreeItemCollapsibleState.Collapsed,
+                            'category',
+                            element.mod,
+                            { folder: path.join(element.data.folder, name) }
+                        );
+                        items.push(subItem);
+                    } else {
+                        const fileItem = new LiveModTreeItem(
+                            name,
+                            vscode.TreeItemCollapsibleState.None,
+                            'file',
+                            element.mod,
+                            { fullPath }
+                        );
+                        items.push(fileItem);
+                    }
+                }
+                
+                return items.sort((a, b) => {
+                    // Folders first, then files
+                    if (a.itemType !== b.itemType) {
+                        return a.itemType === 'category' ? -1 : 1;
+                    }
+                    return a.label.localeCompare(b.label);
+                });
+            } catch (error) {
+                // Folder doesn't exist or can't be read
+                return [];
+            }
         }
 
         return [];

@@ -4,9 +4,9 @@
 import sys
 from pathlib import Path
 
-# Add paths
+# Add ck3raven src to path (for ck3raven core modules)
+# ck3lens is installed as editable package, no need for path manipulation
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-sys.path.insert(0, str(Path(__file__).parent.parent / "tools" / "ck3lens_mcp"))
 
 print("="*70)
 print("CK3RAVEN NEW TOOLS TEST SUITE")

@@ -2,7 +2,7 @@
 
 > **Mode:** `ck3lens`  
 > **Purpose:** CK3 mod compatibility patching and error fixing  
-> **Last Updated:** December 18, 2025
+> **Last Updated:** December 20, 2025
 
 ---
 
@@ -75,9 +75,12 @@ You have access to **CK3 Lens MCP tools** that query a 26+ GB indexed database:
 |------|---------|-------------|
 | `ck3_get_active_playset` | Get current playset with mod list | Check what mods are loaded |
 | `ck3_list_playsets` | List all available playsets | See all playset options |
+| `ck3_get_playset_mods` | Get mods in playset with load order | See mod order and file counts |
 | `ck3_search_mods` | Search mods by name/ID/abbreviation | Find a mod before adding |
 | `ck3_add_mod_to_playset` | Add mod (ingests+extracts symbols) | Add new mod to playset |
 | `ck3_remove_mod_from_playset` | Remove mod from playset | Remove mod from playset |
+| `ck3_import_playset_from_launcher` | Import launcher JSON export | Set up playset from Paradox Launcher |
+| `ck3_reorder_mod_in_playset` | Move mod in load order | Adjust mod priority |
 
 ### Unit-Level Conflict Analysis Tools
 
@@ -261,10 +264,33 @@ ck3_get_conflicts(symbol_name="the_symbol")
 ck3_get_file(file_path="common/traits/00_traits.txt")
 ```
 
-### Step 5: Validate Your Fix
+### Step 5: Validate Your Fix (ADVISORY)
 ```
 ck3_parse_content(content="my_fix = { ... }")
+ck3_validate_references(content="my_fix = { ... }")
 ```
+
+**⚠️ IMPORTANT: Validation is ADVISORY during early development.**
+
+| Confidence | Error Codes | Meaning |
+|------------|-------------|---------|
+| **High** | `PATH_*`, `EMPTY_CONTENT` | Definitely wrong |
+| **Medium** | `PARSE_ERROR` | Parser may have edge case bugs |
+| **Low** | `REF_*` | Symbol database incomplete |
+
+**Workflow:**
+1. Run validation tools
+2. Present results to user for review
+3. If user says validation is wrong (false positive), report it:
+   ```
+   ck3_report_validation_issue(
+       issue_type="parser_false_positive",
+       code_snippet="the code that was wrongly rejected",
+       expected_behavior="Should parse successfully",
+       actual_behavior="Parser reported: <error message>"
+   )
+   ```
+4. Proceed with user's judgment, not blind trust in validator
 
 ### Step 6: Write the Fix
 ```

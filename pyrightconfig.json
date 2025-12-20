@@ -1,0 +1,13 @@
+{
+  "include": ["src", "scripts", "tools"],
+  "extraPaths": [
+    "src",
+    "tools/ck3lens_mcp"
+  ],
+  "pythonVersion": "3.10",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": false,
+  "venvPath": ".",
+  "venv": ".venv"
+}

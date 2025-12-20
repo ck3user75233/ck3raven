@@ -30,7 +30,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 ACTIVE_MOD_PATHS_FILE = Path(r"C:\Users\Nathan\Documents\AI Workspace\active_mod_paths.json")
-PLAYSET_NAME = "Active Playset"
+
+def get_playset_name():
+    """Get playset name from active_mod_paths.json or use default."""
+    if ACTIVE_MOD_PATHS_FILE.exists():
+        data = json.loads(ACTIVE_MOD_PATHS_FILE.read_text())
+        return data.get("playset_name", "Active Playset")
+    return "Active Playset"
+
+PLAYSET_NAME = get_playset_name()
 
 
 def main():

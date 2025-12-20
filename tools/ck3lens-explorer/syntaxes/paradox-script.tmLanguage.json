@@ -7,6 +7,7 @@
     { "include": "#strings" },
     { "include": "#numbers" },
     { "include": "#operators" },
+    { "include": "#block-headers" },
     { "include": "#keywords" },
     { "include": "#scopes" },
     { "include": "#triggers" },
@@ -69,31 +70,62 @@
       "patterns": [
         {
           "name": "keyword.operator.comparison.paradox",
-          "match": "\\b(>=|<=|!=|==|>|<)\\b"
+          "match": "(>=|<=|!=|==|>|<|\\?=)"
         },
         {
           "name": "keyword.operator.assignment.paradox",
-          "match": "="
+          "match": "(?<![=!<>])=(?!=)"
+        }
+      ]
+    },
+    "block-headers": {
+      "comment": "Top-level and nested block definitions (key = { ... })",
+      "patterns": [
+        {
+          "comment": "Top-level definitions like namespace, event IDs, decisions, etc.",
+          "match": "^\\s*([a-zA-Z_][a-zA-Z0-9_]*(?:\\.[a-zA-Z0-9_]+)?)\\s*(=)\\s*(\\{)?",
+          "captures": {
+            "1": { "name": "entity.name.function.block-header.paradox" },
+            "2": { "name": "keyword.operator.assignment.paradox" },
+            "3": { "name": "punctuation.section.block.begin.paradox" }
+          }
         },
         {
-          "name": "keyword.operator.comparison.paradox",
-          "match": "\\?="
+          "comment": "Nested block definitions",
+          "match": "^\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(=)\\s*(\\{)",
+          "captures": {
+            "1": { "name": "entity.name.tag.block-property.paradox" },
+            "2": { "name": "keyword.operator.assignment.paradox" },
+            "3": { "name": "punctuation.section.block.begin.paradox" }
+          }
         }
       ]
     },
     "keywords": {
       "patterns": [
         {
-          "name": "keyword.control.paradox",
-          "match": "\\b(if|else|else_if|while|limit|trigger|desc|modifier|effect|on_action|random|random_list|switch|fallback)\\b"
+          "name": "keyword.control.flow.paradox",
+          "match": "\\b(if|else|else_if|while|limit|switch|fallback|break)\\b"
+        },
+        {
+          "name": "keyword.control.trigger.paradox",
+          "match": "\\b(trigger|trigger_if|trigger_else|trigger_else_if)\\b"
         },
         {
           "name": "constant.language.boolean.paradox",
           "match": "\\b(yes|no|true|false)\\b"
         },
         {
-          "name": "keyword.other.paradox",
-          "match": "\\b(namespace|scripted_effect|scripted_trigger|decision|event|trait|culture|religion|faith|government|law|building|holding|title|character|dynasty|artifact|scheme|secret|hook|story|activity|struggle|epidemic|travel|adventure|accolade|court_position|diarchy|legend|tax_slot|domicile)\\b"
+          "name": "storage.type.definition.paradox",
+          "match": "\\b(namespace|scripted_effect|scripted_trigger|scripted_modifier|on_action)\\b"
+        },
+        {
+          "name": "storage.type.entity.paradox",
+          "match": "\\b(decision|event|trait|culture|religion|faith|government|law|building|holding|title|character|dynasty|artifact|scheme|secret|hook|story|activity|struggle|epidemic|travel|adventure|accolade|court_position|diarchy|legend|tax_slot|domicile|lifestyle|perk|focus|innovation|tradition|pillar|doctrine|tenet|men_at_arms|terrain|province|county|duchy|kingdom|empire|casus_belli|war|council_task|interaction|relation|nickname|death_reason|modifier|triggered_modifier)\\b"
+        },
+        {
+          "name": "keyword.other.block.paradox",
+          "match": "\\b(desc|theme|left_portrait|right_portrait|lower_left_portrait|lower_right_portrait|option|immediate|after|on_trigger_fail|weight_multiplier|cooldown|icon|picture|background|override_background|widget|ai_will_do|ai_chance|ai_check_interval)\\b"
         }
       ]
     },
@@ -176,10 +208,11 @@
     "identifiers": {
       "patterns": [
         {
-          "name": "entity.name.type.paradox",
-          "match": "^\\s*([a-z_][a-z0-9_]*)\\s*=",
+          "comment": "Key = value assignment (simple values)",
+          "match": "([a-zA-Z_][a-zA-Z0-9_]*)\\s*(=)\\s*(?!\\{)",
           "captures": {
-            "1": { "name": "entity.name.type.definition.paradox" }
+            "1": { "name": "variable.other.property.paradox" },
+            "2": { "name": "keyword.operator.assignment.paradox" }
           }
         },
         {

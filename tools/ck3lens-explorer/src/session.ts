@@ -472,6 +472,222 @@ export class CK3LensSession implements vscode.Disposable {
         }
     }
 
+    // ========================================================================
+    // Error/Conflict Analysis Methods
+    // ========================================================================
+
+    /**
+     * Get errors from error.log
+     */
+    async getErrors(options: {
+        priority?: number;
+        category?: string;
+        modFilter?: string;
+        excludeCascadeChildren?: boolean;
+        limit?: number;
+    } = {}): Promise<Array<{
+        message: string;
+        file_path: string | null;
+        game_line: number | null;
+        mod_name: string | null;
+        category: string;
+        priority: number;
+        fix_hint: string | null;
+        is_cascading_root: boolean;
+    }>> {
+        if (!this._initialized) {
+            await this.initialize();
+        }
+
+        try {
+            const result = await this.pythonBridge.call('get_errors', {
+                priority: options.priority ?? 4,
+                category: options.category ?? null,
+                mod_filter: options.modFilter ?? null,
+                exclude_cascade_children: options.excludeCascadeChildren ?? true,
+                limit: options.limit ?? 100
+            });
+
+            return result.errors || [];
+        } catch (error) {
+            this.logger.error('Get errors failed', error);
+            return [];
+        }
+    }
+
+    /**
+     * Get cascade patterns from error.log
+     */
+    async getCascadePatterns(): Promise<Array<{
+        pattern_type: string;
+        confidence: number;
+        root_error: any;
+        child_count: number;
+    }>> {
+        if (!this._initialized) {
+            await this.initialize();
+        }
+
+        try {
+            const result = await this.pythonBridge.call('get_cascade_patterns', {});
+            return result.patterns || [];
+        } catch (error) {
+            this.logger.error('Get cascade patterns failed', error);
+            return [];
+        }
+    }
+
+    /**
+     * List conflict units with optional filters
+     */
+    async getConflictUnits(options: {
+        riskFilter?: string;
+        domainFilter?: string;
+        statusFilter?: string;
+        limit?: number;
+        offset?: number;
+    } = {}): Promise<Array<{
+        conflict_unit_id: string;
+        unit_key: string;
+        domain: string;
+        risk_level: string;
+        candidate_count: number;
+        mods: string[];
+    }>> {
+        if (!this._initialized) {
+            await this.initialize();
+        }
+
+        try {
+            const result = await this.pythonBridge.call('list_conflict_units', {
+                risk_filter: options.riskFilter ?? null,
+                domain_filter: options.domainFilter ?? null,
+                status_filter: options.statusFilter ?? null,
+                limit: options.limit ?? 50,
+                offset: options.offset ?? 0
+            });
+
+            return result.conflicts || [];
+        } catch (error) {
+            this.logger.error('Get conflict units failed', error);
+            return [];
+        }
+    }
+
+    /**
+     * Get detail for a specific conflict unit
+     */
+    async getConflictDetail(conflictUnitId: string): Promise<{
+        unit_key: string;
+        domain: string;
+        risk_level: string;
+        candidates: Array<{
+            candidate_id: string;
+            mod_name: string;
+            file_path: string;
+            line_number: number;
+            content_preview: string;
+        }>;
+    } | null> {
+        if (!this._initialized) {
+            await this.initialize();
+        }
+
+        try {
+            const result = await this.pythonBridge.call('get_conflict_detail', {
+                conflict_unit_id: conflictUnitId
+            });
+
+            return result;
+        } catch (error) {
+            this.logger.error('Get conflict detail failed', error);
+            return null;
+        }
+    }
+
+    /**
+     * List all playsets in the database
+     */
+    async listPlaysets(): Promise<Array<{
+        id: string;
+        name: string;
+        is_active: boolean;
+        mod_count?: number;
+    }>> {
+        if (!this._initialized) {
+            await this.initialize();
+        }
+
+        try {
+            const result = await this.pythonBridge.call('list_playsets', {});
+            return result.playsets || [];
+        } catch (error) {
+            this.logger.error('List playsets failed', error);
+            return [];
+        }
+    }
+
+    /**
+     * Reorder a mod within the active playset
+     */
+    async reorderMod(
+        modIdentifier: string,
+        newPosition: number
+    ): Promise<{
+        success: boolean;
+        oldPosition?: number;
+        newPosition?: number;
+        error?: string;
+    }> {
+        if (!this._initialized) {
+            await this.initialize();
+        }
+
+        try {
+            const result = await this.pythonBridge.call('reorder_mod', {
+                mod_identifier: modIdentifier,
+                new_position: newPosition
+            });
+            return result;
+        } catch (error) {
+            this.logger.error('Reorder mod failed', error);
+            return { success: false, error: String(error) };
+        }
+    }
+
+    /**
+     * Create an override patch file
+     */
+    async createOverridePatch(
+        sourcePath: string,
+        targetMod: string,
+        mode: 'override_patch' | 'full_replace',
+        initialContent?: string
+    ): Promise<{
+        success: boolean;
+        created_path?: string;
+        full_path?: string;
+        error?: string;
+    }> {
+        if (!this._initialized) {
+            await this.initialize();
+        }
+
+        try {
+            const result = await this.pythonBridge.call('create_override_patch', {
+                source_path: sourcePath,
+                target_mod: targetMod,
+                mode,
+                initial_content: initialContent ?? null
+            });
+
+            return result;
+        } catch (error) {
+            this.logger.error('Create override patch failed', error);
+            return { success: false, error: String(error) };
+        }
+    }
+
     dispose(): void {
         this._initialized = false;
         this._sessionInfo = null;

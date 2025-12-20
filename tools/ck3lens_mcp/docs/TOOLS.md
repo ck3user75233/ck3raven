@@ -649,6 +649,22 @@ git_log(
 
 Manage the agent's session state.
 
+#### `ck3_init_session`
+Initialize the ck3lens session with database connection.
+
+```python
+ck3_init_session(
+    db_path: str | None = None,   # Uses default ~/.ck3raven/ck3raven.db
+    live_mods: list[str] | None = None  # Override live mod whitelist
+) -> {
+    "initialized": bool,
+    "mod_root": str,
+    "live_mods": [str],
+    "playset_name": str,
+    "playset_id": int
+}
+```
+
 #### `ck3_set_playset`
 Set the active playset (loads configuration from DB).
 
@@ -660,6 +676,103 @@ ck3_set_playset(
     "name": str,
     "vanilla_version": str,
     "mods": [{"name": str, "load_order": int}]
+}
+```
+
+#### `ck3_get_playset_mods`
+Get mods in the active playset with load order.
+
+```python
+ck3_get_playset_mods() -> {
+    "mods": [
+        {
+            "name": str,
+            "contentVersionId": int,
+            "loadOrder": int,
+            "kind": str,  # "vanilla", "steam", or "local"
+            "fileCount": int,
+            "sourcePath": str | None
+        }
+    ]
+}
+```
+
+#### `ck3_add_mod_to_playset`
+Add a mod to the active playset with full ingestion.
+
+```python
+ck3_add_mod_to_playset(
+    mod_identifier: str,           # Workshop ID, name, or path
+    position: int | None = None,   # 0-indexed load order position
+    before_mod: str | None = None, # Insert before this mod
+    after_mod: str | None = None   # Insert after this mod
+) -> {
+    "success": bool,
+    "mod_name": str,
+    "workshop_id": str | None,
+    "content_version_id": int,
+    "load_order_position": int,
+    "files_indexed": int,
+    "symbols_extracted": int
+}
+```
+
+#### `ck3_import_playset_from_launcher`
+Import a playset directly from CK3 Launcher JSON export.
+
+```python
+ck3_import_playset_from_launcher(
+    launcher_json_path: str | None = None,    # Path to launcher export
+    launcher_json_content: str | None = None, # Raw JSON (alternative)
+    playset_name: str | None = None,          # Override name
+    local_mod_paths: list[str] | None = None, # Add local mods at end
+    set_active: bool = True                   # Make this the active playset
+) -> {
+    "success": bool,
+    "playset_id": int,
+    "playset_name": str,
+    "mods_linked": int,
+    "local_mods_linked": int,
+    "mods_skipped": [...] | None,
+    "is_active": bool,
+    "next_steps": str
+}
+```
+
+**Workflow:**
+1. Export playset from Paradox Launcher (Settings → Export Playset)
+2. Call with `launcher_json_path` pointing to the exported JSON
+3. Tool matches Steam IDs to mods already in database
+4. Creates new playset with matching load order
+5. Optionally adds local mod paths at end of load order
+
+#### `ck3_reorder_mod_in_playset`
+Move a mod to a new position in the load order.
+
+```python
+ck3_reorder_mod_in_playset(
+    mod_identifier: str,             # Workshop ID or mod name
+    new_position: int | None = None, # Target position (0-indexed)
+    before_mod: str | None = None,   # Move before this mod
+    after_mod: str | None = None     # Move after this mod
+) -> {
+    "success": bool,
+    "mod_name": str,
+    "old_position": int,
+    "new_position": int
+}
+```
+
+#### `ck3_remove_mod_from_playset`
+Remove a mod from the active playset.
+
+```python
+ck3_remove_mod_from_playset(
+    mod_identifier: str  # Workshop ID or mod name
+) -> {
+    "success": bool,
+    "mod_name": str,
+    "removed_from_position": int
 }
 ```
 
@@ -688,6 +801,7 @@ ck3_refresh_mod(
     "symbols_updated": int,
     "errors": [...]
 }
+```
 ```
 
 ---
@@ -847,6 +961,11 @@ All symbol searches default to `adjacency="auto"` which expands queries:
 | `ck3_read_log` | ✅ Implemented |
 | **Session Tools** | |
 | `ck3_init_session` | ✅ Implemented |
+| `ck3_get_playset_mods` | ✅ Implemented |
+| `ck3_add_mod_to_playset` | ✅ Implemented |
+| `ck3_import_playset_from_launcher` | ✅ Implemented |
+| `ck3_reorder_mod_in_playset` | ✅ Implemented |
+| `ck3_remove_mod_from_playset` | ✅ Implemented |
 | `ck3_set_playset` | 🔲 Planned |
 | `ck3_get_playset_info` | 🔲 Planned |
 | `ck3_refresh_mod` | 🔲 Planned |

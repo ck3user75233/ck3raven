@@ -9,18 +9,51 @@ Runs as a child process of the VS Code extension, communicating via stdio.
 import json
 import sys
 import os
+import sqlite3
 from pathlib import Path
 
-# Add ck3raven to path
+# Add ck3raven to path - handle both development and installed extension cases
 SCRIPT_DIR = Path(__file__).parent
-CKRAVEN_ROOT = SCRIPT_DIR.parent.parent.parent
-sys.path.insert(0, str(CKRAVEN_ROOT / "src"))
+
+def find_ck3raven_root():
+    """Find ck3raven source directory."""
+    # Check PYTHONPATH first (set by VS Code extension)
+    if os.environ.get('PYTHONPATH'):
+        pythonpath = Path(os.environ['PYTHONPATH'])
+        if (pythonpath / 'ck3raven').exists():
+            return pythonpath.parent  # PYTHONPATH points to src, return parent
+    
+    # Development mode: bridge is at tools/ck3lens-explorer/bridge/server.py
+    # So ck3raven root is 3 levels up
+    dev_root = SCRIPT_DIR.parent.parent.parent
+    if (dev_root / "src" / "ck3raven").exists():
+        return dev_root
+    
+    # Installed extension mode: check common locations
+    common_locations = [
+        Path.home() / "Documents" / "AI Workspace" / "ck3raven",
+        Path.home() / "ck3raven",
+        Path(os.environ.get("CK3RAVEN_PATH", "")) if os.environ.get("CK3RAVEN_PATH") else None,
+    ]
+    for loc in common_locations:
+        if loc and (loc / "src" / "ck3raven").exists():
+            return loc
+    
+    return None
+
+CKRAVEN_ROOT = find_ck3raven_root()
+if CKRAVEN_ROOT:
+    sys.path.insert(0, str(CKRAVEN_ROOT / "src"))
+    # Also add ck3lens_mcp for ck3lens module imports
+    ck3lens_mcp = CKRAVEN_ROOT / "tools" / "ck3lens_mcp"
+    if ck3lens_mcp.exists():
+        sys.path.insert(0, str(ck3lens_mcp))
 
 # Now we can import ck3raven
 try:
     from ck3raven.parser import parse_source, LexerError, ParseError
-    from ck3raven.db.search import SearchEngine
-    from ck3raven.db.models import DBSession
+    from ck3raven.db.search import search_symbols, search_content, find_definition
+    from ck3raven.db.schema import DEFAULT_DB_PATH, get_connection
     CKRAVEN_AVAILABLE = True
 except ImportError as e:
     CKRAVEN_AVAILABLE = False
@@ -37,7 +70,9 @@ class CK3LensBridge:
     
     def __init__(self):
         self.db_path = None
+        self.db_conn = None  # SQLite connection
         self.session = None
+        self.playset_id = None
         self.search_engine = None
         self.initialized = False
         
@@ -79,6 +114,16 @@ class CK3LensBridge:
             "read_live_file": self.read_live_file,
             "write_file": self.write_file,
             "git_status": self.git_status,
+            "get_playset_mods": self.get_playset_mods,
+            "get_top_level_folders": self.get_top_level_folders,
+            # Error/Conflict Analysis
+            "get_errors": self.get_errors,
+            "get_cascade_patterns": self.get_cascade_patterns,
+            "list_conflict_units": self.list_conflict_units,
+            "get_conflict_detail": self.get_conflict_detail,
+            "create_override_patch": self.create_override_patch,
+            "list_playsets": self.list_playsets,
+            "reorder_mod": self.reorder_mod,
         }
         
         handler = handlers.get(method)
@@ -106,21 +151,48 @@ class CK3LensBridge:
                 "initialized": False
             }
         
-        # TODO: Initialize actual database session
-        self.initialized = True
-        
-        return {
-            "initialized": True,
-            "db_path": str(self.db_path),
-            "mod_root": str(Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"),
-            "live_mods": {
-                "mods": [
-                    {"modId": "MSC", "name": "Mini Super Compatch", "path": "", "exists": True},
-                    {"modId": "MSCRE", "name": "MSCRE", "path": "", "exists": True},
-                    {"modId": "LRE", "name": "Lowborn Rise Expanded", "path": "", "exists": True}
-                ]
+        # Connect to SQLite database
+        try:
+            self.db_conn = sqlite3.connect(str(self.db_path))
+            self.db_conn.row_factory = sqlite3.Row
+            
+            # Get active playset
+            row = self.db_conn.execute(
+                "SELECT playset_id, name FROM playsets WHERE is_active = 1 LIMIT 1"
+            ).fetchone()
+            
+            if row:
+                self.playset_id = row[0]
+                playset_name = row[1]
+            else:
+                # Use first playset if none active
+                row = self.db_conn.execute(
+                    "SELECT playset_id, name FROM playsets LIMIT 1"
+                ).fetchone()
+                self.playset_id = row[0] if row else None
+                playset_name = row[1] if row else None
+            
+            self.initialized = True
+            
+            return {
+                "initialized": True,
+                "db_path": str(self.db_path),
+                "mod_root": str(Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"),
+                "playset_id": self.playset_id,
+                "playset_name": playset_name,
+                "live_mods": {
+                    "mods": [
+                        {"modId": "MSC", "name": "Mini Super Compatch", "path": "", "exists": True},
+                        {"modId": "MSCRE", "name": "MSCRE", "path": "", "exists": True},
+                        {"modId": "LRE", "name": "Lowborn Rise Expanded", "path": "", "exists": True}
+                    ]
+                }
             }
-        }
+        except Exception as e:
+            return {
+                "error": f"Failed to connect to database: {e}",
+                "initialized": False
+            }
     
     def parse_content(self, params: dict) -> dict:
         """Parse CK3 script content and return AST or errors with rich diagnostics."""
@@ -210,26 +282,26 @@ class CK3LensBridge:
     
     def _check_semantic_issues(self, content: str, ast, filename: str) -> list:
         """Check for semantic issues that aren't parse errors."""
+        import re
         warnings = []
         lines = content.split('\n')
         
-        # Check for common issues
+        # Keywords that don't need = before {
+        no_equals_needed = {'if', 'else', 'else_if', 'while', 'switch', 'random', 'random_list', 'limit', 'trigger', 'modifier'}
+        
+        # Check for common issues line by line
         for i, line in enumerate(lines, 1):
-            # Trailing whitespace
-            if line.rstrip() != line and line.strip():
-                pass  # Too noisy, skip
+            # Skip empty lines and comments
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#'):
+                continue
             
-            # Very long lines (>200 chars)
-            if len(line) > 200:
-                warnings.append({
-                    "line": i,
-                    "column": 200,
-                    "message": f"Line exceeds 200 characters ({len(line)} chars)",
-                    "severity": "info",
-                    "code": "STYLE001"
-                })
+            # Remove inline comments for pattern matching
+            comment_pos = stripped.find('#')
+            if comment_pos > 0:
+                stripped = stripped[:comment_pos].strip()
             
-            # Check for tabs vs spaces inconsistency (just report)
+            # Check for tabs vs spaces inconsistency
             if '\t' in line and '    ' in line:
                 warnings.append({
                     "line": i,
@@ -238,10 +310,48 @@ class CK3LensBridge:
                     "severity": "hint",
                     "code": "STYLE002"
                 })
+            
+            # Check for "yes = " or "no = " (yes/no are values, not keys)
+            yes_no_match = re.search(r'\b(yes|no)\s*=', stripped)
+            if yes_no_match:
+                col = line.find(yes_no_match.group(0)) + 1
+                warnings.append({
+                    "line": i,
+                    "column": col,
+                    "message": f'"{yes_no_match.group(1)}" is typically a value, not a key',
+                    "severity": "hint",
+                    "code": "STYLE003"
+                })
+            
+            # Check for == (comparison operator used where = expected)
+            # But only if it's not part of >=, <=, !=
+            double_eq_match = re.search(r'(?<![!<>=])={2}(?!=)', stripped)
+            if double_eq_match:
+                col = line.find('==') + 1
+                warnings.append({
+                    "line": i,
+                    "column": col,
+                    "message": "Use single = for assignment; == is for comparisons in trigger blocks",
+                    "severity": "hint",
+                    "code": "STYLE004"
+                })
+            
+            # Check for missing = before { (e.g., "my_block {" instead of "my_block = {")
+            missing_eq_match = re.match(r'^(\w+)\s*\{', stripped)
+            if missing_eq_match:
+                key = missing_eq_match.group(1).lower()
+                if key not in no_equals_needed:
+                    col = line.find(missing_eq_match.group(0)) + 1
+                    warnings.append({
+                        "line": i,
+                        "column": col,
+                        "message": f'Consider: {missing_eq_match.group(1)} = {{ ... }} (missing = before {{?)',
+                        "severity": "hint", 
+                        "code": "STYLE005"
+                    })
         
-        # Check for unbalanced braces (sanity check)
-        open_braces = content.count('{')
-        close_braces = content.count('}')
+        # Check for unbalanced braces (properly accounting for strings and comments)
+        open_braces, close_braces = self._count_braces_properly(content)
         if open_braces != close_braces:
             warnings.append({
                 "line": 1,
@@ -252,6 +362,46 @@ class CK3LensBridge:
             })
         
         return warnings
+    
+    def _count_braces_properly(self, content: str) -> tuple:
+        """Count braces while ignoring those inside strings and comments."""
+        open_count = 0
+        close_count = 0
+        in_string = False
+        i = 0
+        
+        while i < len(content):
+            char = content[i]
+            
+            # Handle string boundaries
+            if char == '"' and (i == 0 or content[i-1] != '\\'):
+                in_string = not in_string
+                i += 1
+                continue
+            
+            # Skip content inside strings
+            if in_string:
+                i += 1
+                continue
+            
+            # Handle comments - skip to end of line
+            if char == '#':
+                # Find end of line
+                newline_pos = content.find('\n', i)
+                if newline_pos == -1:
+                    break  # End of file
+                i = newline_pos + 1
+                continue
+            
+            # Count braces
+            if char == '{':
+                open_count += 1
+            elif char == '}':
+                close_count += 1
+            
+            i += 1
+        
+        return open_count, close_count
     
     def _get_recovery_hint(self, error_type: str, message: str) -> str:
         """Generate recovery hints based on error type and message."""
@@ -379,6 +529,71 @@ class CK3LensBridge:
         # TODO: Implement actual conflict detection
         return {"conflicts": []}
     
+    def get_playset_mods(self, params: dict) -> dict:
+        """Get mods in the active playset with load order."""
+        if not self.initialized or not self.db_conn:
+            return {"error": "Session not initialized", "mods": []}
+        
+        try:
+            # Get mods in playset with load order
+            mods = self.db_conn.execute("""
+                SELECT pm.load_order_index, mp.name, mp.workshop_id, 
+                       cv.file_count, cv.content_version_id, mp.source_path
+                FROM playset_mods pm
+                JOIN content_versions cv ON pm.content_version_id = cv.content_version_id
+                JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                WHERE pm.playset_id = ? AND pm.enabled = 1
+                ORDER BY pm.load_order_index
+            """, (self.playset_id,)).fetchall()
+            
+            return {
+                "mods": [
+                    {
+                        "loadOrder": m[0],
+                        "name": m[1],
+                        "workshopId": m[2],
+                        "fileCount": m[3],
+                        "contentVersionId": m[4],
+                        "sourcePath": m[5],
+                        "kind": "steam" if m[2] else "local"
+                    }
+                    for m in mods
+                ]
+            }
+        except Exception as e:
+            return {"error": str(e), "mods": []}
+    
+    def get_top_level_folders(self, params: dict) -> dict:
+        """Get top-level folders across all mods in the active playset."""
+        if not self.initialized or not self.db_conn:
+            return {"error": "Session not initialized", "folders": []}
+        
+        try:
+            # Get unique folder prefixes from files
+            folders = self.db_conn.execute("""
+                SELECT 
+                    CASE 
+                        WHEN INSTR(f.relpath, '/') > 0 THEN SUBSTR(f.relpath, 1, INSTR(f.relpath, '/') - 1)
+                        ELSE f.relpath
+                    END as folder,
+                    COUNT(*) as file_count
+                FROM files f
+                JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+                JOIN playset_mods pm ON pm.content_version_id = cv.content_version_id
+                WHERE pm.playset_id = ? AND pm.enabled = 1
+                GROUP BY folder
+                ORDER BY folder
+            """, (self.playset_id,)).fetchall()
+            
+            return {
+                "folders": [
+                    {"name": f[0], "fileCount": f[1]}
+                    for f in folders
+                ]
+            }
+        except Exception as e:
+            return {"error": str(e), "folders": []}
+
     def confirm_not_exists(self, params: dict) -> dict:
         """Exhaustive search to confirm something doesn't exist."""
         name = params.get("name", "")
@@ -438,12 +653,17 @@ class CK3LensBridge:
         
         # Validate syntax first
         if validate_syntax:
-            parse_result = self.parse_content({"content": content})
+            parse_result = self.parse_content({"content": content, "include_warnings": True})
             if parse_result.get("errors"):
                 return {
                     "success": False,
-                    "errors": parse_result["errors"]
+                    "errors": parse_result["errors"],
+                    "warnings": parse_result.get("warnings", [])
                 }
+            # Include warnings in successful write too
+            warnings = parse_result.get("warnings", [])
+        else:
+            warnings = []
         
         mod_root = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
         file_path = mod_root / mod_name / rel_path
@@ -451,7 +671,11 @@ class CK3LensBridge:
         try:
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_text(content, encoding="utf-8-sig")
-            return {"success": True, "bytes_written": len(content)}
+            return {
+                "success": True, 
+                "bytes_written": len(content),
+                "warnings": warnings  # Return any style warnings even on success
+            }
         except Exception as e:
             return {"success": False, "error": str(e)}
     
@@ -498,7 +722,247 @@ class CK3LensBridge:
             }
         except Exception as e:
             return {"error": str(e)}
-    
+
+    # ========================================================================
+    # Error/Conflict Analysis Handlers
+    # ========================================================================
+
+    def get_errors(self, params: dict) -> dict:
+        """Get errors from error.log."""
+        if not self.initialized:
+            return {"error": "Not initialized", "errors": []}
+        
+        try:
+            from ck3raven.logs.error_parser import CK3ErrorParser
+            
+            logs_dir = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "logs"
+            parser = CK3ErrorParser(logs_dir=logs_dir)
+            
+            priority = params.get("priority", 4)
+            category = params.get("category")
+            mod_filter = params.get("mod_filter")
+            exclude_cascade = params.get("exclude_cascade_children", True)
+            limit = params.get("limit", 100)
+            
+            errors = parser.get_errors(
+                priority=priority,
+                category=category,
+                mod_filter=mod_filter,
+                exclude_cascade_children=exclude_cascade,
+                limit=limit
+            )
+            
+            return {
+                "errors": [
+                    {
+                        "message": e.message,
+                        "file_path": e.file_path,
+                        "game_line": e.game_line,
+                        "mod_name": e.mod_name,
+                        "category": e.category,
+                        "priority": e.priority,
+                        "fix_hint": getattr(e, 'fix_hint', None),
+                        "is_cascading_root": e.is_cascading_root
+                    }
+                    for e in errors
+                ]
+            }
+        except Exception as e:
+            return {"error": str(e), "errors": []}
+
+    def get_cascade_patterns(self, params: dict) -> dict:
+        """Get cascade patterns from error.log."""
+        if not self.initialized:
+            return {"error": "Not initialized", "patterns": []}
+        
+        try:
+            from ck3raven.logs.error_parser import CK3ErrorParser
+            
+            logs_dir = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "logs"
+            parser = CK3ErrorParser(logs_dir=logs_dir)
+            parser.parse()  # Need to parse first
+            
+            patterns = parser.get_cascade_patterns()
+            
+            return {
+                "patterns": [p.to_dict() for p in patterns]
+            }
+        except Exception as e:
+            return {"error": str(e), "patterns": []}
+
+    def list_conflict_units(self, params: dict) -> dict:
+        """List conflict units from database."""
+        if not self.initialized or not self.db_conn:
+            return {"error": "Not initialized", "conflicts": []}
+        
+        try:
+            from ck3raven.resolver.conflict_analyzer import get_conflict_units
+            
+            conflicts = get_conflict_units(
+                self.db_conn,
+                self.playset_id,
+                risk_filter=params.get("risk_filter"),
+                domain_filter=params.get("domain_filter"),
+                status_filter=params.get("status_filter"),
+                limit=params.get("limit", 50),
+                offset=params.get("offset", 0)
+            )
+            
+            return {"conflicts": conflicts}
+        except Exception as e:
+            return {"error": str(e), "conflicts": []}
+
+    def get_conflict_detail(self, params: dict) -> dict:
+        """Get detail for a specific conflict unit."""
+        if not self.initialized or not self.db_conn:
+            return {"error": "Not initialized"}
+        
+        try:
+            from ck3raven.resolver.conflict_analyzer import get_conflict_unit_detail
+            
+            conflict_unit_id = params.get("conflict_unit_id")
+            if not conflict_unit_id:
+                return {"error": "conflict_unit_id required"}
+            
+            detail = get_conflict_unit_detail(self.db_conn, conflict_unit_id)
+            return detail or {"error": "Not found"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def create_override_patch(self, params: dict) -> dict:
+        """Create an override patch file in a live mod."""
+        from datetime import datetime
+        
+        source_path = params.get("source_path")
+        target_mod = params.get("target_mod")
+        mode = params.get("mode", "override_patch")
+        initial_content = params.get("initial_content")
+        
+        if not source_path or not target_mod:
+            return {"success": False, "error": "source_path and target_mod required"}
+        
+        try:
+            source = Path(source_path)
+            
+            # Determine output filename
+            if mode == "override_patch":
+                new_name = f"zzz_msc_{source.name}"
+            elif mode == "full_replace":
+                new_name = source.name
+            else:
+                return {"success": False, "error": f"Invalid mode: {mode}"}
+            
+            # Build target path
+            target_rel_path = str(source.parent / new_name)
+            
+            # Get mod path
+            mod_root = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
+            mod_paths = {
+                "MSC": mod_root / "Mini Super Compatch",
+                "MSCRE": mod_root / "MSCRE",
+                "LRE": mod_root / "Lowborn Rise Expanded",
+                "MRP": mod_root / "More Raid and Prisoners",
+                "PVP2": mod_root / "PVP2",
+            }
+            
+            mod_path = mod_paths.get(target_mod)
+            if not mod_path:
+                # Try direct name match
+                mod_path = mod_root / target_mod
+            
+            if not mod_path.exists():
+                return {"success": False, "error": f"Mod directory not found: {mod_path}"}
+            
+            # Create full path
+            full_path = mod_path / target_rel_path
+            
+            # Generate default content if not provided
+            if initial_content is None:
+                initial_content = f"""# Override patch for: {source_path}
+# Created: {datetime.now().strftime("%Y-%m-%d %H:%M")}
+# Mode: {mode}
+# 
+# Add your overrides below. For 'override_patch' mode, only include
+# the specific units you want to override/add.
+
+"""
+            
+            # Create directories and write file
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(initial_content, encoding="utf-8")
+            
+            return {
+                "success": True,
+                "created_path": target_rel_path,
+                "full_path": str(full_path),
+                "mode": mode,
+                "source_path": source_path,
+                "message": f"Created override patch: {target_rel_path}"
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def list_playsets(self, params: dict) -> dict:
+        """List all playsets in the launcher database."""
+        try:
+            if not self.db:
+                return {"error": "Database not initialized", "playsets": []}
+            
+            # Query playsets from the launcher database
+            # This uses the same connection the MCP server uses
+            playsets = []
+            
+            # Try to use the MCP tool if available
+            if CKRAVEN_AVAILABLE:
+                from ck3lens_mcp.server import ck3_list_playsets
+                result = ck3_list_playsets()
+                return result
+            
+            # Fallback: Direct database query
+            cursor = self.db.conn.execute("""
+                SELECT 
+                    id,
+                    name,
+                    CASE WHEN id = (SELECT value FROM metadata WHERE key = 'active_playset_id') THEN 1 ELSE 0 END as is_active
+                FROM playsets
+                ORDER BY name
+            """)
+            
+            for row in cursor.fetchall():
+                playsets.append({
+                    "id": row[0],
+                    "name": row[1],
+                    "is_active": bool(row[2])
+                })
+            
+            return {"playsets": playsets}
+        except Exception as e:
+            return {"error": str(e), "playsets": []}
+
+    def reorder_mod(self, params: dict) -> dict:
+        """Reorder a mod in the active playset."""
+        try:
+            mod_identifier = params.get("mod_identifier")
+            new_position = params.get("new_position")
+            
+            if not mod_identifier:
+                return {"success": False, "error": "mod_identifier required"}
+            if new_position is None:
+                return {"success": False, "error": "new_position required"}
+            
+            # Use the MCP tool
+            if CKRAVEN_AVAILABLE:
+                from ck3lens_mcp.server import ck3_reorder_mod_in_playset
+                result = ck3_reorder_mod_in_playset(
+                    mod_identifier=mod_identifier,
+                    new_position=new_position
+                )
+                return result
+            
+            return {"success": False, "error": "ck3raven not available"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     def _ast_to_dict(self, ast) -> dict:
         """Convert AST node to dictionary."""
         if ast is None:

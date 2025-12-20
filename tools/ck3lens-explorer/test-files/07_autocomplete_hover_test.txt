@@ -1,0 +1,51 @@
+# =============================================================================
+# TEST-FILE: DO-NOT-FIX - This is a validator test file
+# =============================================================================
+# FILE: 07_autocomplete_hover_test.txt
+# PURPOSE: Test autocomplete and hover functionality
+# EXPECTED OUTPUT: This file is for MANUAL testing of IntelliSense features
+# =============================================================================
+# HOW TO TEST AUTOCOMPLETE:
+#   1. Place cursor after "add_" on line 20 and press Ctrl+Space
+#      Expected: See completions like add_gold, add_prestige, add_trait, etc.
+#   2. Place cursor after "has_" on line 24 and press Ctrl+Space
+#      Expected: See completions like has_trait, has_culture, has_faith, etc.
+#   3. Start typing a known trait name like "brave" or "ambitious"
+#      Expected: See trait definitions from the database
+#
+# HOW TO TEST HOVER:
+#   1. Hover over "trigger" keyword
+#      Expected: See documentation about trigger blocks
+#   2. Hover over "add_gold" 
+#      Expected: See documentation about the add_gold effect
+#   3. Hover over "root" scope
+#      Expected: See documentation about root scope
+#   4. Hover over any trait name that exists in database
+#      Expected: See trait details including mod and file location
+# =============================================================================
+
+namespace = autocomplete_test
+
+autocomplete_test.001 = {
+    type = character_event
+    title = autocomplete_test.001.t
+    
+    trigger = {
+        is_ruler = yes
+        has_trait = brave
+        root = { is_alive = yes }
+    }
+    
+    option = {
+        name = autocomplete_test.001.a
+        
+        # Test autocomplete here - type "add_" then Ctrl+Space
+        add_gold = 100
+        
+        # Test autocomplete here - type "has_" then Ctrl+Space  
+        if = {
+            limit = { has_culture = culture:english }
+            add_prestige = 50
+        }
+    }
+}

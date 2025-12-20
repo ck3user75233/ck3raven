@@ -1,0 +1,33 @@
+# =============================================================================
+# TEST-FILE: DO-NOT-FIX - This file has INTENTIONAL bugs for testing
+# =============================================================================
+# FILE: 02_unbalanced_braces.txt
+# PURPOSE: Test detection of unbalanced/mismatched braces
+# EXPECTED OUTPUT:
+#   - ERROR: Unclosed brace on line 17 (trigger block missing closing brace)
+#   - ERROR: Unmatched closing brace on line 26 (extra } at end)
+#   - WARNING: Unbalanced braces count (should show mismatch)
+# =============================================================================
+# The trigger block on line 17 is missing its closing brace.
+# There is an extra closing brace at the end of the file.
+# =============================================================================
+
+namespace = error_events
+
+error_events.0001 = {
+    type = character_event
+    title = error_events.0001.t
+    
+    trigger = {
+        is_ruler = yes
+        age >= 16
+    # <-- INTENTIONAL BUG: Missing closing brace for trigger
+    
+    option = {
+        name = error_events.0001.a
+        add_prestige = 100
+    }
+}
+
+}
+# <-- INTENTIONAL BUG: Extra unmatched closing brace above

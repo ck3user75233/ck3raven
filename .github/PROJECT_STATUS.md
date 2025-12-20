@@ -1,14 +1,85 @@
-# Project Status - December 18, 2025 (Updated)
+# Project Status - December 19, 2025 (Updated)
 
 ## Session Summary
 
 This session focused on:
-1. Setting up ck3lens mode with VS Code Tool Sets
-2. Adding Culture Expanded mod to the active playset
-3. Building the unit-level conflict analyzer for compatching
-4. Building the conflicts report generator (v1)
-5. Adding general search tools (search_files, search_content)
-6. Updating all architecture documentation
+1. **Fixing symbol extraction bug** - Wrong column name in rebuild script
+2. **Fixing MCP server configuration** - mcp.json pointed to non-existent venv
+3. **Adding database integrity tests** - Comprehensive test suite
+4. **Adding large file handling** - Skip files >2MB to prevent parser hangs
+
+---
+
+## Critical Bug Fixes
+
+### 1. ✅ Symbol Extraction Bug (FIXED)
+**Root Cause:** `rebuild_database.py` used column name `context_json` but schema has `metadata_json`.
+
+**Fix:** Changed line 302 from:
+```python
+(name, symbol_type, defining_file_id, line_number, context_json)
+```
+To:
+```python
+(name, symbol_type, defining_file_id, line_number, metadata_json)
+```
+
+**Result:** Symbols now extract correctly (~130,000+ from 4,400+ files before hang).
+
+### 2. ✅ MCP Server Config Bug (FIXED)
+**Root Cause:** `.vscode/mcp.json` pointed to `.venv\\Scripts\\python.exe` but no venv existed.
+
+**Fix:** Updated to use system Python with cwd:
+```json
+{
+  "servers": {
+    "ck3lens": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["tools/ck3lens_mcp/server.py"],
+      "cwd": "${workspaceFolder}"
+    }
+  }
+}
+```
+
+**Requirement:** Install MCP package: `pip install mcp[cli] pydantic fs structlog typer`
+
+### 3. ✅ Large File Handling (ADDED)
+**Problem:** Parser hangs on very large files (>2MB), blocking all extraction.
+
+**Fix:** Added size check in `phase_symbol_extraction`:
+```python
+max_file_size = 2_000_000  # Skip files larger than 2MB
+if len(content) > max_file_size:
+    skipped_large += 1
+    continue
+```
+
+---
+
+## New Test Files Created
+
+| File | Purpose |
+|------|---------|
+| `tests/test_db_content_integrity.py` | 8 tests: DB exists, tables, content, AST parsing, symbol extraction |
+| `tests/test_rebuild_logic.py` | Replicates exact rebuild logic to identify schema mismatches |
+
+---
+
+## Known Issues
+
+### Parser Hangs on Large Files
+Some files cause the parser to hang indefinitely. Added 2MB skip threshold.
+Files affected are typically large localization or GUI definition files.
+
+### @lens/@raven Agent Modes Not Implemented
+The extension's `package.json` has no `chatParticipants` section.
+These agent modes would require VS Code's Chat Participants API.
+
+### Workspace File Addition Opens New Window
+When adding game files, VS Code opens a new window because files are outside current workspace.
+Use "Add Folder to Workspace" instead of "Open Folder".
 
 ---
 
@@ -120,16 +191,20 @@ These complement `ck3_search_symbols` which only searches symbol names.
 | vanilla_versions | 1 | ✅ |
 | mod_packages | 105 | ✅ Including Culture Expanded |
 | content_versions | 110 | ✅ |
-| file_contents | ~80,000 | ✅ 26 GB deduplicated |
-| files | ~85,000 | ✅ |
+| file_contents | ~77,000 | ✅ 30,781 with content_text |
+| files | ~81,000 | ✅ 80,962 non-deleted |
 | playsets | 1 | ✅ Active playset configured |
 | playset_mods | 106 | ✅ Including Culture Expanded |
-| symbols | ~1,200,000 | ✅ Extracted |
+| symbols | ~132,000 | ⚠️ Partial - run `--refresh-symbols` after VS Code reset |
 | asts | ~70,000 | ✅ Cached |
 | contribution_units | 0 | ⏳ Run `ck3_scan_unit_conflicts` to populate |
 | conflict_units | 0 | ⏳ Run `ck3_scan_unit_conflicts` to populate |
-| conflict_candidates | 0 | ⏳ Run `ck3_scan_unit_conflicts` to populate |
-| resolution_choices | 0 | ⏳ Populated when conflicts are resolved |
+
+**After VS Code Reset:**
+```bash
+cd ck3raven
+python scripts/rebuild_database.py --refresh-symbols
+```
 
 ---
 

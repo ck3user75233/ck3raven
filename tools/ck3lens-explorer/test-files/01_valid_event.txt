@@ -1,0 +1,50 @@
+# =============================================================================
+# TEST-FILE: DO-NOT-FIX - This is a validator test file
+# =============================================================================
+# FILE: 01_valid_event.txt
+# PURPOSE: Verify that a correctly structured CK3 event passes validation
+# EXPECTED OUTPUT: NO errors, NO warnings, NO hints
+# =============================================================================
+# This file contains valid CK3 script syntax and should produce zero diagnostics.
+# If any diagnostics appear, the validator has a false positive bug.
+# =============================================================================
+
+namespace = test_events
+
+test_events.0001 = {
+    type = character_event
+    title = test_events.0001.t
+    desc = test_events.0001.desc
+    
+    theme = realm
+    left_portrait = {
+        character = root
+        animation = personality_bold
+    }
+    
+    trigger = {
+        is_ruler = yes
+        age >= 16
+    }
+    
+    immediate = {
+        save_scope_as = event_target
+    }
+    
+    option = {
+        name = test_events.0001.a
+        add_prestige = 100
+        ai_chance = {
+            base = 50
+            modifier = {
+                add = 50
+                has_trait = ambitious
+            }
+        }
+    }
+    
+    option = {
+        name = test_events.0001.b
+        add_gold = 50
+    }
+}

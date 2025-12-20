@@ -1,0 +1,23 @@
+# =============================================================================
+# TEST-FILE: DO-NOT-FIX - This file has INTENTIONAL bugs for testing
+# =============================================================================
+# FILE: 03_unterminated_string.txt
+# PURPOSE: Test detection of unterminated string literals
+# EXPECTED OUTPUT:
+#   - ERROR: Unterminated string on line 14 (missing closing quote)
+# =============================================================================
+# The title value on line 14 has a string that starts but never ends.
+# =============================================================================
+
+namespace = string_errors
+
+string_error_event = {
+    type = character_event
+    title = "This string is not terminated
+    
+    desc = "This one is fine"
+    
+    option = {
+        name = string_error.0001.a
+    }
+}

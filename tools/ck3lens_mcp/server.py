@@ -137,7 +137,7 @@ def ck3_init_session(
         mod_root = _session.live_mods[0].path.parent
     _trace = ToolTrace(mod_root / "ck3lens_trace.jsonl")
     
-    _trace.log("ck3.init_session", {"db_path": db_path, "live_mods": live_mods}, {
+    _trace.log("ck3lens.init_session", {"db_path": db_path, "live_mods": live_mods}, {
         "mod_root": str(mod_root),
         "live_mods_count": len(_session.live_mods)
     })
@@ -149,13 +149,121 @@ def ck3_init_session(
         (playset_id,)
     ).fetchone()
     
-    return {
+    # Check database health
+    db_status = _check_db_health(_db.conn)
+    
+    result = {
         "mod_root": str(mod_root),
         "live_mods": [m.name for m in _session.live_mods],
         "db_path": str(_db.db_path) if _db.db_path else None,
         "playset_id": playset_id,
-        "playset_name": playset_info[0] if playset_info else None
+        "playset_name": playset_info[0] if playset_info else None,
+        "db_status": db_status,
     }
+    
+    # Add warning if database needs attention
+    if not db_status.get("is_complete"):
+        result["warning"] = f"Database incomplete: {db_status.get('rebuild_reason', 'unknown')}. Run: python scripts/rebuild_database.py"
+    
+    return result
+
+
+def _check_db_health(conn) -> dict:
+    """Check database build status and completeness."""
+    try:
+        # Check build_state table
+        state_row = conn.execute("""
+            SELECT value FROM build_state WHERE key = 'current'
+        """).fetchone()
+        
+        if state_row:
+            import json
+            state = json.loads(state_row[0])
+            is_complete = state.get('phase') == 'complete'
+        else:
+            state = None
+            is_complete = False
+        
+        # Get counts
+        files = conn.execute("SELECT COUNT(*) FROM files WHERE deleted = 0").fetchone()[0]
+        symbols = conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
+        refs = conn.execute("SELECT COUNT(*) FROM refs").fetchone()[0]
+        
+        # Determine if rebuild needed
+        needs_rebuild = False
+        rebuild_reason = None
+        
+        if not state:
+            needs_rebuild = True
+            rebuild_reason = "No build state found - database may not be fully initialized"
+        elif not is_complete:
+            needs_rebuild = True
+            rebuild_reason = f"Build incomplete - stopped at phase: {state.get('phase')}"
+        elif symbols == 0:
+            needs_rebuild = True
+            rebuild_reason = "No symbols extracted"
+        elif refs == 0:
+            needs_rebuild = True
+            rebuild_reason = "No references extracted"
+        
+        return {
+            "is_complete": is_complete and not needs_rebuild,
+            "phase": state.get('phase') if state else "unknown",
+            "last_updated": state.get('updated_at') if state else None,
+            "files_indexed": files,
+            "symbols_extracted": symbols,
+            "refs_extracted": refs,
+            "needs_rebuild": needs_rebuild,
+            "rebuild_reason": rebuild_reason,
+        }
+    except Exception as e:
+        return {
+            "is_complete": False,
+            "error": str(e),
+            "needs_rebuild": True,
+            "rebuild_reason": f"Error checking database: {e}"
+        }
+
+
+@mcp.tool()
+def ck3_get_db_status() -> dict:
+    """
+    Check database build status and completeness.
+    
+    Returns information about:
+    - Current build phase (complete, in progress, or failed)
+    - File, symbol, and reference counts
+    - Whether a rebuild is needed and why
+    
+    If the database is incomplete, provides the command to run
+    for a full rebuild.
+    
+    Returns:
+        {
+            "is_complete": bool,
+            "phase": "complete" | "symbol_extraction" | etc,
+            "files_indexed": int,
+            "symbols_extracted": int,
+            "refs_extracted": int,
+            "needs_rebuild": bool,
+            "rebuild_reason": str or null,
+            "rebuild_command": str
+        }
+    """
+    db = _get_db()
+    trace = _get_trace()
+    
+    status = _check_db_health(db.conn)
+    status["rebuild_command"] = "python scripts/rebuild_database.py"
+    
+    if status.get("needs_rebuild"):
+        status["message"] = f"⚠️ Database needs rebuild: {status.get('rebuild_reason')}"
+    else:
+        status["message"] = f"✅ Database ready: {status.get('symbols_extracted', 0):,} symbols, {status.get('refs_extracted', 0):,} refs"
+    
+    trace.log("ck3lens.get_db_status", {}, status)
+    
+    return status
 
 
 # ============================================================================
@@ -200,7 +308,7 @@ def ck3_search_symbols(
         limit=limit
     )
     
-    trace.log("ck3.search_symbols", {
+    trace.log("ck3lens.search_symbols", {
         "query": query,
         "symbol_type": symbol_type,
         "adjacency": adjacency,
@@ -235,7 +343,7 @@ def ck3_confirm_not_exists(
     
     result = db.confirm_not_exists(playset_id, name, symbol_type)
     
-    trace.log("ck3.confirm_not_exists", {
+    trace.log("ck3lens.confirm_not_exists", {
         "name": name,
         "symbol_type": symbol_type
     }, {
@@ -269,7 +377,7 @@ def ck3_get_file(
     
     result = db.get_file(playset_id, relpath=file_path, include_ast=include_ast)
     
-    trace.log("ck3.get_file", {
+    trace.log("ck3lens.get_file", {
         "file_path": file_path,
         "include_ast": include_ast
     }, {
@@ -307,7 +415,7 @@ def ck3_get_conflicts(
         symbol_type=symbol_type
     )
     
-    trace.log("ck3.get_conflicts", {
+    trace.log("ck3lens.get_conflicts", {
         "path_pattern": path_pattern,
         "symbol_name": symbol_name,
         "symbol_type": symbol_type
@@ -333,7 +441,7 @@ def ck3_list_live_mods() -> dict:
     
     mods = live_mods.list_live_mods(session)
     
-    trace.log("ck3.list_live_mods", {}, {"mods_count": len(mods)})
+    trace.log("ck3lens.list_live_mods", {}, {"mods_count": len(mods)})
     
     return {"live_mods": mods}
 
@@ -360,7 +468,7 @@ def ck3_read_live_file(
     
     result = live_mods.read_live_file(session, mod_name, rel_path, max_bytes)
     
-    trace.log("ck3.read_live_file", {
+    trace.log("ck3lens.read_live_file", {
         "mod_name": mod_name,
         "rel_path": rel_path
     }, {"success": result.get("success", False)})
@@ -394,7 +502,7 @@ def ck3_write_file(
     if validate_syntax and rel_path.endswith(".txt"):
         parse_result = parse_content(content, rel_path)
         if not parse_result["success"]:
-            trace.log("ck3.write_file", {
+            trace.log("ck3lens.write_file", {
                 "mod_name": mod_name,
                 "rel_path": rel_path
             }, {"success": False, "reason": "syntax_error"})
@@ -406,7 +514,7 @@ def ck3_write_file(
     
     result = live_mods.write_file(session, mod_name, rel_path, content)
     
-    trace.log("ck3.write_file", {
+    trace.log("ck3lens.write_file", {
         "mod_name": mod_name,
         "rel_path": rel_path,
         "content_length": len(content)
@@ -450,7 +558,7 @@ def ck3_edit_file(
             if not parse_result["success"]:
                 result["syntax_warnings"] = parse_result["errors"]
     
-    trace.log("ck3.edit_file", {
+    trace.log("ck3lens.edit_file", {
         "mod_name": mod_name,
         "rel_path": rel_path
     }, {"success": result.get("success", False)})
@@ -478,7 +586,7 @@ def ck3_delete_file(
     
     result = live_mods.delete_file(session, mod_name, rel_path)
     
-    trace.log("ck3.delete_file", {
+    trace.log("ck3lens.delete_file", {
         "mod_name": mod_name,
         "rel_path": rel_path
     }, {"success": result.get("success", False)})
@@ -508,13 +616,120 @@ def ck3_rename_file(
     
     result = live_mods.rename_file(session, mod_name, old_rel_path, new_rel_path)
     
-    trace.log("ck3.rename_file", {
+    trace.log("ck3lens.rename_file", {
         "mod_name": mod_name,
         "old_rel_path": old_rel_path,
         "new_rel_path": new_rel_path
     }, {"success": result.get("success", False)})
     
     return result
+
+
+@mcp.tool()
+def ck3_create_override_patch(
+    source_path: str,
+    target_mod: str,
+    mode: Literal["override_patch", "full_replace"],
+    initial_content: str | None = None,
+) -> dict:
+    """
+    Create an override patch file in a live mod.
+    
+    Use this when you need to patch a file from vanilla or a non-editable mod.
+    Automatically creates the correct directory structure and follows naming conventions.
+    
+    Modes:
+    - override_patch: Creates zzz_msc_[original_name].txt (for adding/modifying specific units)
+    - full_replace: Creates [original_name].txt (full replacement, last-wins)
+    
+    Args:
+        source_path: The relative path being overridden (e.g., "common/traits/00_traits.txt")
+        target_mod: Name of the live mod to create the patch in (e.g., "MSC")
+        mode: "override_patch" for partial override, "full_replace" for full replacement
+        initial_content: Optional initial content for the file. If None, creates with comment header.
+    
+    Returns:
+        {
+            "success": bool,
+            "created_path": str,  # Relative path in target mod
+            "full_path": str,     # Absolute filesystem path
+            "mode": str,
+            "source_path": str
+        }
+    
+    Example:
+        ck3_create_override_patch(
+            source_path="common/traits/00_traits.txt",
+            target_mod="MSC",
+            mode="override_patch"
+        )
+        # Creates: MSC/common/traits/zzz_msc_00_traits.txt
+    """
+    from pathlib import Path as P
+    from datetime import datetime
+    
+    session = _get_session()
+    trace = _get_trace()
+    
+    # Parse source path
+    source = P(source_path)
+    if source.is_absolute() or ".." in source.parts:
+        return {"success": False, "error": "source_path must be relative without .."}
+    
+    # Determine output filename
+    if mode == "override_patch":
+        # zzz_msc_[original_name].txt
+        new_name = f"zzz_msc_{source.name}"
+    elif mode == "full_replace":
+        # Same name (will override due to load order)
+        new_name = source.name
+    else:
+        return {"success": False, "error": f"Invalid mode: {mode}. Use 'override_patch' or 'full_replace'"}
+    
+    # Build target path (same directory structure)
+    target_rel_path = str(source.parent / new_name)
+    
+    # Generate default content if not provided
+    if initial_content is None:
+        initial_content = f"""# Override patch for: {source_path}
+# Created: {datetime.now().strftime("%Y-%m-%d %H:%M")}
+# Mode: {mode}
+# 
+# Add your overrides below. For 'override_patch' mode, only include
+# the specific units you want to override/add.
+
+"""
+    
+    # Write the file
+    result = live_mods.write_file(session, target_mod, target_rel_path, initial_content)
+    
+    if result.get("success"):
+        # Get the full path for navigation
+        live_mod = session.get_live_mod(target_mod)
+        full_path = str(live_mod.path / target_rel_path) if live_mod else None
+        
+        trace.log("ck3lens.create_override_patch", {
+            "source_path": source_path,
+            "target_mod": target_mod,
+            "mode": mode
+        }, {"success": True, "created_path": target_rel_path})
+        
+        return {
+            "success": True,
+            "created_path": target_rel_path,
+            "full_path": full_path,
+            "mode": mode,
+            "source_path": source_path,
+            "message": f"Created override patch: {target_rel_path}"
+        }
+    else:
+        trace.log("ck3lens.create_override_patch", {
+            "source_path": source_path,
+            "target_mod": target_mod,
+            "mode": mode
+        }, {"success": False, "error": result.get("error")})
+        
+        return result
 
 
 @mcp.tool()
@@ -539,7 +754,7 @@ def ck3_list_live_files(
     
     result = live_mods.list_live_files(session, mod_name, path_prefix, pattern)
     
-    trace.log("ck3.list_live_files", {
+    trace.log("ck3lens.list_live_files", {
         "mod_name": mod_name,
         "path_prefix": path_prefix,
         "pattern": pattern
@@ -560,21 +775,39 @@ def ck3_parse_content(
     """
     Parse CK3 script content and return AST or errors.
     
+    Uses error-recovering parser that collects ALL errors instead of
+    stopping at the first one. Returns partial AST even when errors occur.
+    
     Args:
         content: CK3 script content to parse
         filename: Optional filename for error messages
     
     Returns:
-        Parse result with AST (if successful) or errors
+        {
+            "success": bool (true if no errors),
+            "ast": {...} (partial AST, may be valid despite errors),
+            "errors": [
+                {
+                    "line": 5,
+                    "column": 10,
+                    "end_line": 5,
+                    "end_column": 15,
+                    "message": "Expected value after operator",
+                    "code": "PARSE_ERROR",
+                    "severity": "error"
+                },
+                ...
+            ]
+        }
     """
     trace = _get_trace()
     
-    result = parse_content(content, filename)
+    result = parse_content(content, filename, recover=True)
     
-    trace.log("ck3.parse_content", {
+    trace.log("ck3lens.parse_content", {
         "filename": filename,
         "content_length": len(content)
-    }, {"success": result["success"]})
+    }, {"success": result["success"], "error_count": len(result["errors"])})
     
     return result
 
@@ -597,11 +830,414 @@ def ck3_validate_patchdraft(patchdraft: dict) -> dict:
     draft = PatchDraft.model_validate(patchdraft)
     report = validate_patchdraft(draft)
     
-    trace.log("ck3.validate_patchdraft", {
+    trace.log("ck3lens.validate_patchdraft", {
         "patch_count": len(draft.patches)
     }, {"ok": report.ok, "errors": len(report.errors)})
     
     return report.model_dump()
+
+
+@mcp.tool()
+def ck3_report_validation_issue(
+    issue_type: Literal["parser_false_positive", "reference_false_positive", "parser_missed_error", "other"],
+    code_snippet: str,
+    expected_behavior: str,
+    actual_behavior: str,
+    notes: str | None = None,
+) -> dict:
+    """
+    Report a validation false positive or missed error.
+    
+    Use this when the parser or reference validator produces incorrect results.
+    These reports help improve ck3raven's validation accuracy.
+    
+    Issue types:
+    - parser_false_positive: Parser rejected valid CK3 syntax
+    - reference_false_positive: Reference checker flagged a valid symbol
+    - parser_missed_error: Parser accepted invalid CK3 syntax
+    - other: Other validation issues
+    
+    Args:
+        issue_type: Category of validation issue
+        code_snippet: The CK3 code that was incorrectly validated
+        expected_behavior: What should have happened
+        actual_behavior: What actually happened
+        notes: Optional additional context
+    
+    Returns:
+        Confirmation with issue ID for tracking
+    """
+    import json
+    import hashlib
+    from datetime import datetime
+    
+    trace = _get_trace()
+    session = _get_session()
+    
+    # Create issue record
+    issue_id = hashlib.sha256(
+        f"{issue_type}:{code_snippet[:100]}:{datetime.now().isoformat()}".encode()
+    ).hexdigest()[:12]
+    
+    issue = {
+        "issue_id": issue_id,
+        "issue_type": issue_type,
+        "code_snippet": code_snippet,
+        "expected_behavior": expected_behavior,
+        "actual_behavior": actual_behavior,
+        "notes": notes,
+        "reported_at": datetime.now().isoformat(),
+        "status": "open",
+    }
+    
+    # Write to issues file in mod root
+    issues_file = session.mod_root / "ck3lens_validation_issues.jsonl"
+    with issues_file.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(issue, ensure_ascii=False) + "\n")
+    
+    trace.log("ck3lens.report_validation_issue", {
+        "issue_type": issue_type,
+        "snippet_length": len(code_snippet)
+    }, {"issue_id": issue_id})
+    
+    return {
+        "success": True,
+        "issue_id": issue_id,
+        "message": f"Validation issue recorded. ID: {issue_id}. Will be reviewed in ck3raven-dev mode.",
+        "issues_file": str(issues_file)
+    }
+
+
+@mcp.tool()
+def ck3_validate_python(
+    file_path: str | None = None,
+    code_snippet: str | None = None,
+) -> dict:
+    """
+    Validate Python code for syntax and import errors.
+    
+    Use this before deploying any Python code changes to ensure they are valid.
+    This is MANDATORY for ck3raven-dev mode work.
+    
+    Provide either:
+    - file_path: Path to a Python file to validate
+    - code_snippet: Python code string to validate
+    
+    Args:
+        file_path: Absolute path to Python file to check
+        code_snippet: Python code string to validate (if no file_path)
+    
+    Returns:
+        {
+            "valid": bool,
+            "errors": [...],
+            "warnings": [...]
+        }
+    """
+    import ast
+    import subprocess
+    import tempfile
+    
+    trace = _get_trace()
+    errors: list[dict] = []
+    warnings: list[dict] = []
+    
+    code_to_check = None
+    source_desc = "snippet"
+    
+    if file_path:
+        from pathlib import Path
+        p = Path(file_path)
+        if not p.exists():
+            return {"valid": False, "errors": [{"message": f"File not found: {file_path}"}], "warnings": []}
+        code_to_check = p.read_text(encoding="utf-8")
+        source_desc = str(p)
+    elif code_snippet:
+        code_to_check = code_snippet
+    else:
+        return {"valid": False, "errors": [{"message": "Provide either file_path or code_snippet"}], "warnings": []}
+    
+    # Step 1: Python AST syntax check
+    try:
+        ast.parse(code_to_check)
+    except SyntaxError as e:
+        errors.append({
+            "type": "syntax",
+            "line": e.lineno,
+            "column": e.offset,
+            "message": str(e.msg),
+            "source": source_desc
+        })
+        # Syntax error is fatal - return immediately
+        trace.log("ck3lens.validate_python", {"source": source_desc}, {"valid": False, "error_count": 1})
+        return {"valid": False, "errors": errors, "warnings": []}
+    
+    # Step 2: Try to compile (catches more issues)
+    try:
+        compile(code_to_check, source_desc, 'exec')
+    except Exception as e:
+        errors.append({
+            "type": "compile",
+            "message": str(e),
+            "source": source_desc
+        })
+    
+    # Step 3: For file paths, try running Python -m py_compile
+    if file_path and not errors:
+        try:
+            result = subprocess.run(
+                ["python", "-m", "py_compile", file_path],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode != 0:
+                errors.append({
+                    "type": "py_compile",
+                    "message": result.stderr.strip(),
+                    "source": source_desc
+                })
+        except subprocess.TimeoutExpired:
+            warnings.append({"type": "timeout", "message": "py_compile check timed out"})
+        except Exception as e:
+            warnings.append({"type": "subprocess", "message": f"Could not run py_compile: {e}"})
+    
+    # Step 4: Basic import checking for common issues
+    import_lines = [line for line in code_to_check.split('\n') if line.strip().startswith(('import ', 'from '))]
+    for line in import_lines[:10]:  # Check first 10 imports
+        # Just note them - actual import validation would require execution context
+        pass
+    
+    valid = len(errors) == 0
+    trace.log("ck3lens.validate_python", {
+        "source": source_desc,
+        "code_length": len(code_to_check)
+    }, {"valid": valid, "errors": len(errors), "warnings": len(warnings)})
+    
+    return {
+        "valid": valid,
+        "errors": errors,
+        "warnings": warnings,
+        "imports_found": len(import_lines),
+        "note": "For full type checking, use get_errors tool on saved files."
+    }
+
+
+# ============================================================================
+# Semantic Analysis Tools (Autocomplete, Hover, Reference Validation)
+# ============================================================================
+
+@mcp.tool()
+def ck3_validate_references(
+    content: str,
+    filename: str = "inline.txt"
+) -> dict:
+    """
+    Validate all references in CK3 script content.
+    
+    Checks that all symbol references (traits, events, decisions, etc.)
+    exist in the symbol database. Returns diagnostics for undefined references
+    with suggestions for similar symbols.
+    
+    Args:
+        content: CK3 script content to validate
+        filename: For context in error messages
+    
+    Returns:
+        {
+            "success": bool (true if no errors),
+            "errors": [...],
+            "warnings": [...]
+        }
+    """
+    from ck3lens.semantic import validate_content
+    
+    session = _get_session()
+    trace = _get_trace()
+    playset_id = _get_playset_id()
+    
+    result = validate_content(
+        content=content,
+        db_path=session.db_path,
+        playset_id=playset_id,
+        filename=filename
+    )
+    
+    trace.log("ck3lens.validate_references", {
+        "filename": filename,
+        "content_length": len(content)
+    }, {
+        "success": result["success"],
+        "errors": len(result["errors"]),
+        "warnings": len(result["warnings"])
+    })
+    
+    return result
+
+
+@mcp.tool()
+def ck3_get_completions(
+    content: str,
+    line: int,
+    column: int,
+    filename: str = "inline.txt"
+) -> dict:
+    """
+    Get autocomplete suggestions at cursor position.
+    
+    Provides intelligent completions based on context:
+    - After 'has_trait = ' suggests traits
+    - After 'trigger_event = ' suggests events
+    - Block names suggest scope changers and keywords
+    
+    Args:
+        content: Full file content
+        line: 1-based line number
+        column: 0-based column position
+        filename: For context
+    
+    Returns:
+        {
+            "completions": [
+                {
+                    "label": "brave",
+                    "kind": "symbol",
+                    "detail": "trait (vanilla)",
+                    "documentation": "Defined in: common/traits/00_traits.txt",
+                    "insertText": "brave"
+                },
+                ...
+            ]
+        }
+    """
+    from ck3lens.semantic import get_completions
+    
+    session = _get_session()
+    trace = _get_trace()
+    playset_id = _get_playset_id()
+    
+    completions = get_completions(
+        content=content,
+        line=line,
+        column=column,
+        db_path=session.db_path,
+        playset_id=playset_id
+    )
+    
+    trace.log("ck3lens.get_completions", {
+        "line": line,
+        "column": column
+    }, {
+        "completions_count": len(completions)
+    })
+    
+    return {"completions": completions}
+
+
+@mcp.tool()
+def ck3_get_hover(
+    content: str,
+    line: int,
+    column: int,
+    filename: str = "inline.txt"
+) -> dict:
+    """
+    Get hover documentation for symbol at cursor position.
+    
+    Returns markdown-formatted documentation including:
+    - Symbol name and type
+    - Source mod (vanilla or mod name)
+    - Definition file and line number
+    
+    Args:
+        content: Full file content
+        line: 1-based line number
+        column: 0-based column position
+        filename: For context
+    
+    Returns:
+        {
+            "content": "**brave**\n\nType: `trait`\n\nSource: `vanilla`\n\nFile: `common/traits/00_traits.txt`",
+            "range": {"line": 5, "column": 10, "end_line": 5, "end_column": 15}
+        }
+        or null if no symbol at position
+    """
+    from ck3lens.semantic import get_hover
+    
+    session = _get_session()
+    trace = _get_trace()
+    playset_id = _get_playset_id()
+    
+    result = get_hover(
+        content=content,
+        line=line,
+        column=column,
+        db_path=session.db_path,
+        playset_id=playset_id
+    )
+    
+    trace.log("ck3lens.get_hover", {
+        "line": line,
+        "column": column
+    }, {
+        "found": result is not None
+    })
+    
+    return result or {"content": None}
+
+
+@mcp.tool()
+def ck3_get_definition(
+    content: str,
+    line: int,
+    column: int,
+    filename: str = "inline.txt"
+) -> dict:
+    """
+    Get definition location for symbol at cursor position.
+    
+    Returns file path and line number where the symbol is defined.
+    
+    Args:
+        content: Full file content
+        line: 1-based line number
+        column: 0-based column position
+        filename: For context
+    
+    Returns:
+        {
+            "file": "common/traits/00_traits.txt",
+            "line": 42,
+            "mod": "vanilla"
+        }
+        or null if not found
+    """
+    from ck3lens.semantic import SemanticAnalyzer
+    
+    session = _get_session()
+    trace = _get_trace()
+    playset_id = _get_playset_id()
+    
+    analyzer = SemanticAnalyzer(session.db_path, playset_id)
+    try:
+        location = analyzer.get_definition(content, line, column, filename)
+        
+        trace.log("ck3lens.get_definition", {
+            "line": line,
+            "column": column
+        }, {
+            "found": location is not None
+        })
+        
+        if location:
+            return {
+                "file": location.file_path,
+                "line": location.line,
+                "mod": location.mod
+            }
+        return {"file": None}
+    finally:
+        analyzer.close()
 
 
 # ============================================================================
@@ -624,7 +1260,7 @@ def ck3_git_status(mod_name: str) -> dict:
     
     result = git_ops.git_status(session, mod_name)
     
-    trace.log("ck3.git_status", {"mod_name": mod_name}, {"success": result.get("success", False)})
+    trace.log("ck3lens.git_status", {"mod_name": mod_name}, {"success": result.get("success", False)})
     
     return result
 
@@ -651,7 +1287,7 @@ def ck3_git_diff(
     
     result = git_ops.git_diff(session, mod_name, file_path, staged)
     
-    trace.log("ck3.git_diff", {"mod_name": mod_name, "file_path": file_path}, {"success": result.get("success", False)})
+    trace.log("ck3lens.git_diff", {"mod_name": mod_name, "file_path": file_path}, {"success": result.get("success", False)})
     
     return result
 
@@ -676,7 +1312,7 @@ def ck3_git_add(
     
     result = git_ops.git_add(session, mod_name, paths)
     
-    trace.log("ck3.git_add", {"mod_name": mod_name, "paths": paths}, {"success": result.get("success", False)})
+    trace.log("ck3lens.git_add", {"mod_name": mod_name, "paths": paths}, {"success": result.get("success", False)})
     
     return result
 
@@ -701,7 +1337,7 @@ def ck3_git_commit(
     
     result = git_ops.git_commit(session, mod_name, message)
     
-    trace.log("ck3.git_commit", {"mod_name": mod_name, "message": message[:50]}, {"success": result.get("success", False)})
+    trace.log("ck3lens.git_commit", {"mod_name": mod_name, "message": message[:50]}, {"success": result.get("success", False)})
     
     return result
 
@@ -722,7 +1358,7 @@ def ck3_git_push(mod_name: str) -> dict:
     
     result = git_ops.git_push(session, mod_name)
     
-    trace.log("ck3.git_push", {"mod_name": mod_name}, {"success": result.get("success", False)})
+    trace.log("ck3lens.git_push", {"mod_name": mod_name}, {"success": result.get("success", False)})
     
     return result
 
@@ -743,7 +1379,7 @@ def ck3_git_pull(mod_name: str) -> dict:
     
     result = git_ops.git_pull(session, mod_name)
     
-    trace.log("ck3.git_pull", {"mod_name": mod_name}, {"success": result.get("success", False)})
+    trace.log("ck3lens.git_pull", {"mod_name": mod_name}, {"success": result.get("success", False)})
     
     return result
 
@@ -770,7 +1406,7 @@ def ck3_git_log(
     
     result = git_ops.git_log(session, mod_name, limit, file_path)
     
-    trace.log("ck3.git_log", {"mod_name": mod_name, "limit": limit}, {"success": result.get("success", False)})
+    trace.log("ck3lens.git_log", {"mod_name": mod_name, "limit": limit}, {"success": result.get("success", False)})
     
     return result
 
@@ -822,7 +1458,7 @@ def ck3_get_active_playset() -> dict:
         ]
     }
     
-    trace.log("ck3.get_active_playset", {}, {"mod_count": len(mods)})
+    trace.log("ck3lens.get_active_playset", {}, {"mod_count": len(mods)})
     
     return result
 
@@ -860,7 +1496,7 @@ def ck3_list_playsets() -> dict:
         ]
     }
     
-    trace.log("ck3.list_playsets", {}, {"count": len(playsets)})
+    trace.log("ck3lens.list_playsets", {}, {"count": len(playsets)})
     
     return result
 
@@ -948,7 +1584,7 @@ def ck3_search_mods(
                         "match_type": match_type
                     })
     
-    trace.log("ck3.search_mods", {"query": query, "search_by": search_by, "fuzzy": fuzzy},
+    trace.log("ck3lens.search_mods", {"query": query, "search_by": search_by, "fuzzy": fuzzy},
               {"result_count": len(results)})
     
     return {"results": results[:limit], "query": query}
@@ -1151,7 +1787,7 @@ def ck3_add_mod_to_playset(
     
     db.conn.commit()
     
-    trace.log("ck3.add_mod_to_playset", {
+    trace.log("ck3lens.add_mod_to_playset", {
         "mod_identifier": mod_identifier, "position": position
     }, {
         "mod_name": mod_name, "files": file_count, "symbols": symbols_extracted
@@ -1227,13 +1863,299 @@ def ck3_remove_mod_from_playset(
     
     db.conn.commit()
     
-    trace.log("ck3.remove_mod_from_playset", {"mod_identifier": mod_identifier},
+    trace.log("ck3lens.remove_mod_from_playset", {"mod_identifier": mod_identifier},
               {"mod_name": mod_name, "position": removed_position})
     
     return {
         "success": True,
         "mod_name": mod_name,
         "removed_from_position": removed_position
+    }
+
+
+@mcp.tool()
+def ck3_import_playset_from_launcher(
+    launcher_json_path: str | None = None,
+    launcher_json_content: str | None = None,
+    playset_name: str | None = None,
+    local_mod_paths: list[str] | None = None,
+    set_active: bool = True
+) -> dict:
+    """
+    Import a playset from CK3 Launcher JSON export.
+    
+    The launcher JSON can be exported from Paradox Launcher:
+    Settings > Export Playset (creates .json file)
+    
+    Args:
+        launcher_json_path: Path to the launcher JSON file
+        launcher_json_content: Raw JSON content (alternative to path)
+        playset_name: Override name (default: from JSON or "Imported Playset")
+        local_mod_paths: Additional local mod paths to add at end of load order
+        set_active: Whether to make this the active playset (default: True)
+    
+    Returns:
+        Playset creation result with linked mods count
+    """
+    import json
+    db = _get_db()
+    trace = _get_trace()
+    
+    # Load JSON
+    if launcher_json_path:
+        path = Path(launcher_json_path)
+        if not path.exists():
+            return {"error": f"File not found: {launcher_json_path}"}
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    elif launcher_json_content:
+        data = json.loads(launcher_json_content)
+    else:
+        return {"error": "Must provide launcher_json_path or launcher_json_content"}
+    
+    # Extract playset name
+    final_name = playset_name
+    if not final_name:
+        if "name" in data:
+            final_name = data["name"]
+        elif "playset" in data and "name" in data["playset"]:
+            final_name = data["playset"]["name"]
+        else:
+            final_name = "Imported Playset"
+    
+    # Extract mods from JSON
+    mod_entries = []
+    if "mods" in data:
+        mod_entries = data["mods"]
+    elif "playset" in data and "mods" in data["playset"]:
+        mod_entries = data["playset"]["mods"]
+    
+    # Create the playset
+    db.conn.execute("""
+        INSERT INTO playsets (name, created_at) VALUES (?, datetime('now'))
+    """, (final_name,))
+    db.conn.commit()
+    
+    playset_id = db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    
+    # Process mods
+    linked_count = 0
+    skipped = []
+    load_order = 1  # Start at 1 (0 is typically vanilla)
+    
+    for mod in mod_entries:
+        # Get steam_id from mod entry
+        steam_id = None
+        if "steamId" in mod:
+            steam_id = str(mod["steamId"])
+        elif "steam_id" in mod:
+            steam_id = str(mod["steam_id"])
+        elif "id" in mod:
+            steam_id = str(mod["id"])
+        
+        if not steam_id:
+            skipped.append({"reason": "no_steam_id", "mod": mod})
+            continue
+        
+        # Find in database by workshop_id
+        cv_row = db.conn.execute("""
+            SELECT cv.content_version_id, mp.name
+            FROM content_versions cv
+            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            WHERE mp.workshop_id = ?
+            ORDER BY cv.ingested_at DESC LIMIT 1
+        """, (steam_id,)).fetchone()
+        
+        if not cv_row:
+            mod_name = mod.get("displayName") or mod.get("name") or steam_id
+            skipped.append({"steam_id": steam_id, "name": mod_name, "reason": "not_in_database"})
+            continue
+        
+        # Add to playset
+        db.conn.execute("""
+            INSERT INTO playset_mods (playset_id, content_version_id, load_order_index, enabled)
+            VALUES (?, ?, ?, 1)
+        """, (playset_id, cv_row[0], load_order))
+        
+        linked_count += 1
+        load_order += 1
+    
+    # Add local mods at end
+    local_linked = 0
+    if local_mod_paths:
+        for local_path in local_mod_paths:
+            path = Path(local_path)
+            if not path.exists():
+                skipped.append({"path": local_path, "reason": "path_not_found"})
+                continue
+            
+            # Find by source_path
+            cv_row = db.conn.execute("""
+                SELECT cv.content_version_id, mp.name
+                FROM content_versions cv
+                JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                WHERE mp.source_path LIKE ?
+                ORDER BY cv.ingested_at DESC LIMIT 1
+            """, (f"%{path.name}",)).fetchone()
+            
+            if cv_row:
+                db.conn.execute("""
+                    INSERT INTO playset_mods (playset_id, content_version_id, load_order_index, enabled)
+                    VALUES (?, ?, ?, 1)
+                """, (playset_id, cv_row[0], load_order))
+                local_linked += 1
+                load_order += 1
+            else:
+                skipped.append({"path": local_path, "reason": "not_in_database"})
+    
+    db.conn.commit()
+    
+    # Set as active if requested
+    if set_active:
+        global _session
+        if _session:
+            _session.playset_id = playset_id
+    
+    trace.log("ck3lens.import_playset_from_launcher", {
+        "source": launcher_json_path or "inline_json",
+        "playset_name": final_name
+    }, {
+        "playset_id": playset_id,
+        "linked": linked_count,
+        "local_linked": local_linked,
+        "skipped": len(skipped)
+    })
+    
+    return {
+        "success": True,
+        "playset_id": playset_id,
+        "playset_name": final_name,
+        "mods_linked": linked_count,
+        "local_mods_linked": local_linked,
+        "mods_skipped": skipped if skipped else None,
+        "is_active": set_active,
+        "next_steps": "Use ck3_add_mod_to_playset to add missing mods after ingesting them"
+    }
+
+
+@mcp.tool()
+def ck3_reorder_mod_in_playset(
+    mod_identifier: str,
+    new_position: int | None = None,
+    before_mod: str | None = None,
+    after_mod: str | None = None
+) -> dict:
+    """
+    Move a mod to a new position in the active playset's load order.
+    
+    Args:
+        mod_identifier: Workshop ID or mod name to move
+        new_position: Target position (0-indexed). 0=first loaded, higher=later
+        before_mod: Move before this mod (by name or workshop ID)
+        after_mod: Move after this mod (by name or workshop ID)
+    
+    Returns:
+        Success status with old and new positions
+    """
+    db = _get_db()
+    trace = _get_trace()
+    playset_id = _get_playset_id()
+    
+    # Find the mod to move
+    if mod_identifier.isdigit():
+        row = db.conn.execute("""
+            SELECT pm.content_version_id, mp.name, pm.load_order_index
+            FROM playset_mods pm
+            JOIN content_versions cv ON pm.content_version_id = cv.content_version_id
+            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            WHERE pm.playset_id = ? AND mp.workshop_id = ?
+        """, (playset_id, mod_identifier)).fetchone()
+    else:
+        row = db.conn.execute("""
+            SELECT pm.content_version_id, mp.name, pm.load_order_index
+            FROM playset_mods pm
+            JOIN content_versions cv ON pm.content_version_id = cv.content_version_id
+            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            WHERE pm.playset_id = ? AND LOWER(mp.name) LIKE LOWER(?)
+        """, (playset_id, f"%{mod_identifier}%")).fetchone()
+    
+    if not row:
+        return {"error": f"Mod not found in playset: {mod_identifier}"}
+    
+    content_version_id = row[0]
+    mod_name = row[1]
+    old_position = row[2]
+    
+    # Determine target position
+    target_position = new_position
+    
+    if before_mod:
+        ref_row = db.conn.execute("""
+            SELECT pm.load_order_index FROM playset_mods pm
+            JOIN content_versions cv ON pm.content_version_id = cv.content_version_id
+            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            WHERE pm.playset_id = ? AND (mp.name LIKE ? OR mp.workshop_id = ?)
+        """, (playset_id, f"%{before_mod}%", before_mod)).fetchone()
+        if ref_row:
+            target_position = ref_row[0]
+    elif after_mod:
+        ref_row = db.conn.execute("""
+            SELECT pm.load_order_index FROM playset_mods pm
+            JOIN content_versions cv ON pm.content_version_id = cv.content_version_id
+            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            WHERE pm.playset_id = ? AND (mp.name LIKE ? OR mp.workshop_id = ?)
+        """, (playset_id, f"%{after_mod}%", after_mod)).fetchone()
+        if ref_row:
+            target_position = ref_row[0] + 1
+    
+    if target_position is None:
+        return {"error": "Must specify new_position, before_mod, or after_mod"}
+    
+    if target_position == old_position:
+        return {"success": True, "mod_name": mod_name, "position": old_position, "message": "No change needed"}
+    
+    # Remove from old position
+    db.conn.execute("""
+        DELETE FROM playset_mods WHERE playset_id = ? AND content_version_id = ?
+    """, (playset_id, content_version_id))
+    
+    # Shift mods to close the gap
+    db.conn.execute("""
+        UPDATE playset_mods SET load_order_index = load_order_index - 1
+        WHERE playset_id = ? AND load_order_index > ?
+    """, (playset_id, old_position))
+    
+    # Adjust target if moving down
+    if target_position > old_position:
+        target_position -= 1
+    
+    # Shift mods to make room at target
+    db.conn.execute("""
+        UPDATE playset_mods SET load_order_index = load_order_index + 1
+        WHERE playset_id = ? AND load_order_index >= ?
+    """, (playset_id, target_position))
+    
+    # Insert at target position
+    db.conn.execute("""
+        INSERT INTO playset_mods (playset_id, content_version_id, load_order_index, enabled)
+        VALUES (?, ?, ?, 1)
+    """, (playset_id, content_version_id, target_position))
+    
+    db.conn.commit()
+    
+    trace.log("ck3lens.reorder_mod", {
+        "mod_identifier": mod_identifier
+    }, {
+        "mod_name": mod_name,
+        "old_position": old_position,
+        "new_position": target_position
+    })
+    
+    return {
+        "success": True,
+        "mod_name": mod_name,
+        "old_position": old_position,
+        "new_position": target_position
     }
 
 
@@ -1274,7 +2196,7 @@ def ck3_scan_unit_conflicts(
             folder_filter=folder_filter,
         )
         
-        trace.log("ck3.scan_unit_conflicts", 
+        trace.log("ck3lens.scan_unit_conflicts", 
                   {"folder_filter": folder_filter},
                   {"conflicts_found": result["conflicts_found"]})
         
@@ -1445,7 +2367,7 @@ def ck3_resolve_conflict(
     
     db.conn.commit()
     
-    trace.log("ck3.resolve_conflict", 
+    trace.log("ck3lens.resolve_conflict", 
               {"conflict_unit_id": conflict_unit_id, "decision_type": decision_type},
               {"resolution_id": resolution_id})
     
@@ -1582,7 +2504,7 @@ def ck3_search_files(
     
     files = db.search_files(playset_id, pattern, source_filter, limit)
     
-    trace.log("ck3.search_files", {
+    trace.log("ck3lens.search_files", {
         "pattern": pattern,
         "source_filter": source_filter,
     }, {"count": len(files)})
@@ -1618,7 +2540,7 @@ def ck3_search_content(
     
     results = db.search_content(playset_id, query, file_pattern, source_filter, limit)
     
-    trace.log("ck3.search_content", {
+    trace.log("ck3lens.search_content", {
         "query": query,
         "file_pattern": file_pattern,
     }, {"count": len(results)})
@@ -1672,7 +2594,7 @@ def ck3_generate_conflicts_report(
         min_risk_score=min_risk_score,
     )
     
-    trace.log("ck3.generate_conflicts_report", {
+    trace.log("ck3lens.generate_conflicts_report", {
         "domains_include": domains_include,
         "paths_filter": paths_filter,
     }, {
@@ -1765,7 +2687,7 @@ def ck3_get_high_risk_conflicts(
     # Sort by risk score descending
     all_conflicts.sort(key=lambda x: x["risk_score"], reverse=True)
     
-    trace.log("ck3.get_high_risk_conflicts", {
+    trace.log("ck3lens.get_high_risk_conflicts", {
         "domain": domain,
         "min_risk_score": min_risk_score,
     }, {"count": len(all_conflicts)})

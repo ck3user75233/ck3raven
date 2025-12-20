@@ -205,6 +205,8 @@ class BlockNode(ASTNode):
         
         Returns both semantic format (key-value pairs) AND AST-preserving
         format (children list) for different use cases.
+        
+        OPTIMIZED: Only iterates through children once, caching dict results.
         """
         result = {
             '_name': self.name,
@@ -215,49 +217,46 @@ class BlockNode(ASTNode):
         }
         
         # AST-preserving children list (needed for symbol extraction)
+        # Build this once - all dicts are cached in children_list
         children_list = []
+        
         for child in self.children:
             if hasattr(child, 'to_dict'):
-                children_list.append(child.to_dict())
+                child_dict = child.to_dict()
+                children_list.append(child_dict)
+                
+                # Also add to semantic key-value format for convenience
+                # This happens in ONE PASS, no re-iteration
+                if isinstance(child, AssignmentNode):
+                    key = child.key
+                    # Get value from the cached child_dict
+                    value = child_dict.get('value')
+                    # Handle duplicate keys by making lists
+                    if key in result:
+                        if not isinstance(result[key], list):
+                            result[key] = [result[key]]
+                        result[key].append(value)
+                    else:
+                        result[key] = value
+                elif isinstance(child, BlockNode):
+                    # Anonymous/inline block - use cached child_dict
+                    key = child.name
+                    value = child_dict
+                    if key in result:
+                        if not isinstance(result[key], list):
+                            result[key] = [result[key]]
+                        result[key].append(value)
+                    else:
+                        result[key] = value
+                elif isinstance(child, ValueNode):
+                    # Standalone value in block (part of a list-like structure)
+                    if '_values' not in result:
+                        result['_values'] = []
+                    result['_values'].append(child.value)
             else:
                 children_list.append(str(child))
-        result['children'] = children_list
         
-        # Also include semantic key-value format for convenience
-        for child in self.children:
-            if isinstance(child, AssignmentNode):
-                key = child.key
-                if isinstance(child.value, ValueNode):
-                    value = child.value.value
-                elif isinstance(child.value, BlockNode):
-                    value = child.value.to_dict()
-                elif isinstance(child.value, ListNode):
-                    value = [self._node_to_value(item) for item in child.value.items]
-                else:
-                    value = str(child.value)
-                
-                # Handle duplicate keys by making lists
-                if key in result:
-                    if not isinstance(result[key], list):
-                        result[key] = [result[key]]
-                    result[key].append(value)
-                else:
-                    result[key] = value
-            elif isinstance(child, BlockNode):
-                # Anonymous/inline block - rare but possible
-                key = child.name
-                value = child.to_dict()
-                if key in result:
-                    if not isinstance(result[key], list):
-                        result[key] = [result[key]]
-                    result[key].append(value)
-                else:
-                    result[key] = value
-            elif isinstance(child, ValueNode):
-                # Standalone value in block (part of a list-like structure)
-                if '_values' not in result:
-                    result['_values'] = []
-                result['_values'].append(child.value)
+        result['children'] = children_list
         return result
     
     def _node_to_value(self, node):
@@ -316,12 +315,65 @@ class RootNode(ASTNode):
 
 class ParseError(Exception):
     """Error during parsing."""
-    def __init__(self, message: str, token: Token = None):
+    def __init__(self, message: str, token: Token = None, line: int = None, column: int = None):
         self.token = token
+        self.line = line or (token.line if token else 0)
+        self.column = column or (token.column if token else 0)
+        self.message = message
         if token:
             super().__init__(f"Parse error at line {token.line}, column {token.column}: {message}")
+        elif line:
+            super().__init__(f"Parse error at line {line}, column {column or 0}: {message}")
         else:
             super().__init__(f"Parse error: {message}")
+
+
+@dataclass
+class ParseDiagnostic:
+    """A diagnostic message from parsing (error, warning, or info)."""
+    line: int
+    column: int
+    end_line: int
+    end_column: int
+    severity: str  # "error", "warning", "info"
+    code: str
+    message: str
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "line": self.line,
+            "column": self.column,
+            "end_line": self.end_line,
+            "end_column": self.end_column,
+            "severity": self.severity,
+            "code": self.code,
+            "message": self.message
+        }
+
+
+@dataclass
+class ParseResult:
+    """Result of parsing with error recovery."""
+    ast: Optional[RootNode]
+    diagnostics: List[ParseDiagnostic]
+    success: bool
+    
+    @property
+    def errors(self) -> List[ParseDiagnostic]:
+        return [d for d in self.diagnostics if d.severity == "error"]
+    
+    @property
+    def warnings(self) -> List[ParseDiagnostic]:
+        return [d for d in self.diagnostics if d.severity == "warning"]
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "success": self.success,
+            "ast": self.ast.to_dict() if self.ast else None,
+            "diagnostics": [d.to_dict() for d in self.diagnostics],
+            "errors": [d.to_dict() for d in self.errors],
+            "warnings": [d.to_dict() for d in self.warnings]
+        }
 
 
 class Parser:
@@ -711,12 +763,216 @@ class Parser:
         return ListNode(items=items, line=token.line if token else 0, column=token.column if token else 0)
 
 
+class RecoveringParser(Parser):
+    """
+    Parser with error recovery that collects multiple errors.
+    
+    Instead of stopping at the first error, this parser attempts to
+    skip past problematic tokens and continue parsing. All errors
+    are collected and returned with the (partial) AST.
+    
+    Recovery strategies:
+    - Skip to next line on unexpected token
+    - Skip to matching brace on block errors
+    - Continue after value errors
+    """
+    
+    MAX_ERRORS = 100  # Prevent infinite error loops
+    
+    def __init__(self, tokens: List[Token], filename: str = "<unknown>"):
+        super().__init__(tokens, filename)
+        self.diagnostics: List[ParseDiagnostic] = []
+        self.error_count = 0
+    
+    def _add_error(self, message: str, token: Token = None, code: str = "PARSE_ERROR"):
+        """Record an error without raising exception."""
+        self.error_count += 1
+        line = token.line if token else 0
+        column = token.column if token else 0
+        end_column = column + len(token.value) if token else column
+        
+        self.diagnostics.append(ParseDiagnostic(
+            line=line,
+            column=column,
+            end_line=line,
+            end_column=end_column,
+            severity="error",
+            code=code,
+            message=message
+        ))
+    
+    def _skip_to_recovery_point(self):
+        """Skip tokens until we find a recovery point."""
+        # Recovery points: next line, closing brace at depth 0, or EOF
+        brace_depth = 0
+        start_line = self._current().line if self._current() else 0
+        
+        while True:
+            token = self._current()
+            if token is None or token.type == TokenType.EOF:
+                break
+            
+            if token.type == TokenType.LBRACE:
+                brace_depth += 1
+            elif token.type == TokenType.RBRACE:
+                if brace_depth > 0:
+                    brace_depth -= 1
+                else:
+                    # At top level, this closes current scope
+                    break
+            
+            # If we've moved to a new line at depth 0, try to resume
+            if brace_depth == 0 and token.line > start_line:
+                # Check if this looks like a valid start
+                if token.type in (TokenType.IDENTIFIER, TokenType.AT, TokenType.STRING):
+                    break
+            
+            self._advance()
+    
+    def _skip_to_next_statement(self):
+        """Skip to what looks like the start of a new statement."""
+        start_line = self._current().line if self._current() else 0
+        
+        while True:
+            token = self._current()
+            if token is None or token.type == TokenType.EOF:
+                break
+            
+            # New line with identifier = potential new statement
+            if token.line > start_line and token.type in (TokenType.IDENTIFIER, TokenType.AT, TokenType.STRING):
+                break
+            
+            # Closing brace - return to let caller handle
+            if token.type == TokenType.RBRACE:
+                break
+            
+            self._advance()
+    
+    def parse(self) -> RootNode:
+        """Parse with error recovery, collecting all errors."""
+        root = RootNode(filename=self.filename, line=1, column=1)
+        
+        while self.error_count < self.MAX_ERRORS:
+            token = self._current()
+            if token is None or token.type == TokenType.EOF:
+                break
+            
+            try:
+                node = self._parse_element()
+                if node:
+                    root.children.append(node)
+            except ParseError as e:
+                self._add_error(e.message, e.token)
+                self._skip_to_recovery_point()
+            except LexerError as e:
+                self._add_error(str(e), code="LEXER_ERROR")
+                self._skip_to_next_statement()
+        
+        if self.error_count >= self.MAX_ERRORS:
+            self._add_error(f"Too many errors ({self.MAX_ERRORS}+), stopping", code="TOO_MANY_ERRORS")
+        
+        return root
+    
+    def _parse_element(self) -> Optional[Union[BlockNode, AssignmentNode, ValueNode]]:
+        """Parse element with recovery on error."""
+        try:
+            return super()._parse_element()
+        except ParseError:
+            raise  # Let parse() handle it
+    
+    def _parse_block_contents(self) -> ListNode:
+        """Parse block contents with error recovery."""
+        open_brace = self._current()
+        try:
+            self._expect(TokenType.LBRACE, "Expected '{'")
+        except ParseError as e:
+            self._add_error(e.message, e.token, "MISSING_BRACE")
+            # Try to continue anyway
+            if self._current() and self._current().type != TokenType.LBRACE:
+                return ListNode(items=[], line=open_brace.line if open_brace else 0, column=open_brace.column if open_brace else 0)
+            self._advance()
+        
+        items = []
+        
+        while self.error_count < self.MAX_ERRORS:
+            token = self._current()
+            
+            if token is None:
+                self._add_error("Unexpected end of file in block (missing closing '}')", code="UNCLOSED_BLOCK")
+                break
+            
+            if token.type == TokenType.EOF:
+                self._add_error("Unexpected end of file in block (missing closing '}')", token, "UNCLOSED_BLOCK")
+                break
+            
+            if token.type == TokenType.RBRACE:
+                self._advance()
+                break
+            
+            if token.type in (TokenType.COMMENT, TokenType.NEWLINE, TokenType.COMMA):
+                self._advance()
+                continue
+            
+            try:
+                element = self._parse_element()
+                if element:
+                    items.append(element)
+            except ParseError as e:
+                self._add_error(e.message, e.token)
+                self._skip_to_next_statement()
+        
+        return ListNode(items=items, line=open_brace.line if open_brace else 0, column=open_brace.column if open_brace else 0)
+
+
 def parse_source(source: str, filename: str = "<unknown>") -> RootNode:
     """Parse source code string into AST."""
     lexer = Lexer(source, filename)
     tokens = lexer.tokenize_all()
     parser = Parser(tokens, filename)
     return parser.parse()
+
+
+def parse_source_recovering(source: str, filename: str = "<unknown>") -> ParseResult:
+    """
+    Parse source with error recovery, collecting all errors.
+    
+    Unlike parse_source(), this continues parsing after errors and
+    returns a ParseResult with both the (partial) AST and all diagnostics.
+    
+    Args:
+        source: Source code string
+        filename: For error messages
+    
+    Returns:
+        ParseResult with ast, diagnostics, and success flag
+    """
+    try:
+        lexer = Lexer(source, filename)
+        tokens = lexer.tokenize_all()
+    except LexerError as e:
+        # Lexer failed - return single error
+        return ParseResult(
+            ast=None,
+            diagnostics=[ParseDiagnostic(
+                line=getattr(e, 'line', 1),
+                column=getattr(e, 'column', 0),
+                end_line=getattr(e, 'line', 1),
+                end_column=getattr(e, 'column', 0) + 1,
+                severity="error",
+                code="LEXER_ERROR",
+                message=str(e)
+            )],
+            success=False
+        )
+    
+    parser = RecoveringParser(tokens, filename)
+    ast = parser.parse()
+    
+    return ParseResult(
+        ast=ast,
+        diagnostics=parser.diagnostics,
+        success=len(parser.diagnostics) == 0
+    )
 
 
 def parse_file(filepath: str) -> RootNode:

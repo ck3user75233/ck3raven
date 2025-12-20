@@ -1,0 +1,67 @@
+# =============================================================================
+# TEST-FILE: DO-NOT-FIX - This is a validator test file
+# =============================================================================
+# FILE: 05_complex_nesting.txt
+# PURPOSE: Test that deeply nested valid structures pass validation
+# EXPECTED OUTPUT: NO errors, NO warnings, NO hints
+# =============================================================================
+# This file has complex nested blocks that are all correctly balanced.
+# Tests the brace matching algorithm with deep nesting.
+# =============================================================================
+
+namespace = complex_test
+
+complex_event = {
+    type = character_event
+    
+    trigger = {
+        AND = {
+            OR = {
+                has_trait = ambitious
+                has_trait = greedy
+            }
+            NOR = {
+                has_trait = content
+                AND = {
+                    age < 20
+                    is_ruler = no
+                }
+            }
+        }
+    }
+    
+    immediate = {
+        random_list = {
+            50 = {
+                trigger = { has_trait = brave }
+                add_prestige = 100
+            }
+            30 = {
+                add_gold = 50
+            }
+            20 = {
+                stress_impact = {
+                    base = 10
+                }
+            }
+        }
+    }
+    
+    option = {
+        name = complex_test.a
+        
+        if = {
+            limit = { gold >= 100 }
+            remove_short_term_gold = 100
+            add_prestige = 200
+        }
+        else_if = {
+            limit = { gold >= 50 }
+            remove_short_term_gold = 50
+            add_prestige = 100
+        }
+        else = {
+            add_stress = 10
+        }
+    }
+}

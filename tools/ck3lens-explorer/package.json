@@ -25,14 +25,8 @@
     "ck3raven",
     "game state"
   ],
-  "icon": "media/ck3lens-icon.png",
   "activationEvents": [
-    "onLanguage:paradox-script",
-    "workspaceContains:**/common/**/*.txt",
-    "workspaceContains:**/events/**/*.txt",
-    "onView:ck3lens.explorerView",
-    "onView:ck3lens.conflictsView",
-    "onView:ck3lens.symbolsView"
+    "onStartupFinished"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -76,27 +70,45 @@
     "views": {
       "ck3lens": [
         {
+          "id": "ck3lens.playsetView",
+          "name": "Active Playset",
+          "type": "tree",
+          "icon": "$(list-selection)",
+          "contextualTitle": "CK3 Lens"
+        },
+        {
           "id": "ck3lens.explorerView",
           "name": "Game State Explorer",
           "type": "tree",
+          "icon": "$(globe)",
           "contextualTitle": "CK3 Lens"
         },
         {
           "id": "ck3lens.conflictsView",
           "name": "Conflicts",
           "type": "tree",
+          "icon": "$(git-compare)",
           "contextualTitle": "CK3 Lens"
         },
         {
           "id": "ck3lens.symbolsView",
           "name": "Symbols",
           "type": "tree",
+          "icon": "$(symbol-class)",
           "contextualTitle": "CK3 Lens"
         },
         {
           "id": "ck3lens.liveModsView",
           "name": "Live Mods",
           "type": "tree",
+          "icon": "$(file-code)",
+          "contextualTitle": "CK3 Lens"
+        },
+        {
+          "id": "ck3lens.issuesView",
+          "name": "Issues",
+          "type": "tree",
+          "icon": "$(issues)",
           "contextualTitle": "CK3 Lens"
         }
       ]
@@ -174,6 +186,36 @@
         "icon": "$(new-file)"
       },
       {
+        "command": "ck3lens.refreshIssues",
+        "title": "CK3 Lens: Refresh Issues",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "ck3lens.navigateToIssue",
+        "title": "CK3 Lens: Navigate to Issue",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "ck3lens.showConflictDetail",
+        "title": "CK3 Lens: Show Conflict Detail",
+        "icon": "$(info)"
+      },
+      {
+        "command": "ck3lens.createOverridePatch",
+        "title": "CK3 Lens: Create Override Patch",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "ck3lens.setupPlayset",
+        "title": "CK3 Lens: Setup Active Playset",
+        "icon": "$(library)"
+      },
+      {
+        "command": "ck3lens.viewPlaysets",
+        "title": "CK3 Lens: View Playsets",
+        "icon": "$(list-unordered)"
+      },
+      {
         "command": "ck3lens.toggleLens",
         "title": "CK3 Lens: Toggle Lens On/Off",
         "icon": "$(eye)"
@@ -222,9 +264,36 @@
           "group": "navigation"
         },
         {
+          "command": "ck3lens.setupPlayset",
+          "when": "view == ck3lens.playsetView",
+          "group": "navigation"
+        },
+        {
+          "command": "ck3lens.viewPlaysets",
+          "when": "view == ck3lens.playsetView",
+          "group": "navigation"
+        },
+        {
           "command": "ck3lens.searchSymbols",
           "when": "view == ck3lens.symbolsView",
           "group": "navigation"
+        },
+        {
+          "command": "ck3lens.refreshIssues",
+          "when": "view == ck3lens.issuesView",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "ck3lens.createOverridePatch",
+          "when": "view == ck3lens.issuesView && viewItem == error",
+          "group": "inline"
+        },
+        {
+          "command": "ck3lens.createOverridePatch",
+          "when": "view == ck3lens.issuesView && viewItem == conflict",
+          "group": "inline"
         }
       ],
       "editor/context": [
@@ -288,6 +357,11 @@
           "default": true,
           "description": "Enable real-time linting on file changes"
         },
+        "ck3lens.autoInitialize": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically initialize session when extension activates"
+        },
         "ck3lens.lintOnSave": {
           "type": "boolean",
           "default": true,
@@ -317,35 +391,35 @@
           "default": "info",
           "description": "Logging level for CK3 Lens"
         },
-        "ck3.widget.enabled": {
+        "ck3lens.widget.enabled": {
           "type": "boolean",
           "default": true,
           "description": "Enable the CK3 Lens floating widget"
         },
-        "ck3.widget.anchor": {
+        "ck3lens.widget.anchor": {
           "type": "string",
           "enum": ["bottomRight", "bottomLeft", "topRight", "topLeft"],
           "default": "bottomRight",
           "description": "Anchor position for the floating widget"
         },
-        "ck3.widget.opacity": {
+        "ck3lens.widget.opacity": {
           "type": "number",
           "default": 0.95,
           "minimum": 0.1,
           "maximum": 1.0,
           "description": "Widget opacity (0.1-1.0)"
         },
-        "ck3.widget.startCollapsed": {
+        "ck3lens.widget.startCollapsed": {
           "type": "boolean",
           "default": false,
           "description": "Start the widget in collapsed state"
         },
-        "ck3.agent.autoEngageOnLensEnable": {
+        "ck3lens.agent.autoEngageOnLensEnable": {
           "type": "boolean",
           "default": false,
           "description": "Automatically engage the agent when lens is enabled"
         },
-        "ck3.mode.default": {
+        "ck3lens.mode.default": {
           "type": "string",
           "enum": ["ck3lens", "ck3raven-dev", "ck3creator"],
           "default": "ck3lens",

@@ -1,4 +1,8 @@
 .vscode-test
-out
 node_modules
 *.vsix
+src/**
+**/*.ts
+**/*.map
+.gitignore
+tsconfig.json

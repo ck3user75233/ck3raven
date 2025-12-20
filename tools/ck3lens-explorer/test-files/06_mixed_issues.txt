@@ -1,0 +1,31 @@
+# =============================================================================
+# TEST-FILE: DO-NOT-FIX - This file has INTENTIONAL bugs for testing
+# =============================================================================
+# FILE: 06_mixed_issues.txt
+# PURPOSE: Test multiple different issues in one file
+# EXPECTED OUTPUT:
+#   - HINT on line 15: "no" is typically a value, not a key (STYLE003)
+#   - HINT on line 20: Missing = before { (STYLE005)
+#   - ERROR: Unterminated string on line 25
+#   - ERROR: Unbalanced braces (the unterminated string will cause parse issues)
+# =============================================================================
+# This file has multiple different types of issues to test combined detection.
+# =============================================================================
+
+namespace = mixed_errors
+
+# Style issue: no used as key
+bad_block = {
+    no = value
+}
+
+# Style issue: missing equals
+another_block {
+    key = value
+}
+
+# Parse error: unterminated string causes cascading issues
+broken_event = {
+    title = "This never ends
+    desc = "more text"
+}

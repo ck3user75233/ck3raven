@@ -154,14 +154,16 @@ def ingest_directory(
     kind: str,
     vanilla_version_id: Optional[int] = None,
     mod_package_id: Optional[int] = None,
-    force: bool = False
+    force: bool = False,
+    progress_callback: Optional[callable] = None,
+    batch_size: int = 500
 ) -> IngestResult:
     """
     Ingest a directory (vanilla or mod) into the database.
     
     This is the core ingestion function. It:
-    1. Scans the directory for files
-    2. Computes content hashes
+    1. Scans the directory for files (streaming, not all in memory)
+    2. Computes content hashes in batches
     3. Computes root hash to identify the version
     4. If version already exists and not force, returns existing
     5. Otherwise, stores new/changed content and creates records
@@ -173,6 +175,8 @@ def ingest_directory(
         vanilla_version_id: FK for vanilla versions
         mod_package_id: FK for mod packages
         force: If True, re-ingest even if version exists
+        progress_callback: Optional callback(files_done, total_files) for progress
+        batch_size: Number of files to process per batch
     
     Returns:
         IngestResult with content_version_id and stats
@@ -182,33 +186,50 @@ def ingest_directory(
     
     logger.info(f"Scanning {root_path}...")
     
-    # Phase 1: Scan directory and compute all hashes
-    file_hashes: List[Tuple[str, str]] = []  # (relpath, content_hash)
-    file_data: Dict[str, Tuple[bytes, str, int]] = {}  # relpath -> (data, hash, size)
+    # Phase 1: Scan directory and collect file paths (lightweight - just paths)
+    # This is O(n) memory for paths only, not file contents
+    file_entries = list(scan_directory(root_path))
+    total_files = len(file_entries)
+    logger.info(f"Found {total_files} files to process")
     
-    for entry in scan_directory(root_path):
+    if not file_entries:
+        raise ValueError(f"No files found in {root_path}")
+    
+    # Phase 2: Compute hashes in streaming fashion for root hash
+    # We need all hashes for the root hash, but we don't need to keep content
+    file_hashes: List[Tuple[str, str]] = []
+    total_size = 0
+    
+    for i, entry in enumerate(file_entries):
         stats.files_scanned += 1
         
         try:
             file_path = root_path / entry.relpath
             data = file_path.read_bytes()
             content_hash = compute_content_hash(data)
+            file_size = len(data)
             
             file_hashes.append((entry.relpath, content_hash))
-            file_data[entry.relpath] = (data, content_hash, len(data))
+            total_size += file_size
+            
+            # Don't keep data in memory - we'll re-read it if needed
+            del data
             
         except Exception as e:
             errors.append((entry.relpath, str(e)))
             logger.warning(f"Error reading {entry.relpath}: {e}")
+        
+        # Progress callback
+        if progress_callback and (i + 1) % 1000 == 0:
+            progress_callback(i + 1, total_files)
     
-    if not file_hashes:
-        raise ValueError(f"No files found in {root_path}")
+    logger.info(f"Computed hashes for {len(file_hashes)} files")
     
-    # Phase 2: Compute root hash
+    # Phase 3: Compute root hash
     content_root_hash = compute_root_hash(file_hashes)
     logger.info(f"Root hash: {content_root_hash[:12]}... ({len(file_hashes)} files)")
     
-    # Phase 3: Check if version already exists
+    # Phase 4: Check if version already exists
     existing = find_content_version_by_hash(conn, content_root_hash)
     
     if existing and not force:
@@ -225,15 +246,11 @@ def ingest_directory(
     # If force and existing, delete old version first
     if existing and force:
         logger.info(f"Force mode: deleting existing content version {existing.content_version_id}")
-        # Delete file records (cascade from content_version)
         conn.execute("DELETE FROM files WHERE content_version_id = ?", (existing.content_version_id,))
-        # Delete the content version itself
         conn.execute("DELETE FROM content_versions WHERE content_version_id = ?", (existing.content_version_id,))
-        # Note: file_contents are NOT deleted - they're content-addressed and may be shared
         conn.commit()
     
-    # Phase 4: Create content version
-    total_size = sum(d[2] for d in file_data.values())
+    # Phase 5: Create content version
     content_version_id = create_content_version(
         conn=conn,
         kind=kind,
@@ -246,28 +263,48 @@ def ingest_directory(
     
     logger.info(f"Created content version {content_version_id}")
     
-    # Phase 5: Store file contents (with dedup) and file records
-    for relpath, (data, content_hash, size) in file_data.items():
-        try:
-            # Store content (deduped by hash)
-            store_file_content(conn, data, content_hash)
-            
-            # Store file record
-            store_file_record(
-                conn=conn,
-                content_version_id=content_version_id,
-                relpath=relpath,
-                content_hash=content_hash,
-            )
-            
-            stats.files_new += 1
-            stats.bytes_stored += size
-            
-        except Exception as e:
-            errors.append((relpath, str(e)))
-            logger.warning(f"Error storing {relpath}: {e}")
+    # Phase 6: Store file contents in batches (re-read files, but batch commits)
+    # This keeps memory bounded to batch_size files at a time
+    hash_to_relpath = {h: r for r, h in file_hashes}
     
-    conn.commit()
+    for batch_start in range(0, len(file_hashes), batch_size):
+        batch_end = min(batch_start + batch_size, len(file_hashes))
+        batch = file_hashes[batch_start:batch_end]
+        
+        for relpath, content_hash in batch:
+            try:
+                file_path = root_path / relpath
+                data = file_path.read_bytes()
+                
+                # Store content (deduped by hash)
+                store_file_content(conn, data, content_hash)
+                
+                # Store file record
+                store_file_record(
+                    conn=conn,
+                    content_version_id=content_version_id,
+                    relpath=relpath,
+                    content_hash=content_hash,
+                )
+                
+                stats.files_new += 1
+                stats.bytes_stored += len(data)
+                
+                del data  # Free memory immediately
+                
+            except Exception as e:
+                errors.append((relpath, str(e)))
+                logger.warning(f"Error storing {relpath}: {e}")
+        
+        # Commit after each batch
+        conn.commit()
+        
+        # Progress callback
+        if progress_callback:
+            progress_callback(batch_end, total_files)
+        
+        if batch_end % 5000 == 0:
+            logger.info(f"Stored {batch_end}/{len(file_hashes)} files...")
     
     logger.info(f"Ingested {stats.files_new} files, {stats.bytes_stored:,} bytes")
     
@@ -284,7 +321,8 @@ def ingest_vanilla(
     game_path: Path,
     ck3_version: str,
     dlc_set: List[str] = None,
-    force: bool = False
+    force: bool = False,
+    progress_callback: Optional[callable] = None
 ) -> Tuple[VanillaVersion, IngestResult]:
     """
     Ingest vanilla CK3 game files.
@@ -295,6 +333,7 @@ def ingest_vanilla(
         ck3_version: CK3 version string
         dlc_set: List of enabled DLC IDs
         force: Re-ingest even if exists
+        progress_callback: Optional callback(files_done, total_files)
     
     Returns:
         (VanillaVersion, IngestResult)
@@ -311,6 +350,7 @@ def ingest_vanilla(
         kind='vanilla',
         vanilla_version_id=vanilla_version.vanilla_version_id,
         force=force,
+        progress_callback=progress_callback,
     )
     
     return vanilla_version, result

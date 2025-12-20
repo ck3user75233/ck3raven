@@ -1,0 +1,50 @@
+﻿# Pre-commit hooks for ck3raven
+# Install: pip install pre-commit && pre-commit install
+# Run manually: pre-commit run --all-files
+
+repos:
+  # Standard pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+
+  # Python syntax and import checking
+  - repo: local
+    hooks:
+      - id: python-syntax-check
+        name: Python Syntax Check
+        entry: python -m py_compile
+        language: system
+        files: \.py$
+        types: [python]
+
+      - id: pyright-check
+        name: Pyright Type Check
+        entry: python -m pyright
+        language: system
+        files: \.py$
+        types: [python]
+        # Run on specific directories only
+        args: ['--project', 'pyrightconfig.json']
+        pass_filenames: false
+        # Allow failure during early development
+        verbose: true
+
+  # Ruff for linting and formatting
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.3.4
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+
+# Configuration for hooks
+default_language_version:
+  python: python3.11

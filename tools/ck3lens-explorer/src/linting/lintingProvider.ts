@@ -140,14 +140,12 @@ export class LintingProvider implements vscode.Disposable {
         const content = document.getText();
         const result = quickValidate(content);
         
-        // Only show quick validation if there are blocking errors
-        // (unbalanced braces, unterminated strings)
-        if (!result.bracesBalanced || !result.stringsTerminated) {
+        // Show all quick validation diagnostics (errors, warnings, and hints)
+        // These will be replaced when the full Python lint completes
+        if (result.diagnostics.length > 0) {
             const quickDiagnostics = result.diagnostics
-                .filter(d => d.severity === 'error')
                 .map(d => this.convertQuickDiagnostic(d));
             
-            // Show these immediately (will be replaced by full lint)
             this.diagnosticCollection.set(document.uri, quickDiagnostics);
         }
     }
@@ -172,10 +170,56 @@ export class LintingProvider implements vscode.Disposable {
     }
 
     /**
+     * Check if a file should be linted based on path and content heuristics
+     */
+    private shouldLintFile(document: vscode.TextDocument): boolean {
+        const filePath = document.fileName.toLowerCase();
+        const fileName = filePath.split(/[/\\]/).pop() || '';
+        
+        // Skip known non-script files by name
+        const skipNames = [
+            'readme.txt', 'intro.txt', 'changelog.txt', 'credits.txt',
+            'description.txt', 'license.txt', 'notes.txt', 'todo.txt',
+            'checksum_manifest.txt', 'compound_settings.txt', 'credit_portraits.txt'
+        ];
+        if (skipNames.includes(fileName)) {
+            return false;
+        }
+        
+        // Only lint files in expected CK3 directories
+        const ck3Paths = [
+            '/common/', '/events/', '/decisions/', '/history/', '/gfx/',
+            '/gui/', '/localization/', '/map_data/', '/music/', '/sound/',
+            '\\common\\', '\\events\\', '\\decisions\\', '\\history\\', '\\gfx\\',
+            '\\gui\\', '\\localization\\', '\\map_data\\', '\\music\\', '\\sound\\'
+        ];
+        
+        // If file is not in a CK3 content path, check content
+        const inCK3Path = ck3Paths.some(p => filePath.includes(p));
+        if (!inCK3Path) {
+            // Check if content looks like CK3 script (has = assignments and {})
+            const content = document.getText(new vscode.Range(0, 0, 20, 0));
+            const hasAssignments = /^\s*\w+\s*=\s*[{\w"]/m.test(content);
+            const hasBraces = content.includes('{');
+            if (!hasAssignments && !hasBraces) {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+
+    /**
      * Lint a document and update diagnostics
      */
     async lintDocument(document: vscode.TextDocument): Promise<void> {
         if (document.languageId !== 'paradox-script') {
+            return;
+        }
+        
+        // Skip files that don't look like CK3 script
+        if (!this.shouldLintFile(document)) {
+            this.diagnosticCollection.delete(document.uri);
             return;
         }
 

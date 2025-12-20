@@ -40,42 +40,97 @@ export class PythonBridge implements vscode.Disposable {
      */
     private async startProcess(): Promise<void> {
         const config = vscode.workspace.getConfiguration('ck3lens');
-        const pythonPath = config.get<string>('pythonPath') || 'python';
+        let pythonPath = config.get<string>('pythonPath') || '';
         let ck3ravenPath = config.get<string>('ck3ravenPath') || '';
+        
+        this.logger.info(`Config pythonPath: '${pythonPath}'`);
+        this.logger.info(`Config ck3ravenPath: '${ck3ravenPath}'`);
 
-        // Auto-detect ck3raven path if not configured
-        if (!ck3ravenPath) {
-            // Try to find it relative to the extension
-            const extensionPath = vscode.extensions.getExtension('ck3-modding.ck3lens-explorer')?.extensionPath;
-            if (extensionPath) {
-                // Extension is in tools/ck3lens-explorer, ck3raven is in parent
-                ck3ravenPath = path.resolve(extensionPath, '..', '..');
-            } else {
-                // Fallback to workspace folder
-                const workspaceFolders = vscode.workspace.workspaceFolders;
-                if (workspaceFolders) {
-                    for (const folder of workspaceFolders) {
-                        if (folder.uri.fsPath.includes('ck3raven')) {
-                            ck3ravenPath = folder.uri.fsPath;
-                            break;
+        // Get the extension's own path (where the bridge script is bundled)
+        const extensionPath = vscode.extensions.getExtension('ck3-modding.ck3lens-explorer')?.extensionPath;
+        
+        // Bridge script is bundled with the extension
+        let bridgeScriptPath: string;
+        if (extensionPath) {
+            bridgeScriptPath = path.join(extensionPath, 'bridge', 'server.py');
+        } else {
+            // Fallback for development mode - use workspace
+            const workspaceFolders = vscode.workspace.workspaceFolders;
+            if (workspaceFolders) {
+                for (const folder of workspaceFolders) {
+                    const tryPath = path.join(folder.uri.fsPath, 'tools', 'ck3lens-explorer', 'bridge', 'server.py');
+                    if (require('fs').existsSync(tryPath)) {
+                        bridgeScriptPath = tryPath;
+                        // In dev mode, derive ck3raven path from bridge location
+                        ck3ravenPath = path.join(folder.uri.fsPath, 'ck3raven');
+                        if (!require('fs').existsSync(path.join(ck3ravenPath, 'src', 'ck3raven'))) {
+                            // Maybe bridge is at tools/ck3lens-explorer, so ck3raven is parent
+                            ck3ravenPath = path.dirname(path.dirname(path.dirname(tryPath)));
                         }
+                        break;
                     }
+                }
+            }
+            if (!bridgeScriptPath!) {
+                throw new Error('Could not find bridge script - extension path not available');
+            }
+        }
+
+        // ck3ravenPath is needed for Python imports - try to auto-detect if not configured
+        if (!ck3ravenPath) {
+            // Check common locations
+            const possiblePaths = [
+                path.join(process.env.USERPROFILE || '', 'Documents', 'AI Workspace', 'ck3raven'),
+                path.join(process.env.HOME || '', 'ck3raven'),
+            ];
+            for (const p of possiblePaths) {
+                if (require('fs').existsSync(path.join(p, 'src', 'ck3raven'))) {
+                    ck3ravenPath = p;
+                    break;
                 }
             }
         }
 
-        const bridgeScriptPath = path.join(ck3ravenPath, 'tools', 'ck3lens-explorer', 'bridge', 'server.py');
+        // Auto-detect Python if not configured - look for venv in AI Workspace or ck3raven
+        if (!pythonPath) {
+            const venvPaths = [
+                path.join(process.env.USERPROFILE || '', 'Documents', 'AI Workspace', '.venv', 'Scripts', 'python.exe'),
+                path.join(ck3ravenPath, '.venv', 'Scripts', 'python.exe'),
+                path.join(ck3ravenPath, '.venv', 'bin', 'python'),
+                path.join(process.env.USERPROFILE || '', 'Documents', 'AI Workspace', '.venv', 'bin', 'python'),
+            ];
+            for (const venvPython of venvPaths) {
+                if (require('fs').existsSync(venvPython)) {
+                    pythonPath = venvPython;
+                    this.logger.info(`Auto-detected venv Python: ${pythonPath}`);
+                    break;
+                }
+            }
+            // Fall back to system python
+            if (!pythonPath) {
+                pythonPath = 'python';
+            }
+        }
 
+        // Check if pythonPath is an absolute path or just 'python'
+        const pythonIsAbsolute = path.isAbsolute(pythonPath);
+        const pythonFileExists = pythonIsAbsolute ? require('fs').existsSync(pythonPath) : false;
+        
         this.logger.info(`Starting Python bridge: ${pythonPath} ${bridgeScriptPath}`);
+        this.logger.info(`ck3raven path: ${ck3ravenPath || '(not set - bridge may fail imports)'}`);
+        this.logger.info(`Bridge script exists: ${require('fs').existsSync(bridgeScriptPath!)}`);
+        this.logger.info(`Python path: ${pythonPath} (${pythonIsAbsolute ? (pythonFileExists ? 'file exists' : 'file NOT found') : 'using PATH lookup'})`);
+        this.logger.info(`Extension path: ${extensionPath || '(not found)'}`);
 
         return new Promise((resolve, reject) => {
             try {
-                this.process = spawn(pythonPath, [bridgeScriptPath], {
-                    cwd: ck3ravenPath,
+                this.process = spawn(pythonPath, [bridgeScriptPath!], {
+                    cwd: ck3ravenPath || path.dirname(bridgeScriptPath!),
                     stdio: ['pipe', 'pipe', 'pipe'],
                     env: {
                         ...process.env,
-                        PYTHONUNBUFFERED: '1'
+                        PYTHONUNBUFFERED: '1',
+                        PYTHONPATH: ck3ravenPath ? path.join(ck3ravenPath, 'src') : ''
                     }
                 });
 
@@ -104,12 +159,30 @@ export class PythonBridge implements vscode.Disposable {
                     this.pendingRequests.clear();
                 });
 
+                // Collect any early stderr for diagnostic purposes
+                let stderrBuffer = '';
+                const stderrCollector = (data: Buffer) => {
+                    stderrBuffer += data.toString();
+                };
+                this.process.stderr?.on('data', stderrCollector);
+
                 // Wait a moment for process to start
                 setTimeout(() => {
+                    // Remove temporary collector
+                    this.process?.stderr?.removeListener('data', stderrCollector);
+                    
                     if (this.process && !this.process.killed) {
                         resolve();
                     } else {
-                        reject(new Error('Python process failed to start'));
+                        const errorDetails = [
+                            `Python: ${pythonPath}`,
+                            `Script: ${bridgeScriptPath}`,
+                            `CK3Raven: ${ck3ravenPath || '(not found)'}`,
+                            stderrBuffer ? `Stderr: ${stderrBuffer.slice(0, 500)}` : ''
+                        ].filter(Boolean).join('\n');
+                        
+                        this.logger.error(`Python process failed to start:\n${errorDetails}`);
+                        reject(new Error(`Python process failed to start. Check Output > CK3 Lens for details.`));
                     }
                 }, 500);
 

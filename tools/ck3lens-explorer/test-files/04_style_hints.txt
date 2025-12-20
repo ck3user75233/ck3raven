@@ -1,0 +1,44 @@
+# =============================================================================
+# TEST-FILE: DO-NOT-FIX - This file has INTENTIONAL bugs for testing
+# =============================================================================
+# FILE: 04_style_hints.txt
+# PURPOSE: Test detection of style issues and common mistakes (non-blocking)
+# EXPECTED OUTPUT:
+#   - HINT on line 16: "yes" is typically a value, not a key (STYLE003)
+#   - HINT on line 21: Use single = for assignment (STYLE004) 
+#   - HINT on line 27: Missing = before { (STYLE005)
+# =============================================================================
+# These are not parse errors but style/usage hints that help catch mistakes.
+# =============================================================================
+
+namespace = hint_events
+
+# Using yes as a key instead of a value
+wrong_usage = {
+    yes = something
+}
+
+# Double equals where single equals expected
+comparison_event = {
+    trigger = {
+        age == 16
+    }
+}
+
+# Missing = before opening brace (not a control keyword)
+hint_event {
+    type = character_event
+}
+
+# This is CORRECT - control keywords don't need =
+correct_if = {
+    if {
+        limit = { age >= 16 }
+        add_gold = 100
+    }
+}
+
+# This is CORRECT - simple valid block
+valid_simple = {
+    key = value
+}

@@ -1,6 +1,6 @@
 # CK3 Lens - Comprehensive Copilot Instructions
 
-> **Last Updated:** December 18, 2025  
+> **Last Updated:** December 19, 2025  
 > **For use with:** ck3raven, CK3 Lens MCP, CK3 Lens Explorer
 
 ---
@@ -16,13 +16,13 @@ This workspace contains the **CK3 Lens** ecosystem - a complete AI-powered toolk
 | **ck3raven** | `AI Workspace/ck3raven/` | Python parser, resolver, SQLite database |
 | **CK3 Lens MCP** | `ck3raven/tools/ck3lens_mcp/` | MCP server exposing 28+ tools to Copilot |
 | **CK3 Lens Explorer** | `ck3raven/tools/ck3lens-explorer/` | VS Code extension for human UI |
-| **CK3 Parser** | `AI Workspace/ck3_parser/` | Original standalone parser (100% vanilla pass rate) |
+| **CK3 Parser** | `ck3raven/src/ck3raven/parser/` | Paradox script parser (integrated, 100% vanilla pass rate) |
 
 ### Database
 - **Path:** `~/.ck3raven/ck3raven.db`
-- **Content:** ~85,000 files, 110+ content versions, 27.9 GB indexed
+- **Content:** ~81,000 files, 110+ content versions, indexed
 - **Includes:** Vanilla CK3, Steam Workshop mods, local mods
-- **Symbols:** ~1.2 million extracted symbol definitions
+- **Symbols:** Run `python scripts/rebuild_database.py --refresh-symbols` after setup
 
 ---
 

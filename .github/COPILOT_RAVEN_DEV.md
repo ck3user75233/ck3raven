@@ -198,6 +198,38 @@ pytest tests/ -v
 
 ---
 
+## Code Validation Requirements (MANDATORY)
+
+**All Python code MUST pass validation before being considered complete.**
+
+### Before Making Changes
+1. Run `get_errors` on target files to understand existing state
+2. Check if imports exist using terminal or `mcp_pylance_mcp_s_pylanceRunCodeSnippet`
+
+### After Making Changes  
+1. **Run `get_errors`** on all modified Python files
+2. **Code is NOT complete** until `get_errors` returns clean (no errors)
+3. If errors remain, fix them before reporting completion
+
+### Import Validation
+For any new imports, verify they exist at runtime:
+```python
+# Use terminal to test imports before committing code:
+& "C:\Users\Nathan\Documents\AI Workspace\.venv\Scripts\python.exe" -c "from module import Class; print('OK')"
+```
+
+Or use `mcp_pylance_mcp_s_pylanceRunCodeSnippet` to validate imports.
+
+### Validation Checklist
+- [ ] `get_errors` returns no errors for modified files
+- [ ] All new imports tested and confirmed working
+- [ ] TypeScript files compiled successfully (`npm run compile`)
+- [ ] No syntax errors in any modified files
+
+**Do NOT report a task as complete if validation fails.**
+
+---
+
 ## Roadmap
 
 ### Phase 2: Game State Emulator (NEXT)

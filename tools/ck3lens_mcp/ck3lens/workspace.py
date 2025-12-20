@@ -30,6 +30,7 @@ class Session:
     playset_name: Optional[str] = None
     db_path: Optional[Path] = None
     live_mods: list[LiveMod] = field(default_factory=list)
+    mod_root: Path = field(default_factory=lambda: DEFAULT_CK3_MOD_DIR)
     
     def get_live_mod(self, mod_id: str) -> Optional[LiveMod]:
         """Get live mod by ID."""

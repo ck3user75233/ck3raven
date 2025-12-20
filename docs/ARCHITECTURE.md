@@ -1,6 +1,6 @@
 # ck3raven Architecture
 
-> **Last Updated:** December 19, 2025
+> **Last Updated:** December 20, 2025
 
 ## Overview
 
@@ -278,10 +278,31 @@ ASTs are cached by (content_hash, parser_version):
 | **Session** | `ck3_init_session` | Initialize database connection |
 | **Search** | `ck3_search_symbols`, `ck3_confirm_not_exists` | Find symbols with adjacency matching |
 | **Files** | `ck3_get_file`, `ck3_list_live_files` | Read content from database |
-| **Playset** | `ck3_get_active_playset`, `ck3_add_mod_to_playset` | Manage mod collections |
+| **Playset** | `ck3_get_active_playset`, `ck3_add_mod_to_playset`, `ck3_import_playset_from_launcher`, `ck3_reorder_mod_in_playset` | Manage mod collections |
 | **Conflicts** | `ck3_scan_unit_conflicts`, `ck3_list_conflict_units` | Unit-level conflict analysis |
 | **Live Ops** | `ck3_write_file`, `ck3_edit_file` | Sandboxed file modifications |
 | **Git** | `ck3_git_status`, `ck3_git_commit` | Version control for live mods |
+
+#### Playset Import from Launcher
+
+The `ck3_import_playset_from_launcher` tool enables importing playsets directly from
+CK3 Launcher's exported JSON files:
+
+```python
+# Import a playset from launcher export
+result = ck3_import_playset_from_launcher(
+    launcher_json_path="C:/path/to/MSC_Playset.json",
+    local_mod_paths=["C:/Users/.../mod/LocalMod"],  # Optional local mods
+    set_active=True
+)
+# Returns: { playset_id: 2, mods_linked: 102, mods_skipped: [...] }
+```
+
+**Workflow:**
+1. Export playset from Paradox Launcher (Settings → Export Playset)
+2. Call `ck3_import_playset_from_launcher` with the JSON path
+3. Tool matches Steam IDs to indexed mods and creates playset
+4. Optionally adds local mods at end of load order
 
 #### Adjacency Search
 
@@ -392,6 +413,13 @@ ConflictUnit → User Decision → ResolutionChoice → Patch Generation
 - Provenance tracking per definition
 - Export resolved files with annotations
 
+### Map Mod Conversion Agent (Phase 5)
+- Specialized agent mode for compatching total conversion map mods (MB+, TFE, etc.)
+- Build mapping indices: vanilla↔map_mod for titles, regions, holy sites
+- Auto-mapping with confidence scoring (EXACT, HIGH, MEDIUM, LOW, UNMAPPED)
+- Apply conversions across gameplay mods to generate comaptches
+- See [08_MAP_MOD_CONVERSION_AGENT.md](08_MAP_MOD_CONVERSION_AGENT.md) for full design
+
 ---
 
 ## VS Code Extension (`tools/ck3lens-explorer/`)
@@ -420,9 +448,23 @@ ck3raven Library (parser, database, resolver)
 | Quick Validator | `linting/quickValidator.ts` | Instant TS-based syntax checks |
 | Linting Provider | `linting/lintingProvider.ts` | Full Python parser validation |
 | Explorer View | `views/explorerView.ts` | Database-driven file tree |
+| Playset View | `views/playsetView.ts` | Load order with drag-and-drop reordering |
 | AST Viewer | `views/astViewerPanel.ts` | File content + AST webview |
 | Studio Panel | `views/studioPanel.ts` | Template-based file creation |
 | Widget | `widget/lensWidget.ts` | Mode switching, status overlay |
+
+### Playset Management
+
+The playset view shows mods in the active playset with load order position.
+Users can reorder mods using **drag-and-drop** to change load priority:
+
+- **Drag a mod** → Drop on another mod to insert before it
+- **Drop on header** → Move to first position (after vanilla)
+- Changes are persisted to the database immediately
+
+Setup workflows are accessible from the playset view title bar:
+- **+ Add mods** → Add mods to playset
+- **Switch playset** → View all playsets and switch active
 
 ### Validation Pipeline
 
@@ -448,7 +490,80 @@ See `tools/ck3lens-explorer/DESIGN.md` for full design documentation.
 ---
 
 ### Compatch Helper (Phase 4)
-- Decision card UI
-- Guided merge editor
-- AI-assisted conflict resolution
+
+#### Error/Conflict Explorer
+
+Unified view showing both **parse errors** (from error.log) and **load-order conflicts** (from database):
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│ CK3 Lens: Issues                                         [⟳] │
+├────────────────────────────────────────────────────────────────┤
+│ Filter: [Priority ▾] [Mod ▾] [Status ▾]    🔍 search          │
+├────────────────────────────────────────────────────────────────┤
+│ ▼ CRITICAL (2)                                                 │
+│   🔴 Script parse error in events/ww_events.txt:45            │
+│      Mod: World Wonders | [Navigate] [Create Patch ▾]         │
+│   🔴 Missing trait 'brave_custom' in decisions/knight.txt:12  │
+│      Mod: Knight Overhaul | [Navigate] [Create Patch ▾]       │
+│                                                                │
+│ ▼ HIGH RISK CONFLICTS (5)                                     │
+│   ⚠️ on_action:yearly_ruler_pulse (4 mods)                    │
+│      EPE, CFP, RICE, Vanilla | [Compare] [Create Patch ▾]     │
+│                                                                │
+│ ▼ MEDIUM (12)  ▼ LOW (45)                                      │
+└────────────────────────────────────────────────────────────────┘
+```
+
+#### One-Click Navigation Flow
+
+1. **Click error/conflict** → Opens source file at exact line
+2. Real-time linting shows red squiggly + reference validation
+3. Status bar shows file provenance (which mod, load order position)
+
+#### Override Patch Creation
+
+When error is in **vanilla or non-live mod**, user can create an override patch:
+
+**"Create Patch" Dropdown Options:**
+
+| Option | File Created | Use Case |
+|--------|--------------|----------|
+| **Add Override Patch** | `zzz_msc_[original_name].txt` | Add/modify specific units while preserving others |
+| **Replace Entire File** | `[original_name].txt` | Full replacement, last-wins |
+
+**Target Mod Selection:**
+- Dropdown shows all live mods (editable mods in whitelist)
+- Default: "Mini Super Compatch" or last-used mod
+- Creates correct directory structure automatically
+
+**Example:**
+```
+Error in: common/traits/00_traits.txt (Vanilla)
+User clicks: Create Patch → Add Override Patch → MSC
+
+Creates: MSC/common/traits/zzz_msc_00_traits.txt
+         (containing only the specific trait being fixed)
+```
+
+#### AI-Assisted Merge Modes (Future)
+
+| Mode | Description |
+|------|-------------|
+| **Merge All** | AI merges all mods touching this file, reports unplaceable conflicts |
+| **Merge Subset** | User selects which mods to merge, others get overwritten |
+| **Re-Assert Original** | Original (vanilla/origin mod) wins, all override mods ignored |
+
+**Provenance Tracking:**
+- Every AI merge records which versions were merged
+- Undo capability via git history on live mods
+
+#### MCP Tools for Agent Support
+
+| Tool | Agent Use |
+|------|-----------|
+| `ck3_get_errors(priority=2, mod_filter="MyMod")` | Focus on high-priority issues in specific mod |
+| `ck3_list_conflict_units(risk_filter="high")` | See high-risk conflicts needing compatch |
+| `ck3_get_conflict_detail(id)` | Get full content of all candidates |
+| `ck3_create_override_patch(path, target_mod, mode)` | Create override file in correct location |
 
