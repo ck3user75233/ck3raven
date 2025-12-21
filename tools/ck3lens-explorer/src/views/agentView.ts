@@ -147,11 +147,16 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
         for (const mcpConfigPath of possiblePaths) {
             try {
                 if (mcpConfigPath && fs.existsSync(mcpConfigPath)) {
-                    const content = fs.readFileSync(mcpConfigPath, 'utf-8');
+                    let content = fs.readFileSync(mcpConfigPath, 'utf-8');
+                    // Strip BOM if present
+                    if (content.charCodeAt(0) === 0xFEFF) {
+                        content = content.slice(1);
+                    }
                     const config = JSON.parse(content);
                     
                     if (config.servers?.ck3lens?.args?.[0]) {
                         serverPath = config.servers.ck3lens.args[0];
+                        this.logger.info(`Found MCP config at ${mcpConfigPath}: ${serverPath}`);
                         break;
                     }
                 }
@@ -196,9 +201,25 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
         return new Promise((resolve) => {
             const { spawn } = require('child_process');
             const path = require('path');
+            const fs = require('fs');
 
             const serverDir = path.dirname(serverPath);
-            const proc = spawn('python', [serverPath], {
+            
+            // Try to find the correct Python - check for venv first
+            // From ck3lens_mcp, go up 3 levels: ck3lens_mcp -> tools -> ck3raven -> AI Workspace
+            let pythonPath = 'python';
+            const venvPython = path.join(serverDir, '..', '..', '..', '.venv', 'Scripts', 'python.exe');
+            this.logger.info(`Looking for venv at: ${venvPython}`);
+            if (fs.existsSync(venvPython)) {
+                pythonPath = venvPython;
+                this.logger.info(`Using venv Python: ${venvPython}`);
+            } else {
+                this.logger.info(`Venv not found at ${venvPython}, falling back to system python`);
+            }
+
+            this.logger.info(`Spawning: ${pythonPath} ${serverPath}`);
+            
+            const proc = spawn(pythonPath, [serverPath], {
                 cwd: serverDir,
                 stdio: ['pipe', 'pipe', 'pipe']
             });
