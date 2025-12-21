@@ -1,4 +1,4 @@
-# CK3 Lens Compatching Mode - AI Agent Instructions
+﻿# CK3 Lens Compatching Mode - AI Agent Instructions
 
 > **Mode:** `ck3lens`  
 > **Purpose:** CK3 mod compatibility patching and error fixing  
@@ -6,15 +6,15 @@
 
 ---
 
-## ⚠️ CRITICAL: Database-Only Mode
+## âš ï¸ CRITICAL: Database-Only Mode
 
 **ck3lens is a DATABASE-ONLY mode.** All information is accessed through MCP tools that query the ck3raven SQLite database.
 
-### ✅ ALLOWED Tools
+### âœ… ALLOWED Tools
 - `mcp_ck3lens_*` - All CK3 Lens MCP tools
 - Live file editing via MCP (`ck3_write_file`, `ck3_edit_file`)
 
-### ❌ FORBIDDEN Tools (Do NOT use these)
+### âŒ FORBIDDEN Tools (Do NOT use these)
 - `run_in_terminal` - No terminal commands
 - `grep_search` - No filesystem grep
 - `file_search` - No filesystem search  
@@ -37,7 +37,7 @@ Everything you need is in the database. If something is missing, use `ck3raven-d
 ## VS Code Tool Set
 
 Select the **"CK3 Lens"** tool set in VS Code to restrict available tools:
-- Chat menu → Configure Tool Sets → Select "ck3lens"
+- Chat menu â†’ Configure Tool Sets â†’ Select "ck3lens"
 - Or use `Chat: Configure Tool Sets` command
 
 ---
@@ -45,12 +45,12 @@ Select the **"CK3 Lens"** tool set in VS Code to restrict available tools:
 ## Quick Identity Check
 
 **Am I in the right mode?**
-- ✅ You're fixing CK3 mod errors (syntax, conflicts, missing refs)
-- ✅ You're creating/editing .txt files in mod folders
-- ✅ You're writing compatibility patches for MSC/MSCRE/LRE
-- ✅ You're analyzing load order conflicts
-- ❌ If you're writing Python code for ck3raven → Switch to `ck3raven-dev` mode
-- ❌ If you used `grep_search`, `read_file`, or `run_in_terminal` → You're doing it wrong!
+- âœ… You're fixing CK3 mod errors (syntax, conflicts, missing refs)
+- âœ… You're creating/editing .txt files in mod folders
+- âœ… You're writing compatibility patches for MSC/MSCRE/LRE
+- âœ… You're analyzing load order conflicts
+- âŒ If you're writing Python code for ck3raven â†’ Switch to `ck3raven-dev` mode
+- âŒ If you used `grep_search`, `read_file`, or `run_in_terminal` â†’ You're doing it wrong!
 
 ---
 
@@ -99,9 +99,28 @@ You have access to **CK3 Lens MCP tools** that query a 26+ GB indexed database:
 |------|---------|
 | `ck3_list_live_mods` | List mods you can edit |
 | `ck3_read_live_file` | Read from editable mod |
-| `ck3_write_file` | Write to mod (auto-validates syntax) |
-| `ck3_edit_file` | Search/replace in mod file |
+| `ck3_write_file` | Write/overwrite file in mod |
+| `ck3_create_override_patch` | Create new patch file with proper naming |
 | `ck3_delete_file` | Remove file from mod |
+
+#### File Editing Best Practice
+
+**Always use the read-modify-write pattern:**
+
+1. **Read** the current file: `ck3_read_live_file(mod_name, rel_path)`
+2. **Modify** the content in your response (add/change/remove as needed)
+3. **Write** the full modified content: `ck3_write_file(mod_name, rel_path, new_content)`
+
+This is safer than string replacement because:
+- You see the complete file context
+- No risk of "match not found" failures  
+- Diffs show exactly what changed
+- Works reliably for files of any size
+
+**For new patches**, start from an existing file if needed:
+1. Get source: `ck3_get_file(vanilla_or_mod_path)`
+2. Modify the content
+3. Write as new patch: `ck3_write_file("MSC", "common/traits/zzz_msc_fix.txt", content)`
 
 ### Git Operations
 
@@ -161,11 +180,11 @@ You can edit these mods:
 - `weight_multiplier = { }` - ONE per on_action
 
 ### List Blocks (SAFE - all entries merge)
-- `events = { }` ✅ appends
-- `on_actions = { }` ✅ appends
-- `random_events = { }` ✅ appends
+- `events = { }` âœ… appends
+- `on_actions = { }` âœ… appends
+- `random_events = { }` âœ… appends
 
-### ✅ CORRECT Pattern
+### âœ… CORRECT Pattern
 ```pdx
 # Hook into vanilla via list - SAFE
 on_game_start = {
@@ -180,7 +199,7 @@ my_mod_on_game_start = {
 }
 ```
 
-### ❌ WRONG Pattern
+### âŒ WRONG Pattern
 ```pdx
 # This DESTROYS vanilla's effect block!
 on_game_start = {
@@ -245,9 +264,9 @@ my_trigger = {
 
 ### Step 1: Understand the Error
 What type of error?
-- Syntax error → Parse and validate
-- Missing reference → Search for the symbol
-- Conflict/override → Check conflicts
+- Syntax error â†’ Parse and validate
+- Missing reference â†’ Search for the symbol
+- Conflict/override â†’ Check conflicts
 
 ### Step 2: Search for Context
 ```
@@ -270,7 +289,7 @@ ck3_parse_content(content="my_fix = { ... }")
 ck3_validate_references(content="my_fix = { ... }")
 ```
 
-**⚠️ IMPORTANT: Validation is ADVISORY during early development.**
+**âš ï¸ IMPORTANT: Validation is ADVISORY during early development.**
 
 | Confidence | Error Codes | Meaning |
 |------------|-------------|---------|
@@ -309,21 +328,21 @@ ck3_git_commit(mod_name="MSC", message="Fix: brief description")
 
 ```
 mod/
-├── common/
-│   ├── traits/              # OVERRIDE
-│   ├── cultures/            # OVERRIDE  
-│   ├── religions/           # OVERRIDE
-│   ├── decisions/           # OVERRIDE
-│   ├── on_action/           # CONTAINER_MERGE ⚠️
-│   ├── scripted_effects/    # OVERRIDE
-│   ├── scripted_triggers/   # OVERRIDE
-│   ├── character_interactions/  # OVERRIDE
-│   └── defines/             # PER_KEY_OVERRIDE
-├── events/                  # OVERRIDE by namespace.id
-├── localization/
-│   └── english/
-│       └── replace/         # Override folder
-└── gui/                     # FIOS (first wins)
+â”œâ”€â”€ common/
+â”‚   â”œâ”€â”€ traits/              # OVERRIDE
+â”‚   â”œâ”€â”€ cultures/            # OVERRIDE  
+â”‚   â”œâ”€â”€ religions/           # OVERRIDE
+â”‚   â”œâ”€â”€ decisions/           # OVERRIDE
+â”‚   â”œâ”€â”€ on_action/           # CONTAINER_MERGE âš ï¸
+â”‚   â”œâ”€â”€ scripted_effects/    # OVERRIDE
+â”‚   â”œâ”€â”€ scripted_triggers/   # OVERRIDE
+â”‚   â”œâ”€â”€ character_interactions/  # OVERRIDE
+â”‚   â””â”€â”€ defines/             # PER_KEY_OVERRIDE
+â”œâ”€â”€ events/                  # OVERRIDE by namespace.id
+â”œâ”€â”€ localization/
+â”‚   â””â”€â”€ english/
+â”‚       â””â”€â”€ replace/         # Override folder
+â””â”€â”€ gui/                     # FIOS (first wins)
 ```
 
 ---
@@ -386,3 +405,4 @@ mod/
 5. **Use `zzz_` prefix** to win OVERRIDE conflicts
 6. **Commit changes** with meaningful messages
 7. **Check error.log** after testing in-game
+
