@@ -791,12 +791,24 @@ def generate_missing_asts(conn, logger: DaemonLogger, status: StatusWriter, forc
             # Skip non-script files (graphics data, generated content, etc.)
             # Only common/, events/, history/, localization/, gui/ are CK3 script folders
             skip_patterns = [
-                'gfx/',           # ALL graphics - tree transforms, cameras, meshes, NOT scripts
+                # Graphics and assets - NOT scripts
+                'gfx/',           # ALL graphics - tree transforms, cameras, meshes
                 '/fonts/', '/licenses/', '/sounds/', '/music/',
-                'guids.txt', 'credits.txt', 'readme', 'changelog',
+                
+                # Generated/backup content
                 '#backup/', '/generated/',
-                'moreculturalnames', 'cultural_names_l_',  # Massive localization databases
+                'guids.txt', 'credits.txt', 'readme', 'changelog',
                 'checksum', '.dds', '.png', '.tga',
+                
+                # Portrait/DNA data - huge files with no useful symbols
+                'common/ethnicities/',   # 3000+ portrait ethnicity files
+                'common/dna_data/',      # DNA appearance data
+                'common/coat_of_arms/',  # Procedural coat of arms
+                
+                # Name databases - localization but no symbols
+                'moreculturalnames', 'cultural_names_l_',
+                '/names/character_names',  # Character name databases
+                '_names_l_',  # Name localization files
             ]
             if any(skip in relpath.lower() for skip in skip_patterns):
                 continue
