@@ -70,6 +70,14 @@
     "views": {
       "ck3lens": [
         {
+          "id": "ck3lens.agentView",
+          "name": "Tools",
+          "type": "tree",
+          "icon": "$(tools)",
+          "contextualTitle": "CK3 Lens",
+          "visibility": "visible"
+        },
+        {
           "id": "ck3lens.playsetView",
           "name": "Active Playset",
           "type": "tree",
@@ -88,13 +96,6 @@
           "name": "Conflicts",
           "type": "tree",
           "icon": "$(git-compare)",
-          "contextualTitle": "CK3 Lens"
-        },
-        {
-          "id": "ck3lens.symbolsView",
-          "name": "Symbols",
-          "type": "tree",
-          "icon": "$(symbol-class)",
           "contextualTitle": "CK3 Lens"
         },
         {
@@ -254,6 +255,31 @@
         "command": "ck3lens.mcp.reconnect",
         "title": "CK3 Lens: Reconnect MCP Server",
         "icon": "$(plug)"
+      },
+      {
+        "command": "ck3lens.agent.initialize",
+        "title": "Initialize Agent",
+        "icon": "$(add)"
+      },
+      {
+        "command": "ck3lens.agent.initializeWithMode",
+        "title": "Initialize Agent with Mode",
+        "icon": "$(symbol-event)"
+      },
+      {
+        "command": "ck3lens.agent.reinitialize",
+        "title": "Re-initialize Agent",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "ck3lens.agent.addSubAgent",
+        "title": "Add Sub-agent",
+        "icon": "$(add)"
+      },
+      {
+        "command": "ck3lens.agent.clearAll",
+        "title": "Clear All Agents",
+        "icon": "$(trash)"
       }
     ],
     "menus": {
@@ -261,6 +287,16 @@
         {
           "command": "ck3lens.refreshViews",
           "when": "view =~ /ck3lens\\./",
+          "group": "navigation"
+        },
+        {
+          "command": "ck3lens.agent.initializeWithMode",
+          "when": "view == ck3lens.agentView",
+          "group": "navigation"
+        },
+        {
+          "command": "ck3lens.agent.clearAll",
+          "when": "view == ck3lens.agentView",
           "group": "navigation"
         },
         {
@@ -274,17 +310,17 @@
           "group": "navigation"
         },
         {
-          "command": "ck3lens.searchSymbols",
-          "when": "view == ck3lens.symbolsView",
-          "group": "navigation"
-        },
-        {
           "command": "ck3lens.refreshIssues",
           "when": "view == ck3lens.issuesView",
           "group": "navigation"
         }
       ],
       "view/item/context": [
+        {
+          "command": "ck3lens.agent.reinitialize",
+          "when": "view == ck3lens.agentView && viewItem == agent",
+          "group": "inline"
+        },
         {
           "command": "ck3lens.createOverridePatch",
           "when": "view == ck3lens.issuesView && viewItem == error",

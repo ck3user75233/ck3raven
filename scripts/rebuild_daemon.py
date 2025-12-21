@@ -722,6 +722,10 @@ def generate_missing_asts(conn, logger: DaemonLogger, status: StatusWriter, forc
     # 1. Its content_hash doesn't have an AST entry for this parser version
     # 2. It's a .txt file (CK3 script) or .yml file (localization)
     
+    # Skip files larger than 5MB - they're usually generated data or massive title files
+    # that take too long to parse and aren't useful for symbol extraction
+    MAX_FILE_SIZE = 5_000_000
+    
     query = """
         SELECT DISTINCT fc.content_hash, fc.content_text, f.relpath
         FROM files f
@@ -732,6 +736,7 @@ def generate_missing_asts(conn, logger: DaemonLogger, status: StatusWriter, forc
         AND (f.relpath LIKE '%.txt' OR f.relpath LIKE '%.yml')
         AND fc.content_text IS NOT NULL
         AND a.ast_id IS NULL
+        AND LENGTH(fc.content_text) < ?
     """
     
     # First count
@@ -743,11 +748,12 @@ def generate_missing_asts(conn, logger: DaemonLogger, status: StatusWriter, forc
             AND a.parser_version_id = ?
         WHERE f.deleted = 0
         AND (f.relpath LIKE '%.txt' OR f.relpath LIKE '%.yml')
+        AND LENGTH(fc.content_text) < ?
         AND fc.content_text IS NOT NULL
         AND a.ast_id IS NULL
     """
     
-    total_count = conn.execute(count_query, (parser_version_id,)).fetchone()[0]
+    total_count = conn.execute(count_query, (parser_version_id, MAX_FILE_SIZE)).fetchone()[0]
     
     if total_count == 0:
         logger.info("All files already have ASTs - nothing to do")
@@ -768,7 +774,7 @@ def generate_missing_asts(conn, logger: DaemonLogger, status: StatusWriter, forc
         
         rows = conn.execute(
             query + " LIMIT ? OFFSET ?",
-            (parser_version_id, chunk_size, offset)
+            (parser_version_id, MAX_FILE_SIZE, chunk_size, offset)
         ).fetchall()
         
         if not rows:
@@ -782,8 +788,17 @@ def generate_missing_asts(conn, logger: DaemonLogger, status: StatusWriter, forc
             if not content or len(content) > 2_000_000:
                 continue
             
-            # Skip known problematic file patterns
-            if any(skip in relpath for skip in ['/fonts/', '/licenses/', 'guids.txt', 'credits.txt']):
+            # Skip non-script files (graphics data, generated content, etc.)
+            # Only common/, events/, history/, localization/, gui/ are CK3 script folders
+            skip_patterns = [
+                'gfx/',           # ALL graphics - tree transforms, cameras, meshes, NOT scripts
+                '/fonts/', '/licenses/', '/sounds/', '/music/',
+                'guids.txt', 'credits.txt', 'readme', 'changelog',
+                '#backup/', '/generated/',
+                'moreculturalnames', 'cultural_names_l_',  # Massive localization databases
+                'checksum', '.dds', '.png', '.tga',
+            ]
+            if any(skip in relpath.lower() for skip in skip_patterns):
                 continue
             
             try:

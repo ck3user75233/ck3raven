@@ -48,25 +48,25 @@ export const MODE_DEFINITIONS: Record<string, {
     initPrompt: string;  // Message sent to chat to initialize agent
 }> = {
     'ck3lens': {
-        displayName: 'CK3 Lens (Compatch)',
+        displayName: 'CK3 Lens',
         shortName: 'Lens',
-        description: 'Mod integration, conflict resolution, virtual merge workflows',
+        description: 'Full CK3 modding - conflict detection, live file editing, compatibility patches',
         icon: '$(merge)',
-        initPrompt: 'Initialize as ck3lens mode. Call ck3_get_mode_instructions with mode "ck3lens" and confirm your initialization.'
+        initPrompt: `You have access to the ck3lens MCP server tools (prefixed with ck3_). Initialize as CK3 Lens agent by calling the ck3_get_mode_instructions tool with mode "ck3lens-live". Follow the instructions returned to complete initialization. If you cannot find the ck3_ tools, the MCP server may not be connected - check VS Code settings for MCP configuration.`
     },
     'ck3raven-dev': {
         displayName: 'CK3 Raven Dev',
         shortName: 'Raven',
-        description: 'Game-state emulator + toolchain development',
+        description: 'Infrastructure development - Python, MCP server, database schema',
         icon: '$(beaker)',
-        initPrompt: 'Initialize as ck3raven-dev mode. Call ck3_get_mode_instructions with mode "ck3raven-dev" and confirm your initialization.'
+        initPrompt: `You have access to the ck3lens MCP server tools (prefixed with ck3_). Initialize as CK3 Raven Dev agent by calling the ck3_get_mode_instructions tool with mode "ck3raven-dev". Follow the instructions returned to complete initialization. If you cannot find the ck3_ tools, the MCP server may not be connected - check VS Code settings for MCP configuration.`
     },
     'ck3creator': {
         displayName: 'CK3 Creator',
         shortName: 'Creator',
-        description: 'New content creation (events, cultures, traditions)',
+        description: 'New content creation (events, cultures, traditions) - experimental',
         icon: '$(lightbulb)',
-        initPrompt: 'Initialize as ck3creator mode. Call ck3_get_mode_instructions with mode "ck3creator" and confirm your initialization.'
+        initPrompt: `You have access to the ck3lens MCP server tools (prefixed with ck3_). Initialize as CK3 Creator agent by calling the ck3_get_mode_instructions tool with mode "ck3creator". Follow the instructions returned to complete initialization. If you cannot find the ck3_ tools, the MCP server may not be connected - check VS Code settings for MCP configuration.`
     }
 };
 
@@ -119,9 +119,22 @@ export class LensWidget implements vscode.Disposable {
 
     private loadState(): WidgetState {
         const stored = this.context.globalState.get<WidgetState>('ck3lens.widgetState');
-        return stored || {
+        
+        // Restore persisted state, keeping agents that were explicitly initialized
+        if (stored) {
+            // Keep the stored agents - they were explicitly added by the user
+            return {
+                mcp: stored.mcp || { status: 'disconnected' },
+                agents: stored.agents || [],
+                session: stored.session || { id: this.generateSessionId(), startedAt: new Date().toISOString() },
+                recentActivity: stored.recentActivity || []
+            };
+        }
+        
+        // No stored state - start fresh
+        return {
             mcp: { status: 'disconnected' },
-            agents: [],  // No agents until explicitly initialized or detected
+            agents: [],
             session: { id: this.generateSessionId(), startedAt: new Date().toISOString() }
         };
     }
@@ -226,6 +239,7 @@ export class LensWidget implements vscode.Disposable {
             let lastActivity: Date | null = null;
             let lastActivityDescription = '';
             const recentActivities: string[] = [];
+            let hasAnyToolActivity = false;
 
             for (const line of recentLines.reverse()) {
                 try {
@@ -244,6 +258,8 @@ export class LensWidget implements vscode.Disposable {
                         continue;
                     }
 
+                    hasAnyToolActivity = true;
+
                     // Capture activity description
                     const activityDesc = this.toolToActivityDescription(tool, entry.args, entry.result);
                     
@@ -258,16 +274,20 @@ export class LensWidget implements vscode.Disposable {
                         recentActivities.push(activityDesc);
                     }
 
-                    // Detect mode from tool calls
+                    // ONLY detect mode from explicit get_mode_instructions calls
+                    // Do NOT default to any mode - agent must explicitly initialize
                     if ((tool === 'ck3lens.get_mode_instructions' || tool === 'ck3.get_mode_instructions') && entry.args?.mode) {
                         if (detectedMode === 'none') {
                             detectedMode = entry.args.mode as LensMode;
                         }
-                    } else if (entry.result?.mode && detectedMode === 'none') {
-                        detectedMode = entry.result.mode as LensMode;
-                    } else if (detectedMode === 'none') {
-                        detectedMode = 'ck3lens';  // Default
                     }
+                    // Also check if the result explicitly contains a mode (from init_session perhaps)
+                    else if (entry.result?.mode && typeof entry.result.mode === 'string' && 
+                             Object.keys(MODE_DEFINITIONS).includes(entry.result.mode) && 
+                             detectedMode === 'none') {
+                        detectedMode = entry.result.mode as LensMode;
+                    }
+                    // DO NOT default to 'ck3lens' - only explicit mode initialization counts
                 } catch {
                     // Skip malformed lines
                 }
@@ -276,20 +296,30 @@ export class LensWidget implements vscode.Disposable {
             // Update state with recent activity
             this.state.recentActivity = recentActivities;
 
-            // If we detected an active session, update or add agent
-            if (detectedMode !== 'none' && lastActivity) {
-                const existingAgent = this.state.agents.find(a => a.mode === detectedMode);
-                if (existingAgent) {
+            // Log what we detected for debugging
+            this.logger.debug(`Detection: hasActivity=${hasAnyToolActivity}, mode=${detectedMode}, activities=${recentActivities.length}`);
+
+            // Create/update agent if there's ANY tool activity
+            if (hasAnyToolActivity && lastActivity) {
+                // Find existing agent or create new one
+                let agent = this.state.agents.length > 0 ? this.state.agents[0] : null;
+                
+                if (agent) {
                     // Update existing agent's activity
-                    existingAgent.lastActivity = lastActivityDescription;
-                    existingAgent.lastActivityTime = lastActivity.toISOString();
+                    agent.lastActivity = lastActivityDescription;
+                    agent.lastActivityTime = lastActivity.toISOString();
+                    // Update mode if we detected one and agent had no mode
+                    if (detectedMode !== 'none' && agent.mode === 'none') {
+                        agent.mode = detectedMode;
+                        agent.label = 'Agent (detected)';
+                    }
                 } else {
                     // Create new detected agent
                     const newAgent: AgentInstance = {
                         id: this.generateAgentId(),
-                        mode: detectedMode,
+                        mode: detectedMode,  // Will be 'none' if not explicitly initialized
                         initializedAt: lastActivity.toISOString(),
-                        label: 'Active Agent',
+                        label: 'Agent (detected)',
                         isLocal: false,  // Detected, not explicitly initialized
                         lastActivity: lastActivityDescription,
                         lastActivityTime: lastActivity.toISOString()
@@ -302,9 +332,66 @@ export class LensWidget implements vscode.Disposable {
                 this.logger.debug(`Agent activity: ${lastActivityDescription}`);
             }
         } catch (error) {
-            // Silently fail - detection is best-effort
+            this.logger.error('Error in checkForActiveAgents:', error);
         }
     }
+
+    /**
+     * Debug helper - manually check trace file and log what we find
+     */
+    private async debugTraceFile(): Promise<void> {
+        const fs = require('fs');
+        const path = require('path');
+        const os = require('os');
+
+        const modRoot = path.join(os.homedir(), 'Documents', 'Paradox Interactive', 'Crusader Kings III', 'mod');
+        const traceFile = path.join(modRoot, 'ck3lens_trace.jsonl');
+
+        this.logger.show();  // Make sure output is visible
+        this.logger.info('=== Debug Trace File ===');
+        this.logger.info(`Trace file path: ${traceFile}`);
+
+        if (!fs.existsSync(traceFile)) {
+            this.logger.info('WARNING: Trace file does NOT exist!');
+            vscode.window.showWarningMessage('Trace file not found. No MCP tool calls have been logged.');
+            return;
+        }
+
+        const stats = fs.statSync(traceFile);
+        const lastModified = stats.mtime;
+        const now = new Date();
+        const ageMinutes = (now.getTime() - lastModified.getTime()) / (1000 * 60);
+
+        this.logger.info(`File exists: YES`);
+        this.logger.info(`Last modified: ${lastModified.toISOString()} (${ageMinutes.toFixed(1)} minutes ago)`);
+        this.logger.info(`File size: ${stats.size} bytes`);
+
+        // Read last 10 entries
+        const content = fs.readFileSync(traceFile, 'utf-8');
+        const lines = content.trim().split('\n');
+        this.logger.info(`Total lines: ${lines.length}`);
+
+        this.logger.info('--- Last 10 entries ---');
+        const recentLines = lines.slice(-10);
+        for (const line of recentLines) {
+            try {
+                const entry = JSON.parse(line);
+                const entryTime = new Date(entry.ts * 1000);
+                const entryAgeMinutes = (now.getTime() - entryTime.getTime()) / (1000 * 60);
+                this.logger.info(`  [${entryAgeMinutes.toFixed(1)}m ago] ${entry.tool} - args: ${JSON.stringify(entry.args || {}).substring(0, 100)}`);
+            } catch {
+                this.logger.info(`  [malformed] ${line.substring(0, 80)}...`);
+            }
+        }
+
+        this.logger.info('--- Current widget state ---');
+        this.logger.info(`Agents: ${JSON.stringify(this.state.agents)}`);
+        this.logger.info(`MCP: ${JSON.stringify(this.state.mcp)}`);
+        this.logger.info(`Recent activity: ${JSON.stringify(this.state.recentActivity)}`);
+        
+        vscode.window.showInformationMessage('Debug info written to CK3 Lens output channel');
+    }
+
     private generateSessionId(): string {
         return 'S-' + Math.random().toString(36).substring(2, 10);
     }
@@ -314,9 +401,18 @@ export class LensWidget implements vscode.Disposable {
     }
 
     private registerCommands(): void {
-        // Initialize agent with mode selection
+        // Initialize agent - creates agent in default mode (no specific mode yet)
         this.disposables.push(
             vscode.commands.registerCommand('ck3lens.initializeAgent', async () => {
+                // Create agent with 'none' mode (default mode)
+                // The agent will be updated when it calls ck3_get_mode_instructions
+                await this.initializeDefaultAgent();
+            })
+        );
+
+        // Initialize agent with specific mode selection
+        this.disposables.push(
+            vscode.commands.registerCommand('ck3lens.initializeAgentWithMode', async () => {
                 const items = Object.entries(MODE_DEFINITIONS).map(([id, def]) => ({
                     label: `${def.icon} ${def.displayName}`,
                     description: def.description,
@@ -325,7 +421,7 @@ export class LensWidget implements vscode.Disposable {
 
                 const selected = await vscode.window.showQuickPick(items, {
                     placeHolder: 'Select agent mode to initialize',
-                    title: 'Initialize Agent'
+                    title: 'Initialize Agent with Mode'
                 });
 
                 if (selected) {
@@ -395,7 +491,7 @@ export class LensWidget implements vscode.Disposable {
                     const modeDef = MODE_DEFINITIONS[selected.id];
                     
                     // Copy mode switch prompt to clipboard
-                    const switchPrompt = `Switch to ${selected.id} mode. Call ck3_get_mode_instructions with mode "${selected.id}" and confirm the mode switch.`;
+                    const switchPrompt = `Switch to ${modeDef.displayName} mode. Call the ck3_get_mode_instructions tool with mode "${selected.id}" and follow the returned instructions.`;
                     await vscode.env.clipboard.writeText(switchPrompt);
                     
                     // Update agent mode in state
@@ -455,6 +551,14 @@ export class LensWidget implements vscode.Disposable {
                 const stateJson = JSON.stringify(this.state, null, 2);
                 vscode.env.clipboard.writeText(stateJson);
                 vscode.window.showInformationMessage('CK3 Lens state copied to clipboard');
+                this.logger.info(`Widget state: ${stateJson}`);
+            })
+        );
+
+        // Debug: check trace file and log findings
+        this.disposables.push(
+            vscode.commands.registerCommand('ck3lens.debugTrace', async () => {
+                await this.debugTraceFile();
             })
         );
 
@@ -475,7 +579,7 @@ export class LensWidget implements vscode.Disposable {
     }
 
     /**
-     * Initialize agent by copying prompt to clipboard and opening chat
+     * Initialize agent by opening chat with the initialization prompt
      */
     private async initializeAgentWithMode(mode: LensMode, isSubAgent: boolean): Promise<void> {
         const modeDef = MODE_DEFINITIONS[mode];
@@ -488,15 +592,9 @@ export class LensWidget implements vscode.Disposable {
         const prompt = modeDef.initPrompt;
 
         try {
-            // Copy prompt to clipboard
-            await vscode.env.clipboard.writeText(prompt);
+            this.logger.info(`Initializing ${isSubAgent ? 'sub-' : ''}agent with mode: ${mode}`);
             
-            // Open chat panel
-            await vscode.commands.executeCommand('workbench.action.chat.open');
-            
-            this.logger.info(`Copied initialization prompt for ${isSubAgent ? 'sub-' : ''}agent mode: ${mode}`);
-            
-            // Add agent to list with session tracking
+            // Add agent to list with session tracking BEFORE opening chat
             const agentLabel = isSubAgent 
                 ? `Sub-Agent ${this.state.agents.filter(a => a.label.startsWith('Sub-')).length + 1}`
                 : `Agent ${this.state.agents.filter(a => !a.label.startsWith('Sub-')).length + 1}`;
@@ -520,21 +618,59 @@ export class LensWidget implements vscode.Disposable {
             this.persistState();
             this.updateStatusBar();
             this.updateWebview();
-            
-            // Show notification with paste instruction
-            const action = await vscode.window.showInformationMessage(
-                `${modeDef.shortName} mode prompt copied! Paste (Ctrl+V) into chat to initialize.`,
-                'Open Chat'
-            );
-            
-            if (action === 'Open Chat') {
-                await vscode.commands.executeCommand('workbench.action.chat.open');
+
+            if (isSubAgent) {
+                // For sub-agents: Create a NEW chat session with the prompt pre-filled
+                // First create a new chat, then open it with the query
+                await vscode.commands.executeCommand('workbench.action.chat.newChat');
+                // Small delay to ensure new chat is ready
+                await new Promise(resolve => setTimeout(resolve, 100));
             }
+            
+            // Open chat with the initialization prompt pre-filled in the input
+            // The 'query' parameter pre-fills the chat input box
+            await vscode.commands.executeCommand('workbench.action.chat.open', {
+                query: prompt
+            });
+            
+            // Also copy to clipboard as backup
+            await vscode.env.clipboard.writeText(prompt);
+            
+            // Show brief notification
+            vscode.window.showInformationMessage(
+                `${modeDef.shortName} mode: Press Enter to send the initialization prompt${isSubAgent ? ' (new chat created)' : ''}`
+            );
             
         } catch (error) {
             this.logger.error('Failed to initialize agent', error);
             vscode.window.showErrorMessage(`Failed to initialize agent: ${error}`);
         }
+    }
+
+    /**
+     * Initialize agent in default mode (no specific mode)
+     * This just marks that an agent is now active in the chat
+     */
+    private async initializeDefaultAgent(): Promise<void> {
+        // Create agent with 'none' mode - will be updated when agent calls get_mode_instructions
+        const newAgent: AgentInstance = {
+            id: this.generateAgentId(),
+            mode: 'none',
+            initializedAt: new Date().toISOString(),
+            label: 'Agent',
+            isLocal: true
+        };
+        
+        // Replace any existing primary agent
+        this.state.agents = this.state.agents.filter(a => a.label.startsWith('Sub-'));
+        this.state.agents.unshift(newAgent);
+        
+        this.persistState();
+        this.updateStatusBar();
+        this.updateWebview();
+        
+        this.logger.info('Agent initialized in default mode');
+        vscode.window.showInformationMessage('Agent marked as active. Use Re-init to set a specific mode.');
     }
 
     /**
@@ -635,6 +771,7 @@ export class LensWidget implements vscode.Disposable {
     private showWebviewPanel(): void {
         if (this.webviewPanel) {
             this.webviewPanel.reveal();
+            this.updateWebview();  // Refresh HTML when revealing existing panel
             return;
         }
 
@@ -699,6 +836,9 @@ export class LensWidget implements vscode.Disposable {
             case 'viewPlaysets':
                 vscode.commands.executeCommand('ck3lens.viewPlaysets');
                 break;
+            case 'debugTrace':
+                vscode.commands.executeCommand('ck3lens.debugTrace');
+                break;
         }
     }
 
@@ -723,35 +863,56 @@ export class LensWidget implements vscode.Disposable {
         };
 
         const agentsHtml = this.state.agents.length === 0
-            ? '<div class="no-agents">No agent activity detected<br><span class="hint">Start chatting with CK3 Lens tools to see activity here</span></div>'
+            ? ''  // No agents - will show Initialize button instead
             : this.state.agents.map(agent => {
                 const modeDef = MODE_DEFINITIONS[agent.mode];
                 const activityTime = formatRelativeTime(agent.lastActivityTime);
-                const activityHtml = agent.lastActivity 
-                    ? `<div class="agent-activity" title="${agent.lastActivity}">
-                         <span class="activity-icon">⚡</span>
-                         <span class="activity-text">${agent.lastActivity}</span>
-                         ${activityTime ? `<span class="activity-time">${activityTime}</span>` : ''}
-                       </div>`
+                
+                // Build activity list - show recent activities or a placeholder
+                let activityHtml = '';
+                if (agent.lastActivity) {
+                    activityHtml = `
+                        <div class="agent-activity">
+                            <span class="activity-text">${agent.lastActivity}</span>
+                            ${activityTime ? `<span class="activity-time">${activityTime}</span>` : ''}
+                        </div>`;
+                }
+                
+                // Show recent activities from state if available
+                const recentActivitiesHtml = this.state.recentActivity && this.state.recentActivity.length > 0
+                    ? this.state.recentActivity.slice(0, 3).map(activity => 
+                        `<div class="activity-item">• ${activity}</div>`
+                    ).join('')
                     : '';
+                
+                // Display: "Agent - initialized by VS Code" or "Agent - ck3lens" etc.
+                const modeLabel = agent.mode === 'none' 
+                    ? 'initialized by VS Code'
+                    : (modeDef?.shortName || agent.mode);
+
                 return `
                     <div class="agent-row">
                         <div class="agent-info">
                             <div class="agent-header">
-                                <span class="agent-label">${modeDef?.displayName || agent.mode}</span>
-                            </div>
-                            <div class="agent-mode-row">
-                                <span class="agent-mode">${modeDef?.icon || ''} ${modeDef?.description || ''}</span>
+                                <span class="agent-label">Agent - ${modeLabel}</span>
+                                <button class="btn-reinit" data-agent-id="${agent.id}" data-action="reinit" title="Re-initialize to a specific mode">Re-init</button>
                             </div>
                             ${activityHtml}
-                        </div>
-                        <div class="agent-actions">
-                            <button class="btn-mode" data-agent-id="${agent.id}" data-action="changeMode" title="Switch to a different mode">Switch Mode</button>
-                            <button class="btn-mode" data-agent-id="${agent.id}" data-action="reinit" title="Re-initialize this agent">Re-init</button>
+                            ${recentActivitiesHtml ? `<div class="recent-activities">${recentActivitiesHtml}</div>` : ''}
                         </div>
                     </div>
                 `;
             }).join('');
+
+        // Build action buttons based on state
+        const hasAgents = this.state.agents.length > 0;
+        const actionButtonsHtml = hasAgents 
+            ? `<button class="btn-secondary full-width" id="addSubAgent">+ Add Sub-agent</button>`
+            : `<button class="btn-primary full-width" id="initAgent">Initialize Agent</button>`;
+        
+        const clearButtonHtml = hasAgents
+            ? `<button class="btn-ghost full-width" id="clearAgents">Clear All Agents</button>`
+            : '';
 
         return `<!DOCTYPE html>
 <html lang="en">
@@ -827,9 +988,6 @@ export class LensWidget implements vscode.Disposable {
             color: var(--vscode-button-secondaryForeground);
         }
         .agent-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
             padding: 10px;
             margin: 4px 0;
             background: var(--vscode-editor-background);
@@ -840,52 +998,28 @@ export class LensWidget implements vscode.Disposable {
         .agent-info {
             display: flex;
             flex-direction: column;
-            gap: 4px;
-            flex: 1;
+            gap: 2px;
         }
         .agent-header {
             display: flex;
             align-items: center;
             gap: 8px;
+            flex-wrap: wrap;
         }
         .agent-label {
             font-weight: bold;
             font-size: 13px;
         }
-        .agent-mode-row {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .agent-mode {
-            font-size: 11px;
-            color: var(--vscode-descriptionForeground);
-        }
-        .agent-activity {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            margin-top: 4px;
-            padding: 4px 6px;
-            background: var(--vscode-textBlockQuote-background);
+        .mode-badge {
+            font-size: 10px;
+            padding: 2px 6px;
             border-radius: 3px;
-            font-size: 11px;
+            background: var(--vscode-activityBarBadge-background);
+            color: var(--vscode-activityBarBadge-foreground);
         }
-        .activity-icon {
-            font-size: 10px;
-        }
-        .activity-text {
-            color: var(--vscode-foreground);
-            flex: 1;
-        }
-        .activity-time {
-            color: var(--vscode-descriptionForeground);
-            font-size: 10px;
-        }
-        .agent-actions {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
+        .mode-badge.uninitialized {
+            background: var(--vscode-editorWarning-foreground);
+            color: var(--vscode-editor-background);
         }
         .no-agents {
             text-align: center;
@@ -907,6 +1041,63 @@ export class LensWidget implements vscode.Disposable {
         }
         .activity-item:last-child {
             border-bottom: none;
+        }
+        .agent-subtitle {
+            font-size: 11px;
+            color: var(--vscode-descriptionForeground);
+            margin-bottom: 4px;
+        }
+        .agent-activity {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 8px;
+            background: var(--vscode-textBlockQuote-background);
+            border-radius: 3px;
+            font-size: 11px;
+            margin-top: 4px;
+        }
+        .activity-text {
+            color: var(--vscode-foreground);
+            flex: 1;
+        }
+        .activity-time {
+            color: var(--vscode-descriptionForeground);
+            font-size: 10px;
+        }
+        .recent-activities {
+            margin-top: 6px;
+            padding-top: 6px;
+            border-top: 1px solid var(--vscode-panel-border);
+        }
+        .recent-activities .activity-item {
+            font-size: 10px;
+            color: var(--vscode-descriptionForeground);
+            padding: 2px 0;
+        }
+        .btn-reinit {
+            width: auto;
+            padding: 2px 8px;
+            font-size: 10px;
+            margin: 0;
+            background: var(--vscode-button-secondaryBackground);
+            color: var(--vscode-button-secondaryForeground);
+        }
+        .btn-primary {
+            background: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+        }
+        .btn-secondary {
+            background: var(--vscode-button-secondaryBackground);
+            color: var(--vscode-button-secondaryForeground);
+        }
+        .btn-ghost {
+            background: transparent;
+            color: var(--vscode-descriptionForeground);
+            border: 1px solid var(--vscode-panel-border);
+        }
+        .full-width {
+            width: 100%;
         }
         .quick-actions {
             display: grid;
@@ -934,31 +1125,24 @@ export class LensWidget implements vscode.Disposable {
             ${this.state.mcp.latencyMs ? `<span style="color: var(--vscode-descriptionForeground)">(${this.state.mcp.latencyMs}ms)</span>` : ''}
         </div>
         ${this.state.mcp.serverName ? `<div style="font-size: 11px; color: var(--vscode-descriptionForeground)">Server: ${this.state.mcp.serverName}</div>` : ''}
-        ${this.state.mcp.status === 'disconnected' ? '<button class="secondary" id="btn-reconnect">Reconnect</button>' : ''}
+        ${this.state.mcp.status === 'disconnected' ? '<button class="btn-secondary" id="btn-reconnect">Reconnect</button>' : ''}
     </div>
 
     <div class="section">
-        <div class="section-title">Agent Mode</div>
+        <div class="section-title">${this.state.agents.length > 0 ? 'Agent Mode' : 'Agents'}</div>
         ${agentsHtml}
-        ${this.state.agents.length === 0 ? '<button id="btn-init-agent">Initialize Agent Mode ▼</button>' : ''}
+        ${actionButtonsHtml}
+        ${clearButtonHtml}
     </div>
-
-    ${this.state.recentActivity && this.state.recentActivity.length > 0 ? `
-    <div class="section">
-        <div class="section-title">Recent Activity</div>
-        <div class="activity-list">
-            ${this.state.recentActivity.map(a => `<div class="activity-item">• ${a}</div>`).join('')}
-        </div>
-    </div>
-    ` : ''}
 
     <div class="section">
         <div class="section-title">Quick Actions</div>
         <div class="quick-actions">
-            <button class="secondary" id="btn-logs">📋 Logs</button>
-            <button class="secondary" id="btn-state">📋 State</button>
-            <button class="secondary" id="btn-settings">⚙️ Settings</button>
+            <button class="btn-secondary" id="btn-logs">📋 Logs</button>
+            <button class="btn-secondary" id="btn-state">📋 State</button>
+            <button class="btn-secondary" id="btn-settings">⚙️ Settings</button>
         </div>
+        <button class="btn-ghost full-width" id="btn-debug" style="margin-top: 8px; font-size: 10px;">🔍 Debug Trace</button>
     </div>
 
     <div class="health">
@@ -971,7 +1155,7 @@ export class LensWidget implements vscode.Disposable {
         // Add event listeners when DOM is ready
         document.addEventListener('DOMContentLoaded', function() {
             // Initialize Agent button
-            const initBtn = document.getElementById('btn-init-agent');
+            const initBtn = document.getElementById('initAgent');
             if (initBtn) {
                 initBtn.addEventListener('click', function() {
                     vscode.postMessage({ command: 'initializeAgent' });
@@ -1008,14 +1192,6 @@ export class LensWidget implements vscode.Disposable {
                 });
             }
             
-            // Agent mode switch buttons (data-action="changeMode")
-            document.querySelectorAll('[data-action="changeMode"]').forEach(function(btn) {
-                btn.addEventListener('click', function() {
-                    const agentId = btn.getAttribute('data-agent-id');
-                    vscode.postMessage({ command: 'changeAgentMode', agentId: agentId });
-                });
-            });
-            
             // Agent re-init buttons (data-action="reinit")
             document.querySelectorAll('[data-action="reinit"]').forEach(function(btn) {
                 btn.addEventListener('click', function() {
@@ -1023,6 +1199,30 @@ export class LensWidget implements vscode.Disposable {
                     vscode.postMessage({ command: 'reinitializeAgent', agentId: agentId });
                 });
             });
+            
+            // Add Sub-agent button
+            const addSubagentBtn = document.getElementById('addSubAgent');
+            if (addSubagentBtn) {
+                addSubagentBtn.addEventListener('click', function() {
+                    vscode.postMessage({ command: 'initializeSubAgent' });
+                });
+            }
+            
+            // Clear all agents button
+            const clearAgentsBtn = document.getElementById('clearAgents');
+            if (clearAgentsBtn) {
+                clearAgentsBtn.addEventListener('click', function() {
+                    vscode.postMessage({ command: 'clearAgents' });
+                });
+            }
+            
+            // Debug trace button
+            const debugBtn = document.getElementById('btn-debug');
+            if (debugBtn) {
+                debugBtn.addEventListener('click', function() {
+                    vscode.postMessage({ command: 'debugTrace' });
+                });
+            }
         });
     </script>
 </body>

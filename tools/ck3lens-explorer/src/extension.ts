@@ -9,10 +9,10 @@ import * as vscode from 'vscode';
 import { CK3LensSession } from './session';
 import { ExplorerViewProvider } from './views/explorerView';
 import { ConflictsViewProvider } from './views/conflictsView';
-import { SymbolsViewProvider } from './views/symbolsView';
 import { LiveModsViewProvider } from './views/liveModsView';
 import { PlaysetViewProvider } from './views/playsetView';
 import { IssuesViewProvider } from './views/issuesView';
+import { AgentViewProvider } from './views/agentView';
 import { AstViewerPanel } from './views/astViewerPanel';
 import { StudioPanel } from './views/studioPanel';
 import { LintingProvider } from './linting/lintingProvider';
@@ -21,13 +21,13 @@ import { ReferenceProvider } from './language/referenceProvider';
 import { HoverProvider } from './language/hoverProvider';
 import { CompletionProvider } from './language/completionProvider';
 import { PythonBridge } from './bridge/pythonBridge';
-import { LensWidget } from './widget/lensWidget';
+import { LensStatusBar } from './widget/statusBar';
 import { Logger } from './utils/logger';
 
 // Global extension state
 let session: CK3LensSession | undefined;
 let pythonBridge: PythonBridge | undefined;
-let lensWidget: LensWidget | undefined;
+let statusBar: LensStatusBar | undefined;
 let logger: Logger;
 let outputChannel: vscode.OutputChannel;
 let diagnosticCollection: vscode.DiagnosticCollection;
@@ -55,10 +55,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Register view providers
     const explorerProvider = new ExplorerViewProvider(session, logger);
     const conflictsProvider = new ConflictsViewProvider(session, logger);
-    const symbolsProvider = new SymbolsViewProvider(session, logger);
     const liveModsProvider = new LiveModsViewProvider(session, logger);
     const playsetProvider = new PlaysetViewProvider(session, logger);
     const issuesProvider = new IssuesViewProvider(session, logger);
+    const agentProvider = new AgentViewProvider(context, logger);
 
     // Create playset tree view with drag-and-drop support
     const playsetTreeView = vscode.window.createTreeView('ck3lens.playsetView', {
@@ -68,23 +68,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
 
     context.subscriptions.push(
+        vscode.window.registerTreeDataProvider('ck3lens.agentView', agentProvider),
         vscode.window.registerTreeDataProvider('ck3lens.explorerView', explorerProvider),
         vscode.window.registerTreeDataProvider('ck3lens.conflictsView', conflictsProvider),
-        vscode.window.registerTreeDataProvider('ck3lens.symbolsView', symbolsProvider),
         vscode.window.registerTreeDataProvider('ck3lens.liveModsView', liveModsProvider),
         playsetTreeView,
         vscode.window.registerTreeDataProvider('ck3lens.issuesView', issuesProvider)
     );
 
-    // Initialize the Lens Widget (status bar + panel)
-    lensWidget = new LensWidget(context, logger);
-    context.subscriptions.push(lensWidget);
-
-    // Connect widget to session state changes
-    lensWidget.onStateChange(state => {
-        const primaryMode = state.agents.length > 0 ? state.agents[0].mode : 'none';
-        logger.info(`Widget state changed: mcp=${state.mcp.status}, agents=${state.agents.length}, mode=${primaryMode}`);
-    });
+    // Initialize the Status Bar
+    statusBar = new LensStatusBar(context, logger);
+    context.subscriptions.push(statusBar);
 
     // Register language features for paradox-script
     const paradoxSelector: vscode.DocumentSelector = { language: 'paradox-script' };
@@ -127,7 +121,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     // Register commands
-    registerCommands(context, explorerProvider, conflictsProvider, symbolsProvider, liveModsProvider, playsetProvider, issuesProvider, lintingProvider);
+    registerCommands(context, agentProvider, explorerProvider, conflictsProvider, liveModsProvider, playsetProvider, issuesProvider, lintingProvider);
 
     // Register file watchers for real-time linting
     if (vscode.workspace.getConfiguration('ck3lens').get('enableRealTimeLinting', true)) {
@@ -156,9 +150,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
  */
 function registerCommands(
     context: vscode.ExtensionContext,
+    agentProvider: AgentViewProvider,
     explorerProvider: ExplorerViewProvider,
     conflictsProvider: ConflictsViewProvider,
-    symbolsProvider: SymbolsViewProvider,
     liveModsProvider: LiveModsViewProvider,
     playsetProvider: PlaysetViewProvider,
     issuesProvider: IssuesViewProvider,
@@ -170,29 +164,27 @@ function registerCommands(
             try {
                 await session?.initialize();
                 
-                // Update widget to show connected status
-                if (lensWidget) {
-                    lensWidget.setMcpStatus('connected', undefined, 'ck3raven');
-                    lensWidget.setLensEnabled(true);
-                    lensWidget.setAgentStatus('idle'); // Clear any previous error
-                }
+                // Update status bar to show connected
+                statusBar?.setPythonBridgeStatus('connected');
+                
+                // Update agent view - Python Bridge is now connected
+                agentProvider.setPythonBridgeStatus('connected');
                 
                 vscode.window.showInformationMessage('CK3 Lens session initialized');
                 
                 // Refresh all views
                 explorerProvider.refresh();
                 conflictsProvider.refresh();
-                symbolsProvider.refresh();
                 liveModsProvider.refresh();
                 playsetProvider.refresh();
             } catch (error) {
                 logger.error('Failed to initialize session', error);
                 
-                // Update widget to show error status
-                if (lensWidget) {
-                    lensWidget.setMcpStatus('disconnected');
-                    lensWidget.setAgentStatus('error', `${error}`);
-                }
+                // Update status bar to show disconnected
+                statusBar?.setPythonBridgeStatus('disconnected');
+                
+                // Update agent view - Python Bridge failed
+                agentProvider.setPythonBridgeStatus('disconnected');
                 
                 vscode.window.showErrorMessage(`Failed to initialize CK3 Lens: ${error}`);
             }
@@ -204,7 +196,6 @@ function registerCommands(
         vscode.commands.registerCommand('ck3lens.refreshViews', () => {
             explorerProvider.refresh();
             conflictsProvider.refresh();
-            symbolsProvider.refresh();
             liveModsProvider.refresh();
             playsetProvider.refresh();
         })
@@ -256,7 +247,7 @@ function registerCommands(
         })
     );
 
-    // Search symbols
+    // Search symbols (results shown in quick pick)
     context.subscriptions.push(
         vscode.commands.registerCommand('ck3lens.searchSymbols', async () => {
             const query = await vscode.window.showInputBox({
@@ -267,7 +258,18 @@ function registerCommands(
             if (query) {
                 const results = await session?.searchSymbols(query);
                 if (results && results.length > 0) {
-                    symbolsProvider.showSearchResults(results);
+                    // Show results in quick pick
+                    const items = results.map(r => ({
+                        label: r.name,
+                        description: `${r.symbolType} (${r.mod})`,
+                        detail: r.relpath
+                    }));
+                    const selected = await vscode.window.showQuickPick(items, {
+                        placeHolder: `Found ${results.length} symbols`
+                    });
+                    if (selected) {
+                        vscode.window.showInformationMessage(`Selected: ${selected.label} - ${selected.detail}`);
+                    }
                 } else {
                     vscode.window.showInformationMessage('No symbols found');
                 }
@@ -658,5 +660,5 @@ export function deactivate(): void {
     logger?.info('CK3 Lens Explorer deactivating...');
     session?.dispose();
     pythonBridge?.dispose();
-    lensWidget?.dispose();
+    statusBar?.dispose();
 }
