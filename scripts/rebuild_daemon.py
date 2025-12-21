@@ -737,6 +737,14 @@ def generate_missing_asts(conn, logger: DaemonLogger, status: StatusWriter, forc
         AND fc.content_text IS NOT NULL
         AND a.ast_id IS NULL
         AND LENGTH(fc.content_text) < ?
+        -- Exclude non-script paths at SQL level for efficiency
+        AND f.relpath NOT LIKE 'gfx/%'
+        AND f.relpath NOT LIKE 'common/ethnicities/%'
+        AND f.relpath NOT LIKE 'common/dna_data/%'
+        AND f.relpath NOT LIKE 'common/coat_of_arms/%'
+        AND f.relpath NOT LIKE 'history/characters/%'
+        AND f.relpath NOT LIKE '%/names/character_names%'
+        AND f.relpath NOT LIKE '%_names_l_%'
     """
     
     # First count
@@ -804,6 +812,7 @@ def generate_missing_asts(conn, logger: DaemonLogger, status: StatusWriter, forc
                 'common/ethnicities/',   # 3000+ portrait ethnicity files
                 'common/dna_data/',      # DNA appearance data
                 'common/coat_of_arms/',  # Procedural coat of arms
+                'history/characters/',   # Massive character history files
                 
                 # Name databases - localization but no symbols
                 'moreculturalnames', 'cultural_names_l_',
