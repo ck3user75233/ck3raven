@@ -2,6 +2,19 @@
 
 VS Code extension for CK3 mod development - Game state explorer, conflict resolution, and real-time linting powered by ck3raven.
 
+## Current Status (December 2025)
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Parser | ✅ Working | Fixed infinite loop bug, 98% round-trip accuracy |
+| Database | ✅ Built | 648 mods indexed, 71K ASTs, 207K files |
+| Linting | ✅ Working | Two-phase: quick TypeScript + full Python |
+| Syntax Highlighting | ✅ Working | TextMate grammars for .txt/.yml |
+| Symbol Search | ⚠️ Partial | FTS5 search works, needs full extraction run |
+| IntelliSense | ⚠️ Partial | Prefix matching only, fuzzy matching planned |
+| Go to Definition | 🔜 Planned | Architecture ready |
+| Reference Validation | 🔜 Planned | Warn on undefined symbols |
+
 ## Features
 
 ### 🔍 Game State Explorer

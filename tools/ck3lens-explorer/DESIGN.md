@@ -1,8 +1,37 @@
 # CK3 Lens Explorer - Design Brief
 
 > **Version:** 0.2.0-dev  
-> **Last Updated:** December 19, 2025  
+> **Last Updated:** December 22, 2025  
 > **Status:** Implementation in Progress
+
+## Current Status (December 2025)
+
+### ✅ Completed
+- **Parser**: Fixed infinite loop bug on unexpected `}` tokens
+- **AST Builder**: 71,393 ASTs built (68,877 OK, 2,516 parse errors) 
+- **Database**: 648 mods indexed (633 Steam + 15 local) including vanilla
+- **Playset**: Active playset "MSC Religion Expanded Dec20-updated" with 111 mods
+- **Symbol Search**: FTS5-based search implemented in bridge with playset filtering
+- **Real-Time Linting**: Two-phase validation (quick TypeScript + full Python)
+- **Syntax Highlighting**: TextMate grammars for .txt and .yml files
+- **Studio Panel**: 11 file creation templates
+
+### 🔄 In Progress
+- **Symbol Extraction**: Only 5,214 symbols extracted from 71K ASTs (mostly title_history)
+- **IntelliSense**: Prefix matching works, context-awareness and fuzzy matching planned
+
+### ⚠️ Known Issues
+- **Database Size**: 110GB vs ~3GB raw files (AST blob compression needed)
+- **Symbol Coverage**: Need full extraction run for traits, events, decisions etc.
+- **Stub Implementations**: Several bridge methods return placeholder data
+
+### 📋 Planned
+- Context-aware completions (filter by expected type after `has_trait =`)
+- Fuzzy matching for typo tolerance
+- Reference validation (warn on undefined symbols)
+- Version control for vanilla CK3 symbols per game version
+
+---
 
 ## Overview
 

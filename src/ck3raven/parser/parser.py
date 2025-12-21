@@ -538,9 +538,12 @@ class Parser:
         if token.type == TokenType.LBRACE:
             return self._parse_block_contents()
         
-        # Handle closing brace (return to caller)
+        # Handle closing brace at top level - this is a syntax error
+        # (unbalanced braces, likely from commented-out opening brace)
         if token.type == TokenType.RBRACE:
-            return None
+            # Advance past the unexpected brace to prevent infinite loop
+            self._advance()
+            raise ParseError(f"Unexpected closing brace '}}' at top level (unbalanced braces?)", token)
         
         raise ParseError(f"Unexpected token {token.type.name}", token)
     

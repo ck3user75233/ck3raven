@@ -492,18 +492,97 @@ class CK3LensBridge:
         return issues
     
     def search_symbols(self, params: dict) -> dict:
-        """Search for symbols in the database."""
+        """Search for symbols in the database.
+        
+        Uses FTS5 search on symbols_fts table, filtered to active playset mods.
+        """
         query = params.get("query", "")
         symbol_type = params.get("symbol_type")
         limit = params.get("limit", 50)
-        adjacency = params.get("adjacency", "auto")
+        adjacency = params.get("adjacency", "auto")  # For future fuzzy matching
         
-        # TODO: Implement actual database search
-        return {
-            "results": [],
-            "adjacencies": [],
-            "query_patterns": [query]
-        }
+        if not self.db_conn or not query.strip():
+            return {"results": [], "adjacencies": [], "query_patterns": [query]}
+        
+        try:
+            # Escape query for FTS5
+            fts_query = self._escape_fts_query(query)
+            
+            # Build SQL with playset filtering
+            # Only return symbols from mods in the active playset
+            sql = """
+                SELECT s.symbol_id, s.name, s.symbol_type, s.scope,
+                       s.line_number, f.relpath, cv.content_version_id,
+                       mp.name as mod_name, rank
+                FROM symbols_fts fts
+                JOIN symbols s ON s.symbol_id = fts.rowid
+                LEFT JOIN files f ON s.defining_file_id = f.file_id
+                LEFT JOIN content_versions cv ON s.content_version_id = cv.content_version_id
+                LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                WHERE symbols_fts MATCH ?
+            """
+            params_list = [fts_query]
+            
+            # Filter by active playset
+            if self.playset_id:
+                sql += """
+                    AND cv.content_version_id IN (
+                        SELECT content_version_id FROM playset_mods 
+                        WHERE playset_id = ? AND enabled = 1
+                    )
+                """
+                params_list.append(self.playset_id)
+            
+            # Filter by symbol type if specified
+            if symbol_type:
+                sql += " AND s.symbol_type = ?"
+                params_list.append(symbol_type)
+            
+            sql += " ORDER BY rank LIMIT ?"
+            params_list.append(limit)
+            
+            rows = self.db_conn.execute(sql, params_list).fetchall()
+            
+            results = []
+            for r in rows:
+                results.append({
+                    "symbolId": r[0],
+                    "name": r[1],
+                    "symbolType": r[2],
+                    "scope": r[3],
+                    "line": r[4],
+                    "relpath": r[5],
+                    "contentVersionId": r[6],
+                    "mod": r[7] or "vanilla",
+                    "relevance": -r[8] if r[8] else 0
+                })
+            
+            return {
+                "results": results,
+                "adjacencies": [],  # TODO: Implement fuzzy/adjacent matches
+                "query_patterns": [query, fts_query]
+            }
+            
+        except Exception as e:
+            return {
+                "results": [],
+                "adjacencies": [],
+                "query_patterns": [query],
+                "error": str(e)
+            }
+    
+    def _escape_fts_query(self, query: str) -> str:
+        """Escape special characters for FTS5 queries."""
+        # Escape double quotes
+        query = query.replace('"', '""')
+        terms = query.split()
+        if not terms:
+            return ''
+        if len(terms) == 1:
+            # Single term: use prefix match for autocomplete
+            return f'"{terms[0]}"*'
+        # Multiple terms: OR them together
+        return ' OR '.join(f'"{t}"*' for t in terms if t)
     
     def get_file(self, params: dict) -> dict:
         """Get file content from database."""
