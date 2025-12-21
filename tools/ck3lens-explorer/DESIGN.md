@@ -168,6 +168,74 @@ CK3 Lens Explorer is a VS Code extension providing an IDE-like experience for CK
 
 ---
 
+### 7. Setup Wizard (`setup/setupWizard.ts`)
+
+**Purpose:** Guide users through first-time setup and configuration.
+
+**Setup Flow:**
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         Setup Wizard Flow                            │
+├─────────────────────────────────────────────────────────────────────┤
+│  Step 1: Python Detection                                            │
+│    ├─ Check workspace .venv, .venv-1 folders                        │
+│    ├─ Check ck3raven/.venv                                          │
+│    ├─ Fall back to system Python                                    │
+│    └─ Offer to create new venv if needed                            │
+├─────────────────────────────────────────────────────────────────────┤
+│  Step 2: ck3raven Detection                                          │
+│    ├─ Auto-detect from workspace folders                            │
+│    ├─ Check relative to extension path                              │
+│    └─ Prompt user if not found                                      │
+├─────────────────────────────────────────────────────────────────────┤
+│  Step 3: Python Packages                                             │
+│    ├─ Check: mcp, pydantic, sqlite-utils                            │
+│    ├─ Auto-install missing packages via pip                         │
+│    └─ Install ck3raven in editable mode                             │
+├─────────────────────────────────────────────────────────────────────┤
+│  Step 4: Game Paths                                                  │
+│    ├─ Vanilla: Auto-detect Steam install                            │
+│    ├─ Workshop: User provides (Steam workshop/content/1158310)      │
+│    └─ Local Mods: Auto-detect Documents/Paradox Interactive         │
+├─────────────────────────────────────────────────────────────────────┤
+│  Step 5: Database Path                                               │
+│    └─ Default: ~/.ck3raven/ck3raven.db                              │
+├─────────────────────────────────────────────────────────────────────┤
+│  Step 6: Verification                                                │
+│    ├─ Test ck3raven imports                                         │
+│    ├─ Verify bridge server exists                                   │
+│    └─ Check vanilla path structure                                  │
+├─────────────────────────────────────────────────────────────────────┤
+│  Step 7: Save Configuration                                          │
+│    └─ Write to workspace or global settings                         │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Commands:**
+| Command | Description |
+|---------|-------------|
+| `ck3lens.runSetupWizard` | Run full guided setup wizard |
+| `ck3lens.showSetupStatus` | Quick diagnostics view |
+
+**Path Detection Strategy:**
+
+| Path Type | Auto-Detection | User-Provided | Required |
+|-----------|----------------|---------------|----------|
+| Python venv | Workspace `.venv`, `.venv-1` | No | Yes |
+| ck3raven | Workspace, relative to extension | If not found | Yes |
+| Vanilla game | Steam install locations | If not found | Yes |
+| Workshop mods | Common Steam paths | Always confirm | No |
+| Local mods | Documents/Paradox Interactive | Always confirm | No |
+| Database | `~/.ck3raven/ck3raven.db` | No | Yes |
+
+**Diagnostic Checks:**
+- Python installation and version
+- Required packages: `mcp`, `pydantic`, `sqlite_utils`, `ck3raven`
+- Path validation with structural checks
+
+---
+
 ## Planned Features
 
 ### Reference Validation (P1)
@@ -229,19 +297,31 @@ tools/ck3lens-explorer/
 │   ├── linting/
 │   │   ├── lintingProvider.ts    # Full linting with Python
 │   │   └── quickValidator.ts     # Quick TS-based validation
+│   ├── setup/
+│   │   └── setupWizard.ts        # Installation wizard
 │   ├── views/
 │   │   ├── explorerView.ts       # Database-driven explorer
+│   │   ├── conflictsView.ts      # Conflict detection view
+│   │   ├── liveModsView.ts       # Live mods management
+│   │   ├── playsetView.ts        # Playset management
+│   │   ├── issuesView.ts         # Issues aggregation
+│   │   ├── agentView.ts          # Agent/tools status
 │   │   ├── astViewerPanel.ts     # AST viewer webview
 │   │   └── studioPanel.ts        # File creation studio
 │   ├── widget/
-│   │   └── lensWidget.ts         # Floating widget
+│   │   ├── lensWidget.ts         # Floating widget
+│   │   └── statusBar.ts          # Status bar integration
 │   ├── language/
-│   │   └── (language features)
+│   │   ├── definitionProvider.ts # Go to definition
+│   │   ├── referenceProvider.ts  # Find references
+│   │   ├── hoverProvider.ts      # Hover information
+│   │   └── completionProvider.ts # IntelliSense
 │   └── utils/
 │       └── logger.ts
 ├── bridge/
 │   └── server.py             # Python JSON-RPC server
 ├── media/                    # Icons and assets
+├── test-files/               # Test files for validation
 ├── package.json              # Extension manifest
 └── tsconfig.json             # TypeScript config
 ```

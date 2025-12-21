@@ -172,6 +172,16 @@
         "icon": "$(database)"
       },
       {
+        "command": "ck3lens.runSetupWizard",
+        "title": "CK3 Lens: Run Setup Wizard",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "ck3lens.showSetupStatus",
+        "title": "CK3 Lens: Show Setup Status",
+        "icon": "$(info)"
+      },
+      {
         "command": "ck3lens.setPlayset",
         "title": "CK3 Lens: Select Playset",
         "icon": "$(list-selection)"
@@ -377,6 +387,11 @@
           "type": "string",
           "default": "",
           "description": "Path to CK3 mod directory. Leave empty for default"
+        },
+        "ck3lens.workshopPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to Steam Workshop mods folder (steamapps/workshop/content/1158310)"
         },
         "ck3lens.pythonPath": {
           "type": "string",

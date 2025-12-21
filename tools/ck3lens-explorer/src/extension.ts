@@ -23,6 +23,7 @@ import { CompletionProvider } from './language/completionProvider';
 import { PythonBridge } from './bridge/pythonBridge';
 import { LensStatusBar } from './widget/statusBar';
 import { Logger } from './utils/logger';
+import { SetupWizard, showSetupStatus } from './setup/setupWizard';
 
 // Global extension state
 let session: CK3LensSession | undefined;
@@ -609,6 +610,25 @@ Use the appropriate tools (ck3_add_mod_to_playset, ck3_remove_mod_from_playset) 
             } else {
                 vscode.window.showErrorMessage(`Failed to create patch: ${result.error}`);
             }
+        })
+    );
+
+    // ========================================================================
+    // Setup Wizard Commands
+    // ========================================================================
+
+    // Run full setup wizard
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ck3lens.runSetupWizard', async () => {
+            const wizard = new SetupWizard(context, logger);
+            await wizard.run();
+        })
+    );
+
+    // Show setup status / quick diagnostics
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ck3lens.showSetupStatus', async () => {
+            await showSetupStatus(context, logger);
         })
     );
 }

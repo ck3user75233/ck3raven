@@ -52,7 +52,23 @@ Track changes, commit, and sync your mod repositories.
 
 ## Installation
 
-### 1. Build ck3raven database
+### Quick Setup (Recommended)
+
+1. **Install the extension** (via VSIX or Extension Development Host)
+2. **Run the Setup Wizard**: 
+   - Press `Ctrl+Shift+P`
+   - Type `CK3 Lens: Run Setup Wizard`
+   - Follow the prompts
+
+The wizard will:
+- Detect or create a Python virtual environment
+- Install required packages (`mcp`, `pydantic`, `sqlite-utils`)
+- Configure game paths (vanilla, workshop, local mods)
+- Verify everything works
+
+### Manual Setup
+
+#### 1. Build ck3raven database
 
 ```bash
 cd ck3raven
@@ -64,7 +80,7 @@ pip install -e .
 python -m ck3raven.cli ingest --vanilla "path/to/CK3/game"
 ```
 
-### 2. Install extension dependencies
+#### 2. Install extension dependencies
 
 ```bash
 cd tools/ck3lens-explorer
@@ -72,7 +88,7 @@ npm install
 npm run compile
 ```
 
-### 3. Launch extension
+#### 3. Launch extension
 
 **Option A: F5 (Debug Mode)**
 1. Open the `tools/ck3lens-explorer` folder in VS Code
@@ -92,7 +108,10 @@ code --install-extension ck3lens-explorer-0.1.0.vsix
 {
   "ck3lens.databasePath": "",  // Default: ~/.ck3raven/ck3raven.db
   "ck3lens.vanillaPath": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Crusader Kings III\\game",
+  "ck3lens.workshopPath": "",  // Steam workshop/content/1158310
+  "ck3lens.modRoot": "",       // Documents/Paradox Interactive/Crusader Kings III/mod
   "ck3lens.pythonPath": "python",
+  "ck3lens.ck3ravenPath": "",  // Auto-detected from workspace
   "ck3lens.enableRealTimeLinting": true,
   "ck3lens.lintOnSave": true,
   "ck3lens.lintDelay": 300,
@@ -104,6 +123,8 @@ code --install-extension ck3lens-explorer-0.1.0.vsix
 
 | Command | Description |
 |---------|-------------|
+| `CK3 Lens: Run Setup Wizard` | Guided first-time setup |
+| `CK3 Lens: Show Setup Status` | Quick diagnostics check |
 | `CK3 Lens: Initialize Session` | Connect to ck3raven database |
 | `CK3 Lens: Validate Current File` | Lint the active file |
 | `CK3 Lens: Validate Entire Workspace` | Lint all .txt files |
