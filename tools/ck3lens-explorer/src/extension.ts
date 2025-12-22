@@ -13,6 +13,7 @@ import { LiveModsViewProvider } from './views/liveModsView';
 import { PlaysetViewProvider } from './views/playsetView';
 import { IssuesViewProvider } from './views/issuesView';
 import { AgentViewProvider } from './views/agentView';
+import { RulesViewProvider } from './views/rulesView';
 import { AstViewerPanel } from './views/astViewerPanel';
 import { StudioPanel } from './views/studioPanel';
 import { LintingProvider } from './linting/lintingProvider';
@@ -60,6 +61,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const playsetProvider = new PlaysetViewProvider(session, logger);
     const issuesProvider = new IssuesViewProvider(session, logger);
     const agentProvider = new AgentViewProvider(context, logger);
+    const rulesProvider = new RulesViewProvider(logger);
 
     // Create playset tree view with drag-and-drop support
     const playsetTreeView = vscode.window.createTreeView('ck3lens.playsetView', {
@@ -74,7 +76,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.window.registerTreeDataProvider('ck3lens.conflictsView', conflictsProvider),
         vscode.window.registerTreeDataProvider('ck3lens.liveModsView', liveModsProvider),
         playsetTreeView,
-        vscode.window.registerTreeDataProvider('ck3lens.issuesView', issuesProvider)
+        vscode.window.registerTreeDataProvider('ck3lens.issuesView', issuesProvider),
+        vscode.window.registerTreeDataProvider('ck3lens.rulesView', rulesProvider)
     );
 
     // Initialize the Status Bar
@@ -122,7 +125,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     // Register commands
-    registerCommands(context, agentProvider, explorerProvider, conflictsProvider, liveModsProvider, playsetProvider, issuesProvider, lintingProvider);
+    registerCommands(context, agentProvider, explorerProvider, conflictsProvider, liveModsProvider, playsetProvider, issuesProvider, lintingProvider, rulesProvider);
 
     // Register file watchers for real-time linting
     if (vscode.workspace.getConfiguration('ck3lens').get('enableRealTimeLinting', true)) {
@@ -157,7 +160,8 @@ function registerCommands(
     liveModsProvider: LiveModsViewProvider,
     playsetProvider: PlaysetViewProvider,
     issuesProvider: IssuesViewProvider,
-    lintingProvider: LintingProvider
+    lintingProvider: LintingProvider,
+    rulesProvider: RulesViewProvider
 ): void {
     // Initialize session
     context.subscriptions.push(
@@ -351,6 +355,69 @@ function registerCommands(
         vscode.commands.registerCommand('ck3lens.setPlayset', async () => {
             // TODO: Show playset picker
             vscode.window.showInformationMessage('Playset selection coming soon...');
+        })
+    );
+
+    // ------------------------------------------
+    // Validation Rules Commands
+    // ------------------------------------------
+    
+    // Toggle a validation rule on/off
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ck3lens.rules.toggle', async (item?: { ruleId?: string }) => {
+            if (item?.ruleId) {
+                await rulesProvider.toggleRule(item.ruleId);
+            }
+        })
+    );
+
+    // Set severity for a validation rule
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ck3lens.rules.setSeverity', async (item?: { ruleId?: string }) => {
+            if (item?.ruleId) {
+                await rulesProvider.setSeverity(item.ruleId);
+            }
+        })
+    );
+
+    // Refresh rules view
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ck3lens.rules.refresh', () => {
+            rulesProvider.refresh();
+        })
+    );
+
+    // Open rules config file
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ck3lens.rules.openConfig', async () => {
+            const configPath = rulesProvider.getConfigPath();
+            if (configPath) {
+                const uri = vscode.Uri.file(configPath);
+                await vscode.window.showTextDocument(uri);
+            } else {
+                vscode.window.showWarningMessage('Config file not found');
+            }
+        })
+    );
+
+    // Enable CK3 Lens mode rules
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ck3lens.rules.enableCk3lens', () => {
+            rulesProvider.enableCk3lensMode();
+        })
+    );
+
+    // Enable CK3 Raven Dev mode rules
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ck3lens.rules.enableCk3ravenDev', () => {
+            rulesProvider.enableCk3ravenDevMode();
+        })
+    );
+
+    // Disable all rules
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ck3lens.rules.disableAll', () => {
+            rulesProvider.disableAllRules();
         })
     );
 

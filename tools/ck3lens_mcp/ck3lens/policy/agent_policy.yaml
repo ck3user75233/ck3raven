@@ -1,0 +1,240 @@
+﻿# CK3 Lens Agent Policy Specification
+# Policy Spec Version 1.3 - December 2025
+#
+# NOTE: This is the POLICY SPECIFICATION version, NOT the CK3 game version.
+# CK3 game version should be read from the vanilla game files at runtime.
+#
+# This policy defines validation rules for AI agents operating in different modes.
+# Rules are enforced by the policy validator before delivery of outputs.
+#
+# TERMINOLOGY:
+# - enforcement_stage: Server-internal validation step, NOT an MCP tool
+# - severity: error = blocks delivery, warning = advisory only
+# - status: enhancement = not yet fully enforced, tbc = requires manual review
+
+policy_spec_version: "1.3"
+
+# -------------------------------------------------------------------
+# GLOBAL RULES
+# Apply to ALL agent modes unless explicitly overridden
+# -------------------------------------------------------------------
+
+global_rules:
+  tool_trace_required:
+    applies_to: [ck3lens, ck3raven-dev]
+    description: >
+      Any conclusion, recommendation, or output must be
+      derivable from MCP tool traces.
+    enforcement_stage: trace_required
+    severity: error
+
+  no_silent_assumptions:
+    applies_to: [ck3lens, ck3raven-dev]
+    description: >
+      The agent may not guess file locations, symbols,
+      merge behavior, or existence without tool evidence.
+    enforcement_stage: claims_validation
+    severity: error
+    evidence_contract:
+      # Agent must attach claims[] to delivery attempts
+      # Each claim must reference tool calls that provide evidence
+      requires_claims_list: true
+      claim_schema:
+        - claim_type: existence | non_existence | behavior | value
+        - subject: string  # What is being claimed
+        - evidence_tool_calls: list[trace_id]  # References to trace entries
+      validation:
+        - every claim must have >= 1 evidence_tool_call
+        - evidence must match scope rules (playset, vanilla version)
+        - non_existence claims require ck3_confirm_not_exists
+
+  completion_gate:
+    applies_to: [ck3lens, ck3raven-dev]
+    description: >
+      Completion is a server-issued state, not an agent claim.
+    enforcement_stage: server_only
+    requires:
+      - validation_passed
+      - no_disqualifying_traces
+
+# -------------------------------------------------------------------
+# AGENT-SPECIFIC RULES
+# -------------------------------------------------------------------
+
+agents:
+
+  # ================================================================
+  # CK3LENS
+  # Uses ck3raven to compatch / create CK3 mods
+  # ================================================================
+
+  ck3lens:
+
+    scope:
+      restrict_to_active_playset: true
+      restrict_to_selected_vanilla_version: true
+      # Required scope fields in tool-call args for scoped operations
+      required_scope_fields:
+        - playset_id
+        - vanilla_version_id
+      optional_scope_fields:
+        - roots  # List of mod/vanilla roots being searched
+        - mod_ids  # Specific mod IDs being queried
+
+    rules:
+
+      active_playset_enforcement:
+        description: >
+          Searches, reads, and conclusions must be limited
+          to the active playset and selected vanilla version.
+        enforcement_stage: pre_call_wrapper
+        severity: error
+        scope_injection:
+          # Pre-call wrapper auto-injects these from session state
+          auto_inject: [playset_id, vanilla_version_id]
+          # Post-trace validator verifies all scoped calls have these
+          verify_present: [playset_id]
+
+      database_first_search:
+        description: >
+          Database-backed search must be attempted before
+          filesystem inspection. When DB is unavailable or
+          rebuilding, filesystem fallback is permitted.
+          
+          NOTE: Currently severity=warning because filesystem access uses
+          VS Code built-in tools (read_file, grep_search, list_dir) which
+          are NOT traced by the MCP server. We cannot detect FS access
+          without implementing a trace-forwarding mechanism from VS Code.
+        filesystem_allowed_if:
+          - database_rebuilding
+          - database_incomplete
+          - domain_not_indexed
+        enforcement_stage: post_trace
+        severity: warning  # Cannot enforce: VS Code FS tools not in MCP trace
+        status: enhancement
+        upgrade_to_error_when: vscode_fs_tools_traced
+
+      ck3_file_model_required:
+        description: >
+          Every CK3 file must declare a ck3_file_model (A/B/C/D).
+          This is CK3-specific and does not apply to Python files.
+        allowed_models: [A, B, C, D]
+        enforcement_stage: artifact_bundle_schema
+        severity: error
+
+      file_path_domain_validation:
+        description: >
+          File paths must match CK3 domain semantics
+          (e.g. traditions in traditions folder).
+        enforcement_stage: artifact_bundle_validator
+        severity: error
+
+      new_symbol_declaration:
+        description: >
+          All newly introduced symbols must be declared,
+          justified, and defined in submitted files.
+        enforcement_stage: symbol_manifest_check
+        severity: error
+
+      symbol_resolution:
+        description: >
+          All symbols must resolve against vanilla,
+          active mods, or patch-defined symbols.
+        allow_dynamic_symbols: true
+        enforcement_stage: ck3_validator
+        severity: error
+
+      conflict_alignment:
+        description: >
+          Modified unit_keys must correspond to
+          explicitly resolved conflict units.
+        enforcement_stage: post_trace
+        severity: warning  # Downgraded until touched_units tracking complete
+        status: enhancement
+        upgrade_to_error_when: touched_units_extraction_complete
+
+      negative_claims:
+        description: >
+          Claims of non-existence require exhaustive
+          database-backed proof via ck3_confirm_not_exists.
+        acceptable_proof:
+          - ck3_confirm_not_exists  # MCP tool that performs exhaustive search
+        enforcement_stage: claims_validation
+        severity: error
+        requires_in_claims:
+          - claim_type: non_existence
+          - evidence_tool: ck3_confirm_not_exists
+
+  # ================================================================
+  # CK3RAVEN-DEV
+  # Development of ck3raven itself (Python, schemas, DB, UI)
+  # ================================================================
+
+  ck3raven-dev:
+
+    scope:
+      restrict_to_active_playset: false
+      restrict_to_vanilla_version: false
+
+    rules:
+
+      python_validation_required:
+        description: >
+          All Python code must pass syntax and import validation.
+        enforcement_stage: python_validator
+        severity: error
+
+      schema_change_declaration:
+        description: >
+          Changes to schemas, ASTs, or contracts must be
+          classified as breaking or non-breaking.
+        enforcement_stage: advisory
+        severity: warning
+        status: enhancement
+
+      preserve_uncertainty:
+        description: >
+          Core ck3raven logic must not encode gameplay assumptions
+          or collapse unknowns into safe defaults.
+        enforcement_stage: manual_review
+        severity: warning
+        status: tbc
+
+# -------------------------------------------------------------------
+# VALIDATION DOMAINS
+# Invoked only when relevant to the content being produced
+# -------------------------------------------------------------------
+
+validation_domains:
+
+  ck3_script:
+    applicable_to_agents: [ck3lens]
+    tools:
+      - ck3_parse_content
+      - ck3_validate_artifact_bundle
+
+  python:
+    applicable_to_agents: [ck3raven-dev]
+    tools:
+      - ck3_validate_python
+
+# -------------------------------------------------------------------
+# ENFORCEMENT STAGES (Server-Internal, NOT MCP Tools)
+# -------------------------------------------------------------------
+# These are validator pipeline stages implemented in the policy
+# validator, not exposed as MCP tools to agents.
+#
+# Stage descriptions:
+#   trace_required      - Verify non-empty tool trace exists
+#   claims_validation   - Check claims[] against evidence contracts
+#   pre_call_wrapper    - Inject/validate scope before tool execution
+#   post_trace          - Analyze trace after session for violations
+#   artifact_bundle_schema - Validate ArtifactBundle structure
+#   artifact_bundle_validator - Validate CK3 content semantics
+#   symbol_manifest_check - Verify declared symbols exist in artifacts
+#   ck3_validator       - Run CK3 parse + reference validation
+#   python_validator    - Run Python syntax/import validation
+#   server_only         - Server-controlled state, not agent-claimable
+#   advisory            - Log warning but don't block
+#   manual_review       - Requires human review (not automated)
+# -------------------------------------------------------------------

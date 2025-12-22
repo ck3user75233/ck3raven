@@ -33,15 +33,26 @@
     "languages": [
       {
         "id": "paradox-script",
-        "aliases": ["Paradox Script", "CK3 Script", "Clausewitz"],
-        "extensions": [".txt"],
+        "aliases": [
+          "Paradox Script",
+          "CK3 Script",
+          "Clausewitz"
+        ],
+        "extensions": [
+          ".txt"
+        ],
         "configuration": "./language-configuration.json",
         "firstLine": "^#.*[Ee]vent|^#.*[Dd]ecision|^#.*[Tt]rait|^#.*[Cc]ulture"
       },
       {
         "id": "paradox-localization",
-        "aliases": ["Paradox Localization", "CK3 Localization"],
-        "extensions": [".yml"],
+        "aliases": [
+          "Paradox Localization",
+          "CK3 Localization"
+        ],
+        "extensions": [
+          ".yml"
+        ],
         "configuration": "./language-configuration.json",
         "firstLine": "^l_english:|^l_french:|^l_german:|^l_spanish:|^l_simp_chinese:|^l_russian:|^l_korean:"
       }
@@ -110,6 +121,13 @@
           "name": "Issues",
           "type": "tree",
           "icon": "$(issues)",
+          "contextualTitle": "CK3 Lens"
+        },
+        {
+          "id": "ck3lens.rulesView",
+          "name": "Validation Rules",
+          "type": "tree",
+          "icon": "$(shield)",
           "contextualTitle": "CK3 Lens"
         }
       ]
@@ -267,6 +285,41 @@
         "icon": "$(plug)"
       },
       {
+        "command": "ck3lens.rules.toggle",
+        "title": "Toggle Validation Rule",
+        "icon": "$(check)"
+      },
+      {
+        "command": "ck3lens.rules.setSeverity",
+        "title": "Set Rule Severity",
+        "icon": "$(settings)"
+      },
+      {
+        "command": "ck3lens.rules.refresh",
+        "title": "Refresh Validation Rules",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "ck3lens.rules.openConfig",
+        "title": "Open Rules Config",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "ck3lens.rules.enableCk3lens",
+        "title": "Enable CK3 Lens Mode Rules",
+        "icon": "$(symbol-namespace)"
+      },
+      {
+        "command": "ck3lens.rules.enableCk3ravenDev",
+        "title": "Enable CK3 Raven Dev Mode Rules",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "ck3lens.rules.disableAll",
+        "title": "Disable All Rules",
+        "icon": "$(circle-slash)"
+      },
+      {
         "command": "ck3lens.agent.initialize",
         "title": "Initialize Agent",
         "icon": "$(add)"
@@ -323,6 +376,26 @@
           "command": "ck3lens.refreshIssues",
           "when": "view == ck3lens.issuesView",
           "group": "navigation"
+        },
+        {
+          "command": "ck3lens.rules.enableCk3lens",
+          "when": "view == ck3lens.rulesView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ck3lens.rules.enableCk3ravenDev",
+          "when": "view == ck3lens.rulesView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ck3lens.rules.openConfig",
+          "when": "view == ck3lens.rulesView",
+          "group": "navigation@3"
+        },
+        {
+          "command": "ck3lens.rules.refresh",
+          "when": "view == ck3lens.rulesView",
+          "group": "navigation@4"
         }
       ],
       "view/item/context": [
@@ -438,7 +511,12 @@
         },
         "ck3lens.traceLevel": {
           "type": "string",
-          "enum": ["off", "error", "info", "debug"],
+          "enum": [
+            "off",
+            "error",
+            "info",
+            "debug"
+          ],
           "default": "info",
           "description": "Logging level for CK3 Lens"
         },
@@ -449,7 +527,12 @@
         },
         "ck3lens.widget.anchor": {
           "type": "string",
-          "enum": ["bottomRight", "bottomLeft", "topRight", "topLeft"],
+          "enum": [
+            "bottomRight",
+            "bottomLeft",
+            "topRight",
+            "topLeft"
+          ],
           "default": "bottomRight",
           "description": "Anchor position for the floating widget"
         },
@@ -457,7 +540,7 @@
           "type": "number",
           "default": 0.95,
           "minimum": 0.1,
-          "maximum": 1.0,
+          "maximum": 1,
           "description": "Widget opacity (0.1-1.0)"
         },
         "ck3lens.widget.startCollapsed": {
@@ -472,7 +555,11 @@
         },
         "ck3lens.mode.default": {
           "type": "string",
-          "enum": ["ck3lens", "ck3raven-dev", "ck3creator"],
+          "enum": [
+            "ck3lens",
+            "ck3raven-dev",
+            "ck3creator"
+          ],
           "default": "ck3lens",
           "description": "Default mode when starting CK3 Lens"
         }
@@ -561,6 +648,7 @@
     "publish": "vsce publish"
   },
   "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.10.0",
     "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^6.13.0",
@@ -568,6 +656,7 @@
     "@vscode/test-electron": "^2.3.8",
     "@vscode/vsce": "^2.22.0",
     "eslint": "^8.54.0",
+    "js-yaml": "^4.1.1",
     "typescript": "^5.3.2"
   },
   "dependencies": {

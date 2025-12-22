@@ -2,14 +2,23 @@
 Workspace and Live Mod Configuration
 
 Manages live mod paths (whitelisted for agent writes) and session state.
-NO file copying - all reads come from ck3raven DB.
+NO file copying - all reads come from ck3raven DB or filesystem wrappers.
+
+Configuration is loaded from ck3lens_config.yaml in the AI Workspace.
 """
 from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
+
+# Try to import yaml, fall back to json-only if not available
+try:
+    import yaml
+    HAS_YAML = True
+except ImportError:
+    HAS_YAML = False
 
 
 @dataclass
@@ -87,43 +96,109 @@ DEFAULT_LIVE_MODS = [
     ),
 ]
 
+# Default config file location
+DEFAULT_CONFIG_PATH = Path.home() / "Documents" / "AI Workspace" / "ck3lens_config.yaml"
+
+
+def _expand_path(path_str: str) -> Path:
+    """Expand ~ and return Path."""
+    return Path(path_str).expanduser()
+
 
 def load_config(config_path: Optional[Path] = None) -> Session:
     """
-    Load configuration from JSON file or use defaults.
+    Load configuration from YAML/JSON file or use defaults.
     
-    Config file format:
-    {
-        "db_path": "~/.ck3raven/ck3raven.db",
-        "live_mods": [
-            {"mod_id": "MSC", "name": "Mini Super Compatch", "path": "..."}
-        ]
-    }
+    Searches for config in this order:
+    1. Explicit config_path if provided
+    2. ck3lens_config.yaml in AI Workspace
+    3. ck3lens_config.json in AI Workspace
+    4. Hardcoded defaults
+    
+    Config file format (YAML):
+        db_path: "~/.ck3raven/ck3raven.db"
+        local_mods_path: "~/Documents/Paradox Interactive/Crusader Kings III/mod"
+        live_mods:
+          - mod_id: MSC
+            name: Mini Super Compatch
+            path: "~/Documents/.../Mini Super Compatch"
     """
     session = Session(
         db_path=DEFAULT_DB_PATH,
         live_mods=[m for m in DEFAULT_LIVE_MODS if m.exists()]
     )
     
+    # Find config file
+    if config_path is None:
+        if DEFAULT_CONFIG_PATH.exists():
+            config_path = DEFAULT_CONFIG_PATH
+        else:
+            json_path = DEFAULT_CONFIG_PATH.with_suffix('.json')
+            if json_path.exists():
+                config_path = json_path
+    
     if config_path and config_path.exists():
         try:
-            data = json.loads(config_path.read_text(encoding="utf-8"))
+            content = config_path.read_text(encoding="utf-8")
             
-            if "db_path" in data:
-                session.db_path = Path(data["db_path"]).expanduser()
+            # Parse YAML or JSON
+            if config_path.suffix in ('.yaml', '.yml') and HAS_YAML:
+                data = yaml.safe_load(content)
+            else:
+                data = json.loads(content)
             
-            if "live_mods" in data:
-                session.live_mods = []
-                for m in data["live_mods"]:
-                    mod = LiveMod(
-                        mod_id=m["mod_id"],
-                        name=m.get("name", m["mod_id"]),
-                        path=Path(m["path"]).expanduser()
-                    )
-                    if mod.exists():
-                        session.live_mods.append(mod)
+            if data:
+                _apply_config(session, data)
+                
         except Exception as e:
             print(f"Warning: Failed to load config from {config_path}: {e}")
+    
+    return session
+
+
+def _apply_config(session: Session, data: dict[str, Any]) -> None:
+    """Apply config data to session."""
+    if "db_path" in data and data["db_path"]:
+        session.db_path = _expand_path(data["db_path"])
+    
+    if "local_mods_path" in data and data["local_mods_path"]:
+        session.mod_root = _expand_path(data["local_mods_path"])
+    
+    if "live_mods" in data and data["live_mods"]:
+        session.live_mods = []
+        for m in data["live_mods"]:
+            path = _expand_path(m["path"]) if "path" in m else session.mod_root / m["mod_id"]
+            mod = LiveMod(
+                mod_id=m["mod_id"],
+                name=m.get("name", m["mod_id"]),
+                path=path
+            )
+            if mod.exists():
+                session.live_mods.append(mod)
+
+
+def get_validation_rules_config(config_path: Optional[Path] = None) -> dict[str, dict[str, Any]]:
+    """
+    Load validation rules configuration from config file.
+    
+    Returns dict mapping rule_name -> {enabled: bool, severity: str}
+    """
+    if config_path is None:
+        config_path = DEFAULT_CONFIG_PATH
+    
+    if not config_path.exists():
+        return {}
+    
+    try:
+        content = config_path.read_text(encoding="utf-8")
+        if config_path.suffix in ('.yaml', '.yml') and HAS_YAML:
+            data = yaml.safe_load(content)
+        else:
+            data = json.loads(content)
+        
+        return data.get("validation_rules", {})
+    except Exception:
+        return {}
     
     return session
 

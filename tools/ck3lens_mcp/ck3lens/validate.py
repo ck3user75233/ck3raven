@@ -13,7 +13,7 @@ CK3RAVEN_PATH = Path(__file__).parent.parent.parent.parent / "src"
 if CK3RAVEN_PATH.exists():
     sys.path.insert(0, str(CK3RAVEN_PATH))
 
-from .contracts import PatchDraft, ValidationMessage, ValidationReport
+from .contracts import ArtifactBundle, ValidationMessage, ValidationReport
 
 ALLOWED_TOPLEVEL = {"common", "events", "gfx", "localization", "interface", "music", "sound", "history", "map_data"}
 
@@ -119,9 +119,9 @@ def parse_content(content: str, filename: str = "inline.txt", recover: bool = Tr
         }
 
 
-def validate_patchdraft(draft: PatchDraft) -> ValidationReport:
+def validate_artifact_bundle(bundle: ArtifactBundle) -> ValidationReport:
     """
-    Validate a PatchDraft.
+    Validate an ArtifactBundle.
     
     IMPORTANT: During early development, validation is ADVISORY, not blocking.
     The agent should present results to the user for review. If the validator
@@ -129,7 +129,7 @@ def validate_patchdraft(draft: PatchDraft) -> ValidationReport:
     
     Checks:
     1. Path policy (relative, no traversal, valid top-level)
-    2. Parse each patch content
+    2. Parse each artifact content
     3. Reference validation (advisory - may have false positives)
     
     Trust levels:
@@ -141,7 +141,7 @@ def validate_patchdraft(draft: PatchDraft) -> ValidationReport:
     warnings: list[ValidationMessage] = []
 
     # 1) Path policy - HIGH CONFIDENCE
-    for pf in draft.patches:
+    for pf in bundle.artifacts:
         p = Path(pf.path)
 
         if p.is_absolute():
@@ -162,8 +162,8 @@ def validate_patchdraft(draft: PatchDraft) -> ValidationReport:
         if p.name.endswith("_patched.txt"):
             warnings.append(ValidationMessage(code="NAME_STYLE", message="Avoid '_patched' suffix; use zz_ naming", details={"path": pf.path}))
 
-    # 2) Parse each patch - MEDIUM CONFIDENCE
-    for pf in draft.patches:
+    # 2) Parse each artifact - MEDIUM CONFIDENCE
+    for pf in bundle.artifacts:
         if not pf.content.strip():
             errors.append(ValidationMessage(code="EMPTY_CONTENT", message="Patch file content is empty", details={"path": pf.path, "confidence": "high"}))
             continue
@@ -191,10 +191,14 @@ def validate_patchdraft(draft: PatchDraft) -> ValidationReport:
     ok = len(errors) == 0
     summary = {
         "parsed": ok,
-        "patch_files": len(draft.patches),
+        "artifact_files": len(bundle.artifacts),
         "errors": len(errors),
         "warnings": len(warnings),
         "validation_mode": "advisory",  # Not blocking during early development
         "note": "Review results with agent. Report false positives via ck3_report_validation_issue."
     }
     return ValidationReport(ok=ok, errors=errors, warnings=warnings, summary=summary)
+
+
+# Backwards compatibility alias
+validate_patchdraft = validate_artifact_bundle

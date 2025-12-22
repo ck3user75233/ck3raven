@@ -1,4 +1,4 @@
-﻿# CK3 Lens Compatching Mode - AI Agent Instructions
+# CK3 Lens Compatching Mode - AI Agent Instructions
 
 > **Mode:** `ck3lens`  
 > **Purpose:** CK3 mod compatibility patching and error fixing  
@@ -6,23 +6,37 @@
 
 ---
 
-## âš ï¸ CRITICAL: Database-Only Mode
+## ⚠️ CRITICAL: Database-First Mode
 
-**ck3lens is a DATABASE-ONLY mode.** All information is accessed through MCP tools that query the ck3raven SQLite database.
+**ck3lens is a DATABASE-FIRST mode.** All information should be accessed through MCP tools that query the ck3raven SQLite database.
 
-### âœ… ALLOWED Tools
+### ✅ ALLOWED Tools
 - `mcp_ck3lens_*` - All CK3 Lens MCP tools
 - Live file editing via MCP (`ck3_write_file`, `ck3_edit_file`)
 
-### âŒ FORBIDDEN Tools (Do NOT use these)
-- `run_in_terminal` - No terminal commands
-- `grep_search` - No filesystem grep
-- `file_search` - No filesystem search  
-- `read_file` - No direct file reads (use `ck3_get_file` or `ck3_read_live_file`)
-- `semantic_search` - No semantic search (use `ck3_search_symbols`)
-- `list_dir` - No directory listing (use `ck3_list_live_files`)
+### ⚠️ FILESYSTEM ACCESS (Use Wrappers Only)
+When database is unavailable or you need raw filesystem access, use the **traceable wrapper tools**:
 
-### Why Database-Only?
+| Instead of... | Use... |
+|--------------|--------|
+| `read_file` | `ck3_read_raw_file(path, justification)` |
+| `list_dir` | `ck3_list_raw_dir(path, justification)` |
+| `grep_search` | `ck3_grep_raw(path, query, justification)` |
+
+These wrappers:
+1. Log all access for policy validation
+2. Require a justification (audit trail)
+3. Are traceable by the policy validator
+
+### ❌ FORBIDDEN Tools (Never use directly)
+- `run_in_terminal` - No terminal commands
+- `grep_search` - Use `ck3_grep_raw` instead (traceable)
+- `file_search` - No filesystem search (use DB)
+- `read_file` - Use `ck3_read_raw_file` instead (traceable)
+- `semantic_search` - No semantic search (use `ck3_search_symbols`)
+- `list_dir` - Use `ck3_list_raw_dir` instead (traceable)
+
+### Why Database-First?
 The ck3raven database contains:
 - **Parsed AST** of all CK3 script files
 - **Raw file content** (no need to read from disk)
@@ -30,7 +44,7 @@ The ck3raven database contains:
 - **Conflict detection** across load order
 - **Playset management** for mods
 
-Everything you need is in the database. If something is missing, use `ck3raven-dev` mode to add ingestion/extraction tools.
+Everything you need is in the database. If DB is unavailable, use FS wrapper tools with justification. If something is structurally missing, use `ck3raven-dev` mode to add ingestion/extraction tools.
 
 ---
 
