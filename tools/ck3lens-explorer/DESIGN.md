@@ -1,14 +1,15 @@
 # CK3 Lens Explorer - Design Brief
 
 > **Version:** 0.2.0-dev  
-> **Last Updated:** December 22, 2025  
-> **Status:** Implementation in Progress
+> **Last Updated:** December 22, 2025 10:30 UTC+8  
+> **Status:** Database Rebuild In Progress
 
-## Current Status (December 2025)
+## Current Status (December 22, 2025)
 
 ### ✅ Completed
-- **Parser**: Fixed infinite loop bug on unexpected `}` tokens
-- **AST Builder**: 71,393 ASTs built (68,877 OK, 2,516 parse errors) 
+- **Parser**: Fixed infinite loop bug on unexpected `}` tokens (commit 626493c)
+- **Rebuild Daemon**: Fully implemented detached daemon for database rebuilds
+- **Database Diagnostics**: Tools to analyze AST bloat and table sizes
 - **Database**: 648 mods indexed (633 Steam + 15 local) including vanilla
 - **Playset**: Active playset "MSC Religion Expanded Dec20-updated" with 111 mods
 - **Symbol Search**: FTS5-based search implemented in bridge with playset filtering
@@ -16,16 +17,26 @@
 - **Syntax Highlighting**: TextMate grammars for .txt and .yml files
 - **Studio Panel**: 11 file creation templates
 
-### 🔄 In Progress
-- **Symbol Extraction**: Only 5,214 symbols extracted from 71K ASTs (mostly title_history)
-- **IntelliSense**: Prefix matching works, context-awareness and fuzzy matching planned
+### 🔄 In Progress (NOW)
+- **Database Rebuild**: Old 110GB database deleted, fresh rebuild running via daemon
+  - Monitor: `python scripts/rebuild_daemon.py status`
+  - Logs: `~/.ck3raven/daemon/rebuild.log`
+  - Progress: Phase 1/7 (vanilla ingest) → Phase 3 (AST gen) → Phase 4-5 (symbols/refs)
 
-### ⚠️ Known Issues
-- **Database Size**: 110GB vs ~3GB raw files (AST blob compression needed)
-- **Symbol Coverage**: Need full extraction run for traits, events, decisions etc.
-- **Stub Implementations**: Several bridge methods return placeholder data
+### ⚠️ Resolved Issues
+- **Parser Infinite Loop**: FIXED (Dec 22) - caused by unexpected `}` tokens
+- **Stale Database**: RESOLVED - all 71K old ASTs were pre-fix, deleted and rebuilding
+- **Database Lock Issues**: Daemon uses WAL mode + retry logic
 
-### 📋 Planned
+### 📋 Open TODOs (from code)
+1. **resolver.py:400-404**: `PER_KEY_OVERRIDE` and `FIOS` policies not implemented
+2. **lint.py:147**: `raise NotImplementedError` stub
+3. **conflict_analyzer.py:521-522**: `has_unknown_refs` and `has_rename_pattern` placeholders
+4. **extension.ts:321**: Merge editor webview not implemented
+5. **extension.ts:352**: Playset picker UI not implemented
+6. **bridge/server.py:562**: Fuzzy/adjacent matches for symbol search
+
+### 📋 Planned Features
 - Context-aware completions (filter by expected type after `has_trait =`)
 - Fuzzy matching for typo tolerance
 - Reference validation (warn on undefined symbols)
