@@ -156,7 +156,13 @@ def scan_directory(root_path: Path, include_patterns: Optional[List[str]] = None
             continue
         if 'thumbnail' in relpath_lower:
             continue
-        
+
+        # Only ingest CK3 script files (.txt, .yml) - skip binary assets
+        # This prevents 50GB+ of .dds, .mesh, .anim files from bloating the database
+        file_type = classify_file_type(relpath)
+        if file_type not in ('script', 'localization'):
+            continue
+
         try:
             stat = file_path.stat()
             yield FileManifestEntry(
