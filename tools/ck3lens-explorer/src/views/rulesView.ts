@@ -32,6 +32,7 @@ export class RulesViewProvider implements vscode.TreeDataProvider<RuleItem> {
     
     // Rule metadata for display
     private readonly ruleMetadata: { [key: string]: { displayName: string; description: string; mode: string } } = {
+        // === GLOBAL RULES (all modes) ===
         tool_trace_required: {
             displayName: 'Tool Trace Required',
             description: 'All conclusions must be derivable from MCP tool traces',
@@ -42,6 +43,8 @@ export class RulesViewProvider implements vscode.TreeDataProvider<RuleItem> {
             description: 'Agent may not guess without tool evidence',
             mode: 'all'
         },
+        
+        // === CK3 LENS RULES ===
         active_playset_enforcement: {
             displayName: 'Active Playset Scope',
             description: 'Searches limited to active playset',
@@ -82,6 +85,38 @@ export class RulesViewProvider implements vscode.TreeDataProvider<RuleItem> {
             description: 'Non-existence claims require ck3_confirm_not_exists',
             mode: 'ck3lens'
         },
+        
+        // === CK3 RAVEN DEV RULES ===
+        allowed_python_paths: {
+            displayName: 'Allowed Python Paths',
+            description: 'New .py files must be in src/, tests/, scripts/, examples/, tools/, or builder/',
+            mode: 'ck3raven-dev'
+        },
+        scripts_must_be_documented: {
+            displayName: 'Scripts Must Be Documented',
+            description: 'Scripts in scripts/ must have entry in scripts/README.md',
+            mode: 'ck3raven-dev'
+        },
+        ephemeral_scripts_location: {
+            displayName: 'Ephemeral Scripts Location',
+            description: 'scratch_*, tmp_*, workaround_* files must go to .artifacts/ (never committed)',
+            mode: 'ck3raven-dev'
+        },
+        bugfix_requires_core_change: {
+            displayName: 'Bugfix Requires Core Change',
+            description: 'Bugfixes must modify core code in src/, not just create scripts',
+            mode: 'ck3raven-dev'
+        },
+        bugfix_requires_test: {
+            displayName: 'Bugfix Requires Test',
+            description: 'Bugfixes must include a regression test under tests/',
+            mode: 'ck3raven-dev'
+        },
+        architecture_intent_required: {
+            displayName: 'Architecture Intent',
+            description: 'Declare intent (bugfix/feature/refactor) and output_kind (core_change/maintenance_script/experiment)',
+            mode: 'ck3raven-dev'
+        },
         python_validation_required: {
             displayName: 'Python Validation',
             description: 'Python code must pass syntax validation',
@@ -89,12 +124,12 @@ export class RulesViewProvider implements vscode.TreeDataProvider<RuleItem> {
         },
         schema_change_declaration: {
             displayName: 'Schema Change Declaration',
-            description: 'Schema changes must be classified',
+            description: 'Schema changes must be classified as breaking/non-breaking',
             mode: 'ck3raven-dev'
         },
         preserve_uncertainty: {
             displayName: 'Preserve Uncertainty',
-            description: 'Parser/DB must not encode gameplay assumptions - store data as-is without judging correctness',
+            description: 'Parser/DB must not encode gameplay assumptions - store data as-is',
             mode: 'ck3raven-dev'
         }
     };
