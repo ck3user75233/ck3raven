@@ -70,6 +70,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         canSelectMany: false
     });
 
+    // Create rules tree view with checkbox support
+    const rulesTreeView = vscode.window.createTreeView('ck3lens.rulesView', {
+        treeDataProvider: rulesProvider,
+        manageCheckboxStateManually: true
+    });
+    rulesProvider.registerTreeView(rulesTreeView);
+
     context.subscriptions.push(
         vscode.window.registerTreeDataProvider('ck3lens.agentView', agentProvider),
         vscode.window.registerTreeDataProvider('ck3lens.explorerView', explorerProvider),
@@ -77,7 +84,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.window.registerTreeDataProvider('ck3lens.liveModsView', liveModsProvider),
         playsetTreeView,
         vscode.window.registerTreeDataProvider('ck3lens.issuesView', issuesProvider),
-        vscode.window.registerTreeDataProvider('ck3lens.rulesView', rulesProvider)
+        rulesTreeView
     );
 
     // Initialize the Status Bar

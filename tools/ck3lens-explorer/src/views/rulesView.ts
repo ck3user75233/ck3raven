@@ -23,8 +23,12 @@ export class RulesViewProvider implements vscode.TreeDataProvider<RuleItem> {
     private _onDidChangeTreeData = new vscode.EventEmitter<RuleItem | undefined>();
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
     
+    // Support checkbox state changes
+    readonly onDidChangeCheckboxState = new vscode.EventEmitter<vscode.TreeCheckboxChangeEvent<RuleItem>>();
+    
     private configPath: string;
     private rules: RulesConfig = {};
+    private treeView: vscode.TreeView<RuleItem> | undefined;
     
     // Rule metadata for display
     private readonly ruleMetadata: { [key: string]: { displayName: string; description: string; mode: string } } = {
@@ -90,7 +94,7 @@ export class RulesViewProvider implements vscode.TreeDataProvider<RuleItem> {
         },
         preserve_uncertainty: {
             displayName: 'Preserve Uncertainty',
-            description: 'Core logic must not encode gameplay assumptions',
+            description: 'Parser/DB must not encode gameplay assumptions - store data as-is without judging correctness',
             mode: 'ck3raven-dev'
         }
     };
@@ -103,6 +107,25 @@ export class RulesViewProvider implements vscode.TreeDataProvider<RuleItem> {
         );
         this.configPath = path.join(aiWorkspace, 'ck3lens_config.yaml');
         this.loadConfig();
+    }
+    
+    /**
+     * Register tree view to handle checkbox changes
+     */
+    registerTreeView(treeView: vscode.TreeView<RuleItem>): void {
+        this.treeView = treeView;
+        treeView.onDidChangeCheckboxState(async (e) => {
+            for (const [item, state] of e.items) {
+                const enabled = state === vscode.TreeItemCheckboxState.Checked;
+                if (!this.rules[item.ruleId]) {
+                    this.rules[item.ruleId] = { enabled, severity: 'error' };
+                } else {
+                    this.rules[item.ruleId].enabled = enabled;
+                }
+            }
+            this.saveConfig();
+            this.refresh();
+        });
     }
     
     private loadConfig(): void {
@@ -202,52 +225,40 @@ export class RulesViewProvider implements vscode.TreeDataProvider<RuleItem> {
     
     /**
      * Enable all rules for ck3lens mode (includes global 'all' rules)
+     * Resets all rules to default state (enabled with error severity for relevant rules)
      */
     enableCk3lensMode(): void {
         for (const [ruleId, meta] of Object.entries(this.ruleMetadata)) {
             if (meta.mode === 'ck3lens' || meta.mode === 'all') {
-                if (!this.rules[ruleId]) {
-                    this.rules[ruleId] = { enabled: true, severity: 'error' };
-                } else {
-                    this.rules[ruleId].enabled = true;
-                }
+                // Enable and reset to default severity
+                this.rules[ruleId] = { enabled: true, severity: 'error' };
             } else {
                 // Disable rules not relevant to ck3lens mode
-                if (!this.rules[ruleId]) {
-                    this.rules[ruleId] = { enabled: false, severity: 'error' };
-                } else {
-                    this.rules[ruleId].enabled = false;
-                }
+                this.rules[ruleId] = { enabled: false, severity: 'error' };
             }
         }
         this.saveConfig();
         this.refresh();
-        vscode.window.showInformationMessage('Enabled CK3 Lens mode rules (+ global rules)');
+        vscode.window.showInformationMessage('Reset to CK3 Lens mode defaults');
     }
     
     /**
      * Enable all rules for ck3raven-dev mode (includes global 'all' rules)
+     * Resets all rules to default state (enabled with error severity for relevant rules)
      */
     enableCk3ravenDevMode(): void {
         for (const [ruleId, meta] of Object.entries(this.ruleMetadata)) {
             if (meta.mode === 'ck3raven-dev' || meta.mode === 'all') {
-                if (!this.rules[ruleId]) {
-                    this.rules[ruleId] = { enabled: true, severity: 'error' };
-                } else {
-                    this.rules[ruleId].enabled = true;
-                }
+                // Enable and reset to default severity
+                this.rules[ruleId] = { enabled: true, severity: 'error' };
             } else {
                 // Disable rules not relevant to ck3raven-dev mode
-                if (!this.rules[ruleId]) {
-                    this.rules[ruleId] = { enabled: false, severity: 'error' };
-                } else {
-                    this.rules[ruleId].enabled = false;
-                }
+                this.rules[ruleId] = { enabled: false, severity: 'error' };
             }
         }
         this.saveConfig();
         this.refresh();
-        vscode.window.showInformationMessage('Enabled CK3 Raven Dev mode rules (+ global rules)');
+        vscode.window.showInformationMessage('Reset to CK3 Raven Dev mode defaults');
     }
     
     /**
@@ -293,25 +304,32 @@ class RuleItem extends vscode.TreeItem {
             ? vscode.TreeItemCheckboxState.Checked 
             : vscode.TreeItemCheckboxState.Unchecked;
         
-        // Icon based on severity
+        // Icon based on enabled state (green check = enabled, gray slash = disabled)
         if (!enabled) {
             this.iconPath = new vscode.ThemeIcon('circle-slash', new vscode.ThemeColor('disabledForeground'));
-        } else if (severity === 'error') {
-            this.iconPath = new vscode.ThemeIcon('error', new vscode.ThemeColor('errorForeground'));
         } else {
-            this.iconPath = new vscode.ThemeIcon('warning', new vscode.ThemeColor('editorWarning.foreground'));
+            this.iconPath = new vscode.ThemeIcon('check', new vscode.ThemeColor('testing.iconPassed'));
         }
         
-        // Description shows mode and severity
-        this.description = `${mode} • ${severity}`;
+        // Description with colored severity indicator
+        const modeIndicator = mode === 'all' ? '⭐' : mode === 'ck3lens' ? '🔷' : '🔶';
+        if (enabled) {
+            const severityIndicator = severity === 'error' ? '🔴' : '🟡';
+            this.description = `${modeIndicator} ${severityIndicator}`;
+        } else {
+            this.description = `${modeIndicator} ⚫`;
+        }
         
-        // Tooltip with full details
+        // Tooltip with full details and instructions
         this.tooltip = new vscode.MarkdownString();
         this.tooltip.appendMarkdown(`**${displayName}**\n\n`);
         this.tooltip.appendMarkdown(`${description}\n\n`);
-        this.tooltip.appendMarkdown(`- Mode: \`${mode}\`\n`);
-        this.tooltip.appendMarkdown(`- Severity: \`${severity}\`\n`);
-        this.tooltip.appendMarkdown(`- Status: ${enabled ? '✅ Enabled' : '❌ Disabled'}\n`);
+        this.tooltip.appendMarkdown(`---\n\n`);
+        this.tooltip.appendMarkdown(`**Mode:** ${mode === 'all' ? '⭐ Global' : mode === 'ck3lens' ? '🔷 CK3 Lens' : '🔶 CK3 Raven Dev'}\n\n`);
+        this.tooltip.appendMarkdown(`**Severity:** ${severity === 'error' ? '🔴 Error' : '🟡 Warning'}\n\n`);
+        this.tooltip.appendMarkdown(`**Status:** ${enabled ? '✅ Enabled' : '⚫ Disabled'}\n\n`);
+        this.tooltip.appendMarkdown(`---\n\n`);
+        this.tooltip.appendMarkdown(`*Right-click to change severity*`);
         
         // Context value for context menu
         this.contextValue = 'rule';

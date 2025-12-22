@@ -89,6 +89,14 @@
           "visibility": "visible"
         },
         {
+          "id": "ck3lens.rulesView",
+          "name": "Policy Rules",
+          "type": "tree",
+          "icon": "$(shield)",
+          "contextualTitle": "CK3 Lens",
+          "visibility": "collapsed"
+        },
+        {
           "id": "ck3lens.playsetView",
           "name": "Active Playset",
           "type": "tree",
@@ -121,13 +129,6 @@
           "name": "Issues",
           "type": "tree",
           "icon": "$(issues)",
-          "contextualTitle": "CK3 Lens"
-        },
-        {
-          "id": "ck3lens.rulesView",
-          "name": "Validation Rules",
-          "type": "tree",
-          "icon": "$(shield)",
           "contextualTitle": "CK3 Lens"
         }
       ]
@@ -399,6 +400,11 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "ck3lens.rules.setSeverity",
+          "when": "view == ck3lens.rulesView && viewItem == rule",
+          "group": "inline"
+        },
         {
           "command": "ck3lens.agent.reinitialize",
           "when": "view == ck3lens.agentView && viewItem == agent",
