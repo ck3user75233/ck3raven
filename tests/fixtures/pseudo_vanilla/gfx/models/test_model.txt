@@ -1,0 +1,7 @@
+# This is a GFX file - should be SKIPPED
+objectTypes = {
+    pdxmesh = {
+        name = "test_mesh"
+        file = "gfx/models/test.mesh"
+    }
+}

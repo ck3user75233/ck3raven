@@ -1,0 +1,10 @@
+# GUI file - should parse but NO symbols extracted
+window = {
+    name = "test_window"
+    size = { 500 400 }
+    
+    button = {
+        name = "close_button"
+        onclick = "[CloseWindow]"
+    }
+}

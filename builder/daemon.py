@@ -295,12 +295,8 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
             ingest_all_mods(conn, logger, status)
             db_wrapper.checkpoint()
         else:
-            # symbols_only mode - clear only symbols and refs
-            logger.info("Symbols-only mode: clearing symbols and refs...")
-            conn.execute("DELETE FROM symbols")
-            conn.execute("DELETE FROM refs")
-            conn.commit()
-            logger.info("Symbols and refs cleared")
+            # symbols_only mode - skip ingest phases, go straight to symbols/refs
+            logger.info("Symbols-only mode: skipping ingest, extracting symbols incrementally...")
         
         # Phase 3: AST generation - parse files and store ASTs
         status.update(
@@ -912,87 +908,41 @@ def generate_missing_asts(conn, logger: DaemonLogger, status: StatusWriter, forc
 # SYMBOL/REF EXTRACTION FROM STORED ASTs
 # =============================================================================
 
-def extract_symbols_from_stored_asts(conn, logger: DaemonLogger, status: StatusWriter):
-    """Extract symbols from stored ASTs (not re-parsing)."""
-    from ck3raven.db.symbols import extract_symbols_from_ast
-    import json
+def extract_symbols_from_stored_asts(conn, logger: DaemonLogger, status: StatusWriter, force_rebuild: bool = False):
+    """Extract symbols from stored ASTs using the library's incremental function.
     
-    logger.info("Starting symbol extraction from stored ASTs...")
-    
-    # Clear old symbols
-    conn.execute("DELETE FROM symbols")
-    conn.commit()
-    
-    # Query files that have ASTs
-    total_count = conn.execute("""
-        SELECT COUNT(*) FROM files f
-        JOIN asts a ON f.content_hash = a.content_hash
-        WHERE f.deleted = 0 AND a.parse_ok = 1
-        AND f.relpath LIKE '%.txt'
-    """).fetchone()[0]
-    
-    logger.info(f"Processing {total_count} files for symbols")
-    
-    chunk_size = 500
-    offset = 0
-    total_symbols = 0
-    errors = 0
-    
-    while offset < total_count:
+    Delegates to ck3raven.db.symbols.extract_symbols_incremental which:
+    - Only processes ASTs that don't have symbols yet (unless force_rebuild)
+    - Doesn't delete existing valid symbols (unless force_rebuild)
+    - Uses centralized skip rules from skip_rules.py
+    - Maintains full source traceability
+    """
+    from ck3raven.db.symbols import extract_symbols_incremental
+
+    logger.info("Starting incremental symbol extraction...")
+
+    def progress_callback(processed, total, symbols):
         write_heartbeat()
-        
-        rows = conn.execute("""
-            SELECT f.file_id, f.relpath, f.content_hash, a.ast_blob
-            FROM files f
-            JOIN asts a ON f.content_hash = a.content_hash
-            WHERE f.deleted = 0 AND a.parse_ok = 1
-            AND f.relpath LIKE '%.txt'
-            ORDER BY f.file_id
-            LIMIT ? OFFSET ?
-        """, (chunk_size, offset)).fetchall()
-        
-        if not rows:
-            break
-        
-        for file_id, relpath, content_hash, ast_blob in rows:
-            try:
-                # Decode AST from blob
-                ast_dict = json.loads(ast_blob.decode('utf-8'))
-                
-                symbols = list(extract_symbols_from_ast(ast_dict, relpath, content_hash))
-                
-                for sym in symbols:
-                    name = sym.name
-                    kind = sym.kind
-                    line = sym.line
-                    scope = getattr(sym, 'scope', None)
-                    
-                    conn.execute("""
-                        INSERT OR IGNORE INTO symbols
-                        (symbol_type, name, scope, defining_file_id, line_number, content_version_id)
-                        VALUES (?, ?, ?, ?, ?, (SELECT content_version_id FROM files WHERE file_id = ?))
-                    """, (kind, name, scope, file_id, line, file_id))
-                
-                total_symbols += len(symbols)
-                
-            except Exception as e:
-                errors += 1
-                if errors <= 10:
-                    logger.warning(f"Symbol extraction error in {relpath}: {e}")
-        
-        conn.commit()
-        offset += len(rows)
-        
-        pct = (offset / total_count) * 100
+        pct = (processed / total * 100) if total > 0 else 0
         status.update(
             progress=pct,
-            message=f"Symbols: {offset}/{total_count} files, {total_symbols} symbols"
+            message=f"Symbols: {processed}/{total} ASTs, {symbols} symbols"
         )
-        
-        if offset % 2000 == 0:
-            logger.info(f"Symbol progress: {offset}/{total_count} ({pct:.1f}%), {total_symbols} symbols")
-    
-    logger.info(f"Symbol extraction complete: {total_symbols} symbols, {errors} errors")
+        if processed % 2000 == 0:
+            logger.info(f"Symbol progress: {processed}/{total} ({pct:.1f}%), {symbols} symbols")
+
+    result = extract_symbols_incremental(
+        conn,
+        batch_size=500,
+        progress_callback=progress_callback,
+        force_rebuild=force_rebuild
+    )
+
+    logger.info(
+        f"Symbol extraction complete: extracted={result['symbols_extracted']}, "
+        f"inserted={result['symbols_inserted']}, duplicates={result['duplicates']}, "
+        f"errors={result['errors']}"
+    )
 
 
 def extract_refs_from_stored_asts(conn, logger: DaemonLogger, status: StatusWriter):

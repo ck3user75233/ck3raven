@@ -1,0 +1,19 @@
+# Test traits file - SHOULD parse and extract symbols
+brave = {
+    index = 1
+    opposites = { craven }
+    virtue = yes
+    ai_honor = 10
+}
+
+craven = {
+    index = 2
+    opposites = { brave }
+    sin = yes
+    ai_honor = -10
+}
+
+generous = {
+    index = 3
+    virtue = yes
+}

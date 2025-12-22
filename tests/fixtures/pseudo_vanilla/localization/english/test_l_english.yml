@@ -1,0 +1,6 @@
+﻿l_english:
+ test_event.001.t:0 "Test Event Title"
+ test_event.001.desc:0 "This is a test event description"
+ test_event.001.a:0 "Understood"
+ brave:0 "Brave"
+ craven:0 "Craven"

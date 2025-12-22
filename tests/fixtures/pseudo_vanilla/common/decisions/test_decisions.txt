@@ -1,0 +1,18 @@
+# Test decisions - SHOULD parse and extract symbols
+test_decision = {
+    is_shown = {
+        is_ruler = yes
+    }
+    is_valid = {
+        gold >= 100
+    }
+    effect = {
+        add_gold = -100
+        add_prestige = 500
+    }
+}
+
+another_decision = {
+    is_shown = { always = yes }
+    effect = { add_piety = 100 }
+}

@@ -1,0 +1,11 @@
+# Character history - should parse but NO symbols
+1 = {
+    name = "Test Character"
+    dynasty = 1
+    religion = catholic
+    culture = french
+    
+    1066.1.1 = {
+        birth = yes
+    }
+}

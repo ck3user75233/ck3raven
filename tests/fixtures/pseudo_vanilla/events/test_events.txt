@@ -1,0 +1,25 @@
+namespace = test_event
+
+test_event.001 = {
+    type = character_event
+    title = test_event.001.t
+    desc = test_event.001.desc
+    
+    option = {
+        name = test_event.001.a
+        add_gold = 100
+    }
+}
+
+test_event.002 = {
+    type = character_event
+    title = test_event.002.t
+    
+    trigger = {
+        has_trait = brave
+    }
+    
+    option = {
+        name = test_event.002.a
+    }
+}

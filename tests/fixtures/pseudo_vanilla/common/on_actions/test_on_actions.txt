@@ -1,0 +1,14 @@
+# Test on_actions - SHOULD parse and extract symbols
+on_game_start = {
+    effect = {
+        every_player = {
+            trigger_event = test_event.001
+        }
+    }
+}
+
+on_yearly_pulse = {
+    random_events = {
+        100 = test_event.002
+    }
+}
