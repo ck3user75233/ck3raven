@@ -202,63 +202,25 @@ class BlockNode(ASTNode):
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary representation.
-        
-        Returns both semantic format (key-value pairs) AND AST-preserving
-        format (children list) for different use cases.
-        
-        OPTIMIZED: Only iterates through children once, caching dict results.
+
+        Returns a compact AST format with children array only.
+        No duplicate semantic key-value pairs - that was causing exponential bloat!
         """
-        result = {
-            '_name': self.name,
-            '_type': 'block',
-            'name': self.name,  # Also include without underscore for consistency
-            'line': self.line,
-            'column': self.column,
-        }
-        
-        # AST-preserving children list (needed for symbol extraction)
-        # Build this once - all dicts are cached in children_list
         children_list = []
-        
         for child in self.children:
             if hasattr(child, 'to_dict'):
-                child_dict = child.to_dict()
-                children_list.append(child_dict)
-                
-                # Also add to semantic key-value format for convenience
-                # This happens in ONE PASS, no re-iteration
-                if isinstance(child, AssignmentNode):
-                    key = child.key
-                    # Get value from the cached child_dict
-                    value = child_dict.get('value')
-                    # Handle duplicate keys by making lists
-                    if key in result:
-                        if not isinstance(result[key], list):
-                            result[key] = [result[key]]
-                        result[key].append(value)
-                    else:
-                        result[key] = value
-                elif isinstance(child, BlockNode):
-                    # Anonymous/inline block - use cached child_dict
-                    key = child.name
-                    value = child_dict
-                    if key in result:
-                        if not isinstance(result[key], list):
-                            result[key] = [result[key]]
-                        result[key].append(value)
-                    else:
-                        result[key] = value
-                elif isinstance(child, ValueNode):
-                    # Standalone value in block (part of a list-like structure)
-                    if '_values' not in result:
-                        result['_values'] = []
-                    result['_values'].append(child.value)
+                children_list.append(child.to_dict())
             else:
                 children_list.append(str(child))
-        
-        result['children'] = children_list
-        return result
-    
+
+        return {
+            '_type': 'block',
+            'name': self.name,
+            'line': self.line,
+            'column': self.column,
+            'children': children_list,
+        }
+
     def _node_to_value(self, node):
         if isinstance(node, ValueNode):
             return node.value
