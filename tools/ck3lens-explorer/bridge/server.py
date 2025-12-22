@@ -587,26 +587,176 @@ class CK3LensBridge:
     def get_file(self, params: dict) -> dict:
         """Get file content from database."""
         file_path = params.get("file_path", "")
+        file_id = params.get("file_id")
         include_ast = params.get("include_ast", False)
         
-        # TODO: Implement actual file retrieval
-        return {"error": "Not implemented"}
+        if not self.initialized or not self.db_conn:
+            return {"error": "Session not initialized"}
+        
+        try:
+            # Query by file_id or relpath
+            if file_id:
+                row = self.db_conn.execute("""
+                    SELECT f.file_id, f.relpath, f.content_hash, fc.content_text,
+                           mp.name as mod_name, cv.content_version_id
+                    FROM files f
+                    JOIN file_contents fc ON f.content_hash = fc.content_hash
+                    JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+                    LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                    WHERE f.file_id = ?
+                """, (file_id,)).fetchone()
+            else:
+                # Search by relpath in active playset (returns winner)
+                row = self.db_conn.execute("""
+                    SELECT f.file_id, f.relpath, f.content_hash, fc.content_text,
+                           mp.name as mod_name, cv.content_version_id
+                    FROM files f
+                    JOIN file_contents fc ON f.content_hash = fc.content_hash
+                    JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+                    LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                    JOIN playset_mods pm ON pm.content_version_id = cv.content_version_id
+                    WHERE f.relpath = ? AND pm.playset_id = ? AND pm.enabled = 1
+                    ORDER BY pm.load_order_index DESC
+                    LIMIT 1
+                """, (file_path, self.playset_id)).fetchone()
+            
+            if not row:
+                return {"error": f"File not found: {file_path or file_id}"}
+            
+            result = {
+                "fileId": row[0],
+                "relpath": row[1],
+                "contentHash": row[2],
+                "content": row[3],
+                "mod": row[4] or "vanilla",
+                "contentVersionId": row[5]
+            }
+            
+            # Optionally include AST
+            if include_ast:
+                ast_row = self.db_conn.execute("""
+                    SELECT ast_blob FROM asts WHERE content_hash = ?
+                """, (row[2],)).fetchone()
+                if ast_row and ast_row[0]:
+                    try:
+                        import zlib
+                        ast_json = zlib.decompress(ast_row[0]).decode('utf-8')
+                    except:
+                        ast_json = ast_row[0].decode('utf-8') if isinstance(ast_row[0], bytes) else ast_row[0]
+                    result["ast"] = ast_json
+            
+            return result
+            
+        except Exception as e:
+            return {"error": str(e)}
     
     def list_files(self, params: dict) -> dict:
-        """List files in a folder."""
-        folder = params.get("folder", "")
-        pattern = params.get("pattern", "*.txt")
+        """List files in a folder within the active playset."""
+        folder = params.get("folder", "").rstrip("/")
         
-        # TODO: Implement actual file listing
-        return {"files": []}
+        if not self.initialized or not self.db_conn:
+            return {"error": "Session not initialized", "files": [], "folders": []}
+        
+        try:
+            # Get files directly in this folder
+            files = self.db_conn.execute("""
+                SELECT f.file_id, f.relpath, mp.name as mod_name, pm.load_order_index
+                FROM files f
+                JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+                LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                JOIN playset_mods pm ON pm.content_version_id = cv.content_version_id
+                WHERE pm.playset_id = ? AND pm.enabled = 1
+                AND f.relpath LIKE ? || '/%'
+                AND f.relpath NOT LIKE ? || '/%/%'
+                ORDER BY f.relpath
+            """, (self.playset_id, folder, folder)).fetchall()
+            
+            # Get subfolders
+            subfolders = self.db_conn.execute("""
+                SELECT DISTINCT 
+                    SUBSTR(f.relpath, LENGTH(?) + 2, 
+                           INSTR(SUBSTR(f.relpath, LENGTH(?) + 2), '/') - 1
+                    ) as subfolder,
+                    COUNT(*) as file_count
+                FROM files f
+                JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+                JOIN playset_mods pm ON pm.content_version_id = cv.content_version_id
+                WHERE pm.playset_id = ? AND pm.enabled = 1
+                AND f.relpath LIKE ? || '/%/%'
+                GROUP BY subfolder
+                HAVING subfolder != '' AND subfolder IS NOT NULL
+                ORDER BY subfolder
+            """, (folder, folder, self.playset_id, folder)).fetchall()
+            
+            return {
+                "files": [
+                    {"fileId": f[0], "relpath": f[1], "mod": f[2] or "vanilla", "loadOrder": f[3]}
+                    for f in files
+                ],
+                "folders": [
+                    {"name": sf[0], "fileCount": sf[1]}
+                    for sf in subfolders
+                ]
+            }
+            
+        except Exception as e:
+            return {"error": str(e), "files": [], "folders": []}
     
     def get_conflicts(self, params: dict) -> dict:
-        """Get conflicts for a folder or symbol type."""
-        path_pattern = params.get("path_pattern")
+        """Get conflicts for a folder or symbol type.
+        
+        Conflicts occur when multiple mods define the same file path or symbol.
+        The mod with higher load order wins.
+        """
+        path_pattern = params.get("path_pattern", "%")
         symbol_type = params.get("symbol_type")
         
-        # TODO: Implement actual conflict detection
-        return {"conflicts": []}
+        if not self.initialized or not self.db_conn:
+            return {"error": "Session not initialized", "conflicts": []}
+        
+        try:
+            # File-level conflicts: same relpath from multiple mods
+            conflicts = self.db_conn.execute("""
+                SELECT f.relpath, 
+                       GROUP_CONCAT(mp.name || ':' || pm.load_order_index, '|') as sources,
+                       COUNT(*) as source_count
+                FROM files f
+                JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+                LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                JOIN playset_mods pm ON pm.content_version_id = cv.content_version_id
+                WHERE pm.playset_id = ? AND pm.enabled = 1
+                AND f.relpath LIKE ?
+                GROUP BY f.relpath
+                HAVING COUNT(*) > 1
+                ORDER BY f.relpath
+                LIMIT 100
+            """, (self.playset_id, path_pattern)).fetchall()
+            
+            result_conflicts = []
+            for c in conflicts:
+                sources = c[1].split('|')
+                # Parse mod:load_order pairs and sort by load order desc
+                parsed = []
+                for s in sources:
+                    parts = s.rsplit(':', 1)
+                    if len(parts) == 2:
+                        mod_name = parts[0] if parts[0] != 'None' else 'vanilla'
+                        load_order = int(parts[1])
+                        parsed.append((mod_name, load_order))
+                
+                parsed.sort(key=lambda x: -x[1])  # Highest load order first (winner)
+                
+                if len(parsed) >= 2:
+                    result_conflicts.append({
+                        "relpath": c[0],
+                        "winner": {"mod": parsed[0][0], "loadOrder": parsed[0][1]},
+                        "losers": [{"mod": p[0], "loadOrder": p[1]} for p in parsed[1:]]
+                    })
+            
+            return {"conflicts": result_conflicts}
+            
+        except Exception as e:
+            return {"error": str(e), "conflicts": []}
     
     def get_playset_mods(self, params: dict) -> dict:
         """Get mods in the active playset with load order."""
@@ -674,15 +824,72 @@ class CK3LensBridge:
             return {"error": str(e), "folders": []}
 
     def confirm_not_exists(self, params: dict) -> dict:
-        """Exhaustive search to confirm something doesn't exist."""
+        """Exhaustive search to confirm something doesn't exist.
+        
+        This performs a thorough search to prevent false negatives when
+        claiming a symbol doesn't exist.
+        """
         name = params.get("name", "")
         symbol_type = params.get("symbol_type")
         
-        # TODO: Implement exhaustive search
-        return {
-            "can_claim_not_exists": False,
-            "similar_matches": []
-        }
+        if not self.initialized or not self.db_conn or not name:
+            return {"can_claim_not_exists": False, "similar_matches": []}
+        
+        try:
+            # 1. Exact match search
+            sql = """
+                SELECT s.name, s.symbol_type, mp.name as mod_name
+                FROM symbols s
+                LEFT JOIN content_versions cv ON s.content_version_id = cv.content_version_id
+                LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                WHERE s.name = ?
+            """
+            params_list = [name]
+            if symbol_type:
+                sql += " AND s.symbol_type = ?"
+                params_list.append(symbol_type)
+            sql += " LIMIT 10"
+            
+            exact_matches = self.db_conn.execute(sql, params_list).fetchall()
+            
+            if exact_matches:
+                # Found exact matches - cannot claim it doesn't exist
+                return {
+                    "can_claim_not_exists": False,
+                    "similar_matches": [
+                        {"name": m[0], "symbolType": m[1], "mod": m[2] or "vanilla"}
+                        for m in exact_matches
+                    ]
+                }
+            
+            # 2. Fuzzy/similar match search using FTS
+            fts_query = f'"{name}"*'
+            similar_sql = """
+                SELECT s.name, s.symbol_type, mp.name as mod_name
+                FROM symbols_fts fts
+                JOIN symbols s ON s.symbol_id = fts.rowid
+                LEFT JOIN content_versions cv ON s.content_version_id = cv.content_version_id
+                LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                WHERE symbols_fts MATCH ?
+            """
+            params_list = [fts_query]
+            if symbol_type:
+                similar_sql += " AND s.symbol_type = ?"
+                params_list.append(symbol_type)
+            similar_sql += " LIMIT 20"
+            
+            similar_matches = self.db_conn.execute(similar_sql, params_list).fetchall()
+            
+            return {
+                "can_claim_not_exists": len(similar_matches) == 0,
+                "similar_matches": [
+                    {"name": m[0], "symbolType": m[1], "mod": m[2] or "vanilla"}
+                    for m in similar_matches
+                ]
+            }
+            
+        except Exception as e:
+            return {"can_claim_not_exists": False, "similar_matches": [], "error": str(e)}
     
     def list_live_mods(self, params: dict) -> dict:
         """List live mods that can be written to."""
