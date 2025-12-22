@@ -733,7 +733,8 @@ def generate_missing_asts(conn, logger: DaemonLogger, status: StatusWriter, forc
         LEFT JOIN asts a ON fc.content_hash = a.content_hash 
             AND a.parser_version_id = ?
         WHERE f.deleted = 0
-        AND (f.relpath LIKE '%.txt' OR f.relpath LIKE '%.yml')
+        AND f.relpath LIKE '%.txt'
+        AND f.relpath NOT LIKE 'localization/%'
         AND fc.content_text IS NOT NULL
         AND a.ast_id IS NULL
         AND LENGTH(fc.content_text) < ?
@@ -755,7 +756,8 @@ def generate_missing_asts(conn, logger: DaemonLogger, status: StatusWriter, forc
         LEFT JOIN asts a ON fc.content_hash = a.content_hash 
             AND a.parser_version_id = ?
         WHERE f.deleted = 0
-        AND (f.relpath LIKE '%.txt' OR f.relpath LIKE '%.yml')
+        AND f.relpath LIKE '%.txt'
+        AND f.relpath NOT LIKE 'localization/%'
         AND LENGTH(fc.content_text) < ?
         AND fc.content_text IS NOT NULL
         AND a.ast_id IS NULL
@@ -1249,3 +1251,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

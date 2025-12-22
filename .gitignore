@@ -107,3 +107,12 @@ local_config.py
 *.db-journal
 *.db-wal
 *.db-shm
+
+# Test artifacts (gitignored per repository rules)
+.artifacts/
+*.log
+*.tmp
+.ruff_cache/
+
+# Runtime databases
+*.sqlite

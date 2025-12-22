@@ -738,3 +738,267 @@ def find_undefined_refs(
         """).fetchall()
     
     return [Reference.from_row(r) for r in rows]
+
+# =============================================================================
+# Incremental Extraction Functions
+# =============================================================================
+
+def extract_symbols_incremental(
+    conn: sqlite3.Connection,
+    batch_size: int = 500,
+    progress_callback: Optional[callable] = None,
+    force_rebuild: bool = False
+) -> Dict[str, int]:
+    """
+    Incrementally extract symbols from ASTs that don't have symbols yet.
+
+    This is the PREFERRED method for symbol extraction as it:
+    1. Only processes ASTs without existing symbols (unless force_rebuild=True)
+    2. Doesn't delete existing valid symbols (unless force_rebuild=True)
+    3. Uses centralized skip rules to filter non-definition files
+    4. Supports progress callbacks for long-running operations
+    5. Maintains full source traceability (file_id, line_number, ast_id)
+
+    Args:
+        conn: Database connection
+        batch_size: Number of ASTs to process per batch
+        progress_callback: Optional callback(processed, total, symbols_extracted)
+        force_rebuild: If True, delete all existing symbols first and rebuild
+
+    Returns:
+        Dict with 'processed', 'symbols', 'errors', 'skipped' counts
+    """
+    import json
+    from ck3raven.db.skip_rules import should_skip_for_symbols, get_symbol_file_filter_sql
+
+    # Handle force rebuild
+    if force_rebuild:
+        logger.info("Force rebuild: clearing all existing symbols...")
+        conn.execute("DELETE FROM symbols")
+        conn.commit()
+        logger.info("Symbols cleared")
+
+    # Get SQL filter for symbol-eligible files
+    file_filter = get_symbol_file_filter_sql()
+
+    # Count ASTs needing symbols (only from symbol-eligible files)
+    count_sql = f"""
+        SELECT COUNT(DISTINCT a.ast_id)
+        FROM asts a
+        JOIN files f ON a.content_hash = f.content_hash
+        WHERE a.parse_ok = 1
+        AND {file_filter}
+        AND NOT EXISTS (
+            SELECT 1 FROM symbols s
+            WHERE s.defining_ast_id = a.ast_id
+        )
+    """
+    total_row = conn.execute(count_sql).fetchone()
+    total_pending = total_row[0]
+
+    if total_pending == 0:
+        logger.info("No ASTs need symbol extraction")
+        return {'processed': 0, 'symbols_extracted': 0, 'symbols_inserted': 0, 'duplicates': 0, 'errors': 0, 'files_skipped': 0}
+
+    logger.info(f"Extracting symbols from {total_pending} symbol-eligible ASTs...")
+
+    processed = 0
+    symbols_extracted = 0
+    symbols_inserted = 0  
+    errors = 0
+    files_skipped = 0
+
+    while processed < total_pending:
+        # Get batch of ASTs needing symbols (filtered by skip rules)
+        batch_sql = f"""
+            SELECT
+                a.ast_id,
+                a.content_hash,
+                a.ast_blob,
+                f.file_id,
+                f.relpath
+            FROM asts a
+            JOIN files f ON a.content_hash = f.content_hash
+            WHERE a.parse_ok = 1
+            AND {file_filter}
+            AND NOT EXISTS (
+                SELECT 1 FROM symbols s
+                WHERE s.defining_ast_id = a.ast_id
+            )
+            GROUP BY a.ast_id
+            LIMIT ?
+        """
+        rows = conn.execute(batch_sql, (batch_size,)).fetchall()
+
+        if not rows:
+            break
+
+        batch_extracted = 0
+        batch_inserted = 0
+
+        for ast_id, content_hash, ast_blob, file_id, relpath in rows:
+            # Double-check with Python skip rules (SQL filter is approximate)
+            skip, reason = should_skip_for_symbols(relpath)
+            if skip:
+                files_skipped += 1
+                processed += 1
+                continue
+
+            try:
+                # Decode AST
+                ast_dict = json.loads(ast_blob.decode('utf-8'))
+
+                # Extract symbols
+                symbols = list(extract_symbols_from_ast(ast_dict, relpath, content_hash))
+
+                # Store symbols with full source traceability
+                for sym in symbols:
+                    cursor = conn.execute("""
+                        INSERT OR IGNORE INTO symbols
+                        (symbol_type, name, scope, defining_ast_id, defining_file_id,
+                         content_version_id, line_number, metadata_json)
+                        VALUES (?, ?, ?, ?, ?,
+                                (SELECT content_version_id FROM files WHERE file_id = ?),
+                                ?, ?)
+                    """, (
+                        sym.kind, sym.name, sym.scope, ast_id, file_id,
+                        file_id, sym.line, None
+                    ))
+                    if cursor.rowcount > 0:
+                        batch_inserted += 1
+                        symbols_inserted += 1
+
+                symbols_extracted += len(symbols)
+                
+            except Exception as e:
+                errors += 1
+                if errors <= 10:
+                    logger.warning(f"Error extracting symbols from {relpath}: {e}")
+            
+            processed += 1
+        
+        conn.commit()
+        
+        if progress_callback:
+            progress_callback(processed, total_pending, symbols_inserted)
+        
+        logger.debug(f"Batch complete: {processed}/{total_pending}, +{batch_inserted} new symbols")
+    
+    duplicates = symbols_extracted - symbols_inserted
+    logger.info(f"Symbol extraction complete: {processed} ASTs, {symbols_extracted} extracted, {symbols_inserted} new, {duplicates} duplicates, {errors} errors")
+
+    return {
+        'processed': processed,
+        'symbols_extracted': symbols_extracted,
+        'symbols_inserted': symbols_inserted,
+        'duplicates': duplicates,
+        'errors': errors,
+        'files_skipped': files_skipped
+    }
+
+
+def extract_refs_incremental(
+    conn: sqlite3.Connection,
+    batch_size: int = 500,
+    progress_callback: Optional[callable] = None
+) -> Dict[str, int]:
+    """
+    Incrementally extract references from ASTs that do not have refs yet.
+
+    Similar to extract_symbols_incremental but for references.
+
+    Args:
+        conn: Database connection
+        batch_size: Number of ASTs to process per batch
+        progress_callback: Optional callback(processed, total, refs_extracted)
+
+    Returns:
+        Dict with 'processed', 'refs', 'errors' counts
+    """
+    import json
+    
+    # Count ASTs needing refs
+    total_row = conn.execute("""
+        SELECT COUNT(*)
+        FROM asts a
+        WHERE a.parse_ok = 1
+        AND NOT EXISTS (
+            SELECT 1 FROM refs r
+            WHERE r.defining_ast_id = a.ast_id
+        )
+    """).fetchone()
+    total_pending = total_row[0]
+    
+    if total_pending == 0:
+        logger.info("No ASTs need reference extraction")
+        return {'processed': 0, 'refs': 0, 'errors': 0}
+    
+    logger.info(f"Extracting references from {total_pending} ASTs...")
+    
+    processed = 0
+    total_refs = 0
+    errors = 0
+    
+    while processed < total_pending:
+        rows = conn.execute("""
+            SELECT 
+                a.ast_id,
+                a.content_hash,
+                a.ast_blob,
+                f.file_id,
+                f.relpath
+            FROM asts a
+            JOIN files f ON a.content_hash = f.content_hash
+            WHERE a.parse_ok = 1
+            AND f.deleted = 0
+            AND NOT EXISTS (
+                SELECT 1 FROM refs r
+                WHERE r.defining_ast_id = a.ast_id
+            )
+            GROUP BY a.ast_id
+            LIMIT ?
+        """, (batch_size,)).fetchall()
+        
+        if not rows:
+            break
+        
+        batch_refs = 0
+        
+        for ast_id, content_hash, ast_blob, file_id, relpath in rows:
+            try:
+                ast_dict = json.loads(ast_blob.decode('utf-8'))
+                refs = list(extract_refs_from_ast(ast_dict, relpath, content_hash))
+                
+                for ref in refs:
+                    conn.execute("""
+                        INSERT OR IGNORE INTO refs
+                        (ref_type, name, defining_ast_id, defining_file_id, 
+                         line_number, content_version_id)
+                        VALUES (?, ?, ?, ?, ?, 
+                                (SELECT content_version_id FROM files WHERE file_id = ?))
+                    """, (
+                        ref.kind, ref.name, ast_id, file_id, ref.line, file_id
+                    ))
+                
+                batch_refs += len(refs)
+                total_refs += len(refs)
+                
+            except Exception as e:
+                errors += 1
+                if errors <= 10:
+                    logger.warning(f"Error extracting refs from {relpath}: {e}")
+            
+            processed += 1
+        
+        conn.commit()
+        
+        if progress_callback:
+            progress_callback(processed, total_pending, total_refs)
+    
+    logger.info(f"Reference extraction complete: {processed} ASTs, {total_refs} refs, {errors} errors")
+    
+    return {
+        'processed': processed,
+        'refs': total_refs,
+        'errors': errors
+    }

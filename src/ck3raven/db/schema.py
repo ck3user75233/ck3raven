@@ -444,6 +444,42 @@ CREATE TABLE IF NOT EXISTS file_changes (
 
 CREATE INDEX IF NOT EXISTS idx_filechange_changeid ON file_changes(change_id);
 CREATE INDEX IF NOT EXISTS idx_filechange_relpath ON file_changes(relpath);
+
+-- ============================================================================
+-- LOCALIZATION (Paradox .yml format)
+-- ============================================================================
+
+-- Localization entries - parsed key/value pairs from .yml files
+-- Separate from ASTs because localization uses a different format
+CREATE TABLE IF NOT EXISTS localization_entries (
+    loc_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content_hash TEXT NOT NULL,               -- FK to file_contents
+    language TEXT NOT NULL,                   -- 'english', 'german', 'french', etc.
+    loc_key TEXT NOT NULL,                    -- Key name, e.g. 'trait_brave'
+    version INTEGER NOT NULL DEFAULT 0,       -- Version number from key:0 or key:2
+    raw_value TEXT NOT NULL,                  -- Full value with codes
+    plain_text TEXT,                          -- Stripped of [scope], $var$, #format#
+    line_number INTEGER,                      -- Line in source file
+    parser_version_id INTEGER,                -- FK to parsers for cache invalidation
+    UNIQUE(content_hash, loc_key, parser_version_id),
+    FOREIGN KEY (parser_version_id) REFERENCES parsers(parser_version_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_loc_key ON localization_entries(loc_key);
+CREATE INDEX IF NOT EXISTS idx_loc_language ON localization_entries(language);
+CREATE INDEX IF NOT EXISTS idx_loc_hash ON localization_entries(content_hash);
+
+-- Localization references - [scope.Function] and $variable$ refs within loc values
+CREATE TABLE IF NOT EXISTS localization_refs (
+    loc_ref_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    loc_id INTEGER NOT NULL,                  -- FK to localization_entries
+    ref_type TEXT NOT NULL,                   -- 'scripted', 'variable', 'icon'
+    ref_value TEXT NOT NULL,                  -- 'ROOT.Char.GetHerHis', 'bonus_line', etc.
+    FOREIGN KEY (loc_id) REFERENCES localization_entries(loc_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_locref_locid ON localization_refs(loc_id);
+CREATE INDEX IF NOT EXISTS idx_locref_value ON localization_refs(ref_value);
 """
 
 # FTS triggers for keeping indexes in sync

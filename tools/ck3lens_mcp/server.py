@@ -3297,7 +3297,7 @@ def ck3_get_error_summary() -> dict:
     Returns:
         Summary statistics from error.log
     """
-    from ck3raven.logs.error_parser import CK3ErrorParser
+    from ck3raven.analyzers.error_parser import CK3ErrorParser
     
     parser = CK3ErrorParser()
     
@@ -3334,7 +3334,7 @@ def ck3_get_errors(
     Returns:
         List of errors with details and fix hints
     """
-    from ck3raven.logs.error_parser import CK3ErrorParser
+    from ck3raven.analyzers.error_parser import CK3ErrorParser
     
     parser = CK3ErrorParser()
     
@@ -3353,7 +3353,7 @@ def ck3_get_errors(
     )
     
     # Convert to dicts with fix hints
-    from ck3raven.logs.error_parser import ERROR_CATEGORIES
+    from ck3raven.analyzers.error_parser import ERROR_CATEGORIES
     
     results = []
     for error in errors:
@@ -3385,7 +3385,7 @@ def ck3_search_errors(
     Returns:
         Matching errors
     """
-    from ck3raven.logs.error_parser import CK3ErrorParser
+    from ck3raven.analyzers.error_parser import CK3ErrorParser
     
     parser = CK3ErrorParser()
     
@@ -3419,7 +3419,7 @@ def ck3_get_cascade_patterns() -> dict:
     Returns:
         List of cascade patterns with root errors and child counts
     """
-    from ck3raven.logs.error_parser import CK3ErrorParser
+    from ck3raven.analyzers.error_parser import CK3ErrorParser
     
     parser = CK3ErrorParser()
     
@@ -3457,7 +3457,7 @@ def ck3_get_crash_reports(
     Returns:
         List of crash reports with details
     """
-    from ck3raven.logs.crash_parser import get_recent_crashes
+    from ck3raven.analyzers.crash_parser import get_recent_crashes
     
     crashes = get_recent_crashes(limit=limit)
     
@@ -3487,7 +3487,7 @@ def ck3_get_crash_detail(
         Full crash report with logs and stack trace
     """
     from pathlib import Path
-    from ck3raven.logs.crash_parser import parse_crash_folder
+    from ck3raven.analyzers.crash_parser import parse_crash_folder
     
     crashes_dir = (
         Path.home() / "Documents" / "Paradox Interactive" / 
@@ -3991,3 +3991,4 @@ def ck3_get_workspace_config() -> dict:
 
 if __name__ == "__main__":
     mcp.run()
+

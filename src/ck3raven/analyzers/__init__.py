@@ -8,7 +8,7 @@ Provides parsers for CK3's various log files:
 - Crash logs - exception.txt, meta.yml, and associated logs
 """
 
-from ck3raven.logs.error_parser import (
+from ck3raven.analyzers.error_parser import (
     CK3Error,
     ErrorCategory,
     CascadePattern,
@@ -17,7 +17,7 @@ from ck3raven.logs.error_parser import (
     get_errors_summary,
 )
 
-from ck3raven.logs.crash_parser import (
+from ck3raven.analyzers.crash_parser import (
     CrashReport,
     parse_crash_folder,
     get_recent_crashes,
@@ -36,3 +36,4 @@ __all__ = [
     "parse_crash_folder",
     "get_recent_crashes",
 ]
+

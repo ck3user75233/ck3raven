@@ -1,38 +1,69 @@
-# Database Builder Architecture
+﻿# Database Builder Architecture
 
 ## Overview
 
-The ck3raven database stores parsed CK3 content for fast querying by the MCP tools. This document covers the build system, incremental updates, and future roadmap.
+The ck3raven database stores parsed CK3 content for fast querying by the MCP tools. This document covers the build system, incremental updates, and the library functions that power intelligent rebuilds.
 
-## Current Scripts
+---
 
-| Script | Purpose | Status |
-|--------|---------|--------|
-| `scripts/rebuild_database.py` | Original rebuild script (runs in terminal) | ⚠️ Deprecated |
-| `scripts/rebuild_daemon.py` | Detached daemon for long-running rebuilds | ✅ Active |
-| `scripts/build_database.py` | Lightweight build orchestrator | 🔲 Stub |
+## Directory Structure
+
+`
+ck3raven/
+ builder/                      # THE database builder (detached daemon)
+    daemon.py                 # Main daemon script
+    migrations/               # Schema migration scripts
+        create_loc_tables.py
+        init_conflict_tables.py
+        migrate_add_staleness_columns.py
+        migrate_contribution_lifecycle.py
+
+ src/ck3raven/db/              # Database library functions (used by daemon)
+    schema.py                 # Schema definition + SCHEMA_VERSION constant
+    work_detection.py         # Detect what work needs to be done
+    skip_rules.py             # Centralized skip patterns for all phases
+    symbols.py                # Symbol extraction logic
+    references.py             # Reference extraction logic
+    content.py                # File ingestion logic
+    asts.py                   # AST generation logic
+│    queries.py                # Read-only query helpers
+    db_setup.py               # Connection helpers
+
+ tests/                        # Test suite
+    unit/                     # Unit tests (fast, isolated)
+    integration/              # Integration tests (use real DB)
+    fixtures/                 # Test data files
+
+ scripts/                      # Utility scripts (NOT for building)
+     convert_launcher_playset.py
+     create_playset.py
+     ingest_localization.py
+     resolve_traditions.py
+`
+
+---
 
 ## Daemon Usage
 
 The daemon runs completely detached from terminals (avoids Ctrl+C injection issues).
 
-```bash
+`ash
 # Start a full rebuild
-python scripts/rebuild_daemon.py start --db ~/.ck3raven/ck3raven.db
+python builder/daemon.py start --db ~/.ck3raven/ck3raven.db
 
 # Force restart (kills existing daemon)
-python scripts/rebuild_daemon.py start --force
+python builder/daemon.py start --force
 
 # Check status
-python scripts/rebuild_daemon.py status
+python builder/daemon.py status
 
 # View logs
-python scripts/rebuild_daemon.py logs
-python scripts/rebuild_daemon.py logs -f  # Follow mode
+python builder/daemon.py logs
+python builder/daemon.py logs -f  # Follow mode
 
 # Stop daemon
-python scripts/rebuild_daemon.py stop
-```
+python builder/daemon.py stop
+`
 
 ### Daemon Files
 
@@ -54,271 +85,148 @@ Located in `~/.ck3raven/daemon/`:
 
 ---
 
-## Current Limitations (Need Fixing)
+## Library Functions: Work Detection
 
-### 🔴 Full Rebuild Only
+The `src/ck3raven/db/work_detection.py` module contains functions that detect what work needs to be done **without performing it**. These enable intelligent, incremental rebuilds.
 
-**Problem:** The current system rebuilds EVERYTHING from scratch. If one mod updates with 10 files changed, all 200,000+ files are re-processed.
+### Key Classes
 
-**Impact:** Rebuilds take hours instead of seconds.
+| Class | Purpose |
+|-------|---------|
+| `WorkSummary` | Comprehensive summary of pending work across all phases |
+| `SlowParseInfo` | Information about slow parses (statistical outliers) |
+| `RebuildRecommendation` | Result of full rebuild checks with severity levels |
 
-### 🔴 No Staleness Detection
+### Key Functions
 
-**Problem:** No way to detect which files changed since last build.
+| Function | Purpose |
+|----------|---------|
+| `get_files_needing_ingest()` | Compare filesystem to DB, returns (new, deleted, changed) files |
+| `get_files_needing_ast()` | Files with content but no AST |
+| `get_files_with_failed_ast()` | Files that failed parsing |
+| `get_asts_needing_symbols()` | ASTs without extracted symbols |
+| `get_orphan_counts()` | Count orphaned entries needing cleanup |
+| `get_slow_parses()` | Identify statistical outliers in parse times |
+| `should_full_rebuild()` | Check if full rebuild warranted (**NEVER auto-approves**) |
+| `get_build_status()` | Main function - comprehensive work summary |
 
-**Current state:** Files table has `deleted` flag but no `stale` or `needs_rebuild` tracking.
+### Full Rebuild Detection
 
-### 🔴 No Mod Version Tracking
+The `should_full_rebuild()` function **NEVER auto-approves** a full rebuild. It returns a `RebuildRecommendation` dataclass with:
 
-**Problem:** No tracking of mod versions or update timestamps.
+- `requires_user_approval` - Always True
+- `severity` - 'required' | 'recommended' | 'optional'
+- `reason` - Human-readable explanation
+- `details` - Dict with specifics (e.g., schema versions)
 
-**Impact:** Can't tell if a mod was updated on Steam Workshop.
+**Why?** Full rebuilds take hours and destroy existing data. The user must explicitly confirm.
 
-### 🔴 Schema Changes Cause Data Loss
-
-**Problem:** Any schema change requires full rebuild with data loss.
-
-**Ideal:** Schema migrations should preserve existing data.
+**Schema detection:** Compares `SCHEMA_VERSION` constant (in code) against `db_metadata.schema_version` (in DB).
 
 ---
 
-## Roadmap: Incremental Rebuild System
+## Library Functions: Skip Rules
 
-### Core Principle: Filesystem Monitoring is Default
+The `src/ck3raven/db/skip_rules.py` module provides **centralized skip patterns** for all processing phases.
 
-The builder should NOT scan all files on every run. Instead:
+### Skip Categories
 
-1. **Track mtime** (last modified timestamp) for every file in the database
-2. **On rebuild**, only check files whose folder mtime changed
-3. **Use filesystem events** (watchdog) for live editing scenarios
+| Category | Pattern Examples | Reason |
+|----------|------------------|--------|
+| `NEVER_PARSE` | gfx/, fonts/, sounds/, #backup/ | Not CK3 scripts |
+| `USE_LOCALIZATION_PARSER` | localization/*.yml | Different parser |
+| `SKIP_SYMBOL_EXTRACTION` | names/, coat_of_arms/, gui/ | No meaningful symbols |
+| `SKIP_REF_EXTRACTION` | history/ | Historical data, not refs |
+
+### Key Functions
+
+| Function | Returns |
+|----------|---------|
+| `should_skip_ast(relpath)` | bool - Skip AST generation |
+| `should_skip_symbols(relpath)` | bool - Skip symbol extraction |
+| `should_skip_refs(relpath)` | bool - Skip reference extraction |
+| `is_localization_file(relpath)` | bool - Use localization parser |
+| `get_ast_eligible_sql_condition()` | SQL WHERE clause for AST-eligible files |
+| `get_symbol_eligible_sql_condition()` | SQL WHERE clause for symbol-eligible files |
+
+### Why Centralized?
+
+- **Single source of truth** - All phases use the same logic
+- **Consistency** - No divergence between daemon and library
+- **Testability** - Easy to test and verify patterns
+- **Documentation** - Patterns explained inline with rationale
+
+---
+
+## Symbol Extraction Return Values
+
+The `extract_symbols_for_file()` function in `symbols.py` returns a dict with clear terminology:
+
+`python
+{
+    'symbols_extracted': 15,   # Total symbols found in AST
+    'symbols_inserted': 3,     # Actually inserted (new to DB)
+    'duplicates': 12,          # Ignored (INSERT OR IGNORE - already exist)
+    'files_skipped': 0         # Files skipped due to skip rules
+}
+`
+
+**Note:** `duplicates` are expected! Due to content-addressing (files share content by hash), the same symbols may be extracted multiple times. `INSERT OR IGNORE` correctly deduplicates them.
+
+---
+
+## Incremental Update Strategy
+
+### Core Principle: Don't Rebuild What Hasn't Changed
+
+The builder tracks changes at multiple levels:
+
+1. **File level** - mtime + content_hash detect changed files
+2. **AST level** - Only regenerate AST if content_hash changed
+3. **Symbol level** - Only re-extract if AST changed
 
 ### Rebuild Modes
 
-| Command | Behavior | When to Use |
-|---------|----------|-------------|
-| `rebuild` | Check mtime, rebuild only changed files | **Default** - after editing mods |
-| `rebuild --rescan` | Scan all files, compare content_hash | After Steam Workshop updates, game patches |
-| `rebuild --full` | Drop all data, rebuild from scratch | Schema changes, corrupted database |
-
-### Phase 1: File-Level Staleness Detection
-
-Track which files actually changed using **mtime** (filesystem last modified time):
-
-```sql
--- Add to files table
-ALTER TABLE files ADD COLUMN file_mtime INTEGER;  -- Unix timestamp from os.stat().st_mtime
-ALTER TABLE files ADD COLUMN needs_ast_rebuild BOOLEAN DEFAULT 0;
-ALTER TABLE files ADD COLUMN needs_symbol_rebuild BOOLEAN DEFAULT 0;
-
--- Add to mods table  
-ALTER TABLE mods ADD COLUMN last_scanned_at INTEGER;
-ALTER TABLE mods ADD COLUMN folder_mtime INTEGER;
-```
-
-**Default rebuild logic (mtime-based, fast):**
-```python
-for file_path in mod_folder.rglob("*"):
-    disk_mtime = file_path.stat().st_mtime
-    db_mtime = get_stored_mtime(file_path)
-    
-    if db_mtime is None:
-        # New file - ingest and parse
-        ingest_file(file_path)
-    elif disk_mtime > db_mtime:
-        # Changed file - re-ingest and mark for rebuild
-        mark_needs_rebuild(file_path)
-    # else: unchanged, skip entirely
-```
-
-**`--rescan` logic (content_hash based, thorough):**
-```python
-for file_path in mod_folder.rglob("*"):
-    disk_hash = compute_sha256(file_path.read_bytes())
-    db_hash = get_stored_hash(file_path)
-    
-    if disk_hash != db_hash:
-        # Content actually changed
-        update_content(file_path, disk_hash)
-        mark_needs_rebuild(file_path)
-```
-
-### Phase 2: Cascading Invalidation
-
-When a file changes, only rebuild what depends on it:
-
-```
-File changed → AST rebuild → Symbol extraction → Reference updates
-                              ↓
-                    Mark refs to old symbols as orphaned
-                    Insert refs to new symbols
-```
-
-**Key insight:** If a file's content_hash is unchanged, skip ALL downstream processing.
-
-### Phase 3: Mod-Level Tracking
-
-```sql
--- Track Steam Workshop mod versions
-CREATE TABLE mod_versions (
-    mod_id TEXT PRIMARY KEY,
-    steam_workshop_id TEXT,
-    version_string TEXT,
-    last_updated_at INTEGER,
-    files_count INTEGER,
-    needs_full_rescan BOOLEAN DEFAULT 0
-);
-```
-
-**Detection methods:**
-1. Check `.mod` file mtime
-2. Parse version from `descriptor.mod`
-3. (Future) Steam Workshop API for update timestamps
-
-### Phase 4: Surgical Rebuild Commands
-
-```bash
-# Rebuild only changed files in a specific mod
-python scripts/rebuild_daemon.py incremental --mod "MyMod"
-
-# Rebuild only files that failed parsing last time
-python scripts/rebuild_daemon.py retry-failed
-
-# Rebuild AST/symbols for files matching pattern
-python scripts/rebuild_daemon.py rebuild-path "common/traits/*.txt"
-
-# Force rebuild of specific file
-python scripts/rebuild_daemon.py rebuild-file "common/decisions/my_decision.txt"
-```
-
-### Phase 5: Watch Mode
-
-Daemon monitors filesystem for changes and rebuilds in real-time:
-
-```bash
-python scripts/rebuild_daemon.py watch --mods "MSC,VanillaPatch"
-```
-
-**Components:**
-1. `watchdog` library for filesystem events
-2. Debounce (wait 2s after last change before rebuild)
-3. Queue of changed files
-4. Background thread processing queue
-
----
-
-## Schema Changes and Migrations
+| Mode | Behavior | When to Use |
+|------|----------|-------------|
+| Default | Check mtime, rebuild only changed files | After editing mods |
+| `--rescan` | Scan all files, compare content_hash | Steam updates, game patches |
+| `--full` | Drop all data, rebuild from scratch | Schema changes, corrupted DB |
 
 ### When Full Rebuild is Required
 
-- New required columns without defaults
-- Index strategy changes affecting dedup
-- Parser version bump (AST format changed)
-- Content hash algorithm change
+- `SCHEMA_VERSION` changed in code
+- Parser version changed
+- User explicitly requests `--force`
 
-### When Incremental Migration Works
+### When Full Rebuild is NOT Required
 
-- New nullable columns
-- New tables
-- New indexes on existing columns
-- Adding constraints (may need validation pass)
+- New nullable columns (add via migration)
+- New tables (add via migration)
+- New indexes (add via migration)
+- Mod added or removed (incremental)
 
-### Migration Script Pattern
+---
 
-```python
-# scripts/migrate_add_foo.py
+## Migration Scripts
+
+Migrations live in `builder/migrations/` and follow this pattern:
+
+`python
 def migrate(conn):
     # 1. Check if migration already applied
     if column_exists(conn, 'files', 'new_column'):
         return "Already migrated"
-    
+
     # 2. Add column with safe default
     conn.execute("ALTER TABLE files ADD COLUMN new_column TEXT DEFAULT NULL")
-    
+
     # 3. Backfill if needed (incremental, resumable)
-    cursor = conn.execute("SELECT file_id FROM files WHERE new_column IS NULL LIMIT 1000")
-    while rows := cursor.fetchall():
-        for row in rows:
-            # Compute value
-            conn.execute("UPDATE files SET new_column = ? WHERE file_id = ?", (value, row[0]))
-        conn.commit()
-```
+    # ...
 
----
-
-## Garbage Collection: Deleted File Cleanup
-
-When files are deleted from source, we don't just mark them - we need to actually remove data.
-
-### Cleanup Strategy
-
-**Phase 1: Mark deleted** (during rescan)
-```sql
--- Mark files that no longer exist on disk
-UPDATE files SET deleted = 1 WHERE file_id IN (
-    SELECT file_id FROM files WHERE mod_id = ? AND relpath NOT IN (?)
-);
-```
-
-**Phase 2: Cascade delete derived data** (immediate)
-```sql
--- Remove symbols extracted from deleted files
-DELETE FROM symbols WHERE file_id IN (SELECT file_id FROM files WHERE deleted = 1);
-
--- Remove references from deleted files  
-DELETE FROM refs WHERE file_id IN (SELECT file_id FROM files WHERE deleted = 1);
-```
-
-**Phase 3: Orphan content cleanup** (periodic, expensive)
-```sql
--- Find content_hashes no longer referenced by any active file
-DELETE FROM file_contents WHERE content_hash NOT IN (
-    SELECT DISTINCT content_hash FROM files WHERE deleted = 0
-);
-
--- Same for ASTs
-DELETE FROM asts WHERE content_hash NOT IN (
-    SELECT DISTINCT content_hash FROM files WHERE deleted = 0
-);
-```
-
-### When Garbage Collection Runs
-
-| Event | GC Action |
-|-------|-----------|
-| File deleted from source | Mark deleted + cascade delete symbols/refs |
-| `rebuild --rescan` | Full orphan cleanup |
-| `rebuild --full` | N/A (drops everything anyway) |
-| Manual `gc` command | Full orphan cleanup on demand |
-
-### Content Deduplication Consideration
-
-Because content is deduplicated by `content_hash`, a file's content might be shared across mods:
-- `mod_A/common/traits/foo.txt` and `mod_B/common/traits/foo.txt` may have same content_hash
-- Deleting `mod_A/traits/foo.txt` should NOT delete the content if `mod_B` still uses it
-- This is why orphan cleanup checks "no active files reference this hash"
-
----
-
-## File Skip Patterns
-
-Not all files in the game folders are CK3 scripts. The builder skips:
-
-| Pattern | Reason |
-|---------|--------|
-| `gfx/` | Graphics data (meshes, textures, cameras) - NOT scripts |
-| `/generated/` | Auto-generated content |
-| `#backup/` | Editor backups |
-| `/fonts/`, `/sounds/`, `/music/` | Assets, not scripts |
-| `moreculturalnames` | Massive localization databases (50MB+) |
-| `.dds`, `.png`, `.tga` | Binary image files |
-
-**Legitimate CK3 script folders:**
-- `common/` - Game mechanics
-- `events/` - Event scripts
-- `history/` - Character/title history
-- `localization/` - Text strings (yml)
-- `gui/` - UI definitions
-- `decisions/` - Player decisions
+    conn.commit()
+    return "Migration complete"
+`
 
 ---
 
@@ -326,21 +234,10 @@ Not all files in the game folders are CK3 scripts. The builder skips:
 
 | Operation | Current | Target |
 |-----------|---------|--------|
-| Full rebuild (vanilla + 648 mods) | 8+ hours | 2-3 hours |
-| Incremental (10 files changed) | 8+ hours | 10 seconds |
+| Full rebuild (vanilla + 648 mods) | ~4 hours | 2-3 hours |
+| Incremental (10 files changed) | N/A | 10 seconds |
 | Single file rebuild | N/A | <1 second |
 | Watch mode latency | N/A | <3 seconds |
-
----
-
-## Implementation Priority
-
-1. **HIGH:** File mtime tracking + staleness detection
-2. **HIGH:** Incremental AST rebuild (skip unchanged content_hash)
-3. **MEDIUM:** Mod version tracking  
-4. **MEDIUM:** Surgical rebuild commands
-5. **LOW:** Watch mode (nice-to-have)
-6. **LOW:** Steam Workshop API integration
 
 ---
 
@@ -348,4 +245,3 @@ Not all files in the game folders are CK3 scripts. The builder skips:
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) - Overall system architecture
 - [tools/ck3lens_mcp/docs/SETUP.md](../tools/ck3lens_mcp/docs/SETUP.md) - MCP server setup
-- [.github/PROPOSED_TOOLS.md](../.github/PROPOSED_TOOLS.md) - Proposed MCP tools including `ck3_rebuild_index`

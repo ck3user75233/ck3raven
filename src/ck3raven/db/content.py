@@ -92,6 +92,12 @@ def classify_file_type(relpath: str) -> str:
     """
     path_lower = relpath.lower()
     
+    # Skip directories that contain non-CK3-script text files (licenses, fonts, etc.)
+    skip_dirs = ['fonts/', 'music/', 'sound/', 'dlc/']
+    for skip in skip_dirs:
+        if path_lower.startswith(skip) or f'/{skip}' in path_lower:
+            return 'other'
+
     # By directory
     if '/localization/' in path_lower or path_lower.startswith('localization/'):
         return 'localization'

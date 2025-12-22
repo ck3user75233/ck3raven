@@ -1019,7 +1019,7 @@ class CK3LensBridge:
             return {"error": "Not initialized", "errors": []}
         
         try:
-            from ck3raven.logs.error_parser import CK3ErrorParser
+            from ck3raven.analyzers.error_parser import CK3ErrorParser
             
             logs_dir = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "logs"
             parser = CK3ErrorParser(logs_dir=logs_dir)
@@ -1062,7 +1062,7 @@ class CK3LensBridge:
             return {"error": "Not initialized", "patterns": []}
         
         try:
-            from ck3raven.logs.error_parser import CK3ErrorParser
+            from ck3raven.analyzers.error_parser import CK3ErrorParser
             
             logs_dir = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "logs"
             parser = CK3ErrorParser(logs_dir=logs_dir)
@@ -1296,3 +1296,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
