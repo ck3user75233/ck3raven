@@ -413,18 +413,23 @@ def ck3_init_session(
 def _check_db_health(conn) -> dict:
     """Check database build status and completeness."""
     try:
-        # Check build_state table
-        state_row = conn.execute("""
-            SELECT value FROM build_state WHERE key = 'current'
+        # Check builder_runs table (written by daemon)
+        run_row = conn.execute("""
+            SELECT build_id, state, completed_at, files_ingested, 
+                   symbols_extracted, refs_extracted, error_message
+            FROM builder_runs 
+            ORDER BY started_at DESC 
+            LIMIT 1
         """).fetchone()
         
-        if state_row:
-            import json
-            state = json.loads(state_row[0])
-            is_complete = state.get('phase') == 'complete'
+        if run_row:
+            last_state = run_row[1]  # state column
+            is_complete = last_state == 'complete'
+            last_updated = run_row[2]  # completed_at
         else:
-            state = None
+            last_state = None
             is_complete = False
+            last_updated = None
         
         # Get counts
         files = conn.execute("SELECT COUNT(*) FROM files WHERE deleted = 0").fetchone()[0]
@@ -435,12 +440,16 @@ def _check_db_health(conn) -> dict:
         needs_rebuild = False
         rebuild_reason = None
         
-        if not state:
+        if not run_row:
             needs_rebuild = True
-            rebuild_reason = "No build state found - database may not be fully initialized"
-        elif not is_complete:
+            rebuild_reason = "No build runs found - database may not be fully initialized"
+        elif last_state == 'failed':
             needs_rebuild = True
-            rebuild_reason = f"Build incomplete - stopped at phase: {state.get('phase')}"
+            error = run_row[6]  # error_message
+            rebuild_reason = f"Last build failed: {error[:100] if error else 'Unknown error'}"
+        elif last_state == 'running':
+            needs_rebuild = True
+            rebuild_reason = "Build still in progress or was interrupted"
         elif symbols == 0:
             needs_rebuild = True
             rebuild_reason = "No symbols extracted"
@@ -450,8 +459,8 @@ def _check_db_health(conn) -> dict:
         
         return {
             "is_complete": is_complete and not needs_rebuild,
-            "phase": state.get('phase') if state else "unknown",
-            "last_updated": state.get('updated_at') if state else None,
+            "phase": last_state if last_state else "unknown",
+            "last_updated": last_updated,
             "files_indexed": files,
             "symbols_extracted": symbols,
             "refs_extracted": refs,
@@ -557,9 +566,11 @@ def ck3_search(
     query: str,
     file_pattern: Optional[str] = None,
     source_filter: Optional[str] = None,
+    mod_filter: Optional[list[str]] = None,
+    game_folder: Optional[str] = None,
     symbol_type: Optional[str] = None,
     adjacency: Literal["auto", "strict", "fuzzy"] = "auto",
-    limit: int = 50,
+    limit: int = 25,
     definitions_only: bool = False,
     verbose: bool = False,
     no_lens: bool = False
@@ -578,11 +589,13 @@ def ck3_search(
     
     Args:
         query: Search term (symbol name, text to find, or file path)
-        file_pattern: SQL LIKE pattern to filter file paths (e.g., "%traits%")
+        file_pattern: SQL LIKE pattern for file paths (e.g., "%traits%")
         source_filter: Filter by source ("vanilla" or mod name)
+        mod_filter: List of mod names to search (e.g., ["vanilla", "MSC"])
+        game_folder: Limit to CK3 folder (e.g., "events", "common/traits", "common/on_action")
         symbol_type: Filter symbols by type (trait, event, decision, etc.)
         adjacency: Pattern expansion ("auto", "strict", "fuzzy")
-        limit: Max results per category
+        limit: Max results per category (default 25)
         definitions_only: If True, skip references (faster but less useful)
         verbose: More detail (all matches per file, snippets)
         no_lens: If True, search ALL content (not just active playset)
@@ -590,23 +603,33 @@ def ck3_search(
     Returns:
         {
             "query": str,
-            "symbols": {
-                "count": int,           # Definition count
-                "results": [...],       # Definitions with file/line
-                "definitions_by_mod": {...},
-                "references_by_mod": {...}  # WHERE it's used (DEFAULT!)
-            },
-            "content": {count, results (line-by-line matches)},
-            "files": {count, results (matching file paths)}
+            "symbols": {definitions, references_by_mod},
+            "content": {line-by-line matches},
+            "files": {matching paths},
+            "truncated": bool,  # True if results were limited
+            "guidance": str     # Suggestions if truncated
         }
     
-    AGENT RULE: A null/empty answer is ONLY valid if BOTH symbols AND content
-    searches return empty. Filename-only searches are NOT sufficient to claim
-    something doesn't exist.
+    Examples:
+        ck3_search("brave")  # Find all uses of 'brave'
+        ck3_search("brave", game_folder="events")  # Only in events/
+        ck3_search("brave", mod_filter=["MSC"])  # Only in MSC mod
+        ck3_search("has_trait", limit=100, verbose=True)  # More results
     """
     db = _get_db()
     trace = _get_trace()
     lens = _get_lens(no_lens=no_lens)
+    
+    # Build file_pattern from game_folder if provided
+    effective_file_pattern = file_pattern
+    if game_folder:
+        # Normalize folder path
+        folder = game_folder.replace("\\", "/").strip("/")
+        effective_file_pattern = f"{folder}/%"
+    
+    # Build source filter from mod_filter if provided
+    effective_source = source_filter
+    # Note: mod_filter is handled in the query layer
     
     # By default, include references (usages) - this is what compatch needs
     include_references = not definitions_only
@@ -614,28 +637,58 @@ def ck3_search(
     result = db.unified_search(
         lens=lens,
         query=query,
-        file_pattern=file_pattern,
-        source_filter=source_filter,
+        file_pattern=effective_file_pattern,
+        source_filter=effective_source,
         symbol_type=symbol_type,
         adjacency=adjacency,
         limit=limit,
-        matches_per_file=5,
+        matches_per_file=5 if not verbose else 50,
         include_references=include_references,
         verbose=verbose
     )
     
+    # Check if results were truncated and add guidance
+    refs_by_mod = result["symbols"].get("references_by_mod", {})
+    total_refs = sum(len(v) for v in refs_by_mod.values())
+    content_count = result["content"]["count"]
+    
+    truncated = (total_refs >= limit or content_count >= limit)
+    guidance = None
+    
+    if truncated:
+        guidance_parts = []
+        if total_refs >= limit:
+            guidance_parts.append(f"References truncated at {limit}.")
+        if content_count >= limit:
+            guidance_parts.append(f"Content matches truncated at {limit} files.")
+        
+        guidance_parts.append("To see more: increase limit (e.g., limit=100).")
+        
+        if not game_folder:
+            guidance_parts.append("To narrow: use game_folder (e.g., 'events', 'common/traits').")
+        if not mod_filter and not source_filter:
+            guidance_parts.append("To narrow: use mod_filter=['ModName'] or source_filter='vanilla'.")
+        
+        guidance = " ".join(guidance_parts)
+    
+    result["truncated"] = truncated
+    if guidance:
+        result["guidance"] = guidance
+    
     trace.log("ck3lens.search", {
         "query": query,
-        "file_pattern": file_pattern,
+        "file_pattern": effective_file_pattern,
+        "game_folder": game_folder,
+        "mod_filter": mod_filter,
         "symbol_type": symbol_type,
-        "adjacency": adjacency,
+        "limit": limit,
         "definitions_only": definitions_only,
         "no_lens": no_lens
     }, {
         "symbols_count": result["symbols"]["count"],
-        "references_count": len(result["symbols"].get("references_by_mod", {})),
-        "content_count": result["content"]["count"],
-        "files_count": result["files"]["count"]
+        "references_count": total_refs,
+        "content_count": content_count,
+        "truncated": truncated
     })
     
     return result

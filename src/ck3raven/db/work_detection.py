@@ -887,15 +887,16 @@ def get_build_status(conn: sqlite3.Connection) -> WorkSummary:
     loc_coverage = get_loc_coverage(conn, loc_parser_id)
     summary.loc_files_needing_parse = loc_coverage['files_pending']
     
-    # Last build time
+    # Last build time from builder_runs (daemon's table)
     try:
         row = conn.execute("""
-            SELECT value FROM build_state WHERE key = 'current'
+            SELECT completed_at FROM builder_runs 
+            WHERE state = 'complete' 
+            ORDER BY started_at DESC 
+            LIMIT 1
         """).fetchone()
         if row:
-            import json
-            state = json.loads(row[0])
-            summary.last_build_time = state.get('updated_at')
+            summary.last_build_time = row[0]
     except:
         pass
     

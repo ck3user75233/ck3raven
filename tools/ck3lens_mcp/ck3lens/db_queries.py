@@ -271,6 +271,7 @@ class DBQueries:
         lens: Optional[PlaysetLens],
         query: str,
         symbol_type: Optional[str] = None,
+        file_pattern: Optional[str] = None,
         adjacency: str = "auto",
         limit: int = 100,
         include_references: bool = False,
@@ -283,6 +284,7 @@ class DBQueries:
             lens: PlaysetLens to filter through (None = search ALL content)
             query: Search term
             symbol_type: Optional filter (tradition, event, etc.)
+            file_pattern: SQL LIKE pattern for file paths (applies to references)
             adjacency: "strict" | "auto" | "fuzzy"
             limit: Max results per pattern
             include_references: If True, also return mods that reference the symbol
@@ -394,7 +396,7 @@ class DBQueries:
         if include_references and results:
             # Get all symbol names we found
             symbol_names = list({h.name for h in results})
-            refs = self._get_references_for_symbols(symbol_names, lens)
+            refs = self._get_references_for_symbols(symbol_names, lens, file_pattern, limit)
             
             for ref in refs:
                 mod = ref["mod_name"]
@@ -422,18 +424,28 @@ class DBQueries:
     def _get_references_for_symbols(
         self, 
         symbol_names: list[str], 
-        lens: Optional[PlaysetLens]
+        lens: Optional[PlaysetLens],
+        file_pattern: Optional[str] = None,
+        limit: int = 500
     ) -> list[dict]:
         """Get all references to the given symbol names."""
         if not symbol_names:
             return []
         
         placeholders = ",".join("?" * len(symbol_names))
+        params = list(symbol_names)
         
         cv_filter = ""
         if lens:
             cv_list = ",".join(str(cv) for cv in lens.all_cv_ids)
             cv_filter = f" AND r.content_version_id IN ({cv_list})"
+        
+        file_filter = ""
+        if file_pattern:
+            file_filter = " AND LOWER(f.relpath) LIKE LOWER(?)"
+            params.append(file_pattern)
+        
+        params.append(limit)
         
         sql = f"""
             SELECT 
@@ -449,11 +461,12 @@ class DBQueries:
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE r.name IN ({placeholders})
             {cv_filter}
+            {file_filter}
             ORDER BY mod_name, f.relpath, r.line_number
-            LIMIT 500
+            LIMIT ?
         """
         
-        rows = self.conn.execute(sql, symbol_names).fetchall()
+        rows = self.conn.execute(sql, params).fetchall()
         return [dict(row) for row in rows]
     
     def _get_line_snippet(self, file_id: int, line_number: Optional[int], context: int = 0) -> Optional[str]:
@@ -847,11 +860,12 @@ class DBQueries:
             "files": {"count": 0, "results": []}
         }
         
-        # 1. Symbol search
+        # 1. Symbol search (file_pattern filters references, not definitions)
         symbol_result = self.search_symbols(
             lens=lens,
             query=query,
             symbol_type=symbol_type,
+            file_pattern=file_pattern,
             adjacency=adjacency,
             limit=limit,
             include_references=include_references,

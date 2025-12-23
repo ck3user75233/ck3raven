@@ -152,284 +152,77 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
     }
 
     /**
-     * Check if MCP server is working by actually calling it
+     * Check if MCP server is working by checking vscode.lm.tools for ck3_ prefixed tools.
+     * This directly monitors VS Code's actual MCP connection state.
      */
     private async checkMcpConfiguration(): Promise<void> {
-        const fs = require('fs');
-        const path = require('path');
-        const os = require('os');
-        const { spawn } = require('child_process');
+        try {
+            // Check vscode.lm.tools for ck3 lens tools - this reflects the ACTUAL connection state
+            const allTools = vscode.lm.tools;
+            const ck3Tools = allTools.filter(tool => tool.name.startsWith('mcp_ck3lens_ck3_'));
+            
+            if (ck3Tools.length > 0) {
+                this.state.mcpServer = { 
+                    status: 'connected', 
+                    serverName: `ck3lens (${ck3Tools.length} tools)` 
+                };
+                this.logger.info(`MCP server connected: ${ck3Tools.length} ck3lens tools available`);
+                
+                // Check for policy tool to determine policy enforcement status
+                const hasPolicyTool = ck3Tools.some(t => t.name.includes('policy') || t.name.includes('validate'));
+                if (hasPolicyTool) {
+                    this.state.policyEnforcement = { status: 'connected', message: 'active' };
+                } else {
+                    this.state.policyEnforcement = { status: 'connected', message: 'no policy tools' };
+                }
+            } else {
+                // No ck3 tools found - check if MCP config exists
+                const fs = require('fs');
+                const path = require('path');
+                const os = require('os');
+                
+                const possiblePaths = [
+                    process.env.APPDATA ? path.join(process.env.APPDATA, 'Code', 'User', 'mcp.json') : null,
+                    path.join(os.homedir(), 'AppData', 'Roaming', 'Code', 'User', 'mcp.json'),
+                ].filter(Boolean);
 
-        // First check if config exists
-        const possiblePaths = [
-            process.env.APPDATA ? path.join(process.env.APPDATA, 'Code', 'User', 'mcp.json') : null,
-            path.join(os.homedir(), 'AppData', 'Roaming', 'Code', 'User', 'mcp.json'),
-        ].filter(Boolean);
-
-        let serverPath: string | null = null;
-
-        for (const mcpConfigPath of possiblePaths) {
-            try {
-                if (mcpConfigPath && fs.existsSync(mcpConfigPath)) {
-                    let content = fs.readFileSync(mcpConfigPath, 'utf-8');
-                    // Strip BOM if present
-                    if (content.charCodeAt(0) === 0xFEFF) {
-                        content = content.slice(1);
-                    }
-                    const config = JSON.parse(content);
-                    
-                    if (config.servers?.ck3lens?.args?.[0]) {
-                        serverPath = config.servers.ck3lens.args[0];
-                        this.logger.info(`Found MCP config at ${mcpConfigPath}: ${serverPath}`);
-                        break;
+                let configExists = false;
+                for (const mcpConfigPath of possiblePaths) {
+                    try {
+                        if (mcpConfigPath && fs.existsSync(mcpConfigPath)) {
+                            let content = fs.readFileSync(mcpConfigPath, 'utf-8');
+                            if (content.charCodeAt(0) === 0xFEFF) {
+                                content = content.slice(1);
+                            }
+                            const config = JSON.parse(content);
+                            if (config.servers?.ck3lens) {
+                                configExists = true;
+                                break;
+                            }
+                        }
+                    } catch (error) {
+                        this.logger.debug(`MCP config check failed for ${mcpConfigPath}: ${error}`);
                     }
                 }
-            } catch (error) {
-                this.logger.debug(`MCP config check failed for ${mcpConfigPath}: ${error}`);
-            }
-        }
 
-        if (!serverPath) {
-            this.state.mcpServer = { status: 'disconnected', serverName: 'not configured' };
-            this.logger.info('No MCP configuration found');
-            this.persistState();
-            this.refresh();
-            return;
-        }
-
-        // Test the MCP server by spawning it and sending a ping
-        this.logger.info(`Testing MCP server at: ${serverPath}`);
-        
-        try {
-            const result = await this.testMcpServer(serverPath);
-            if (result.success) {
-                this.state.mcpServer = { status: 'connected', serverName: 'ck3lens' };
-                this.logger.info('MCP server responding');
-                
-                // Also check policy enforcement status via MCP
-                await this.checkPolicyStatus(serverPath);
-            } else {
-                this.state.mcpServer = { status: 'disconnected', serverName: result.error || 'failed' };
+                if (configExists) {
+                    // Config exists but no tools available - server is down or not started
+                    this.state.mcpServer = { status: 'disconnected', serverName: 'not running' };
+                    this.logger.info('MCP server configured but not running (no tools available)');
+                } else {
+                    this.state.mcpServer = { status: 'disconnected', serverName: 'not configured' };
+                    this.logger.info('No MCP configuration found');
+                }
                 this.state.policyEnforcement = { status: 'disconnected', message: 'MCP offline' };
-                this.logger.error('MCP server test failed:', result.error);
             }
         } catch (error) {
             this.state.mcpServer = { status: 'disconnected', serverName: 'error' };
-            this.state.policyEnforcement = { status: 'disconnected', message: 'MCP error' };
-            this.logger.error('MCP server test error:', error);
+            this.state.policyEnforcement = { status: 'disconnected', message: 'check failed' };
+            this.logger.error('MCP status check error:', error);
         }
 
         this.persistState();
         this.refresh();
-    }
-
-    /**
-     * Check policy enforcement status by calling the MCP server's policy health endpoint
-     */
-    private async checkPolicyStatus(serverPath: string): Promise<void> {
-        const { spawn } = require('child_process');
-        const path = require('path');
-        const fs = require('fs');
-
-        const serverDir = path.dirname(serverPath);
-        
-        // Find Python
-        let pythonPath = 'python';
-        const venvPython = path.join(serverDir, '..', '..', '..', '.venv', 'Scripts', 'python.exe');
-        if (fs.existsSync(venvPython)) {
-            pythonPath = venvPython;
-        }
-
-        return new Promise((resolve) => {
-            const proc = spawn(pythonPath, [serverPath], {
-                cwd: serverDir,
-                stdio: ['pipe', 'pipe', 'pipe']
-            });
-
-            let stdout = '';
-            let resolved = false;
-
-            const timeout = setTimeout(() => {
-                if (!resolved) {
-                    resolved = true;
-                    proc.kill();
-                    // Couldn't determine policy status
-                    this.state.policyEnforcement = { status: 'disconnected', message: 'timeout' };
-                    resolve();
-                }
-            }, 5000);
-
-            proc.stdout.on('data', (data: Buffer) => {
-                stdout += data.toString();
-                
-                // Look for policy health response
-                if (stdout.includes('"healthy"')) {
-                    if (!resolved) {
-                        resolved = true;
-                        clearTimeout(timeout);
-                        proc.kill();
-                        
-                        try {
-                            // Parse JSONRPC response
-                            const lines = stdout.split('\n');
-                            for (const line of lines) {
-                                if (line.includes('"healthy"')) {
-                                    const match = line.match(/\{[^{}]*"healthy"[^{}]*\}/);
-                                    if (match) {
-                                        const result = JSON.parse(match[0]);
-                                        if (result.healthy === true) {
-                                            this.state.policyEnforcement = { status: 'connected', message: 'active' };
-                                            this.logger.info('Policy enforcement is active');
-                                        } else {
-                                            this.state.policyEnforcement = { status: 'disconnected', message: result.error || 'unhealthy' };
-                                            this.logger.info('Policy enforcement is inactive:', result.error);
-                                        }
-                                        resolve();
-                                        return;
-                                    }
-                                }
-                            }
-                        } catch (e) {
-                            this.logger.debug('Failed to parse policy response');
-                        }
-                        
-                        // Default if parsing fails
-                        this.state.policyEnforcement = { status: 'connected', message: 'unknown' };
-                        resolve();
-                    }
-                }
-            });
-
-            proc.on('error', () => {
-                if (!resolved) {
-                    resolved = true;
-                    clearTimeout(timeout);
-                    this.state.policyEnforcement = { status: 'disconnected', message: 'error' };
-                    resolve();
-                }
-            });
-
-            // Send MCP request to check policy status
-            const policyRequest = {
-                jsonrpc: '2.0',
-                id: 2,
-                method: 'tools/call',
-                params: {
-                    name: 'ck3_get_policy_status',
-                    arguments: {}
-                }
-            };
-
-            try {
-                proc.stdin.write(JSON.stringify(policyRequest) + '\n');
-            } catch (e) {
-                // stdin might be closed
-            }
-        });
-    }
-
-    /**
-     * Test MCP server by spawning it and sending an initialize request
-     */
-    private testMcpServer(serverPath: string): Promise<{ success: boolean; error?: string }> {
-        return new Promise((resolve) => {
-            const { spawn } = require('child_process');
-            const path = require('path');
-            const fs = require('fs');
-
-            const serverDir = path.dirname(serverPath);
-            
-            // Try to find the correct Python - check for venv first
-            // From ck3lens_mcp, go up 3 levels: ck3lens_mcp -> tools -> ck3raven -> AI Workspace
-            let pythonPath = 'python';
-            const venvPython = path.join(serverDir, '..', '..', '..', '.venv', 'Scripts', 'python.exe');
-            this.logger.info(`Looking for venv at: ${venvPython}`);
-            if (fs.existsSync(venvPython)) {
-                pythonPath = venvPython;
-                this.logger.info(`Using venv Python: ${venvPython}`);
-            } else {
-                this.logger.info(`Venv not found at ${venvPython}, falling back to system python`);
-            }
-
-            this.logger.info(`Spawning: ${pythonPath} ${serverPath}`);
-            
-            const proc = spawn(pythonPath, [serverPath], {
-                cwd: serverDir,
-                stdio: ['pipe', 'pipe', 'pipe']
-            });
-
-            let stdout = '';
-            let stderr = '';
-            let resolved = false;
-
-            const timeout = setTimeout(() => {
-                if (!resolved) {
-                    resolved = true;
-                    proc.kill();
-                    // If we got here without error, the server started successfully
-                    if (stderr.includes('Error') || stderr.includes('Traceback')) {
-                        resolve({ success: false, error: 'startup error' });
-                    } else {
-                        resolve({ success: true });
-                    }
-                }
-            }, 3000);
-
-            proc.stdout.on('data', (data: Buffer) => {
-                stdout += data.toString();
-            });
-
-            proc.stderr.on('data', (data: Buffer) => {
-                stderr += data.toString();
-                // MCP servers often log to stderr, check for actual errors
-                if (stderr.includes('Traceback') || stderr.includes('ImportError') || stderr.includes('ModuleNotFoundError')) {
-                    if (!resolved) {
-                        resolved = true;
-                        clearTimeout(timeout);
-                        proc.kill();
-                        resolve({ success: false, error: 'import error' });
-                    }
-                }
-            });
-
-            proc.on('error', (err: Error) => {
-                if (!resolved) {
-                    resolved = true;
-                    clearTimeout(timeout);
-                    resolve({ success: false, error: err.message });
-                }
-            });
-
-            proc.on('exit', (code: number) => {
-                if (!resolved) {
-                    resolved = true;
-                    clearTimeout(timeout);
-                    if (code === 0 || code === null) {
-                        resolve({ success: true });
-                    } else {
-                        resolve({ success: false, error: `exit code ${code}` });
-                    }
-                }
-            });
-
-            // Send MCP initialize request
-            const initRequest = {
-                jsonrpc: '2.0',
-                id: 1,
-                method: 'initialize',
-                params: {
-                    protocolVersion: '2024-11-05',
-                    capabilities: {},
-                    clientInfo: { name: 'ck3lens-test', version: '1.0.0' }
-                }
-            };
-
-            try {
-                proc.stdin.write(JSON.stringify(initRequest) + '\n');
-            } catch (e) {
-                // stdin might be closed already
-            }
-        });
     }
 
     private loadState(): AgentState {
