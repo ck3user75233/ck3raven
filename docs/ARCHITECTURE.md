@@ -350,8 +350,7 @@ ConflictUnit → User Decision → ResolutionChoice → Patch Generation
 
 | Tool Set | Description |
 |----------|-------------|
-| `ck3lens` | Database-only tools for compatching |
-| `ck3lens-live` | Full modding including file editing and git |
+| `ck3lens` | CK3 modding with database search and live mod editing |
 | `ck3raven-dev` | All tools for infrastructure development |
 
 ### Critical Rules for Agents

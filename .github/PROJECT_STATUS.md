@@ -87,14 +87,13 @@ Use "Add Folder to Workspace" instead of "Open Folder".
 
 ### 1. ✅ VS Code Tool Sets Configuration
 **Files Created/Updated:**
-- `.vscode/toolSets.json` - Three tool sets: `ck3lens`, `ck3lens-live`, `ck3raven-dev`
+- `.vscode/toolSets.json` - Two tool sets: `ck3lens`, `ck3raven-dev`
 - `.vscode/mcp.json` - MCP server configuration
 
 **Tool Sets:**
 | Tool Set | Tools | Purpose |
 |----------|-------|---------|
-| `ck3lens` | 22 specific MCP tools | Database-only compatching |
-| `ck3lens-live` | `mcp_ck3lens_*` | Full modding with file editing |
+| `ck3lens` | `mcp_ck3lens_*` | CK3 modding with live editing |
 | `ck3raven-dev` | `*` | Infrastructure development |
 
 ### 2. ✅ Culture Expanded Mod Added

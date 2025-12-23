@@ -4391,7 +4391,7 @@ def ck3_get_folder_contents(
 
 @mcp.tool()
 def ck3_get_mode_instructions(
-    mode: Literal["ck3lens", "ck3lens-live", "ck3raven-dev"]
+    mode: Literal["ck3lens", "ck3raven-dev"]
 ) -> dict:
     """
     Get the instruction content for a specific agent mode.
@@ -4400,8 +4400,7 @@ def ck3_get_mode_instructions(
     
     Args:
         mode: The mode to get instructions for:
-            - "ck3lens": Database-only CK3 modding (restricted tools)
-            - "ck3lens-live": Full CK3 modding with live file editing
+            - "ck3lens": CK3 modding with database search and live mod editing
             - "ck3raven-dev": Full development mode for infrastructure
     
     Returns:
@@ -4412,7 +4411,6 @@ def ck3_get_mode_instructions(
     # Map modes to instruction files
     mode_files = {
         "ck3lens": "COPILOT_LENS_COMPATCH.md",
-        "ck3lens-live": "COPILOT_LENS_COMPATCH.md",  # Same file, different tool access
         "ck3raven-dev": "COPILOT_RAVEN_DEV.md",
     }
     
@@ -4437,8 +4435,7 @@ def ck3_get_mode_instructions(
         
         # Add mode-specific notes
         mode_notes = {
-            "ck3lens": "Restricted mode: Use only MCP tools, no filesystem access.",
-            "ck3lens-live": "Full CK3 modding: All MCP tools including live file operations.",
+            "ck3lens": "CK3 modding: Database search + live mod file editing.",
             "ck3raven-dev": "Development mode: All tools available for infrastructure work.",
         }
         
@@ -4570,13 +4567,8 @@ def ck3_get_workspace_config() -> dict:
         "available_modes": [
             {
                 "name": "ck3lens",
-                "description": "Database-only CK3 modding - searches, symbols, file content, conflict detection",
-                "use_case": "Fixing mod errors, compatibility patching",
-            },
-            {
-                "name": "ck3lens-live",
-                "description": "Full CK3 modding including live file editing and git operations",
-                "use_case": "Active mod development with file writes",
+                "description": "CK3 modding - database search, conflict detection, live mod editing",
+                "use_case": "Fixing mod errors, compatibility patching, mod development",
             },
             {
                 "name": "ck3raven-dev",

@@ -245,7 +245,7 @@ Every piece of content is traceable back to:
 
 ## Agent Integration
 
-Both `ck3lens` and `ck3lens-live` agents can leverage Studio features via MCP:
+The `ck3lens` agent can leverage Studio features via MCP:
 
 | MCP Tool | Studio Feature |
 |----------|----------------|
