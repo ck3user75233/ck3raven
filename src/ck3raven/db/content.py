@@ -86,44 +86,26 @@ def detect_encoding(data: bytes) -> Tuple[str, bool]:
 
 def classify_file_type(relpath: str) -> str:
     """
-    Classify file type based on path and extension.
+    Classify file type based on file routing rules.
     
-    Returns: 'script', 'localization', 'gfx', 'gui', 'other'
+    Returns: 'script', 'localization', 'lookups', 'skip'
+    
+    This is the canonical classification - used at ingest time to tag files
+    so that later phases know which processing pipeline applies.
     """
-    path_lower = relpath.lower()
+    from ck3raven.db.file_routes import get_file_route, FileRoute
     
-    # Skip directories that contain non-CK3-script text files (licenses, fonts, etc.)
-    skip_dirs = ['fonts/', 'music/', 'sound/', 'dlc/']
-    for skip in skip_dirs:
-        if path_lower.startswith(skip) or f'/{skip}' in path_lower:
-            return 'other'
-
-    # By directory
-    if '/localization/' in path_lower or path_lower.startswith('localization/'):
-        return 'localization'
-    if '/gfx/' in path_lower or path_lower.startswith('gfx/'):
-        return 'gfx'
-    if '/gui/' in path_lower or path_lower.startswith('gui/'):
-        return 'gui'
+    route, _reason = get_file_route(relpath)
     
-    # Script directories
-    script_dirs = ['common/', 'events/', 'history/']
-    for sd in script_dirs:
-        if path_lower.startswith(sd) or f'/{sd}' in path_lower:
-            return 'script'
-    
-    # By extension
-    ext = Path(relpath).suffix.lower()
-    if ext in ('.txt', '.mod'):
+    # Map FileRoute enum to stored file_type string
+    if route == FileRoute.SCRIPT:
         return 'script'
-    if ext == '.yml':
+    elif route == FileRoute.LOCALIZATION:
         return 'localization'
-    if ext in ('.dds', '.png', '.tga'):
-        return 'gfx'
-    if ext == '.gui':
-        return 'gui'
-    
-    return 'other'
+    elif route == FileRoute.LOOKUPS:
+        return 'lookups'
+    else:
+        return 'skip'
 
 
 @dataclass

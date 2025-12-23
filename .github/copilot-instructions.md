@@ -22,7 +22,7 @@ This workspace contains the **CK3 Lens** ecosystem - a complete AI-powered toolk
 - **Path:** `~/.ck3raven/ck3raven.db`
 - **Content:** ~81,000 files, 110+ content versions, indexed
 - **Includes:** Vanilla CK3, Steam Workshop mods, local mods
-- **Symbols:** Run `python scripts/rebuild_database.py --refresh-symbols` after setup
+- **Symbols:** Run `python builder/daemon.py start --symbols-only` after setup
 
 ---
 
@@ -37,7 +37,8 @@ This workspace contains the **CK3 Lens** ecosystem - a complete AI-powered toolk
 ### Symbol Search & Validation
 | Tool | Purpose | Critical Notes |
 |------|---------|----------------|
-| `ck3_search_symbols` | Find traits, decisions, events by name | Uses adjacency matching - "combat_skill" also finds "combat_*_skill" |
+| `ck3_search` | **PRIMARY SEARCH** - unified search across symbols, content, and files | Searches EVERYTHING at once - no need to decide if something is a symbol |
+| `ck3_search_symbols` | Find traits, decisions, events by name (legacy) | Use `ck3_search` instead |
 | `ck3_search_files` | Find files by path pattern | Use SQL LIKE patterns: "%on_action%", "common/traits/%" |
 | `ck3_search_content` | Grep-style content search | Find text inside files, returns snippets |
 | `ck3_confirm_not_exists` | Verify symbol truly missing | **ALWAYS call before claiming something doesn't exist** |
@@ -363,13 +364,18 @@ my_custom_trigger = {
 
 ### 1. Always Search Before Creating
 ```
-Use ck3_search_symbols to check if something exists before creating
+Use ck3_search to check if something exists before creating.
+This searches symbols, content, AND files in one call.
 ```
 
 ### 2. Never Claim "Not Found" Without Verification
 ```
-ALWAYS use ck3_confirm_not_exists before saying something doesn't exist
-The database uses fuzzy/adjacency matching - simple searches may miss things
+CRITICAL RULE: A null/empty answer is ONLY valid if BOTH:
+  - Symbol search returns empty AND
+  - Content search returns empty
+
+Filename-only searches are NOT sufficient to claim something doesn't exist.
+Content must be checked. Use ck3_search (unified) or ck3_confirm_not_exists.
 ```
 
 ### 3. Validate Syntax Before Writing

@@ -81,9 +81,9 @@ ck3raven/
 │
 ├── docs/                 # Design documentation (9 docs + ARCHITECTURE.md)
 ├── tests/                # Test suite
-└── scripts/              # Utility scripts
-    ├── rebuild_daemon.py # Detached rebuild daemon (long-running builds)
-    └── rebuild_database.py # Legacy rebuild script
+├── builder/              # Database builder daemon
+│   └── daemon.py         # Detached rebuild daemon (long-running builds)
+└── scripts/              # Utility scripts (NOT for building - use builder/daemon.py)
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed architecture documentation.

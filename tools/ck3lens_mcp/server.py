@@ -549,7 +549,88 @@ def ck3_get_policy_status() -> dict:
 
 
 # ============================================================================
-# Symbol Search Tools (from ck3raven DB)
+# Unified Search Tool
+# ============================================================================
+
+@mcp.tool()
+def ck3_search(
+    query: str,
+    file_pattern: Optional[str] = None,
+    source_filter: Optional[str] = None,
+    symbol_type: Optional[str] = None,
+    adjacency: Literal["auto", "strict", "fuzzy"] = "auto",
+    limit: int = 50,
+    include_references: bool = False,
+    verbose: bool = False,
+    no_lens: bool = False
+) -> dict:
+    """
+    Unified search across symbols, file content, and file paths.
+    
+    This is THE search tool - it searches EVERYTHING:
+    1. Symbol definitions (traits, events, decisions, etc.)
+    2. File content (grep-style text matches with line numbers)
+    3. File paths (if query looks like a path or file_pattern provided)
+    
+    No need to decide if something is a symbol - the search finds it.
+    
+    Args:
+        query: Search term (symbol name, text to find, or file path)
+        file_pattern: SQL LIKE pattern to filter file paths (e.g., "%traits%")
+        source_filter: Filter by source ("vanilla" or mod name)
+        symbol_type: Filter symbols by type (trait, event, decision, etc.)
+        adjacency: Pattern expansion ("auto", "strict", "fuzzy")
+        limit: Max results per category
+        include_references: Include which mods reference found symbols
+        verbose: More detail (all matches per file, snippets)
+        no_lens: If True, search ALL content (not just active playset)
+    
+    Returns:
+        {
+            "query": str,
+            "symbols": {count, results, adjacencies, definitions_by_mod},
+            "content": {count, results (line-by-line matches)},
+            "files": {count, results (matching file paths)}
+        }
+    
+    AGENT RULE: A null/empty answer is ONLY valid if BOTH symbols AND content
+    searches return empty. Filename-only searches are NOT sufficient to claim
+    something doesn't exist.
+    """
+    db = _get_db()
+    trace = _get_trace()
+    lens = _get_lens(no_lens=no_lens)
+    
+    result = db.unified_search(
+        lens=lens,
+        query=query,
+        file_pattern=file_pattern,
+        source_filter=source_filter,
+        symbol_type=symbol_type,
+        adjacency=adjacency,
+        limit=limit,
+        matches_per_file=5,
+        include_references=include_references,
+        verbose=verbose
+    )
+    
+    trace.log("ck3lens.search", {
+        "query": query,
+        "file_pattern": file_pattern,
+        "symbol_type": symbol_type,
+        "adjacency": adjacency,
+        "no_lens": no_lens
+    }, {
+        "symbols_count": result["symbols"]["count"],
+        "content_count": result["content"]["count"],
+        "files_count": result["files"]["count"]
+    })
+    
+    return result
+
+
+# ============================================================================
+# Symbol Search Tools (from ck3raven DB) - LEGACY, use ck3_search instead
 # ============================================================================
 
 @mcp.tool()

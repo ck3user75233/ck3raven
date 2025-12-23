@@ -769,7 +769,7 @@ def extract_symbols_incremental(
         Dict with 'processed', 'symbols', 'errors', 'skipped' counts
     """
     import json
-    from ck3raven.db.skip_rules import should_skip_for_symbols, get_symbol_file_filter_sql
+    from ck3raven.db.file_routes import should_skip_for_symbols, get_symbol_file_filter_sql
 
     # Handle force rebuild
     if force_rebuild:

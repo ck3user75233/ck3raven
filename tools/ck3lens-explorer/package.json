@@ -644,13 +644,16 @@
     ]
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run esbuild-base -- --production",
+    "esbuild-base": "node esbuild.js",
+    "esbuild": "npm run esbuild-base -- --sourcemap",
+    "esbuild-watch": "npm run esbuild-base -- --watch",
+    "compile": "npm run esbuild",
+    "watch": "npm run esbuild-watch",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
     "test": "node ./out/test/runTest.js",
-    "package": "vsce package",
+    "package": "npm run esbuild-base -- --production && vsce package --allow-missing-repository",
     "publish": "vsce publish"
   },
   "devDependencies": {
@@ -661,11 +664,12 @@
     "@typescript-eslint/parser": "^6.13.0",
     "@vscode/test-electron": "^2.3.8",
     "@vscode/vsce": "^2.22.0",
+    "esbuild": "^0.20.2",
     "eslint": "^8.54.0",
-    "js-yaml": "^4.1.1",
     "typescript": "^5.3.2"
   },
   "dependencies": {
+    "js-yaml": "^4.1.0",
     "jsonc-parser": "^3.2.0"
   }
 }

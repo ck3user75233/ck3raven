@@ -78,10 +78,22 @@ Located in `~/.ck3raven/daemon/`:
 
 ### Build Phases
 
-1. **Ingest** - Scan vanilla + Steam Workshop mods, store files with content hashing
-2. **AST Generation** - Parse .txt/.yml files into AST, skip non-script files (gfx/, etc.)
-3. **Symbol Extraction** - Extract traits, decisions, events, etc. from ASTs
-4. **Reference Extraction** - Extract references to symbols (has_trait, trigger_event, etc.)
+The daemon processes files through distinct phases. File routing is determined at ingest time by `file_routes.py` which sets `file_type` on each file.
+
+| Phase | Name | Description |
+|-------|------|-------------|
+| 1 | **Vanilla Ingest** | Scan vanilla game files, store content, tag with `file_type` |
+| 2 | **Mod Ingest** | Scan all Steam Workshop + local mods, same tagging |
+| 3 | **Parsing** | Multi-route based on `file_type`: |
+|   | - script → | Parse to AST, store in `asts` table |
+|   | - localization → | Parse to `localization_entries` table (TODO) |
+|   | - reference → | Parse province/character IDs to ref tables (TODO) |
+|   | - skip → | No parsing (images, binary, docs) |
+| 4 | **Symbol Extraction** | Extract definitions (traits, events, decisions) from ASTs |
+| 5 | **Reference Extraction** | Extract symbol USAGES from ASTs (enables dependency analysis) |
+| 6 | **Done** | Build complete |
+
+**File Routing**: The canonical file classification is in `src/ck3raven/db/file_routes.py`. This single file determines where each file goes. No scattered skip logic.
 
 ---
 

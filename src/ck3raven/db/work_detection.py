@@ -351,7 +351,7 @@ def get_asts_needing_symbols(
     Returns:
         List of dicts with content_hash, ast_id, node_count
     """
-    from ck3raven.db.skip_rules import get_symbol_file_filter_sql
+    from ck3raven.db.file_routes import get_symbol_file_filter_sql
     
     file_filter = get_symbol_file_filter_sql()
     
@@ -384,7 +384,7 @@ def get_symbol_coverage(conn: sqlite3.Connection) -> Dict[str, Any]:
     
     Uses centralized skip rules to only count symbol-eligible ASTs.
     """
-    from ck3raven.db.skip_rules import get_symbol_file_filter_sql
+    from ck3raven.db.file_routes import get_symbol_file_filter_sql
     
     file_filter = get_symbol_file_filter_sql()
     

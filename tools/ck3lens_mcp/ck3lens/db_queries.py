@@ -783,6 +783,116 @@ class DBQueries:
         return content.lower().count(query.lower())
     
     # =========================================================================
+    # UNIFIED SEARCH
+    # =========================================================================
+    
+    def unified_search(
+        self,
+        lens: Optional[PlaysetLens],
+        query: str,
+        file_pattern: Optional[str] = None,
+        source_filter: Optional[str] = None,
+        symbol_type: Optional[str] = None,
+        adjacency: str = "auto",
+        limit: int = 50,
+        matches_per_file: int = 5,
+        include_references: bool = False,
+        verbose: bool = False
+    ) -> dict:
+        """
+        Unified search across symbols AND content.
+        
+        Searches both:
+        1. Symbol definitions (traits, events, decisions, etc.)
+        2. File content (grep-style text search)
+        
+        Returns both in one response - no need to decide if something is a symbol.
+        
+        Args:
+            lens: PlaysetLens to filter (None = search ALL)
+            query: Search term
+            file_pattern: SQL LIKE pattern for file paths (optional)
+            source_filter: Filter by mod/source (optional)
+            symbol_type: Filter symbols by type (optional)
+            adjacency: Pattern expansion mode ("auto", "strict", "fuzzy")
+            limit: Max results per category
+            matches_per_file: Max content matches per file (default 5)
+            include_references: Include mods that reference found symbols
+            verbose: More detail (all matches, snippets)
+        
+        Returns:
+            {
+                "query": str,
+                "symbols": {
+                    "count": int,
+                    "results": [...],
+                    "adjacencies": [...],
+                    "definitions_by_mod": {...}
+                },
+                "content": {
+                    "count": int,
+                    "results": [...]  # Line-by-line matches
+                },
+                "files": {
+                    "count": int,
+                    "results": [...]  # Matching file paths
+                }
+            }
+        """
+        result = {
+            "query": query,
+            "lens": lens.playset_name if lens else "ALL CONTENT (no lens)",
+            "symbols": {"count": 0, "results": [], "adjacencies": [], "definitions_by_mod": {}},
+            "content": {"count": 0, "results": []},
+            "files": {"count": 0, "results": []}
+        }
+        
+        # 1. Symbol search
+        symbol_result = self.search_symbols(
+            lens=lens,
+            query=query,
+            symbol_type=symbol_type,
+            adjacency=adjacency,
+            limit=limit,
+            include_references=include_references,
+            verbose=verbose
+        )
+        result["symbols"] = {
+            "count": len(symbol_result.get("results", [])),
+            "results": symbol_result.get("results", []),
+            "adjacencies": symbol_result.get("adjacencies", []),
+            "definitions_by_mod": symbol_result.get("definitions_by_mod", {})
+        }
+        if include_references:
+            result["symbols"]["references_by_mod"] = symbol_result.get("references_by_mod", {})
+        
+        # 2. Content search (grep)
+        content_result = self.search_content(
+            lens=lens,
+            query=query,
+            file_pattern=file_pattern,
+            source_filter=source_filter,
+            limit=limit,
+            matches_per_file=matches_per_file if not verbose else 1000,
+            verbose=verbose
+        )
+        result["content"] = {
+            "count": len(content_result),
+            "results": content_result
+        }
+        
+        # 3. File path search (if file_pattern provided or query looks like a path)
+        if file_pattern or '/' in query or '\\' in query or query.endswith('.txt'):
+            search_pattern = file_pattern if file_pattern else f"%{query}%"
+            files = self.search_files(lens, search_pattern, source_filter, limit)
+            result["files"] = {
+                "count": len(files),
+                "results": files
+            }
+        
+        return result
+    
+    # =========================================================================
     # CONFLICT ANALYSIS
     # =========================================================================
     

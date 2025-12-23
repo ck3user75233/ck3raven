@@ -21,6 +21,7 @@ export interface AgentInstance {
 export interface AgentState {
     pythonBridge: { status: ConnectionStatus; latencyMs?: number };
     mcpServer: { status: ConnectionStatus; serverName?: string };
+    policyEnforcement: { status: ConnectionStatus; message?: string };
     agents: AgentInstance[];
     session: { id: string; startedAt: string };
 }
@@ -115,6 +116,7 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
 
     private state: AgentState;
     private disposables: vscode.Disposable[] = [];
+    private mcpMonitorInterval: NodeJS.Timeout | undefined;
 
     constructor(
         private readonly context: vscode.ExtensionContext,
@@ -125,6 +127,28 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
         
         // Check MCP configuration on startup
         this.checkMcpConfiguration();
+        
+        // Start ongoing MCP monitoring (every 30 seconds)
+        this.startMcpMonitoring();
+    }
+
+    /**
+     * Start periodic MCP server health monitoring.
+     */
+    private startMcpMonitoring(): void {
+        // Check every 30 seconds
+        this.mcpMonitorInterval = setInterval(() => {
+            this.checkMcpConfiguration();
+        }, 30000);
+        
+        // Also add to disposables for cleanup
+        this.disposables.push({
+            dispose: () => {
+                if (this.mcpMonitorInterval) {
+                    clearInterval(this.mcpMonitorInterval);
+                }
+            }
+        });
     }
 
     /**
@@ -181,17 +205,127 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
             if (result.success) {
                 this.state.mcpServer = { status: 'connected', serverName: 'ck3lens' };
                 this.logger.info('MCP server responding');
+                
+                // Also check policy enforcement status via MCP
+                await this.checkPolicyStatus(serverPath);
             } else {
                 this.state.mcpServer = { status: 'disconnected', serverName: result.error || 'failed' };
+                this.state.policyEnforcement = { status: 'disconnected', message: 'MCP offline' };
                 this.logger.error('MCP server test failed:', result.error);
             }
         } catch (error) {
             this.state.mcpServer = { status: 'disconnected', serverName: 'error' };
+            this.state.policyEnforcement = { status: 'disconnected', message: 'MCP error' };
             this.logger.error('MCP server test error:', error);
         }
 
         this.persistState();
         this.refresh();
+    }
+
+    /**
+     * Check policy enforcement status by calling the MCP server's policy health endpoint
+     */
+    private async checkPolicyStatus(serverPath: string): Promise<void> {
+        const { spawn } = require('child_process');
+        const path = require('path');
+        const fs = require('fs');
+
+        const serverDir = path.dirname(serverPath);
+        
+        // Find Python
+        let pythonPath = 'python';
+        const venvPython = path.join(serverDir, '..', '..', '..', '.venv', 'Scripts', 'python.exe');
+        if (fs.existsSync(venvPython)) {
+            pythonPath = venvPython;
+        }
+
+        return new Promise((resolve) => {
+            const proc = spawn(pythonPath, [serverPath], {
+                cwd: serverDir,
+                stdio: ['pipe', 'pipe', 'pipe']
+            });
+
+            let stdout = '';
+            let resolved = false;
+
+            const timeout = setTimeout(() => {
+                if (!resolved) {
+                    resolved = true;
+                    proc.kill();
+                    // Couldn't determine policy status
+                    this.state.policyEnforcement = { status: 'disconnected', message: 'timeout' };
+                    resolve();
+                }
+            }, 5000);
+
+            proc.stdout.on('data', (data: Buffer) => {
+                stdout += data.toString();
+                
+                // Look for policy health response
+                if (stdout.includes('"healthy"')) {
+                    if (!resolved) {
+                        resolved = true;
+                        clearTimeout(timeout);
+                        proc.kill();
+                        
+                        try {
+                            // Parse JSONRPC response
+                            const lines = stdout.split('\n');
+                            for (const line of lines) {
+                                if (line.includes('"healthy"')) {
+                                    const match = line.match(/\{[^{}]*"healthy"[^{}]*\}/);
+                                    if (match) {
+                                        const result = JSON.parse(match[0]);
+                                        if (result.healthy === true) {
+                                            this.state.policyEnforcement = { status: 'connected', message: 'active' };
+                                            this.logger.info('Policy enforcement is active');
+                                        } else {
+                                            this.state.policyEnforcement = { status: 'disconnected', message: result.error || 'unhealthy' };
+                                            this.logger.info('Policy enforcement is inactive:', result.error);
+                                        }
+                                        resolve();
+                                        return;
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            this.logger.debug('Failed to parse policy response');
+                        }
+                        
+                        // Default if parsing fails
+                        this.state.policyEnforcement = { status: 'connected', message: 'unknown' };
+                        resolve();
+                    }
+                }
+            });
+
+            proc.on('error', () => {
+                if (!resolved) {
+                    resolved = true;
+                    clearTimeout(timeout);
+                    this.state.policyEnforcement = { status: 'disconnected', message: 'error' };
+                    resolve();
+                }
+            });
+
+            // Send MCP request to check policy status
+            const policyRequest = {
+                jsonrpc: '2.0',
+                id: 2,
+                method: 'tools/call',
+                params: {
+                    name: 'ck3_get_policy_status',
+                    arguments: {}
+                }
+            };
+
+            try {
+                proc.stdin.write(JSON.stringify(policyRequest) + '\n');
+            } catch (e) {
+                // stdin might be closed
+            }
+        });
     }
 
     /**
@@ -318,6 +452,7 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
         return {
             pythonBridge: stored?.pythonBridge || { status: 'disconnected' },
             mcpServer: stored?.mcpServer || { status: 'disconnected' },
+            policyEnforcement: stored?.policyEnforcement || { status: 'disconnected' },
             agents: [defaultAgent],  // Always reset to default agent
             session: { id: this.generateId(), startedAt: new Date().toISOString() }
         };
@@ -333,6 +468,15 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
 
     refresh(): void {
         this._onDidChangeTreeData.fire();
+    }
+
+    /**
+     * Public method to re-check MCP server status.
+     * Called by refresh commands.
+     */
+    public async recheckMcpStatus(): Promise<void> {
+        this.logger.info('Re-checking MCP server status...');
+        await this.checkMcpConfiguration();
     }
 
     getTreeItem(element: AgentTreeItem): vscode.TreeItem {
@@ -380,6 +524,25 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
             mcpItem.description = this.state.mcpServer.serverName;
         }
         items.push(mcpItem);
+
+        // Policy Enforcement status
+        const policyLabel = this.state.policyEnforcement.status === 'connected'
+            ? 'Policy Rules: active'
+            : 'Policy Rules: inactive';
+        const policyItem = new AgentTreeItem(
+            policyLabel,
+            'policy-enforcement'
+        );
+        policyItem.iconPath = new vscode.ThemeIcon(
+            this.state.policyEnforcement.status === 'connected' ? 'shield' : 'warning',
+            this.state.policyEnforcement.status === 'connected'
+                ? new vscode.ThemeColor('testing.iconPassed')
+                : new vscode.ThemeColor('testing.iconFailed')
+        );
+        if (this.state.policyEnforcement.message && this.state.policyEnforcement.status === 'disconnected') {
+            policyItem.description = this.state.policyEnforcement.message;
+        }
+        items.push(policyItem);
 
         // Agents
         if (this.state.agents.length === 0) {

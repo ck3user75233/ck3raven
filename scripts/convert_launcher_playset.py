@@ -101,7 +101,7 @@ def main():
     print("\nNext steps:")
     print("  1. Update scripts/create_playset.py with the new playset name")
     print("  2. Run: python scripts/create_playset.py")
-    print("  3. Run: python scripts/rebuild_database.py (if needed)")
+    print("  3. Run: python builder/daemon.py start (if needed)")
     
     return 0
 

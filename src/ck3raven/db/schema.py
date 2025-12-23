@@ -11,7 +11,7 @@ from typing import Optional
 import threading
 
 # Schema version - bump when schema changes
-DATABASE_VERSION = 1
+DATABASE_VERSION = 2
 
 # Thread-local storage for connections
 _local = threading.local()
@@ -323,6 +323,67 @@ CREATE TABLE IF NOT EXISTS db_metadata (
 );
 
 -- ============================================================================
+-- BUILDER PIPELINE TRACKING
+-- ============================================================================
+
+-- Builder runs - tracks each full or partial build
+CREATE TABLE IF NOT EXISTS builder_runs (
+    build_id TEXT PRIMARY KEY,               -- UUID for this build
+    builder_version TEXT NOT NULL,           -- e.g., "1.0.0"
+    git_commit TEXT,                         -- Git commit hash if available
+    schema_version INTEGER NOT NULL,         -- DATABASE_VERSION at build time
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    state TEXT NOT NULL DEFAULT 'running',   -- 'running', 'complete', 'failed', 'cancelled'
+    error_message TEXT,
+    -- Inputs
+    vanilla_path TEXT,
+    playset_id INTEGER,
+    force_rebuild INTEGER DEFAULT 0,
+    -- Aggregate counts (populated on completion)
+    files_ingested INTEGER DEFAULT 0,
+    asts_produced INTEGER DEFAULT 0,
+    symbols_extracted INTEGER DEFAULT 0,
+    refs_extracted INTEGER DEFAULT 0,
+    localization_rows INTEGER DEFAULT 0,
+    lookup_rows INTEGER DEFAULT 0,
+    FOREIGN KEY (playset_id) REFERENCES playsets(playset_id)
+);
+
+-- Builder steps - tracks each phase within a build
+CREATE TABLE IF NOT EXISTS builder_steps (
+    step_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    build_id TEXT NOT NULL,                  -- FK to builder_runs
+    step_name TEXT NOT NULL,                 -- e.g., 'vanilla_ingest', 'ast_generation'
+    step_version TEXT,                       -- Version of step implementation
+    step_number INTEGER NOT NULL,            -- Order in pipeline
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    duration_sec REAL,
+    state TEXT NOT NULL DEFAULT 'running',   -- 'running', 'complete', 'failed', 'skipped'
+    error_message TEXT,
+    -- Row counts
+    rows_in INTEGER DEFAULT 0,               -- Input rows/files processed
+    rows_out INTEGER DEFAULT 0,              -- Output rows created
+    rows_skipped INTEGER DEFAULT 0,          -- Skipped due to rules
+    rows_errored INTEGER DEFAULT 0,          -- Failed to process
+    FOREIGN KEY (build_id) REFERENCES builder_runs(build_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_builder_steps_build ON builder_steps(build_id);
+CREATE INDEX IF NOT EXISTS idx_builder_steps_name ON builder_steps(step_name);
+
+-- Build lock - prevents concurrent builds
+CREATE TABLE IF NOT EXISTS build_lock (
+    lock_id INTEGER PRIMARY KEY CHECK (lock_id = 1),  -- Only one row allowed
+    build_id TEXT NOT NULL,
+    acquired_at TEXT NOT NULL,
+    heartbeat_at TEXT NOT NULL,
+    pid INTEGER,
+    FOREIGN KEY (build_id) REFERENCES builder_runs(build_id)
+);
+
+-- ============================================================================
 -- CONTRIBUTION & CONFLICT ANALYSIS
 -- ============================================================================
 
@@ -480,6 +541,72 @@ CREATE TABLE IF NOT EXISTS localization_refs (
 
 CREATE INDEX IF NOT EXISTS idx_locref_locid ON localization_refs(loc_id);
 CREATE INDEX IF NOT EXISTS idx_locref_value ON localization_refs(ref_value);
+
+-- ============================================================================
+-- LOOKUP TABLES (TBC - Extracted reference data from ASTs)
+-- ============================================================================
+-- These tables provide denormalized, easily-queryable views of commonly-needed
+-- game data extracted from ASTs. This is NOT a different parse - it's a 
+-- deterministic extraction pass over stored ASTs.
+--
+-- Rationale: While symbols table gives us names and locations, lookup tables
+-- provide the semantic details (e.g., trait category, group, level, flags)
+-- that are frequently needed for validation, autocomplete, and analysis.
+
+-- Trait lookup table - extracted from common/traits/*.txt ASTs
+CREATE TABLE IF NOT EXISTS trait_lookups (
+    trait_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol_id INTEGER NOT NULL,               -- FK to symbols table
+    name TEXT NOT NULL,                       -- trait name (e.g., 'brave')
+    category TEXT,                            -- education, personality, lifestyle, etc.
+    trait_group TEXT,                         -- group = X value
+    level INTEGER,                            -- level = X value (for tiered traits)
+    is_genetic INTEGER DEFAULT 0,             -- genetic = yes
+    is_physical INTEGER DEFAULT 0,            -- physical = yes
+    is_health INTEGER DEFAULT 0,              -- health = yes
+    is_fame INTEGER DEFAULT 0,                -- fame = yes
+    opposites_json TEXT,                      -- JSON array of opposite trait names
+    flags_json TEXT,                          -- JSON array of flag values
+    modifiers_json TEXT,                      -- JSON of modifier key/values
+    FOREIGN KEY (symbol_id) REFERENCES symbols(symbol_id) ON DELETE CASCADE,
+    UNIQUE(symbol_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trait_name ON trait_lookups(name);
+CREATE INDEX IF NOT EXISTS idx_trait_category ON trait_lookups(category);
+CREATE INDEX IF NOT EXISTS idx_trait_group ON trait_lookups(trait_group);
+
+-- Decision lookup table - extracted from common/decisions/*.txt ASTs
+CREATE TABLE IF NOT EXISTS decision_lookups (
+    decision_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol_id INTEGER NOT NULL,               -- FK to symbols table
+    name TEXT NOT NULL,                       -- decision name
+    is_shown_check TEXT,                      -- is_shown block summary (TBC)
+    is_valid_check TEXT,                      -- is_valid block summary (TBC)
+    major INTEGER DEFAULT 0,                  -- major = yes
+    ai_check_interval INTEGER,                -- ai_check_interval value
+    FOREIGN KEY (symbol_id) REFERENCES symbols(symbol_id) ON DELETE CASCADE,
+    UNIQUE(symbol_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_decision_name ON decision_lookups(name);
+
+-- Event lookup table - extracted from events/*.txt ASTs  
+CREATE TABLE IF NOT EXISTS event_lookups (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol_id INTEGER NOT NULL,               -- FK to symbols table
+    event_name TEXT NOT NULL,                 -- e.g., 'blackmail.0001'
+    namespace TEXT,                           -- extracted namespace
+    event_type TEXT,                          -- character_event, letter_event, etc.
+    is_hidden INTEGER DEFAULT 0,              -- hidden = yes
+    theme TEXT,                               -- theme value
+    FOREIGN KEY (symbol_id) REFERENCES symbols(symbol_id) ON DELETE CASCADE,
+    UNIQUE(symbol_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_event_name ON event_lookups(event_name);
+CREATE INDEX IF NOT EXISTS idx_event_namespace ON event_lookups(namespace);
+CREATE INDEX IF NOT EXISTS idx_event_type ON event_lookups(event_type);
 """
 
 # FTS triggers for keeping indexes in sync

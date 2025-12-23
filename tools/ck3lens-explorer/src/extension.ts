@@ -25,11 +25,13 @@ import { PythonBridge } from './bridge/pythonBridge';
 import { LensStatusBar } from './widget/statusBar';
 import { Logger } from './utils/logger';
 import { SetupWizard, showSetupStatus } from './setup/setupWizard';
+import { registerMcpServerProvider, CK3LensMcpServerProvider } from './mcp/mcpServerProvider';
 
 // Global extension state
 let session: CK3LensSession | undefined;
 let pythonBridge: PythonBridge | undefined;
 let statusBar: LensStatusBar | undefined;
+let mcpServerProvider: CK3LensMcpServerProvider | undefined;
 let logger: Logger;
 let outputChannel: vscode.OutputChannel;
 let diagnosticCollection: vscode.DiagnosticCollection;
@@ -46,6 +48,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Initialize diagnostic collection for linting
     diagnosticCollection = vscode.languages.createDiagnosticCollection('ck3lens');
     context.subscriptions.push(diagnosticCollection);
+
+    // Register MCP Server Provider for per-window instance isolation
+    // This replaces the static mcp.json approach and allows multiple VS Code windows
+    // to have independent MCP server instances
+    mcpServerProvider = registerMcpServerProvider(context, logger);
+    if (mcpServerProvider) {
+        logger.info(`MCP instance ID for this window: ${mcpServerProvider.getInstanceId()}`);
+    }
 
     // Initialize Python bridge to ck3raven
     pythonBridge = new PythonBridge(logger);
@@ -205,11 +215,13 @@ function registerCommands(
 
     // Refresh all views
     context.subscriptions.push(
-        vscode.commands.registerCommand('ck3lens.refreshViews', () => {
+        vscode.commands.registerCommand('ck3lens.refreshViews', async () => {
             explorerProvider.refresh();
             conflictsProvider.refresh();
             liveModsProvider.refresh();
             playsetProvider.refresh();
+            // Also re-check MCP server status
+            await agentProvider.recheckMcpStatus();
         })
     );
 
