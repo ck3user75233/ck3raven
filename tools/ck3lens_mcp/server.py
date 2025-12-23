@@ -14,6 +14,8 @@ Architecture:
 """
 from __future__ import annotations
 import sys
+import os
+import importlib
 from pathlib import Path
 from typing import Optional, Literal
 
@@ -31,7 +33,53 @@ from ck3lens.validate import parse_content, validate_artifact_bundle
 from ck3lens.contracts import ArtifactBundle
 from ck3lens.trace import ToolTrace
 
-mcp = FastMCP("ck3lens")
+# =============================================================================
+# Policy Health Check - Validate imports at module load time
+# =============================================================================
+_policy_status = {"healthy": False, "error": None, "validated_at": None}
+
+def _check_policy_health() -> dict:
+    """
+    Validate that policy module is properly importable.
+    
+    Returns dict with status info.
+    """
+    import time
+    from ck3lens import policy
+    
+    try:
+        # Force reload to ensure fresh imports
+        importlib.reload(policy)
+        
+        # Verify required functions exist
+        required = ['validate_for_mode', 'validate_policy', 'load_policy']
+        missing = [f for f in required if not hasattr(policy, f)]
+        
+        if missing:
+            _policy_status["healthy"] = False
+            _policy_status["error"] = f"Missing exports: {missing}"
+        else:
+            _policy_status["healthy"] = True
+            _policy_status["error"] = None
+            
+        _policy_status["validated_at"] = time.time()
+        
+    except Exception as e:
+        _policy_status["healthy"] = False
+        _policy_status["error"] = str(e)
+        _policy_status["validated_at"] = time.time()
+    
+    return _policy_status
+
+# Run health check at startup
+_check_policy_health()
+
+# =============================================================================
+
+# Instance ID support for multi-window isolation
+_instance_id = os.environ.get("CK3LENS_INSTANCE_ID", "default")
+_server_name = f"ck3lens-{_instance_id}" if _instance_id != "default" else "ck3lens"
+mcp = FastMCP(_server_name)
 
 # Session state
 _session: Optional[Session] = None
@@ -244,6 +292,28 @@ def _get_trace() -> ToolTrace:
 # Session Management
 # ============================================================================
 
+
+@mcp.tool()
+def ck3_get_instance_info() -> dict:
+    """
+    Get information about this MCP server instance.
+    
+    Use this to verify which server instance you're connected to.
+    Each VS Code window should have a unique instance ID.
+    
+    Returns:
+        Instance ID, server name, and process info
+    """
+    import os
+    return {
+        "instance_id": _instance_id,
+        "server_name": _server_name,
+        "pid": os.getpid(),
+        "is_isolated": _instance_id != "default",
+    }
+
+
+
 @mcp.tool()
 def ck3_init_session(
     db_path: Optional[str] = None,
@@ -316,7 +386,7 @@ def ck3_init_session(
     
     # Add warning if database needs attention
     if not db_status.get("is_complete"):
-        result["warning"] = f"Database incomplete: {db_status.get('rebuild_reason', 'unknown')}. Run: python scripts/rebuild_database.py"
+        result["warning"] = f"Database incomplete: {db_status.get('rebuild_reason', 'unknown')}. Run: python builder/daemon.py start"
     
     return result
 
@@ -407,16 +477,56 @@ def ck3_get_db_status() -> dict:
     trace = _get_trace()
     
     status = _check_db_health(db.conn)
-    status["rebuild_command"] = "python scripts/rebuild_database.py"
+    status["rebuild_command"] = "python builder/daemon.py start"
     
     if status.get("needs_rebuild"):
-        status["message"] = f"⚠️ Database needs rebuild: {status.get('rebuild_reason')}"
+        status["message"] = f"âš ï¸ Database needs rebuild: {status.get('rebuild_reason')}"
     else:
-        status["message"] = f"✅ Database ready: {status.get('symbols_extracted', 0):,} symbols, {status.get('refs_extracted', 0):,} refs"
+        status["message"] = f"âœ… Database ready: {status.get('symbols_extracted', 0):,} symbols, {status.get('refs_extracted', 0):,} refs"
     
     trace.log("ck3lens.get_db_status", {}, status)
     
     return status
+
+
+@mcp.tool()
+def ck3_get_policy_status() -> dict:
+    """
+    Check if policy enforcement is working.
+    
+    âš ï¸ CRITICAL: If this returns healthy=False, the agent MUST stop work
+    and fix the policy system before continuing.
+    
+    Returns:
+        {
+            "healthy": bool,          # True if policy validation works
+            "error": str or null,     # Error message if broken
+            "validated_at": float,    # Timestamp of last check
+            "message": str            # Human-readable status
+        }
+    """
+    import time
+    
+    trace = _get_trace()
+    
+    # Run fresh health check
+    health = _check_policy_health()
+    
+    result = {
+        "healthy": health["healthy"],
+        "error": health["error"],
+        "validated_at": health["validated_at"],
+    }
+    
+    if health["healthy"]:
+        result["message"] = "âœ… Policy enforcement is ACTIVE"
+    else:
+        result["message"] = f"ðŸš¨ POLICY ENFORCEMENT IS DOWN: {health['error']}"
+        result["action_required"] = "Agent must stop work. Fix policy module or restart MCP server."
+    
+    trace.log("ck3lens.get_policy_status", {}, result)
+    
+    return result
 
 
 # ============================================================================
@@ -1381,9 +1491,35 @@ def ck3_validate_policy(
     Returns:
         PolicyOutcome with deliverable status, violations, and summary
     """
-    from ck3lens.policy import validate_for_mode
+    import time
     
     trace = _get_trace()
+    
+    # Check policy health first - fail fast if broken
+    health = _check_policy_health()
+    if not health["healthy"]:
+        error_result = {
+            "status": "error",
+            "deliverable": False,
+            "policy_healthy": False,
+            "error": f"Policy module broken: {health['error']}",
+            "message": "âš ï¸ POLICY ENFORCEMENT IS DOWN. Agent must stop work until fixed.",
+            "violations": [{
+                "severity": "error",
+                "rule_id": "POLICY_IMPORT_FAILED",
+                "message": f"Cannot import policy module: {health['error']}",
+            }],
+            "rules_checked": [],
+        }
+        trace.log("ck3lens.validate_policy", {
+            "mode": mode,
+            "policy_error": health["error"],
+        }, {"deliverable": False, "error": "policy_broken"})
+        return error_result
+    
+    # Import with fresh reload
+    from ck3lens import policy
+    importlib.reload(policy)
     
     # Get trace events
     if session_start_ts:
@@ -1396,12 +1532,15 @@ def ck3_validate_policy(
     playset_id = _get_playset_id()
     
     # Run validation
-    result = validate_for_mode(
+    result = policy.validate_for_mode(
         mode=mode,
         trace=trace_events,
         artifact_bundle_dict=artifact_bundle,
         playset_id=playset_id,
     )
+    
+    # Add health status to result
+    result["policy_healthy"] = True
     
     trace.log("ck3lens.validate_policy", {
         "mode": mode,
@@ -2448,6 +2587,197 @@ def ck3_remove_mod_from_playset(
         "success": True,
         "mod_name": mod_name,
         "removed_from_position": removed_position
+    }
+
+
+@mcp.tool()
+def ck3_create_playset_from_indexed(
+    playset_name: str | None = None,
+    playset_file: str | None = None,
+    set_active: bool = True
+) -> dict:
+    """
+    Create a playset from already-indexed content in the database.
+    
+    This links existing content_versions to a new playset. Use this after
+    running the daemon build, which ingests mods but doesn't create playsets.
+    
+    If playset_file is provided, it reads the active_mod_paths.json format:
+    {
+        "playset_name": "...",
+        "paths": [
+            {"name": "ModName", "steam_id": "123", "load_order": 0, "enabled": true},
+            ...
+        ]
+    }
+    
+    If no file is provided, creates a playset with ALL indexed mods in
+    the order they were ingested (vanilla first).
+    
+    Args:
+        playset_name: Name for the playset (default: from file or "Default Playset")
+        playset_file: Path to active_mod_paths.json (optional)
+        set_active: Whether to make this the active playset (default: True)
+    
+    Returns:
+        Playset creation result with linked mods count
+    """
+    import json
+    db = _get_db()
+    trace = _get_trace()
+    
+    # Load playset file if provided
+    mod_entries = []
+    final_name = playset_name
+    
+    if playset_file:
+        path = Path(playset_file)
+        if not path.exists():
+            return {"error": f"File not found: {playset_file}"}
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        if not final_name and "playset_name" in data:
+            final_name = data["playset_name"]
+        
+        if "paths" in data:
+            mod_entries = data["paths"]
+    
+    if not final_name:
+        final_name = "Default Playset"
+    
+    # Get vanilla content_version_id and vanilla_version_id
+    vanilla_cv = db.conn.execute("""
+        SELECT content_version_id, vanilla_version_id 
+        FROM content_versions WHERE kind = 'vanilla' 
+        ORDER BY ingested_at DESC LIMIT 1
+    """).fetchone()
+    
+    if not vanilla_cv:
+        return {"error": "No vanilla content indexed. Run daemon build first."}
+    
+    vanilla_cv_id = vanilla_cv[0]
+    vanilla_version_id = vanilla_cv[1]
+    
+    # Create the playset with vanilla_version_id
+    db.conn.execute("""
+        INSERT INTO playsets (name, vanilla_version_id, is_active, created_at, updated_at)
+        VALUES (?, ?, ?, datetime('now'), datetime('now'))
+    """, (final_name, vanilla_version_id, 1 if set_active else 0))
+    db.conn.commit()
+    
+    playset_id = db.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    
+    # Deactivate other playsets if setting this one active
+    if set_active:
+        db.conn.execute("""
+            UPDATE playsets SET is_active = 0 WHERE playset_id != ?
+        """, (playset_id,))
+    
+    # Add vanilla as load_order -1 (before all mods)
+    db.conn.execute("""
+        INSERT INTO playset_mods (playset_id, content_version_id, load_order_index, enabled)
+        VALUES (?, ?, -1, 1)
+    """, (playset_id, vanilla_cv_id))
+    
+    linked_count = 1  # Vanilla
+    skipped = []
+    
+    if mod_entries:
+        # Link mods from the playset file
+        for entry in mod_entries:
+            if not entry.get("enabled", True):
+                continue
+            
+            mod_name = entry.get("name", "")
+            steam_id = entry.get("steam_id", "")
+            mod_path = entry.get("path", "")
+            load_order = entry.get("load_order", 0)
+            
+            cv_row = None
+            
+            # Try steam_id first (most reliable for workshop mods)
+            if steam_id:
+                cv_row = db.conn.execute("""
+                    SELECT cv.content_version_id, mp.name
+                    FROM content_versions cv
+                    JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                    WHERE mp.workshop_id = ?
+                    ORDER BY cv.ingested_at DESC LIMIT 1
+                """, (steam_id,)).fetchone()
+            
+            # If not found by steam_id, try by source_path (for local mods)
+            if not cv_row and mod_path:
+                cv_row = db.conn.execute("""
+                    SELECT cv.content_version_id, mp.name
+                    FROM content_versions cv
+                    JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                    WHERE mp.source_path = ?
+                    ORDER BY cv.ingested_at DESC LIMIT 1
+                """, (mod_path,)).fetchone()
+            
+            # Last resort: try by exact name
+            if not cv_row:
+                cv_row = db.conn.execute("""
+                    SELECT cv.content_version_id, mp.name
+                    FROM content_versions cv
+                    JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                    WHERE mp.name = ?
+                    ORDER BY cv.ingested_at DESC LIMIT 1
+                """, (mod_name,)).fetchone()
+            
+            if not cv_row:
+                skipped.append({"name": mod_name, "steam_id": steam_id, "reason": "not_in_database"})
+                continue
+            
+            # Add to playset - use load_order directly from JSON
+            db.conn.execute("""
+                INSERT INTO playset_mods (playset_id, content_version_id, load_order_index, enabled)
+                VALUES (?, ?, ?, 1)
+            """, (playset_id, cv_row[0], load_order))
+            
+            linked_count += 1
+    else:
+        # No file provided - link ALL indexed mods
+        all_mods = db.conn.execute("""
+            SELECT cv.content_version_id, mp.name
+            FROM content_versions cv
+            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            WHERE cv.kind = 'mod'
+            ORDER BY cv.ingested_at ASC
+        """).fetchall()
+        
+        for idx, row in enumerate(all_mods, start=1):
+            db.conn.execute("""
+                INSERT INTO playset_mods (playset_id, content_version_id, load_order_index, enabled)
+                VALUES (?, ?, ?, 1)
+            """, (playset_id, row[0], idx))
+            linked_count += 1
+    
+    db.conn.commit()
+    
+    # Update global playset_id
+    if set_active:
+        global _playset_id
+        _playset_id = playset_id
+    
+    trace.log("ck3lens.create_playset_from_indexed", {
+        "source": playset_file or "all_indexed",
+        "playset_name": final_name
+    }, {
+        "playset_id": playset_id,
+        "linked": linked_count,
+        "skipped": len(skipped)
+    })
+    
+    return {
+        "success": True,
+        "playset_id": playset_id,
+        "playset_name": final_name,
+        "vanilla_version_id": vanilla_version_id,
+        "mods_linked": linked_count,
+        "mods_skipped": skipped if skipped else None,
+        "is_active": set_active
     }
 
 

@@ -129,7 +129,7 @@ class DBQueries:
     
     def search_symbols(
         self,
-        playset_id: int,
+        playset_id: Optional[int],
         query: str,
         symbol_type: Optional[str] = None,
         adjacency: str = "auto",
@@ -139,7 +139,7 @@ class DBQueries:
         Search symbols with adjacency expansion.
         
         Args:
-            playset_id: Active playset
+            playset_id: Active playset (optional - if None, search all content)
             query: Search term
             symbol_type: Optional filter (tradition, event, etc.)
             adjacency: "strict" | "auto" | "fuzzy"
@@ -161,6 +161,8 @@ class DBQueries:
         for pattern, match_type in patterns:
             patterns_searched.append(pattern)
             
+            # Simple query that works without playset linkage
+            # Searches ALL indexed symbols - playset filtering is optional
             sql = """
                 SELECT DISTINCT
                     s.symbol_id,
@@ -172,24 +174,17 @@ class DBQueries:
                     s.line_number
                 FROM symbols s
                 JOIN files f ON s.defining_file_id = f.file_id
-                JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+                JOIN content_versions cv ON s.content_version_id = cv.content_version_id
                 LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-                LEFT JOIN playset_mods pm ON cv.content_version_id = pm.content_version_id
-                    AND pm.playset_id = ? AND pm.enabled = 1
-                JOIN playsets p ON p.playset_id = ?
-                WHERE (
-                    cv.kind = 'vanilla' AND cv.vanilla_version_id = p.vanilla_version_id
-                    OR pm.playset_id = ?
-                )
-                AND LOWER(s.name) LIKE ?
+                WHERE LOWER(s.name) LIKE ?
             """
-            params = [playset_id, playset_id, playset_id, pattern]
+            params = [pattern]
             
             if symbol_type:
                 sql += " AND s.symbol_type = ?"
                 params.append(symbol_type)
             
-            sql += " LIMIT ?"
+            sql += " ORDER BY s.name LIMIT ?"
             params.append(limit)
             
             rows = self.conn.execute(sql, params).fetchall()
@@ -257,7 +252,7 @@ class DBQueries:
     
     def get_file(
         self,
-        playset_id: int,
+        playset_id: Optional[int],
         file_id: Optional[int] = None,
         relpath: Optional[str] = None,
         include_ast: bool = False
@@ -266,8 +261,12 @@ class DBQueries:
         Get file content by file_id or relpath.
         
         Args:
+            playset_id: Active playset (optional - if None, search all content)
+            file_id: Specific file ID to retrieve
+            relpath: Relative path to search for
             include_ast: If True, also return parsed AST
         """
+        # Simple query that works without playset linkage
         sql = """
             SELECT 
                 f.file_id,
@@ -280,15 +279,9 @@ class DBQueries:
             JOIN file_contents fc ON f.content_hash = fc.content_hash
             JOIN content_versions cv ON f.content_version_id = cv.content_version_id
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-            LEFT JOIN playset_mods pm ON cv.content_version_id = pm.content_version_id
-                AND pm.playset_id = ? AND pm.enabled = 1
-            JOIN playsets p ON p.playset_id = ?
-            WHERE (
-                cv.kind = 'vanilla' AND cv.vanilla_version_id = p.vanilla_version_id
-                OR pm.playset_id = ?
-            )
+            WHERE 1=1
         """
-        params = [playset_id, playset_id, playset_id]
+        params = []
         
         if file_id:
             sql += " AND f.file_id = ?"
@@ -427,7 +420,7 @@ class DBQueries:
     
     def search_files(
         self,
-        playset_id: int,
+        playset_id: Optional[int],
         pattern: str,
         source_filter: Optional[str] = None,
         limit: int = 100
@@ -436,7 +429,7 @@ class DBQueries:
         Search for files by path pattern.
         
         Args:
-            playset_id: Active playset
+            playset_id: Active playset (optional - if None, search all content)
             pattern: SQL LIKE pattern for file path
             source_filter: Filter by source ("vanilla", mod name, or mod ID)
             limit: Maximum results
@@ -444,11 +437,8 @@ class DBQueries:
         Returns:
             List of matching files with source info
         """
-        vanilla_vid = self.conn.execute(
-            "SELECT vanilla_version_id FROM playsets WHERE playset_id = ?",
-            (playset_id,)
-        ).fetchone()[0]
-        
+        # Simple query that works without playset linkage
+        # Searches ALL indexed files - playset filtering is optional
         sql = """
             SELECT 
                 f.file_id,
@@ -460,16 +450,10 @@ class DBQueries:
             FROM files f
             JOIN content_versions cv ON f.content_version_id = cv.content_version_id
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-            LEFT JOIN playset_mods pm ON cv.content_version_id = pm.content_version_id
-                AND pm.playset_id = ? AND pm.enabled = 1
             LEFT JOIN file_contents fc ON f.content_hash = fc.content_hash
-            WHERE (
-                (cv.kind = 'vanilla' AND cv.vanilla_version_id = ?)
-                OR pm.playset_id IS NOT NULL
-            )
-            AND LOWER(f.relpath) LIKE LOWER(?)
+            WHERE LOWER(f.relpath) LIKE LOWER(?)
         """
-        params = [playset_id, vanilla_vid, pattern]
+        params = [pattern]
         
         if source_filter:
             sql += " AND (cv.kind = ? OR LOWER(mp.name) LIKE LOWER(?) OR CAST(mp.mod_package_id AS TEXT) = ?)"
@@ -493,7 +477,7 @@ class DBQueries:
     
     def search_content(
         self,
-        playset_id: int,
+        playset_id: Optional[int],
         query: str,
         file_pattern: Optional[str] = None,
         source_filter: Optional[str] = None,
@@ -503,7 +487,7 @@ class DBQueries:
         Search file contents for text matches (grep-style).
         
         Args:
-            playset_id: Active playset
+            playset_id: Active playset (optional - if None, search all content)
             query: Text to search for (case-insensitive)
             file_pattern: SQL LIKE pattern to filter files
             source_filter: Filter by source
@@ -512,11 +496,8 @@ class DBQueries:
         Returns:
             List of matching files with snippets
         """
-        vanilla_vid = self.conn.execute(
-            "SELECT vanilla_version_id FROM playsets WHERE playset_id = ?",
-            (playset_id,)
-        ).fetchone()[0]
-        
+        # Simple query that works without playset linkage
+        # Searches ALL indexed content - playset filtering is optional
         sql = """
             SELECT 
                 f.file_id,
@@ -527,16 +508,10 @@ class DBQueries:
             FROM files f
             JOIN content_versions cv ON f.content_version_id = cv.content_version_id
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-            LEFT JOIN playset_mods pm ON cv.content_version_id = pm.content_version_id
-                AND pm.playset_id = ? AND pm.enabled = 1
             JOIN file_contents fc ON f.content_hash = fc.content_hash
-            WHERE (
-                (cv.kind = 'vanilla' AND cv.vanilla_version_id = ?)
-                OR pm.playset_id IS NOT NULL
-            )
-            AND LOWER(fc.content_text) LIKE LOWER(?)
+            WHERE LOWER(fc.content_text) LIKE LOWER(?)
         """
-        params = [playset_id, vanilla_vid, f"%{query}%"]
+        params = [f"%{query}%"]
         
         if file_pattern:
             sql += " AND LOWER(f.relpath) LIKE LOWER(?)"
