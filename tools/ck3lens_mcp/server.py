@@ -604,11 +604,16 @@ def ck3_search(
     3. File content (grep-style text matches with line numbers)
     4. File paths (if query looks like a path or file_pattern provided)
     
+    Query syntax for content search:
+    - Space-separated words: AND search (all must appear in file)
+    - "quoted phrase": Exact phrase search
+    - Single word: Simple text search
+    
     By default, shows BOTH definitions AND usages - critical for compatch work
     where you need to understand how something is used, not just where it's defined.
     
     Args:
-        query: Search term (symbol name, text to find, or file path)
+        query: Search term(s). Space-separated = AND, "quotes" = exact phrase
         file_pattern: SQL LIKE pattern for file paths (e.g., "%traits%")
         source_filter: Filter by source ("vanilla" or mod name)
         mod_filter: List of mod names to search (e.g., ["vanilla", "MSC"])
@@ -632,6 +637,7 @@ def ck3_search(
     
     Examples:
         ck3_search("brave")  # Find all uses of 'brave'
+        ck3_search("melkite localization")  # Files with BOTH terms
         ck3_search("brave", game_folder="events")  # Only in events/
         ck3_search("brave", mod_filter=["MSC"])  # Only in MSC mod
         ck3_search("has_trait", limit=100, verbose=True)  # More results
@@ -715,78 +721,8 @@ def ck3_search(
 
 
 # ============================================================================
-# Symbol Search Tools (from ck3raven DB) - LEGACY, use ck3_search instead
+# Symbol Tools (from ck3raven DB)
 # ============================================================================
-
-@mcp.tool()
-def ck3_search_symbols(
-    query: str,
-    symbol_type: Optional[str] = None,
-    mod_filter: Optional[list[str]] = None,
-    adjacency: Literal["auto", "strict", "fuzzy"] = "auto",
-    limit: int = 50,
-    include_references: bool = False,
-    verbose: bool = False,
-    no_lens: bool = False
-) -> dict:
-    """
-    Search symbols in the ck3raven database with adjacency pattern expansion.
-    
-    IMPORTANT: This uses adjacency search which automatically expands queries:
-    - "combat_skill" also matches "combat_*_skill", "*_combat_skill", etc.
-    - Use adjacency="strict" to disable expansion (exact matches only)
-    - Use adjacency="fuzzy" for maximum flexibility
-    
-    Args:
-        query: Search query (symbol name, partial name, or pattern)
-        symbol_type: Filter by type (trait, decision, event, etc.)
-        mod_filter: Only search in these mods (list of mod_id strings)
-        adjacency: Pattern expansion mode ("auto", "strict", "fuzzy")
-        limit: Maximum results to return
-        include_references: If True, also return which mods reference the symbol
-        verbose: If True, include code snippets for definitions
-        no_lens: If True, search ALL content (not just active playset)
-    
-    Returns:
-        {
-            results: [...],  # Exact matches with file/line
-            adjacencies: [...],  # Similar names
-            definitions_by_mod: {...},  # Grouped by mod for easy reading
-            references_by_mod: {...}  # If include_references=True
-        }
-    """
-    db = _get_db()
-    trace = _get_trace()
-    lens = _get_lens(no_lens=no_lens)
-    
-    results = db.search_symbols(
-        lens=lens,
-        query=query,
-        symbol_type=symbol_type,
-        adjacency=adjacency,
-        limit=limit,
-        include_references=include_references,
-        verbose=verbose
-    )
-    
-    trace.log("ck3lens.search_symbols", {
-        "query": query,
-        "symbol_type": symbol_type,
-        "adjacency": adjacency,
-        "include_references": include_references,
-        "no_lens": no_lens
-    }, {
-        "results_count": len(results.get("results", [])),
-        "adjacencies_count": len(results.get("adjacencies", []))
-    })
-    
-    # Add lens info to response
-    results["query"] = query
-    results["adjacency_mode"] = adjacency
-    results["lens"] = lens.playset_name if lens else "ALL CONTENT (no lens)"
-    
-    return results
-
 
 @mcp.tool()
 def ck3_confirm_not_exists(
@@ -866,13 +802,16 @@ def ck3_get_file(
 
 
 @mcp.tool()
-def ck3_get_conflicts(
+def ck3_qr_conflicts(
     path_pattern: Optional[str] = None,
     symbol_name: Optional[str] = None,
     symbol_type: Optional[str] = None
 ) -> dict:
     """
-    Get load-order conflicts from the SQLResolver.
+    Quick-resolve conflicts using load order (SQLResolver).
+    
+    Shows what "wins" for each conflicting symbol based on CK3's
+    merge rules and mod load order.
     
     Args:
         path_pattern: Filter by file path pattern (glob-style)
@@ -895,13 +834,84 @@ def ck3_get_conflicts(
         symbol_type=symbol_type
     )
     
-    trace.log("ck3lens.get_conflicts", {
+    trace.log("ck3lens.qr_conflicts", {
         "path_pattern": path_pattern,
         "symbol_name": symbol_name,
         "symbol_type": symbol_type
     }, {"conflicts_count": len(conflicts)})
     
     return {"conflicts": conflicts}
+
+
+@mcp.tool()
+def ck3_get_symbol_conflicts(
+    symbol_type: Optional[str] = None,
+    game_folder: Optional[str] = None,
+    limit: int = 100,
+    include_compatch: bool = False
+) -> dict:
+    """
+    Fast ID-level conflict detection using the symbols table.
+    
+    This is INSTANT compared to the slow contribution_units analysis.
+    Finds symbols (traits, events, decisions, etc.) defined by multiple mods.
+    
+    By default, filters out conflicts involving compatibility patches (compatch mods)
+    since they are DESIGNED to conflict - that's their purpose.
+    
+    Args:
+        symbol_type: Filter by type (trait, event, decision, on_action, etc.)
+        game_folder: Filter by CK3 folder (e.g., "common/traits", "events")
+        limit: Maximum conflicts to return (default 100)
+        include_compatch: If True, include conflicts from compatch mods
+                          (default False - compatch conflicts are expected)
+    
+    Returns:
+        {
+            "conflict_count": int,
+            "conflicts": [
+                {
+                    "name": str,
+                    "symbol_type": str,
+                    "source_count": int,  # How many mods define this
+                    "sources": [{"mod": str, "file": str, "line": int}],
+                    "is_compatch_conflict": bool
+                }
+            ],
+            "compatch_conflicts_hidden": int  # Conflicts filtered out
+        }
+    
+    Examples:
+        ck3_get_symbol_conflicts()  # All non-compatch conflicts
+        ck3_get_symbol_conflicts(symbol_type="trait")  # Only trait conflicts
+        ck3_get_symbol_conflicts(game_folder="common/on_action")  # Only on_action conflicts
+        ck3_get_symbol_conflicts(include_compatch=True)  # Include compatch conflicts
+    """
+    db = _get_db()
+    trace = _get_trace()
+    lens = _get_lens()
+    
+    if not lens:
+        return {"error": "No active playset. Use ck3_set_active_playset first."}
+    
+    result = db.get_symbol_conflicts(
+        lens=lens,
+        symbol_type=symbol_type,
+        game_folder=game_folder,
+        limit=limit,
+        include_compatch=include_compatch
+    )
+    
+    trace.log("ck3lens.get_symbol_conflicts", {
+        "symbol_type": symbol_type,
+        "game_folder": game_folder,
+        "include_compatch": include_compatch
+    }, {
+        "conflict_count": result["conflict_count"],
+        "compatch_hidden": result["compatch_conflicts_hidden"]
+    })
+    
+    return result
 
 
 # ============================================================================
@@ -3663,115 +3673,6 @@ def ck3_get_unit_content(
         "unit_key": unit_key,
         "count": len(contributions),
         "contributions": contributions,
-    }
-
-
-# ============================================================================
-# General Search Tools
-# ============================================================================
-
-@mcp.tool()
-def ck3_search_files(
-    pattern: str,
-    source_filter: Optional[str] = None,
-    limit: int = 100,
-    no_lens: bool = False
-) -> dict:
-    """
-    Search for files by path pattern.
-    
-    Use this when you need to find files by name or path pattern,
-    NOT for symbol/definition search (use ck3_search_symbols for that).
-    
-    Args:
-        pattern: SQL LIKE pattern for file path (e.g., "%on_action%" or "common/traits/%")
-        source_filter: Filter by source ("vanilla", mod name, or mod ID)
-        limit: Maximum results to return
-        no_lens: If True, search ALL content (not just active playset)
-    
-    Returns:
-        List of matching files with source info
-    """
-    db = _get_db()
-    trace = _get_trace()
-    lens = _get_lens(no_lens=no_lens)
-    
-    files = db.search_files(lens, pattern, source_filter, limit)
-    
-    trace.log("ck3lens.search_files", {
-        "pattern": pattern,
-        "source_filter": source_filter,
-        "no_lens": no_lens
-    }, {"count": len(files)})
-    
-    return {
-        "pattern": pattern, 
-        "count": len(files), 
-        "files": files,
-        "lens": lens.playset_name if lens else "ALL CONTENT (no lens)"
-    }
-
-
-@mcp.tool()
-def ck3_search_content(
-    query: str,
-    file_pattern: Optional[str] = None,
-    source_filter: Optional[str] = None,
-    limit: int = 50,
-    verbose: bool = False,
-    no_lens: bool = False
-) -> dict:
-    """
-    Search file contents for text matches (grep-style).
-    
-    Returns line numbers and snippets for EACH match within files.
-    
-    Args:
-        query: Text to search for (case-insensitive substring match)
-        file_pattern: SQL LIKE pattern to limit which files are searched
-        source_filter: Filter by source ("vanilla", mod name, or mod ID)
-        limit: Maximum files to return
-        verbose: If True, return ALL matches per file (default: max 5 per file)
-        no_lens: If True, search ALL content (not just active playset)
-    
-    Returns:
-        List of files with line-by-line match details:
-        {
-            "file_id": 123,
-            "relpath": "common/traits/00_traits.txt",
-            "match_count": 15,
-            "matches": [
-                {"line": 45, "snippet": "...brave = {..."},
-                {"line": 234, "snippet": "...has_trait = brave..."}
-            ],
-            "truncated": true  # if more matches exist
-        }
-    """
-    db = _get_db()
-    trace = _get_trace()
-    lens = _get_lens(no_lens=no_lens)
-    
-    results = db.search_content(
-        lens=lens,
-        query=query,
-        file_pattern=file_pattern,
-        source_filter=source_filter,
-        limit=limit,
-        verbose=verbose
-    )
-    
-    trace.log("ck3lens.search_content", {
-        "query": query,
-        "file_pattern": file_pattern,
-        "verbose": verbose,
-        "no_lens": no_lens
-    }, {"count": len(results)})
-    
-    return {
-        "query": query, 
-        "count": len(results), 
-        "results": results,
-        "lens": lens.playset_name if lens else "ALL CONTENT (no lens)"
     }
 
 

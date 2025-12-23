@@ -20,11 +20,12 @@ ck3raven/
 
  src/ck3raven/db/              # Database library functions (used by daemon)
     schema.py                 # Schema definition + SCHEMA_VERSION constant
+    ingest.py                 # Directory/mod ingestion + incremental update
     work_detection.py         # Detect what work needs to be done
     skip_rules.py             # Centralized skip patterns for all phases
     symbols.py                # Symbol extraction logic
     references.py             # Reference extraction logic
-    content.py                # File ingestion logic
+    content.py                # File record/content storage helpers
     asts.py                   # AST generation logic
 │    queries.py                # Read-only query helpers
     db_setup.py               # Connection helpers
@@ -193,16 +194,48 @@ The `extract_symbols_for_file()` function in `symbols.py` returns a dict with cl
 
 The builder tracks changes at multiple levels:
 
-1. **File level** - mtime + content_hash detect changed files
-2. **AST level** - Only regenerate AST if content_hash changed
-3. **Symbol level** - Only re-extract if AST changed
+1. **File level** - mtime for fast filtering, content_hash for definitive change detection
+2. **AST level** - Keyed by `content_hash` (content-addressable, deduped across mods)
+3. **Symbol level** - Keyed by `file_id` (needs mod/version context for conflicts)
+
+### Why Different Keys?
+
+| Data Type | Primary Key | Reason |
+|-----------|-------------|--------|
+| `file_contents` | `content_hash` | Same content = same bytes, dedup across mods |
+| `asts` | `(content_hash, parser_version)` | Same content parsed by same parser = same AST |
+| `symbols` | `symbol_id`, indexed by `defining_file_id` | Same trait in mod A vs mod B has different conflict/priority context |
+| `refs` | `ref_id`, indexed by `file_id` | References need file context |
+
+### Incremental Update Process (`incremental_update()` in `ingest.py`)
+
+When a mod is updated (e.g., Steam Workshop update):
+
+1. **Fast mtime scan** - Compare stored mtime vs filesystem mtime
+2. **Hash check for changed** - Only read files where mtime differs, compute hash
+3. **Categorize** - Files are `added`, `removed`, `changed`, or `unchanged`
+4. **Clean up replaced/removed files**:
+   - Delete `symbols` (keyed by file_id)
+   - Delete `refs` (keyed by file_id)
+   - Delete `asts` (by content_hash, only if no other files reference it)
+   - Delete `file_contents` (by content_hash, only if orphaned)
+5. **Store new content** - Insert new file_contents and file records with mtime
+6. **Mark stale** - Set `is_stale=1`, `symbols_extracted_at=NULL` on content_version
+7. **Daemon routing** - Existing daemon file routing regenerates ASTs/symbols
+
+### Key Implementation Details
+
+- **First run after mtime fix**: All files will be hash-checked (stored mtime was NULL)
+- **Subsequent runs**: Only files with changed mtime are read
+- **Content deduplication**: ASTs and file_contents are only deleted if no other files reference them
+- **Daemon handles regeneration**: By clearing `symbols_extracted_at`, the daemon's normal file routing kicks in
 
 ### Rebuild Modes
 
 | Mode | Behavior | When to Use |
 |------|----------|-------------|
-| Default | Check mtime, rebuild only changed files | After editing mods |
-| `--rescan` | Scan all files, compare content_hash | Steam updates, game patches |
+| Default | Check mtime, only read changed files | Normal operation, Steam updates |
+| `--rescan` | Scan all files, compare content_hash | Force check everything |
 | `--full` | Drop all data, rebuild from scratch | Schema changes, corrupted DB |
 
 ### When Full Rebuild is Required

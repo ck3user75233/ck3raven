@@ -690,11 +690,16 @@ class DBQueries:
         """
         Search file contents for text matches (grep-style).
         
+        Supports multiple search terms:
+        - Space-separated words are treated as AND (all must appear in file)
+        - Quoted strings search for exact phrases
+        - Single words search for that word anywhere
+        
         Returns line numbers and snippets for EACH match.
         
         Args:
             lens: PlaysetLens to filter through (None = search ALL content)
-            query: Text to search for (case-insensitive)
+            query: Text to search for (case-insensitive). Space = AND, quotes = exact phrase
             file_pattern: SQL LIKE pattern to filter files
             source_filter: Filter by source
             limit: Maximum files to return
@@ -704,10 +709,22 @@ class DBQueries:
         Returns:
             List of files with line-by-line match details
         """
+        # Parse query into terms (handle quoted phrases)
+        terms = self._parse_search_terms(query)
+        
         cv_filter = ""
         if lens:
             cv_list = ",".join(str(cv) for cv in lens.all_cv_ids)
             cv_filter = f" AND f.content_version_id IN ({cv_list})"
+        
+        # Build SQL with AND for all terms
+        term_conditions = []
+        params = []
+        for term in terms:
+            term_conditions.append("LOWER(fc.content_text) LIKE LOWER(?)")
+            params.append(f"%{term}%")
+        
+        term_sql = " AND ".join(term_conditions)
         
         sql = f"""
             SELECT 
@@ -720,10 +737,9 @@ class DBQueries:
             JOIN content_versions cv ON f.content_version_id = cv.content_version_id
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             JOIN file_contents fc ON f.content_hash = fc.content_hash
-            WHERE LOWER(fc.content_text) LIKE LOWER(?)
+            WHERE {term_sql}
             {cv_filter}
         """
-        params = [f"%{query}%"]
         
         if file_pattern:
             sql += " AND LOWER(f.relpath) LIKE LOWER(?)"
@@ -742,8 +758,8 @@ class DBQueries:
         for row in self.conn.execute(sql, params).fetchall():
             content = row["content_text"] if row["content_text"] else ""
             
-            # Find ALL matches with line numbers
-            matches = self._find_all_matches(content, query, max_matches)
+            # Find ALL matches with line numbers (pass parsed terms)
+            matches = self._find_all_matches(content, terms, max_matches)
             
             if not matches:
                 continue
@@ -753,47 +769,94 @@ class DBQueries:
                 "relpath": row["relpath"],
                 "source_kind": row["kind"],
                 "source_name": row["source_name"],
-                "match_count": self._count_matches(content, query),
+                "match_count": self._count_matches(content, terms),
                 "matches": matches,
                 "truncated": len(matches) >= max_matches
             })
         
         return results
     
-    def _find_all_matches(self, content: str, query: str, max_matches: int) -> list[dict]:
-        """Find all occurrences of query in content with line numbers and snippets."""
+    def _parse_search_terms(self, query: str) -> list[str]:
+        """
+        Parse search query into terms.
+        
+        - Quoted strings become exact phrase terms
+        - Unquoted words become individual AND terms
+        - Empty strings are ignored
+        
+        Examples:
+            'melkite localization' -> ['melkite', 'localization']
+            '"has_trait" brave' -> ['has_trait', 'brave']
+            'on_action yearly' -> ['on_action', 'yearly']
+        """
+        import re
+        
+        terms = []
+        
+        # Extract quoted phrases first
+        for match in re.finditer(r'"([^"]+)"', query):
+            terms.append(match.group(1))
+        
+        # Remove quoted parts from query
+        remaining = re.sub(r'"[^"]*"', '', query)
+        
+        # Split remaining by whitespace
+        for word in remaining.split():
+            word = word.strip()
+            if word:
+                terms.append(word)
+        
+        return terms if terms else [query]  # Fallback to original if parsing fails
+    
+    def _find_all_matches(self, content: str, terms: list[str], max_matches: int) -> list[dict]:
+        """Find all lines containing ANY search term, with line numbers and snippets."""
         matches = []
-        query_lower = query.lower()
         lines = content.split("\n")
+        terms_lower = [t.lower() for t in terms]
         
         for line_num, line in enumerate(lines, start=1):
-            if query_lower in line.lower():
-                # Find position in line for highlighting context
-                pos = line.lower().find(query_lower)
-                
-                # Build snippet with context
-                start = max(0, pos - 30)
-                end = min(len(line), pos + len(query) + 50)
-                snippet = line[start:end].strip()
-                
-                if start > 0:
-                    snippet = "..." + snippet
-                if end < len(line):
-                    snippet = snippet + "..."
-                
-                matches.append({
-                    "line": line_num,
-                    "snippet": snippet
-                })
-                
-                if len(matches) >= max_matches:
+            line_lower = line.lower()
+            
+            # Check if any term matches this line
+            matched_term = None
+            for term in terms_lower:
+                if term in line_lower:
+                    matched_term = term
                     break
+            
+            if not matched_term:
+                continue
+            
+            # Find position of matched term for highlighting
+            pos = line_lower.find(matched_term)
+            
+            # Build snippet with context
+            start = max(0, pos - 30)
+            end = min(len(line), pos + len(matched_term) + 50)
+            snippet = line[start:end].strip()
+            
+            if start > 0:
+                snippet = "..." + snippet
+            if end < len(line):
+                snippet = snippet + "..."
+            
+            matches.append({
+                "line": line_num,
+                "snippet": snippet
+            })
+            
+            if len(matches) >= max_matches:
+                break
         
         return matches
     
-    def _count_matches(self, content: str, query: str) -> int:
-        """Count total occurrences of query in content."""
-        return content.lower().count(query.lower())
+    def _count_matches(self, content: str, terms: list[str]) -> int:
+        """Count total occurrences of all search terms in content."""
+        content_lower = content.lower()
+        total = 0
+        for term in terms:
+            total += content_lower.count(term.lower())
+        return total
     
     # =========================================================================
     # UNIFIED SEARCH
@@ -910,6 +973,148 @@ class DBQueries:
     # CONFLICT ANALYSIS
     # =========================================================================
     
+    # Known compatch mod name patterns - these are DESIGNED to conflict
+    COMPATCH_PATTERNS = [
+        "compatch", "compatibility", "patch",
+        "compat", "fix", "hotfix", "tweak", "override"
+    ]
+    
+    def _is_compatch_mod(self, mod_name: str) -> bool:
+        """Check if a mod is a compatibility patch (designed to conflict)."""
+        if not mod_name:
+            return False
+        name_lower = mod_name.lower()
+        return any(pattern in name_lower for pattern in self.COMPATCH_PATTERNS)
+    
+    def get_symbol_conflicts(
+        self,
+        lens: "PlaysetLens",
+        symbol_type: Optional[str] = None,
+        game_folder: Optional[str] = None,
+        limit: int = 100,
+        include_compatch: bool = False
+    ) -> dict:
+        """
+        Fast ID-level conflict detection using the symbols table.
+        
+        This is INSTANT compared to contribution_units extraction.
+        Uses GROUP BY to find symbols defined in multiple mods.
+        
+        Args:
+            lens: PlaysetLens to filter through
+            symbol_type: Filter by type (trait, event, decision, etc.)
+            game_folder: Filter by CK3 folder (e.g., "common/traits")
+            limit: Maximum conflicts to return
+            include_compatch: If True, include conflicts from compatch mods
+                              (default False - compatch mods are expected to conflict)
+        
+        Returns:
+            {
+                "conflict_count": int,
+                "conflicts": [
+                    {
+                        "name": str,
+                        "symbol_type": str,
+                        "source_count": int,
+                        "sources": [{"mod": str, "file": str, "line": int}],
+                        "is_compatch_conflict": bool  # True if involves compatch mod
+                    }
+                ],
+                "compatch_conflicts_hidden": int  # Count of conflicts filtered out
+            }
+        """
+        cv_list = ",".join(str(cv) for cv in lens.all_cv_ids)
+        
+        # Build query to find symbols with multiple definitions
+        sql = f"""
+            SELECT 
+                s.symbol_type,
+                s.name,
+                COUNT(DISTINCT s.content_version_id) as source_count,
+                GROUP_CONCAT(DISTINCT s.content_version_id) as cv_ids
+            FROM symbols s
+            JOIN playset_mods pm ON s.content_version_id = pm.content_version_id
+            WHERE pm.playset_id = ? AND pm.enabled = 1
+        """
+        params = [lens.playset_id]
+        
+        if symbol_type:
+            sql += " AND s.symbol_type = ?"
+            params.append(symbol_type)
+        
+        if game_folder:
+            sql += " AND EXISTS (SELECT 1 FROM files f WHERE f.file_id = s.defining_file_id AND f.relpath LIKE ?)"
+            params.append(f"{game_folder}%")
+        
+        sql += """
+            GROUP BY s.symbol_type, s.name
+            HAVING source_count > 1
+            ORDER BY source_count DESC
+            LIMIT ?
+        """
+        params.append(limit * 2)  # Get extra for compatch filtering
+        
+        rows = self.conn.execute(sql, params).fetchall()
+        
+        conflicts = []
+        compatch_hidden = 0
+        
+        for row in rows:
+            if len(conflicts) >= limit:
+                break
+                
+            symbol_type_val = row["symbol_type"]
+            name = row["name"]
+            cv_ids = [int(cv) for cv in row["cv_ids"].split(",")]
+            
+            # Get details for each source
+            sources = []
+            is_compatch_conflict = False
+            
+            for cv_id in cv_ids:
+                detail_row = self.conn.execute("""
+                    SELECT 
+                        COALESCE(mp.name, 'vanilla') as mod_name,
+                        f.relpath,
+                        s.line_number
+                    FROM symbols s
+                    JOIN files f ON s.defining_file_id = f.file_id
+                    JOIN content_versions cv ON s.content_version_id = cv.content_version_id
+                    LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                    WHERE s.content_version_id = ? AND s.symbol_type = ? AND s.name = ?
+                    LIMIT 1
+                """, (cv_id, symbol_type_val, name)).fetchone()
+                
+                if detail_row:
+                    mod_name = detail_row["mod_name"]
+                    if self._is_compatch_mod(mod_name):
+                        is_compatch_conflict = True
+                    sources.append({
+                        "mod": mod_name,
+                        "file": detail_row["relpath"],
+                        "line": detail_row["line_number"]
+                    })
+            
+            # Filter out compatch conflicts if requested
+            if is_compatch_conflict and not include_compatch:
+                compatch_hidden += 1
+                continue
+            
+            conflicts.append({
+                "name": name,
+                "symbol_type": symbol_type_val,
+                "source_count": row["source_count"],
+                "sources": sources,
+                "is_compatch_conflict": is_compatch_conflict
+            })
+        
+        return {
+            "conflict_count": len(conflicts),
+            "conflicts": conflicts,
+            "compatch_conflicts_hidden": compatch_hidden,
+            "lens": lens.playset_name
+        }
+
     def get_conflicts(
         self,
         lens: PlaysetLens,

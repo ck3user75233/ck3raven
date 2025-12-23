@@ -162,7 +162,7 @@ def test_mcp_tools_registered(r: TestResult):
         "ck3_search_symbols",
         "ck3_confirm_not_exists",
         "ck3_get_file",
-        "ck3_get_conflicts",
+        "ck3_qr_conflicts",
         "ck3_list_live_mods",
         "ck3_read_live_file",
         "ck3_write_file",

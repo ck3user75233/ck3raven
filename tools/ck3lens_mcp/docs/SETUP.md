@@ -218,7 +218,7 @@ Uses `ck3_get_file` to retrieve from database (with optional AST).
 What conflicts exist in the common/on_action folder?
 ```
 
-Uses `ck3_get_conflicts` to show load-order winners/losers.
+Uses `ck3_qr_conflicts` to show load-order winners/losers.
 
 #### 5. Writing to Live Mods
 
@@ -288,7 +288,7 @@ DEFAULT_LIVE_MODS = [
 | `ck3_search_symbols` | Search symbols with adjacency expansion |
 | `ck3_confirm_not_exists` | Exhaustive search before claiming missing |
 | `ck3_get_file` | Get file content (raw or AST) |
-| `ck3_get_conflicts` | Load-order conflict analysis |
+| `ck3_qr_conflicts` | Quick-resolve conflict analysis |
 
 ### Live Mod Tools (Sandboxed Writes)
 

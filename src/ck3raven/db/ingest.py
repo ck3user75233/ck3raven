@@ -197,7 +197,8 @@ def ingest_directory(
     
     # Phase 2: Compute hashes in streaming fashion for root hash
     # We need all hashes for the root hash, but we don't need to keep content
-    file_hashes: List[Tuple[str, str]] = []
+    # Store (relpath, content_hash, mtime) for later storage
+    file_hashes: List[Tuple[str, str, str]] = []
     total_size = 0
     
     for i, entry in enumerate(file_entries):
@@ -209,7 +210,9 @@ def ingest_directory(
             content_hash = compute_content_hash(data)
             file_size = len(data)
             
-            file_hashes.append((entry.relpath, content_hash))
+            # Store mtime as string for database
+            mtime_str = str(entry.mtime) if entry.mtime else None
+            file_hashes.append((entry.relpath, content_hash, mtime_str))
             total_size += file_size
             
             # Don't keep data in memory - we'll re-read it if needed
@@ -225,8 +228,9 @@ def ingest_directory(
     
     logger.info(f"Computed hashes for {len(file_hashes)} files")
     
-    # Phase 3: Compute root hash
-    content_root_hash = compute_root_hash(file_hashes)
+    # Phase 3: Compute root hash (only using relpath and hash, not mtime)
+    hash_pairs = [(r, h) for r, h, _ in file_hashes]
+    content_root_hash = compute_root_hash(hash_pairs)
     logger.info(f"Root hash: {content_root_hash[:12]}... ({len(file_hashes)} files)")
     
     # Phase 4: Check if version already exists
@@ -265,13 +269,12 @@ def ingest_directory(
     
     # Phase 6: Store file contents in batches (re-read files, but batch commits)
     # This keeps memory bounded to batch_size files at a time
-    hash_to_relpath = {h: r for r, h in file_hashes}
     
     for batch_start in range(0, len(file_hashes), batch_size):
         batch_end = min(batch_start + batch_size, len(file_hashes))
         batch = file_hashes[batch_start:batch_end]
         
-        for relpath, content_hash in batch:
+        for relpath, content_hash, mtime in batch:
             try:
                 file_path = root_path / relpath
                 data = file_path.read_bytes()
@@ -279,12 +282,13 @@ def ingest_directory(
                 # Store content (deduped by hash)
                 store_file_content(conn, data, content_hash)
                 
-                # Store file record
+                # Store file record with mtime
                 store_file_record(
                     conn=conn,
                     content_version_id=content_version_id,
                     relpath=relpath,
                     content_hash=content_hash,
+                    mtime=mtime,
                 )
                 
                 stats.files_new += 1
@@ -366,12 +370,14 @@ def ingest_mod(
     """
     Ingest a mod's files.
     
+    Uses incremental update if mod already exists - only reads changed files.
+    
     Args:
         conn: Database connection
         mod_path: Path to mod directory
         name: Mod name
         workshop_id: Steam Workshop ID (if applicable)
-        force: Re-ingest even if exists
+        force: Re-ingest all files even if exists
     
     Returns:
         (ModPackage, IngestResult)
@@ -384,9 +390,43 @@ def ingest_mod(
         source_path=str(mod_path),
     )
     
-    logger.info(f"Ingesting mod '{name}'...")
+    # Check if mod already has a content_version (for incremental update)
+    if not force:
+        existing_cv = conn.execute("""
+            SELECT content_version_id 
+            FROM content_versions 
+            WHERE mod_package_id = ? 
+            ORDER BY ingested_at DESC LIMIT 1
+        """, (mod_package.mod_package_id,)).fetchone()
+        
+        if existing_cv:
+            content_version_id = existing_cv[0]
+            
+            # Use incremental update - only reads changed files
+            stats = incremental_update(conn, content_version_id, mod_path)
+            
+            # Get the updated root hash
+            new_hash = conn.execute(
+                "SELECT content_root_hash FROM content_versions WHERE content_version_id = ?",
+                (content_version_id,)
+            ).fetchone()[0]
+            
+            if stats.files_changed == 0 and stats.files_new == 0 and stats.files_removed == 0:
+                logger.info(f"Mod '{name}' unchanged")
+                stats.content_reused = True
+            else:
+                logger.info(f"Mod '{name}' updated: +{stats.files_new} ~{stats.files_changed} -{stats.files_removed}")
+            
+            return mod_package, IngestResult(
+                content_version_id=content_version_id,
+                content_root_hash=new_hash,
+                stats=stats,
+                errors=[],
+            )
     
-    # Ingest the mod directory
+    logger.info(f"Ingesting mod '{name}' (full)...")
+    
+    # Full ingest - new mod or force rebuild
     result = ingest_directory(
         conn=conn,
         root_path=mod_path,
@@ -433,11 +473,15 @@ def incremental_update(
     """
     Incrementally update a content version with filesystem changes.
     
-    This is for updating an existing version when files change,
-    rather than creating a new version.
+    Uses mtime for fast change detection - only reads files that may have changed.
+    For replaced/removed files, deletes ALL associated data:
+      - symbols (keyed by file_id)
+      - refs (keyed by file_id)  
+      - asts (keyed by content_hash, only if orphaned)
+      - file_contents (keyed by content_hash, only if orphaned)
     
-    Note: This changes the content_root_hash, so the version identity changes.
-    Consider whether you want this or a new version.
+    Sets is_stale=1 and symbols_extracted_at=NULL so the daemon's normal
+    file routing regenerates ASTs and symbols for the new content.
     
     Args:
         conn: Database connection
@@ -449,62 +493,154 @@ def incremental_update(
     """
     stats = IngestStats()
     
-    # Get stored manifest
-    stored_manifest = get_stored_manifest(conn, content_version_id)
+    # Get stored manifest with mtime and hash
+    stored_files = {}
+    for row in conn.execute("""
+        SELECT file_id, relpath, content_hash, mtime FROM files
+        WHERE content_version_id = ? AND deleted = 0
+    """, (content_version_id,)).fetchall():
+        stored_files[row['relpath']] = {
+            'file_id': row['file_id'],
+            'content_hash': row['content_hash'],
+            'mtime': row['mtime']
+        }
     
-    # Scan current directory
-    current_manifest: Dict[str, str] = {}
+    # Scan current directory - just paths and mtime, no content yet
+    current_files = {}
     for entry in scan_directory(root_path):
         stats.files_scanned += 1
+        current_files[entry.relpath] = {
+            'mtime': entry.mtime,
+            'size': entry.size
+        }
+    
+    # Determine changes
+    stored_paths = set(stored_files.keys())
+    current_paths = set(current_files.keys())
+    
+    added_paths = current_paths - stored_paths
+    removed_paths = stored_paths - current_paths
+    common_paths = stored_paths & current_paths
+    
+    # For common files, check if mtime changed (quick) then hash (definitive)
+    changed_paths = set()
+    unchanged_paths = set()
+    
+    for relpath in common_paths:
+        stored = stored_files[relpath]
+        current = current_files[relpath]
+        
+        # Quick mtime check - if same, assume unchanged
+        stored_mtime = float(stored['mtime']) if stored['mtime'] else 0
+        if abs(current['mtime'] - stored_mtime) < 0.001:  # mtime unchanged
+            unchanged_paths.add(relpath)
+            continue
+        
+        # mtime changed - compute hash to confirm
         try:
-            file_path = root_path / entry.relpath
+            file_path = root_path / relpath
+            data = file_path.read_bytes()
+            new_hash = compute_content_hash(data)
+            
+            if new_hash == stored['content_hash']:
+                # Hash same despite mtime change (touched but not modified)
+                unchanged_paths.add(relpath)
+            else:
+                changed_paths.add(relpath)
+        except Exception as e:
+            logger.warning(f"Error reading {relpath}: {e}")
+    
+    stats.files_new = len(added_paths)
+    stats.files_removed = len(removed_paths)
+    stats.files_changed = len(changed_paths)
+    stats.files_unchanged = len(unchanged_paths)
+    
+    # Clean up data for files being replaced or removed
+    # This ensures the daemon's file routing regenerates everything fresh
+    files_to_cleanup = changed_paths | removed_paths
+    if files_to_cleanup:
+        file_ids_to_cleanup = [stored_files[p]['file_id'] for p in files_to_cleanup if p in stored_files]
+        content_hashes_to_cleanup = [stored_files[p]['content_hash'] for p in files_to_cleanup if p in stored_files]
+        
+        if file_ids_to_cleanup:
+            placeholders = ','.join('?' * len(file_ids_to_cleanup))
+            # Delete symbols (keyed by file_id - includes mod/version context)
+            conn.execute(f"DELETE FROM symbols WHERE defining_file_id IN ({placeholders})", file_ids_to_cleanup)
+            # Delete refs (keyed by file_id)
+            conn.execute(f"DELETE FROM refs WHERE file_id IN ({placeholders})", file_ids_to_cleanup)
+        
+        if content_hashes_to_cleanup:
+            hash_placeholders = ','.join('?' * len(content_hashes_to_cleanup))
+            # Delete ASTs (keyed by content_hash - content-addressable)
+            # Only delete if no other files reference this content_hash
+            conn.execute(f"""
+                DELETE FROM asts WHERE content_hash IN ({hash_placeholders})
+                AND content_hash NOT IN (
+                    SELECT DISTINCT content_hash FROM files 
+                    WHERE content_hash IN ({hash_placeholders}) 
+                    AND file_id NOT IN ({placeholders})
+                    AND deleted = 0
+                )
+            """, content_hashes_to_cleanup + content_hashes_to_cleanup + file_ids_to_cleanup)
+            
+            # Delete raw file content (keyed by content_hash)
+            # Only delete if no other files reference this content_hash
+            conn.execute(f"""
+                DELETE FROM file_contents WHERE content_hash IN ({hash_placeholders})
+                AND content_hash NOT IN (
+                    SELECT DISTINCT content_hash FROM files 
+                    WHERE content_hash IN ({hash_placeholders}) 
+                    AND file_id NOT IN ({placeholders})
+                    AND deleted = 0
+                )
+            """, content_hashes_to_cleanup + content_hashes_to_cleanup + file_ids_to_cleanup)
+    
+    # Process additions and changes - only read these files
+    for relpath in added_paths | changed_paths:
+        try:
+            file_path = root_path / relpath
+            stat = file_path.stat()
             data = file_path.read_bytes()
             content_hash = compute_content_hash(data)
-            current_manifest[entry.relpath] = content_hash
+            
+            store_file_content(conn, data, content_hash)
+            store_file_record(conn, content_version_id, relpath, content_hash, mtime=str(stat.st_mtime))
+            stats.bytes_stored += len(data)
         except Exception as e:
-            logger.warning(f"Error reading {entry.relpath}: {e}")
-    
-    # Compare
-    added, removed, changed, unchanged = compare_manifests(stored_manifest, current_manifest)
-    
-    stats.files_new = len(added)
-    stats.files_removed = len(removed)
-    stats.files_changed = len(changed)
-    stats.files_unchanged = len(unchanged)
-    
-    # Process additions and changes
-    for relpath in added | changed:
-        file_path = root_path / relpath
-        data = file_path.read_bytes()
-        content_hash = compute_content_hash(data)
-        
-        store_file_content(conn, data, content_hash)
-        store_file_record(conn, content_version_id, relpath, content_hash)
-        stats.bytes_stored += len(data)
+            logger.warning(f"Error storing {relpath}: {e}")
     
     # Mark removed files as deleted
-    for relpath in removed:
+    for relpath in removed_paths:
         conn.execute("""
             UPDATE files SET deleted = 1
             WHERE content_version_id = ? AND relpath = ?
         """, (content_version_id, relpath))
     
     # Update root hash
-    current_hashes = [(p, h) for p, h in current_manifest.items()]
+    current_hashes = []
+    for relpath in current_paths:
+        if relpath in added_paths or relpath in changed_paths:
+            # Get hash from just-stored record
+            h = conn.execute(
+                "SELECT content_hash FROM files WHERE content_version_id = ? AND relpath = ?",
+                (content_version_id, relpath)
+            ).fetchone()[0]
+        else:
+            h = stored_files[relpath]['content_hash']
+        current_hashes.append((relpath, h))
+    
     new_root_hash = compute_root_hash(current_hashes)
     
     conn.execute("""
         UPDATE content_versions 
-        SET content_root_hash = ?, file_count = ?, total_size = (
-            SELECT SUM(size) FROM file_contents fc
-            JOIN files f ON fc.content_hash = f.content_hash
-            WHERE f.content_version_id = ? AND f.deleted = 0
-        )
+        SET content_root_hash = ?, file_count = ?, 
+            is_stale = 1,
+            symbols_extracted_at = NULL
         WHERE content_version_id = ?
-    """, (new_root_hash, len(current_manifest), content_version_id, content_version_id))
+    """, (new_root_hash, len(current_paths), content_version_id))
     
     conn.commit()
     
-    logger.info(f"Incremental update: +{stats.files_new} -{stats.files_removed} ~{stats.files_changed}")
+    logger.info(f"Incremental update: +{stats.files_new} -{stats.files_removed} ~{stats.files_changed} (read {stats.files_new + stats.files_changed} files)")
     
     return stats

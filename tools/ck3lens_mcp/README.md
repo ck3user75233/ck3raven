@@ -68,7 +68,7 @@ See [SETUP.md](docs/SETUP.md) for complete setup instructions.
 - `ck3_search_symbols` - Search with adjacency expansion
 - `ck3_confirm_not_exists` - Exhaustive search before claiming missing
 - `ck3_get_file` - Get file content (raw or AST)
-- `ck3_get_conflicts` - Load-order conflict analysis
+- `ck3_qr_conflicts` - Quick-resolve conflict analysis
 
 ### Live Mod Tools (Sandboxed Writes)
 - `ck3_list_live_mods` - List writable mods

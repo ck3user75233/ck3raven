@@ -13,23 +13,23 @@ CK3 Lens provides MCP tools for AI agents to work with CK3 mod content safely an
 │                         CK3 Lens MCP Server                                 │
 │  ┌───────────────┐  ┌────────────────┐  ┌─────────────┐  ┌──────────────┐  │
 │  │ Query Tools   │  │ Conflict Tools │  │ Write Tools │  │  Git Tools   │  │
-│  │ (DB read)     │  │ (unit-level)   │  │ (sandbox)   │  │  (live mods) │  │
+│  │ (DB read)     │  │ (fast symbols) │  │ (sandbox)   │  │  (live mods) │  │
 │  └───────┬───────┘  └───────┬────────┘  └──────┬──────┘  └──────┬───────┘  │
 └──────────┼──────────────────┼──────────────────┼────────────────┼──────────┘
            │                  │                  │                │
 ┌──────────▼──────────────────▼──────────────────┼────────────────┼──────────┐
 │                     ck3raven SQLite Database                    │          │
 │  ┌─────────────┐  ┌────────────────┐  ┌───────────────────┐    │          │
-│  │ files       │  │ symbols        │  │ contribution_units│    │          │
-│  │ file_conten │  │ refs           │  │ conflict_units    │    │          │
-│  │ asts        │  │ playsets       │  │ resolution_choice │    │          │
+│  │ files       │  │ symbols        │  │ playsets          │    │          │
+│  │ file_content│  │ refs           │  │ playset_mods      │    │          │
+│  │ asts        │  │                │  │                   │    │          │
 │  └─────────────┘  └────────────────┘  └───────────────────┘    │          │
 └────────────────────────────────────────────────────────────────┼──────────┘
                                                                  │
 ┌────────────────────────────────────────────────────────────────▼──────────┐
 │                           Live Mod Directories                             │
 │  ┌─────────────┐  ┌───────────────┐  ┌──────────────┐  ┌───────────────┐  │
-│  │ MSC         │  │ MSCRE         │  │ LRE          │  │ MRP           │  │
+│  │ MSC         │  │ LocalizationP │  │ VanillaPatch │  │ CrashFixes    │  │
 │  └─────────────┘  └───────────────┘  └──────────────┘  └───────────────┘  │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -40,392 +40,218 @@ CK3 Lens provides MCP tools for AI agents to work with CK3 mod content safely an
 
 ## Tool Categories
 
-### 1. Database Query Tools
+### 1. Unified Search Tool (PRIMARY)
 
-Read-only access to ck3raven's parsed content.
+#### `ck3_search`
 
-#### `ck3_search_symbols`
-Search symbol names/types across the active playset.
+**THE primary search tool** - searches symbols, content, and files in one call.
 
 ```python
-ck3_search_symbols(
-    query: str,
-    symbol_type: str | None = None,  # "trait", "event", "on_action", etc.
-    adjacency: str = "auto"          # "strict" | "auto" | "fuzzy"
+ck3_search(
+    query: str,                    # Search term(s)
+    file_pattern: str = None,      # SQL LIKE pattern for paths
+    source_filter: str = None,     # "vanilla" or mod name
+    mod_filter: list[str] = None,  # List of mod names
+    game_folder: str = None,       # e.g., "events", "common/traits"
+    symbol_type: str = None,       # "trait", "event", "decision", etc.
+    adjacency: str = "auto",       # "strict", "auto", "fuzzy"
+    limit: int = 25,               # Max results per category
+    definitions_only: bool = False,  # Skip references (faster)
+    verbose: bool = False,         # More detail
+    no_lens: bool = False          # Search ALL content
 ) -> {
-    "results": [
-        {"name": str, "symbol_type": str, "file_id": int, "relpath": str, "line": int}
-    ],
-    "adjacencies": [...],  # Near-matches if adjacency != "strict"
-    "query_patterns": [...]  # Patterns searched
+    "query": str,
+    "symbols": {
+        "count": int,
+        "results": [...],           # Symbol definitions
+        "adjacencies": [...],       # Similar names
+        "definitions_by_mod": {...},
+        "references_by_mod": {...}  # Where symbols are USED
+    },
+    "content": {
+        "count": int,
+        "results": [...]            # Line-by-line text matches
+    },
+    "files": {
+        "count": int,
+        "results": [...]            # Matching file paths
+    },
+    "truncated": bool,
+    "guidance": str                 # Suggestions if truncated
 }
+```
+
+**Query Syntax for Content Search:**
+- Space-separated words: AND search (all must appear in file)
+- `"quoted phrase"`: Exact phrase search
+- Single word: Simple text search
+
+**Examples:**
+```python
+ck3_search("brave")                         # All uses of 'brave'
+ck3_search("melkite localization")          # Files with BOTH terms
+ck3_search("on_yearly_pulse", game_folder="common/on_action")
+ck3_search("brave", mod_filter=["MSC"])     # Only in MSC mod
+ck3_search("has_trait", limit=100, verbose=True)
 ```
 
 **Adjacency modes:**
 - `strict`: Exact match only
 - `auto`: Exact + prefix + token decomposition (default)
-- `fuzzy`: All above + Levenshtein distance ≤ 2
+- `fuzzy`: All above + similar spellings
 
-#### `ck3_search_files`
-Search for files by path pattern (SQL LIKE style).
+---
 
-```python
-ck3_search_files(
-    path_pattern: str,                # e.g., "%on_action%" or "common/traits/%"
-    mod_filter: list[str] | None = None,  # Limit to specific mods
-    limit: int = 100
-) -> {
-    "results": [
-        {
-            "file_id": int,
-            "relpath": str,
-            "source_name": str,        # "vanilla" or mod name
-            "source_kind": str,        # "vanilla" or "mod"
-            "file_size": int | None
-        }
-    ],
-    "count": int,
-    "truncated": bool
-}
-```
-
-#### `ck3_search_content`
-Full-text grep-style search in file content.
-
-```python
-ck3_search_content(
-    query: str,                         # Text to search for
-    path_filter: str | None = None,     # SQL LIKE pattern, e.g., "%on_action%"
-    mod_filter: list[str] | None = None,  # Limit to specific mods
-    limit: int = 100
-) -> {
-    "results": [
-        {
-            "file_id": int,
-            "relpath": str,
-            "source_name": str,
-            "source_kind": str,
-            "line_number": int,
-            "snippet": str              # Line content with match
-        }
-    ],
-    "count": int,
-    "truncated": bool
-}
-```
-
-#### `ck3_get_symbol`
-Get full details for a specific symbol.
-
-```python
-ck3_get_symbol(
-    name: str,
-    symbol_type: str | None = None
-) -> {
-    "name": str,
-    "symbol_type": str,
-    "file_id": int,
-    "relpath": str,
-    "line": int,
-    "content_version": str,  # Which mod/vanilla
-    "metadata": dict,
-    "ast": dict | None       # Parsed structure if requested
-}
-```
-
-#### `ck3_get_file`
-Read file content by file_id or relpath.
-
-```python
-ck3_get_file(
-    playset_id: str,
-    file_id: int | None = None,
-    relpath: str | None = None,
-    max_bytes: int = 200000
-) -> {
-    "file_id": int,
-    "relpath": str,
-    "mod": str,
-    "content": str,
-    "size": int
-}
-```
-
-#### `ck3_list_files`
-List files in a folder within the active playset.
-
-```python
-ck3_list_files(
-    playset_id: str,
-    folder: str,             # e.g., "common/on_action"
-    pattern: str = "*.txt"
-) -> {
-    "files": [
-        {"file_id": int, "relpath": str, "mod": str, "size": int}
-    ]
-}
-```
-
-#### `ck3_get_conflicts`
-Get conflict report for a folder or symbol type.
-
-```python
-ck3_get_conflicts(
-    playset_id: str,
-    folder: str | None = None,
-    symbol_type: str | None = None
-) -> {
-    "folder": str,
-    "policy": str,  # "OVERRIDE", "CONTAINER_MERGE", etc.
-    "file_overrides": [...],
-    "symbol_conflicts": [
-        {
-            "name": str,
-            "winner": {"mod": str, "file": str, "line": int},
-            "losers": [{"mod": str, "file": str, "line": int}]
-        }
-    ]
-}
-```
-
-#### `ck3_resolve_symbol`
-Show what definition "wins" for a symbol plus all competing definitions.
-
-```python
-ck3_resolve_symbol(
-    playset_id: str,
-    name: str,
-    symbol_type: str | None = None
-) -> {
-    "name": str,
-    "winner": {"mod": str, "file": str, "line": int, "load_order": int},
-    "all_definitions": [...],
-    "policy": str
-}
-```
-
-#### `ck3_get_policy`
-Get merge policy for a content path.
-
-```python
-ck3_get_policy(
-    folder: str
-) -> {
-    "folder": str,
-    "policy": str,
-    "description": str
-}
-```
+### 2. Symbol Validation Tools
 
 #### `ck3_confirm_not_exists`
+
 **REQUIRED** before claiming something doesn't exist. Runs exhaustive adjacency search.
 
 ```python
 ck3_confirm_not_exists(
-    query: str,
-    symbol_type: str | None = None
+    name: str,
+    symbol_type: str = None,
+    no_lens: bool = False
 ) -> {
-    "query": str,
-    "exact_match": bool,
-    "adjacencies": [...],
-    "searched_patterns": [...],
-    "can_claim_not_exists": bool  # Only true if ALL patterns returned 0 results
+    "can_claim_not_exists": bool,  # True ONLY if exhaustive search found nothing
+    "similar_matches": [...],       # Symbols you might have meant
+    "searched_patterns": [...]
 }
 ```
 
 ---
 
-### 2. Unit-Level Conflict Analysis Tools
+### 3. Conflict Analysis Tools
 
-Analyze conflicts at the semantic unit level (decisions, traits, on_actions, etc.) with risk scoring.
+#### `ck3_get_symbol_conflicts`
+
+**Fast ID-level conflict detection** using the symbols table (instant query).
+
+Automatically filters out conflicts involving "compatch" mods (compatibility patches)
+since they are DESIGNED to conflict - that's their purpose.
+
+```python
+ck3_get_symbol_conflicts(
+    symbol_type: str = None,       # "trait", "event", "decision", etc.
+    game_folder: str = None,       # "common/traits", "events", etc.
+    limit: int = 100,
+    include_compatch: bool = False # Set True to include compatch conflicts
+) -> {
+    "conflict_count": int,
+    "conflicts": [
+        {
+            "name": str,
+            "symbol_type": str,
+            "source_count": int,    # How many mods define this
+            "sources": [{"mod": str, "file": str, "line": int}],
+            "is_compatch_conflict": bool
+        }
+    ],
+    "compatch_conflicts_hidden": int  # Filtered out count
+}
+```
+
+**Compatch Detection:** Mods with names containing "compatch", "compatibility", 
+"patch", "compat", "fix", "hotfix", "tweak", or "override" are recognized
+as compatibility patches and filtered out by default.
+
+**Examples:**
+```python
+ck3_get_symbol_conflicts()                    # All non-compatch conflicts
+ck3_get_symbol_conflicts(symbol_type="trait") # Only trait conflicts
+ck3_get_symbol_conflicts(game_folder="common/on_action")
+ck3_get_symbol_conflicts(include_compatch=True)  # Include compatch
+```
+
+#### `ck3_qr_conflicts`
+
+Quick-resolve conflicts using load order. Shows what "wins" based on CK3 merge rules.
+
+```python
+ck3_qr_conflicts(
+    path_pattern: str = None,
+    symbol_name: str = None,
+    symbol_type: str = None
+) -> {
+    "conflicts": [...],
+    "winner": {...},
+    "losers": [...]
+}
+```
 
 #### `ck3_scan_unit_conflicts`
-Full conflict scan of the active playset. Extracts all ContributionUnits and groups into ConflictUnits.
+
+Full conflict scan extracting ContributionUnits (slower, more detailed).
 
 ```python
 ck3_scan_unit_conflicts(
-    folder_filter: str | None = None  # e.g., "common/on_action"
+    folder_filter: str = None  # e.g., "common/on_action"
 ) -> {
-    "playset_id": int,
-    "contributions_extracted": int,
     "conflicts_found": int,
-    "summary": {
-        "total": int,
-        "by_risk": {"low": int, "med": int, "high": int},
-        "by_domain": {"on_action": int, "decision": int, ...},
-        "unresolved_high_risk": int
-    },
+    "summary": {...},
     "elapsed_seconds": float
 }
 ```
 
-#### `ck3_get_conflict_summary`
-Get summary counts of all conflicts in the playset.
-
-```python
-ck3_get_conflict_summary() -> {
-    "playset_id": int,
-    "total": int,
-    "by_risk": {"low": int, "med": int, "high": int},
-    "by_domain": {...},
-    "by_status": {"unresolved": int, "resolved": int, "deferred": int},
-    "unresolved_high_risk": int
-}
-```
-
-#### `ck3_list_conflict_units`
-List conflict units with filters. Returns paginated results.
-
-```python
-ck3_list_conflict_units(
-    risk_filter: str | None = None,      # "low", "med", "high"
-    domain_filter: str | None = None,    # "on_action", "decision", "trait", etc.
-    status_filter: str | None = None,    # "unresolved", "resolved", "deferred"
-    limit: int = 50,
-    offset: int = 0
-) -> {
-    "playset_id": int,
-    "count": int,
-    "conflicts": [
-        {
-            "conflict_unit_id": str,
-            "unit_key": str,               # e.g., "on_action:on_yearly_pulse"
-            "domain": str,
-            "candidate_count": int,
-            "merge_capability": str,       # "winner_only", "guided_merge", "ai_merge"
-            "risk": str,                   # "low", "med", "high"
-            "risk_score": int,             # 0-100
-            "uncertainty": str,
-            "reasons": [str],
-            "resolution_status": str,
-            "candidates": [
-                {
-                    "candidate_id": str,
-                    "source_kind": str,    # "vanilla" or "mod"
-                    "source_name": str,
-                    "load_order_index": int,
-                    "is_winner": bool,
-                    "relpath": str,
-                    "line_number": int,
-                    "summary": str
-                }
-            ]
-        }
-    ]
-}
-```
-
-#### `ck3_get_conflict_detail`
-Get full details for a specific conflict unit, including content previews.
-
-```python
-ck3_get_conflict_detail(
-    conflict_unit_id: str
-) -> {
-    "conflict_unit_id": str,
-    "unit_key": str,
-    "domain": str,
-    "candidates": [
-        {
-            "candidate_id": str,
-            "source_name": str,
-            "content_preview": str,        # First 2000 chars of file
-            "symbols_defined": [...],
-            "refs_used": [...]
-        }
-    ],
-    "resolution": {...} | None             # If already resolved
-}
-```
-
-#### `ck3_resolve_conflict`
-Record a resolution decision for a conflict unit.
-
-```python
-ck3_resolve_conflict(
-    conflict_unit_id: str,
-    decision_type: str,                    # "winner" or "defer"
-    winner_candidate_id: str | None = None,
-    notes: str | None = None
-) -> {
-    "success": bool,
-    "resolution_id": str,
-    "unit_key": str,
-    "decision_type": str
-}
-```
-
 #### `ck3_get_unit_content`
-Get all candidate contents for a unit_key for side-by-side comparison.
+
+Compare all candidates for a unit_key side-by-side.
 
 ```python
 ck3_get_unit_content(
-    unit_key: str,                         # e.g., "on_action:on_yearly_pulse"
-    source_filter: str | None = None
+    unit_key: str,                  # e.g., "on_action:on_yearly_pulse"
+    source_filter: str = None
 ) -> {
     "unit_key": str,
     "count": int,
-    "contributions": [
-        {
-            "source_name": str,
-            "relpath": str,
-            "content": str                 # Up to 5000 chars
-        }
-    ]
+    "contributions": [...]
 }
 ```
 
 ---
 
-### 3. Live Mod File Operations
+### 4. File Access Tools
+
+#### `ck3_get_file`
+
+Get file content from the database.
+
+```python
+ck3_get_file(
+    file_path: str,           # Relative path
+    include_ast: bool = False,
+    max_bytes: int = 200000,
+    no_lens: bool = False
+) -> {
+    "content": str,
+    "relpath": str,
+    "mod": str,
+    "ast": {...}              # If include_ast=True
+}
+```
+
+---
+
+### 5. Live Mod File Operations
 
 Write access to whitelisted "live mod" directories only.
 
-#### `ck3_list_live_mods`
-List mods the agent is allowed to write to.
-
-```python
-ck3_list_live_mods() -> {
-    "mods": [
-        {"mod_id": str, "name": str, "path": str}
-    ]
-}
-```
-
-#### `ck3_read_live_file`
-Read a file from a live mod (current disk state, not DB).
-
-```python
-ck3_read_live_file(
-    mod_id: str,
-    relpath: str
-) -> {
-    "mod_id": str,
-    "relpath": str,
-    "content": str,
-    "exists": bool
-}
-```
-
 #### `ck3_write_file`
+
 Write or create a file in a live mod.
 
 ```python
 ck3_write_file(
     mod_id: str,
     relpath: str,
-    content: str,
-    create_dirs: bool = True
-) -> {
-    "success": bool,
-    "mod_id": str,
-    "relpath": str,
-    "bytes_written": int
-}
+    content: str
+) -> {"success": bool, "bytes_written": int}
 ```
 
 #### `ck3_edit_file`
-Edit a portion of an existing file.
+
+Edit a portion of an existing file with search-replace.
 
 ```python
 ck3_edit_file(
@@ -433,466 +259,121 @@ ck3_edit_file(
     relpath: str,
     old_content: str,
     new_content: str
-) -> {
-    "success": bool,
-    "mod_id": str,
-    "relpath": str,
-    "replacements": int
-}
+) -> {"success": bool, "replacements": int}
 ```
 
 #### `ck3_delete_file`
+
 Delete a file from a live mod.
 
 ```python
-ck3_delete_file(
-    mod_id: str,
-    relpath: str
-) -> {
-    "success": bool,
-    "mod_id": str,
-    "relpath": str
-}
+ck3_delete_file(mod_id: str, relpath: str) -> {"success": bool}
 ```
 
-#### `ck3_list_live_files`
-List files currently in a live mod folder (disk state).
+#### `ck3_create_override_patch`
+
+Create a patch file that overrides a vanilla or mod file.
 
 ```python
-ck3_list_live_files(
-    mod_id: str,
-    folder: str = "",
-    pattern: str = "*.txt"
+ck3_create_override_patch(
+    source_path: str,        # Path being overridden
+    target_mod: str,         # Live mod to create patch in
+    mode: str,               # "override_patch" or "full_replace"
+    initial_content: str = None
 ) -> {
-    "files": [{"relpath": str, "size": int, "modified": str}]
+    "success": bool,
+    "created_path": str,     # e.g., "common/traits/zzz_msc_00_traits.txt"
+    "full_path": str
 }
 ```
 
 ---
 
-### 4. Validation Tools
+### 6. Validation Tools
 
-Ensure content is correct before writing.
+#### `ck3_validate_references`
 
-#### `ck3_parse_content`
-Parse CK3 script content, return AST or errors.
-
-```python
-ck3_parse_content(
-    content: str,
-    filename: str = "inline.txt"  # For error messages
-) -> {
-    "success": bool,
-    "ast": dict | None,
-    "errors": [{"line": int, "column": int, "message": str}]
-}
-```
-
-#### `ck3_validate_file`
-Full validation: parse + reference checking.
+Check if all references in content are defined in the database.
 
 ```python
-ck3_validate_file(
-    playset_id: str,
+ck3_validate_references(
     content: str,
-    relpath: str
+    filename: str = "inline.txt"
 ) -> {
-    "success": bool,
-    "parse_ok": bool,
-    "parse_errors": [...],
-    "unknown_references": [{"name": str, "line": int, "type": str}],
+    "success": bool,  # True if no errors
+    "errors": [...],
     "warnings": [...]
 }
 ```
 
-#### `ck3_check_references`
-Check if all references in content are defined.
-
-```python
-ck3_check_references(
-    playset_id: str,
-    content: str
-) -> {
-    "references_found": [...],
-    "unknown_references": [...],
-    "declared_symbols": [...]  # New symbols this content defines
-}
-```
-
-#### `ck3_preview_resolution`
-Preview how a new file would affect conflict resolution.
-
-```python
-ck3_preview_resolution(
-    playset_id: str,
-    mod_id: str,
-    relpath: str,
-    content: str
-) -> {
-    "would_override": [...],
-    "would_be_overridden_by": [...],
-    "new_symbols": [...],
-    "conflicts_introduced": [...],
-    "conflicts_resolved": [...]
-}
-```
-
 ---
 
-### 5. Git Operations
+### 7. Session/Context Tools
 
-Version control for live mods.
+#### `ck3_get_scope_info`
 
-#### `git_status`
-Git status for a live mod.
-
-```python
-git_status(
-    mod_id: str
-) -> {
-    "mod_id": str,
-    "branch": str,
-    "staged": [...],
-    "unstaged": [...],
-    "untracked": [...]
-}
-```
-
-#### `git_diff`
-Show uncommitted changes.
+Get current lens (playset) information.
 
 ```python
-git_diff(
-    mod_id: str,
-    staged: bool = False
-) -> {
-    "mod_id": str,
-    "diff": str
-}
-```
-
-#### `git_add`
-Stage files for commit.
-
-```python
-git_add(
-    mod_id: str,
-    files: list[str] | None = None,  # None = all
-    all: bool = False
-) -> {
-    "success": bool,
-    "staged": [...]
-}
-```
-
-#### `git_commit`
-Commit staged changes.
-
-```python
-git_commit(
-    mod_id: str,
-    message: str
-) -> {
-    "success": bool,
-    "commit_hash": str,
-    "message": str
-}
-```
-
-#### `git_push`
-Push to remote.
-
-```python
-git_push(
-    mod_id: str,
-    remote: str = "origin",
-    branch: str | None = None
-) -> {
-    "success": bool,
-    "remote": str,
-    "branch": str
-}
-```
-
-#### `git_pull`
-Pull from remote.
-
-```python
-git_pull(
-    mod_id: str,
-    remote: str = "origin",
-    branch: str | None = None
-) -> {
-    "success": bool,
-    "commits_pulled": int,
-    "conflicts": [...]
-}
-```
-
-#### `git_log`
-Recent commit history.
-
-```python
-git_log(
-    mod_id: str,
-    limit: int = 10
-) -> {
-    "commits": [
-        {"hash": str, "author": str, "date": str, "message": str}
-    ]
-}
-```
-
----
-
-### 6. Session/Context Tools
-
-Manage the agent's session state.
-
-#### `ck3_init_session`
-Initialize the ck3lens session with database connection.
-
-```python
-ck3_init_session(
-    db_path: str | None = None,   # Uses default ~/.ck3raven/ck3raven.db
-    live_mods: list[str] | None = None  # Override live mod whitelist
-) -> {
-    "initialized": bool,
-    "mod_root": str,
-    "live_mods": [str],
-    "playset_name": str,
-    "playset_id": int
-}
-```
-
-#### `ck3_set_playset`
-Set the active playset (loads configuration from DB).
-
-```python
-ck3_set_playset(
-    playset_id: int
-) -> {
+ck3_get_scope_info() -> {
+    "lens_active": bool,
     "playset_id": int,
-    "name": str,
-    "vanilla_version": str,
-    "mods": [{"name": str, "load_order": int}]
+    "playset_name": str,
+    "mod_count": int,
+    "mods": [{"name": str, "workshop_id": str}]
 }
 ```
 
-#### `ck3_get_playset_mods`
-Get mods in the active playset with load order.
+#### `ck3_get_db_status`
+
+Check database build status.
 
 ```python
-ck3_get_playset_mods() -> {
-    "mods": [
-        {
-            "name": str,
-            "contentVersionId": int,
-            "loadOrder": int,
-            "kind": str,  # "vanilla", "steam", or "local"
-            "fileCount": int,
-            "sourcePath": str | None
-        }
-    ]
-}
-```
-
-#### `ck3_add_mod_to_playset`
-Add a mod to the active playset with full ingestion.
-
-```python
-ck3_add_mod_to_playset(
-    mod_identifier: str,           # Workshop ID, name, or path
-    position: int | None = None,   # 0-indexed load order position
-    before_mod: str | None = None, # Insert before this mod
-    after_mod: str | None = None   # Insert after this mod
-) -> {
-    "success": bool,
-    "mod_name": str,
-    "workshop_id": str | None,
-    "content_version_id": int,
-    "load_order_position": int,
+ck3_get_db_status() -> {
+    "is_complete": bool,
+    "phase": str,
     "files_indexed": int,
-    "symbols_extracted": int
-}
-```
-
-#### `ck3_import_playset_from_launcher`
-Import a playset directly from CK3 Launcher JSON export.
-
-```python
-ck3_import_playset_from_launcher(
-    launcher_json_path: str | None = None,    # Path to launcher export
-    launcher_json_content: str | None = None, # Raw JSON (alternative)
-    playset_name: str | None = None,          # Override name
-    local_mod_paths: list[str] | None = None, # Add local mods at end
-    set_active: bool = True                   # Make this the active playset
-) -> {
-    "success": bool,
-    "playset_id": int,
-    "playset_name": str,
-    "mods_linked": int,
-    "local_mods_linked": int,
-    "mods_skipped": [...] | None,
-    "is_active": bool,
-    "next_steps": str
-}
-```
-
-**Workflow:**
-1. Export playset from Paradox Launcher (Settings → Export Playset)
-2. Call with `launcher_json_path` pointing to the exported JSON
-3. Tool matches Steam IDs to mods already in database
-4. Creates new playset with matching load order
-5. Optionally adds local mod paths at end of load order
-
-#### `ck3_reorder_mod_in_playset`
-Move a mod to a new position in the load order.
-
-```python
-ck3_reorder_mod_in_playset(
-    mod_identifier: str,             # Workshop ID or mod name
-    new_position: int | None = None, # Target position (0-indexed)
-    before_mod: str | None = None,   # Move before this mod
-    after_mod: str | None = None     # Move after this mod
-) -> {
-    "success": bool,
-    "mod_name": str,
-    "old_position": int,
-    "new_position": int
-}
-```
-
-#### `ck3_remove_mod_from_playset`
-Remove a mod from the active playset.
-
-```python
-ck3_remove_mod_from_playset(
-    mod_identifier: str  # Workshop ID or mod name
-) -> {
-    "success": bool,
-    "mod_name": str,
-    "removed_from_position": int
-}
-```
-
-#### `ck3_get_playset_info`
-Get current playset details.
-
-```python
-ck3_get_playset_info() -> {
-    "playset_id": int,
-    "name": str,
-    "vanilla_version": str,
-    "mods": [...],
-    "live_mods": [...]  # Writable mods
-}
-```
-
-#### `ck3_refresh_mod`
-Re-ingest a mod after changes (updates DB).
-
-```python
-ck3_refresh_mod(
-    mod_id: str
-) -> {
-    "success": bool,
-    "files_updated": int,
-    "symbols_updated": int,
-    "errors": [...]
-}
-```
-```
-
----
-
-### 7. Report Generation Tools
-
-Generate comprehensive conflict reports for analysis and prioritization.
-
-#### `ck3_generate_conflicts_report`
-Generate a full conflicts report including file-level and ID-level conflicts.
-
-```python
-ck3_generate_conflicts_report(
-    playset_id: int | None = None,     # Uses active playset if None
-    format: str = "json"               # "json" or "cli"
-) -> {
-    "$schema": "ck3raven.conflicts.v1",
-    "generated_at": str,               # ISO 8601 timestamp
-    "ck3raven_version": str,
-    "report_version": "1.0.0",
-    "context": {
-        "playset_id": int,
-        "playset_name": str,
-        "ck3_version": str,
-        "mod_count": int,
-        "mods": [{"name": str, "load_order": int}],
-        "total_files_in_playset": int,
-        "total_symbols": int
-    },
-    "summary": {
-        "file_conflicts_count": int,
-        "id_conflicts_count": int,
-        "highest_risk_file_conflicts": [...],
-        "highest_risk_id_conflicts": [...]
-    },
-    "file_conflicts": [
-        {
-            "vpath": str,               # e.g., "common/on_action/yearly.txt"
-            "conflict_type": str,       # "OVERRIDE" or "MERGE"
-            "risk_score": int,          # 0-100
-            "sources": [
-                {"source_name": str, "load_order": int, "is_winner": bool}
-            ],
-            "notes": str
-        }
-    ],
-    "id_conflicts": [
-        {
-            "unit_key": str,            # e.g., "on_action:on_yearly_pulse"
-            "domain": str,
-            "risk_score": int,
-            "merge_capability": str,
-            "candidates": [
-                {"source_name": str, "relpath": str, "line": int, "is_winner": bool}
-            ]
-        }
-    ]
-}
-```
-
-#### `ck3_get_high_risk_conflicts`
-Get the highest-risk conflicts for priority review.
-
-```python
-ck3_get_high_risk_conflicts(
-    playset_id: int | None = None,     # Uses active playset if None
-    limit: int = 10,                   # Max conflicts to return
-    conflict_type: str = "all"         # "file", "id", or "all"
-) -> {
-    "file_conflicts": [...],           # Top file conflicts by risk
-    "id_conflicts": [...]              # Top ID conflicts by risk
+    "symbols_extracted": int,
+    "needs_rebuild": bool
 }
 ```
 
 ---
 
-## Adjacency Search Details
+## Query Syntax
 
-All symbol searches default to `adjacency="auto"` which expands queries:
+### Multi-term Content Search
+
+`ck3_search` supports multi-term queries:
+
+| Query | Behavior |
+|-------|----------|
+| `brave` | Simple text search |
+| `melkite localization` | Files containing BOTH "melkite" AND "localization" |
+| `"has_trait"` | Exact phrase search |
+| `"on_yearly_pulse" on_action` | Files with exact "on_yearly_pulse" AND "on_action" |
+
+### Adjacency Search (Symbols)
+
+Symbol searches default to `adjacency="auto"` which expands queries:
 
 | Query | Patterns Searched |
 |-------|-------------------|
-| `tradition_warrior_culture` | `tradition_warrior_culture` (exact) |
-| | `tradition_warrior_culture*` (prefix) |
-| | `tradition_warrior*` (stem) |
-| | `tradition AND warrior AND culture` (tokens) |
-| | `tradition*warrior*culture*` (flex) |
+| `tradition_warrior_culture` | Exact + prefix + token decomposition |
+|  | `tradition*warrior*culture*` (flex) |
 
-**Fuzzy mode** adds Levenshtein distance ≤ 2 for catching typos.
+**Modes:** `strict` (exact only), `auto` (default), `fuzzy` (typo tolerance)
 
-**Rule:** Agent cannot claim something "doesn't exist" without calling `ck3_confirm_not_exists` which runs exhaustive fuzzy search.
+---
+
+## Compatch Filtering
+
+Compatibility patches are **designed** to override other mods - that's their purpose.
+`ck3_get_symbol_conflicts` automatically filters these out by default.
+
+**Detected patterns:** "compatch", "compatibility", "patch", "compat", "fix", "hotfix", "tweak", "override"
+
+Set `include_compatch=True` to include these conflicts.
 
 ---
 
@@ -900,72 +381,41 @@ All symbol searches default to `adjacency="auto"` which expands queries:
 
 1. **Database queries**: Read-only, filtered to active playset
 2. **Live mod writes**: Whitelisted directories only
-3. **Git operations**: Restricted to live mod repos
-4. **Path validation**: No `..`, absolute paths, or escaping sandbox
-5. **Trace logging**: All tool invocations logged
+3. **Path validation**: No `..` or escaping sandbox
+4. **Trace logging**: All tool invocations logged
 
 ---
 
 ## Implementation Status
 
-| Tool | Status |
-|------|--------|
-| **Query Tools** | |
-| `ck3_search_symbols` | ✅ Implemented |
-| `ck3_search_files` | ✅ Implemented |
-| `ck3_search_content` | ✅ Implemented |
-| `ck3_get_symbol` | 🔲 Planned |
-| `ck3_get_file` | ✅ Implemented |
-| `ck3_list_files` | 🔲 Planned |
-| `ck3_get_conflicts` | ✅ Implemented |
-| `ck3_resolve_symbol` | 🔲 Planned |
-| `ck3_get_policy` | 🔲 Planned |
-| `ck3_confirm_not_exists` | ✅ Implemented |
-| **Unit-Level Conflict Tools** | |
-| `ck3_scan_unit_conflicts` | ✅ Implemented |
-| `ck3_get_conflict_summary` | ✅ Implemented |
-| `ck3_list_conflict_units` | ✅ Implemented |
-| `ck3_get_conflict_detail` | ✅ Implemented |
-| `ck3_resolve_conflict` | ✅ Implemented |
-| `ck3_get_unit_content` | ✅ Implemented |
-| **Report Tools** | |
-| `ck3_generate_conflicts_report` | ✅ Implemented |
-| `ck3_get_high_risk_conflicts` | ✅ Implemented |
-| **Live Mod Tools** | |
-| `ck3_list_live_mods` | ✅ Implemented |
-| `ck3_read_live_file` | ✅ Implemented |
-| `ck3_write_file` | ✅ Implemented |
-| `ck3_edit_file` | ✅ Implemented |
-| `ck3_delete_file` | ✅ Implemented |
-| `ck3_list_live_files` | ✅ Implemented |
-| **Validation Tools** | |
-| `ck3_parse_content` | ✅ Implemented |
-| `ck3_validate_patchdraft` | ✅ Implemented |
-| `ck3_check_references` | 🔲 Planned |
-| `ck3_preview_resolution` | 🔲 Planned |
-| **Git Tools** | |
-| `ck3_git_status` | ✅ Implemented |
-| `ck3_git_diff` | ✅ Implemented |
-| `ck3_git_add` | ✅ Implemented |
-| `ck3_git_commit` | ✅ Implemented |
-| `ck3_git_push` | ✅ Implemented |
-| `ck3_git_pull` | ✅ Implemented |
-| `ck3_git_log` | ✅ Implemented |
-| **Log Parsing Tools** | |
-| `ck3_get_error_summary` | ✅ Implemented |
-| `ck3_get_errors` | ✅ Implemented |
-| `ck3_search_errors` | ✅ Implemented |
-| `ck3_get_cascade_patterns` | ✅ Implemented |
-| `ck3_get_crash_reports` | ✅ Implemented |
-| `ck3_get_crash_detail` | ✅ Implemented |
-| `ck3_read_log` | ✅ Implemented |
-| **Session Tools** | |
-| `ck3_init_session` | ✅ Implemented |
-| `ck3_get_playset_mods` | ✅ Implemented |
-| `ck3_add_mod_to_playset` | ✅ Implemented |
-| `ck3_import_playset_from_launcher` | ✅ Implemented |
-| `ck3_reorder_mod_in_playset` | ✅ Implemented |
-| `ck3_remove_mod_from_playset` | ✅ Implemented |
-| `ck3_set_playset` | 🔲 Planned |
-| `ck3_get_playset_info` | 🔲 Planned |
-| `ck3_refresh_mod` | 🔲 Planned |
+| Tool | Status | Description |
+|------|--------|-------------|
+| **Search** | | |
+| `ck3_search` | ✅ | Unified search (symbols + content + files) |
+| `ck3_confirm_not_exists` | ✅ | Exhaustive validation before claiming missing |
+| **Conflict Analysis** | | |
+| `ck3_get_symbol_conflicts` | ✅ | **NEW** Fast symbols-based detection |
+| `ck3_qr_conflicts` | ✅ | Quick-resolve with load order |
+| `ck3_scan_unit_conflicts` | ✅ | Unit extraction (slower) |
+| `ck3_get_unit_content` | ✅ | Content comparison |
+| **File Access** | | |
+| `ck3_get_file` | ✅ | Read from DB |
+| **Live Mod Operations** | | |
+| `ck3_write_file` | ✅ | Write files |
+| `ck3_edit_file` | ✅ | Search-replace edit |
+| `ck3_delete_file` | ✅ | Delete files |
+| `ck3_create_override_patch` | ✅ | Create patch files |
+| **Validation** | | |
+| `ck3_validate_references` | ✅ | Reference checking |
+| **Session** | | |
+| `ck3_get_scope_info` | ✅ | Playset info |
+| `ck3_get_db_status` | ✅ | Build status |
+
+---
+
+## Deprecated Tools (REMOVED)
+
+The following tools were removed - use `ck3_search` instead:
+- ~~`ck3_search_symbols`~~ → Use `ck3_search(query, symbol_type="...")`
+- ~~`ck3_search_files`~~ → Use `ck3_search(query, file_pattern="...")`
+- ~~`ck3_search_content`~~ → Use `ck3_search(query)`

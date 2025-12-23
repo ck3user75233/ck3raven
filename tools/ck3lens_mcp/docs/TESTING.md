@@ -152,7 +152,7 @@ Even without the ck3raven database indexed, these tools work:
 | `ck3_search_symbols` | ⚠️ Needs DB |
 | `ck3_confirm_not_exists` | ⚠️ Needs DB |
 | `ck3_get_file` | ⚠️ Needs DB |
-| `ck3_get_conflicts` | ⚠️ Needs DB |
+| `ck3_qr_conflicts` | ⚠️ Needs DB |
 
 ---
 
