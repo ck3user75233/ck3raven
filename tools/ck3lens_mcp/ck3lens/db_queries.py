@@ -3,13 +3,14 @@ Database Query Layer
 
 Provides query wrappers around ck3raven's SQLite database.
 Includes adjacency search pattern expansion for robust symbol lookup.
+All queries are scoped through the active playset (the "lens").
 """
 from __future__ import annotations
 import sqlite3
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Any
+from typing import Optional, Any, Set
 
 # Add ck3raven to path if not installed
 CK3RAVEN_PATH = Path(__file__).parent.parent.parent.parent / "src"
@@ -38,24 +39,43 @@ class SymbolHit:
 
 
 @dataclass
+class ContentMatch:
+    """A single match within a file."""
+    line: int
+    snippet: str
+
+
+@dataclass
 class FileHit:
     """A file found in content search."""
     file_id: int
     relpath: str
     mod_name: str
-    snippet: str
-    line: int
+    matches: list[ContentMatch]
 
 
 @dataclass
-class ConflictInfo:
-    """Information about a symbol conflict."""
-    name: str
-    symbol_type: str
-    winner_mod: str
-    winner_file: str
-    winner_line: int
-    losers: list[dict]
+class PlaysetLens:
+    """
+    A playset lens filters all database queries to a specific set of content.
+    
+    Think of it as putting on glasses - you only see what's in the playset.
+    The underlying data is unchanged; the lens is just a filter.
+    """
+    playset_id: int
+    playset_name: str
+    vanilla_cv_id: int  # content_version_id for vanilla
+    mod_cv_ids: list[int]  # content_version_ids for mods in load order
+    
+    @property
+    def all_cv_ids(self) -> Set[int]:
+        """All content_version_ids visible through this lens."""
+        return {self.vanilla_cv_id} | set(self.mod_cv_ids)
+    
+    def get_file_ids_sql(self, conn: sqlite3.Connection) -> str:
+        """Return SQL subquery for valid file_ids."""
+        cv_list = ",".join(str(cv) for cv in self.all_cv_ids)
+        return f"SELECT file_id FROM files WHERE content_version_id IN ({cv_list})"
 
 
 # =============================================================================
@@ -126,31 +146,166 @@ class DBQueries:
         self.db_path = db_path
         self.conn = get_connection(db_path)
         self.conn.row_factory = sqlite3.Row
+        self._lens_cache: dict[int, PlaysetLens] = {}
+    
+    # =========================================================================
+    # PLAYSET LENS MANAGEMENT
+    # =========================================================================
+    
+    def get_lens(self, playset_id: int) -> Optional[PlaysetLens]:
+        """
+        Get the playset lens for a given playset_id.
+        
+        The lens defines what content is visible for all queries.
+        Returns None if playset doesn't exist.
+        """
+        if playset_id in self._lens_cache:
+            return self._lens_cache[playset_id]
+        
+        # Get playset info
+        playset = self.conn.execute("""
+            SELECT playset_id, name, vanilla_version_id
+            FROM playsets WHERE playset_id = ?
+        """, (playset_id,)).fetchone()
+        
+        if not playset:
+            return None
+        
+        # Get vanilla content_version_id
+        vanilla_cv = self.conn.execute("""
+            SELECT content_version_id 
+            FROM content_versions 
+            WHERE vanilla_version_id = ? AND kind = 'vanilla'
+            ORDER BY ingested_at DESC LIMIT 1
+        """, (playset["vanilla_version_id"],)).fetchone()
+        
+        if not vanilla_cv:
+            return None
+        
+        # Get mod content_version_ids in load order
+        mod_rows = self.conn.execute("""
+            SELECT content_version_id 
+            FROM playset_mods 
+            WHERE playset_id = ? AND enabled = 1
+            ORDER BY load_order_index ASC
+        """, (playset_id,)).fetchall()
+        
+        mod_cv_ids = [row["content_version_id"] for row in mod_rows]
+        
+        lens = PlaysetLens(
+            playset_id=playset_id,
+            playset_name=playset["name"],
+            vanilla_cv_id=vanilla_cv["content_version_id"],
+            mod_cv_ids=mod_cv_ids
+        )
+        
+        self._lens_cache[playset_id] = lens
+        return lens
+    
+    def get_active_lens(self) -> Optional[PlaysetLens]:
+        """Get the lens for the currently active playset."""
+        row = self.conn.execute("""
+            SELECT playset_id FROM playsets WHERE is_active = 1 LIMIT 1
+        """).fetchone()
+        
+        if row:
+            return self.get_lens(row["playset_id"])
+        return None
+    
+    def invalidate_lens_cache(self, playset_id: Optional[int] = None):
+        """Clear cached lens (call after playset changes)."""
+        if playset_id:
+            self._lens_cache.pop(playset_id, None)
+        else:
+            self._lens_cache.clear()
+    
+    def list_playsets(self) -> list[dict]:
+        """List all available playsets."""
+        rows = self.conn.execute("""
+            SELECT 
+                p.playset_id,
+                p.name,
+                p.is_active,
+                p.created_at,
+                (SELECT COUNT(*) FROM playset_mods pm WHERE pm.playset_id = p.playset_id) as mod_count
+            FROM playsets p
+            ORDER BY p.is_active DESC, p.updated_at DESC
+        """).fetchall()
+        
+        return [dict(row) for row in rows]
+    
+    def set_active_playset(self, playset_id: int) -> bool:
+        """
+        Switch the active playset (change the lens).
+        
+        This is instant - just updates which playset is marked active.
+        Does NOT modify any mod data.
+        """
+        # Verify playset exists
+        exists = self.conn.execute(
+            "SELECT 1 FROM playsets WHERE playset_id = ?", (playset_id,)
+        ).fetchone()
+        
+        if not exists:
+            return False
+        
+        # Deactivate all, activate this one
+        self.conn.execute("UPDATE playsets SET is_active = 0")
+        self.conn.execute(
+            "UPDATE playsets SET is_active = 1, updated_at = datetime('now') WHERE playset_id = ?",
+            (playset_id,)
+        )
+        self.conn.commit()
+        
+        # Clear lens cache
+        self.invalidate_lens_cache()
+        
+        return True
+    
+    # =========================================================================
+    # SYMBOL SEARCH
+    # =========================================================================
     
     def search_symbols(
         self,
-        playset_id: Optional[int],
+        lens: Optional[PlaysetLens],
         query: str,
         symbol_type: Optional[str] = None,
         adjacency: str = "auto",
-        limit: int = 100
+        limit: int = 100,
+        include_references: bool = False,
+        verbose: bool = False
     ) -> dict:
         """
         Search symbols with adjacency expansion.
         
         Args:
-            playset_id: Active playset (optional - if None, search all content)
+            lens: PlaysetLens to filter through (None = search ALL content)
             query: Search term
             symbol_type: Optional filter (tradition, event, etc.)
             adjacency: "strict" | "auto" | "fuzzy"
             limit: Max results per pattern
+            include_references: If True, also return mods that reference the symbol
+            verbose: If True, include code snippets for definitions
         
         Returns:
-            {results: [...], adjacencies: [...], query_patterns: [...]}
+            {
+                results: [...],  # Exact matches
+                adjacencies: [...],  # Similar names
+                query_patterns: [...],
+                definitions_by_mod: {...},  # Which mods define this symbol
+                references_by_mod: {...}  # If include_references=True
+            }
         """
         results = []
         adjacencies = []
         patterns_searched = []
+        
+        # Build content_version filter if lens is active
+        cv_filter = ""
+        if lens:
+            cv_list = ",".join(str(cv) for cv in lens.all_cv_ids)
+            cv_filter = f" AND s.content_version_id IN ({cv_list})"
         
         # Determine which patterns to use
         if adjacency == "strict":
@@ -161,9 +316,7 @@ class DBQueries:
         for pattern, match_type in patterns:
             patterns_searched.append(pattern)
             
-            # Simple query that works without playset linkage
-            # Searches ALL indexed symbols - playset filtering is optional
-            sql = """
+            sql = f"""
                 SELECT DISTINCT
                     s.symbol_id,
                     s.name,
@@ -171,12 +324,14 @@ class DBQueries:
                     s.defining_file_id as file_id,
                     f.relpath,
                     COALESCE(mp.name, 'vanilla') as mod_name,
-                    s.line_number
+                    s.line_number,
+                    s.content_version_id
                 FROM symbols s
                 JOIN files f ON s.defining_file_id = f.file_id
                 JOIN content_versions cv ON s.content_version_id = cv.content_version_id
                 LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
                 WHERE LOWER(s.name) LIKE ?
+                {cv_filter}
             """
             params = [pattern]
             
@@ -213,15 +368,126 @@ class DBQueries:
         exact_names = {h.name.lower() for h in results}
         adjacencies = [h for h in adjacencies if h.name.lower() not in exact_names]
         
-        return {
+        # Build definitions_by_mod: group exact matches by mod
+        definitions_by_mod = {}
+        for hit in results:
+            if hit.mod_name not in definitions_by_mod:
+                definitions_by_mod[hit.mod_name] = []
+            
+            entry = {
+                "name": hit.name,
+                "type": hit.symbol_type,
+                "file": hit.relpath,
+                "line": hit.line_number
+            }
+            
+            # Add snippet if verbose
+            if verbose:
+                snippet = self._get_line_snippet(hit.file_id, hit.line_number)
+                if snippet:
+                    entry["snippet"] = snippet
+            
+            definitions_by_mod[hit.mod_name].append(entry)
+        
+        # Build references_by_mod if requested
+        references_by_mod = {}
+        if include_references and results:
+            # Get all symbol names we found
+            symbol_names = list({h.name for h in results})
+            refs = self._get_references_for_symbols(symbol_names, lens)
+            
+            for ref in refs:
+                mod = ref["mod_name"]
+                if mod not in references_by_mod:
+                    references_by_mod[mod] = []
+                references_by_mod[mod].append({
+                    "symbol": ref["name"],
+                    "file": ref["relpath"],
+                    "line": ref["line_number"],
+                    "context": ref.get("context")
+                })
+        
+        result = {
             "results": [self._hit_to_dict(h) for h in results],
             "adjacencies": [self._hit_to_dict(h) for h in adjacencies],
-            "query_patterns": patterns_searched
+            "query_patterns": patterns_searched,
+            "definitions_by_mod": definitions_by_mod
         }
+        
+        if include_references:
+            result["references_by_mod"] = references_by_mod
+        
+        return result
+    
+    def _get_references_for_symbols(
+        self, 
+        symbol_names: list[str], 
+        lens: Optional[PlaysetLens]
+    ) -> list[dict]:
+        """Get all references to the given symbol names."""
+        if not symbol_names:
+            return []
+        
+        placeholders = ",".join("?" * len(symbol_names))
+        
+        cv_filter = ""
+        if lens:
+            cv_list = ",".join(str(cv) for cv in lens.all_cv_ids)
+            cv_filter = f" AND r.content_version_id IN ({cv_list})"
+        
+        sql = f"""
+            SELECT 
+                r.name,
+                r.ref_type,
+                r.line_number,
+                r.context,
+                f.relpath,
+                COALESCE(mp.name, 'vanilla') as mod_name
+            FROM refs r
+            JOIN files f ON r.using_file_id = f.file_id
+            JOIN content_versions cv ON r.content_version_id = cv.content_version_id
+            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            WHERE r.name IN ({placeholders})
+            {cv_filter}
+            ORDER BY mod_name, f.relpath, r.line_number
+            LIMIT 500
+        """
+        
+        rows = self.conn.execute(sql, symbol_names).fetchall()
+        return [dict(row) for row in rows]
+    
+    def _get_line_snippet(self, file_id: int, line_number: Optional[int], context: int = 0) -> Optional[str]:
+        """Get a code snippet from a file at a specific line."""
+        if line_number is None:
+            return None
+        
+        row = self.conn.execute("""
+            SELECT fc.content_text 
+            FROM files f
+            JOIN file_contents fc ON f.content_hash = fc.content_hash
+            WHERE f.file_id = ?
+        """, (file_id,)).fetchone()
+        
+        if not row or not row["content_text"]:
+            return None
+        
+        lines = row["content_text"].split("\n")
+        
+        # Line numbers are 1-indexed
+        idx = line_number - 1
+        if idx < 0 or idx >= len(lines):
+            return None
+        
+        # Get context lines
+        start = max(0, idx - context)
+        end = min(len(lines), idx + context + 1)
+        
+        snippet_lines = lines[start:end]
+        return "\n".join(snippet_lines).strip()
     
     def confirm_not_exists(
         self,
-        playset_id: int,
+        lens: Optional[PlaysetLens],
         query: str,
         symbol_type: Optional[str] = None
     ) -> dict:
@@ -230,9 +496,8 @@ class DBQueries:
         
         MUST be called before agent can claim "not found".
         """
-        # Always use full fuzzy search
         result = self.search_symbols(
-            playset_id=playset_id,
+            lens=lens,
             query=query,
             symbol_type=symbol_type,
             adjacency="fuzzy",
@@ -250,9 +515,13 @@ class DBQueries:
             "can_claim_not_exists": not has_exact and not has_adjacencies
         }
     
+    # =========================================================================
+    # FILE RETRIEVAL
+    # =========================================================================
+    
     def get_file(
         self,
-        playset_id: Optional[int],
+        lens: Optional[PlaysetLens],
         file_id: Optional[int] = None,
         relpath: Optional[str] = None,
         include_ast: bool = False
@@ -261,13 +530,17 @@ class DBQueries:
         Get file content by file_id or relpath.
         
         Args:
-            playset_id: Active playset (optional - if None, search all content)
+            lens: PlaysetLens to filter through (None = search ALL content)
             file_id: Specific file ID to retrieve
             relpath: Relative path to search for
             include_ast: If True, also return parsed AST
         """
-        # Simple query that works without playset linkage
-        sql = """
+        cv_filter = ""
+        if lens:
+            cv_list = ",".join(str(cv) for cv in lens.all_cv_ids)
+            cv_filter = f" AND f.content_version_id IN ({cv_list})"
+        
+        sql = f"""
             SELECT 
                 f.file_id,
                 f.relpath,
@@ -279,7 +552,7 @@ class DBQueries:
             JOIN file_contents fc ON f.content_hash = fc.content_hash
             JOIN content_versions cv ON f.content_version_id = cv.content_version_id
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-            WHERE 1=1
+            WHERE 1=1 {cv_filter}
         """
         params = []
         
@@ -322,9 +595,200 @@ class DBQueries:
         
         return result
     
+    # =========================================================================
+    # FILE SEARCH
+    # =========================================================================
+    
+    def search_files(
+        self,
+        lens: Optional[PlaysetLens],
+        pattern: str,
+        source_filter: Optional[str] = None,
+        limit: int = 100
+    ) -> list[dict]:
+        """
+        Search for files by path pattern.
+        
+        Args:
+            lens: PlaysetLens to filter through (None = search ALL content)
+            pattern: SQL LIKE pattern for file path
+            source_filter: Filter by source ("vanilla", mod name, or mod ID)
+            limit: Maximum results
+        
+        Returns:
+            List of matching files with source info
+        """
+        cv_filter = ""
+        if lens:
+            cv_list = ",".join(str(cv) for cv in lens.all_cv_ids)
+            cv_filter = f" AND f.content_version_id IN ({cv_list})"
+        
+        sql = f"""
+            SELECT 
+                f.file_id,
+                f.relpath,
+                fc.size as file_size,
+                cv.kind,
+                COALESCE(mp.name, 'vanilla') as source_name,
+                mp.mod_package_id
+            FROM files f
+            JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            LEFT JOIN file_contents fc ON f.content_hash = fc.content_hash
+            WHERE LOWER(f.relpath) LIKE LOWER(?)
+            {cv_filter}
+        """
+        params = [pattern]
+        
+        if source_filter:
+            sql += " AND (cv.kind = ? OR LOWER(mp.name) LIKE LOWER(?) OR CAST(mp.mod_package_id AS TEXT) = ?)"
+            params.extend([source_filter, f"%{source_filter}%", source_filter])
+        
+        sql += " ORDER BY f.relpath LIMIT ?"
+        params.append(limit)
+        
+        files = []
+        for row in self.conn.execute(sql, params).fetchall():
+            files.append({
+                "file_id": row["file_id"],
+                "relpath": row["relpath"],
+                "size": row["file_size"],
+                "source_kind": row["kind"],
+                "source_name": row["source_name"],
+                "mod_id": row["mod_package_id"],
+            })
+        
+        return files
+    
+    # =========================================================================
+    # CONTENT SEARCH (GREP)
+    # =========================================================================
+    
+    def search_content(
+        self,
+        lens: Optional[PlaysetLens],
+        query: str,
+        file_pattern: Optional[str] = None,
+        source_filter: Optional[str] = None,
+        limit: int = 50,
+        matches_per_file: int = 5,
+        verbose: bool = False
+    ) -> list[dict]:
+        """
+        Search file contents for text matches (grep-style).
+        
+        Returns line numbers and snippets for EACH match.
+        
+        Args:
+            lens: PlaysetLens to filter through (None = search ALL content)
+            query: Text to search for (case-insensitive)
+            file_pattern: SQL LIKE pattern to filter files
+            source_filter: Filter by source
+            limit: Maximum files to return
+            matches_per_file: Max matches to return per file (default 5, more if verbose)
+            verbose: If True, return all matches (no per-file limit)
+        
+        Returns:
+            List of files with line-by-line match details
+        """
+        cv_filter = ""
+        if lens:
+            cv_list = ",".join(str(cv) for cv in lens.all_cv_ids)
+            cv_filter = f" AND f.content_version_id IN ({cv_list})"
+        
+        sql = f"""
+            SELECT 
+                f.file_id,
+                f.relpath,
+                cv.kind,
+                COALESCE(mp.name, 'vanilla') as source_name,
+                fc.content_text
+            FROM files f
+            JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            JOIN file_contents fc ON f.content_hash = fc.content_hash
+            WHERE LOWER(fc.content_text) LIKE LOWER(?)
+            {cv_filter}
+        """
+        params = [f"%{query}%"]
+        
+        if file_pattern:
+            sql += " AND LOWER(f.relpath) LIKE LOWER(?)"
+            params.append(file_pattern)
+        
+        if source_filter:
+            sql += " AND (cv.kind = ? OR LOWER(mp.name) LIKE LOWER(?))"
+            params.extend([source_filter, f"%{source_filter}%"])
+        
+        sql += " LIMIT ?"
+        params.append(limit)
+        
+        max_matches = 1000 if verbose else matches_per_file
+        
+        results = []
+        for row in self.conn.execute(sql, params).fetchall():
+            content = row["content_text"] if row["content_text"] else ""
+            
+            # Find ALL matches with line numbers
+            matches = self._find_all_matches(content, query, max_matches)
+            
+            if not matches:
+                continue
+            
+            results.append({
+                "file_id": row["file_id"],
+                "relpath": row["relpath"],
+                "source_kind": row["kind"],
+                "source_name": row["source_name"],
+                "match_count": self._count_matches(content, query),
+                "matches": matches,
+                "truncated": len(matches) >= max_matches
+            })
+        
+        return results
+    
+    def _find_all_matches(self, content: str, query: str, max_matches: int) -> list[dict]:
+        """Find all occurrences of query in content with line numbers and snippets."""
+        matches = []
+        query_lower = query.lower()
+        lines = content.split("\n")
+        
+        for line_num, line in enumerate(lines, start=1):
+            if query_lower in line.lower():
+                # Find position in line for highlighting context
+                pos = line.lower().find(query_lower)
+                
+                # Build snippet with context
+                start = max(0, pos - 30)
+                end = min(len(line), pos + len(query) + 50)
+                snippet = line[start:end].strip()
+                
+                if start > 0:
+                    snippet = "..." + snippet
+                if end < len(line):
+                    snippet = snippet + "..."
+                
+                matches.append({
+                    "line": line_num,
+                    "snippet": snippet
+                })
+                
+                if len(matches) >= max_matches:
+                    break
+        
+        return matches
+    
+    def _count_matches(self, content: str, query: str) -> int:
+        """Count total occurrences of query in content."""
+        return content.lower().count(query.lower())
+    
+    # =========================================================================
+    # CONFLICT ANALYSIS
+    # =========================================================================
+    
     def get_conflicts(
         self,
-        playset_id: int,
+        lens: PlaysetLens,
         folder: Optional[str] = None,
         symbol_type: Optional[str] = None
     ) -> dict:
@@ -332,12 +796,11 @@ class DBQueries:
         resolver = SQLResolver(self.conn)
         
         if folder:
-            result = resolver.resolve_folder(playset_id, folder, symbol_type)
+            result = resolver.resolve_folder(lens.playset_id, folder, symbol_type)
             policy = result.policy
             
             conflicts = []
             for ov in result.overridden:
-                # Get winner info
                 winner = result.symbols.get(ov.name)
                 if winner:
                     conflicts.append({
@@ -362,9 +825,12 @@ class DBQueries:
                 "symbol_conflicts": conflicts
             }
         else:
-            # Get summary across all folders
-            summary = resolver.get_conflict_summary(playset_id)
+            summary = resolver.get_conflict_summary(lens.playset_id)
             return summary
+    
+    # =========================================================================
+    # HELPERS
+    # =========================================================================
     
     def _get_mod_name(self, content_version_id: int) -> str:
         """Get mod name from content_version_id."""
@@ -390,7 +856,6 @@ class DBQueries:
     
     def _ast_to_dict(self, ast) -> dict:
         """Convert AST node to dictionary (simplified)."""
-        # Basic serialization - can be enhanced
         from ck3raven.parser.parser import RootNode, BlockNode, AssignmentNode, ValueNode
         
         def node_to_dict(node):
@@ -417,146 +882,6 @@ class DBQueries:
                 return {"type": type(node).__name__, "repr": repr(node)}
         
         return node_to_dict(ast)
-    
-    def search_files(
-        self,
-        playset_id: Optional[int],
-        pattern: str,
-        source_filter: Optional[str] = None,
-        limit: int = 100
-    ) -> list[dict]:
-        """
-        Search for files by path pattern.
-        
-        Args:
-            playset_id: Active playset (optional - if None, search all content)
-            pattern: SQL LIKE pattern for file path
-            source_filter: Filter by source ("vanilla", mod name, or mod ID)
-            limit: Maximum results
-        
-        Returns:
-            List of matching files with source info
-        """
-        # Simple query that works without playset linkage
-        # Searches ALL indexed files - playset filtering is optional
-        sql = """
-            SELECT 
-                f.file_id,
-                f.relpath,
-                fc.size as file_size,
-                cv.kind,
-                COALESCE(mp.name, 'vanilla') as source_name,
-                mp.mod_package_id
-            FROM files f
-            JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-            LEFT JOIN file_contents fc ON f.content_hash = fc.content_hash
-            WHERE LOWER(f.relpath) LIKE LOWER(?)
-        """
-        params = [pattern]
-        
-        if source_filter:
-            sql += " AND (cv.kind = ? OR LOWER(mp.name) LIKE LOWER(?) OR CAST(mp.mod_package_id AS TEXT) = ?)"
-            params.extend([source_filter, f"%{source_filter}%", source_filter])
-        
-        sql += " ORDER BY f.relpath LIMIT ?"
-        params.append(limit)
-        
-        files = []
-        for row in self.conn.execute(sql, params).fetchall():
-            files.append({
-                "file_id": row["file_id"],
-                "relpath": row["relpath"],
-                "size": row["file_size"],
-                "source_kind": row["kind"],
-                "source_name": row["source_name"],
-                "mod_id": row["mod_package_id"],
-            })
-        
-        return files
-    
-    def search_content(
-        self,
-        playset_id: Optional[int],
-        query: str,
-        file_pattern: Optional[str] = None,
-        source_filter: Optional[str] = None,
-        limit: int = 50
-    ) -> list[dict]:
-        """
-        Search file contents for text matches (grep-style).
-        
-        Args:
-            playset_id: Active playset (optional - if None, search all content)
-            query: Text to search for (case-insensitive)
-            file_pattern: SQL LIKE pattern to filter files
-            source_filter: Filter by source
-            limit: Maximum results
-        
-        Returns:
-            List of matching files with snippets
-        """
-        # Simple query that works without playset linkage
-        # Searches ALL indexed content - playset filtering is optional
-        sql = """
-            SELECT 
-                f.file_id,
-                f.relpath,
-                cv.kind,
-                COALESCE(mp.name, 'vanilla') as source_name,
-                fc.content_text
-            FROM files f
-            JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-            JOIN file_contents fc ON f.content_hash = fc.content_hash
-            WHERE LOWER(fc.content_text) LIKE LOWER(?)
-        """
-        params = [f"%{query}%"]
-        
-        if file_pattern:
-            sql += " AND LOWER(f.relpath) LIKE LOWER(?)"
-            params.append(file_pattern)
-        
-        if source_filter:
-            sql += " AND (cv.kind = ? OR LOWER(mp.name) LIKE LOWER(?))"
-            params.extend([source_filter, f"%{source_filter}%"])
-        
-        sql += " LIMIT ?"
-        params.append(limit)
-        
-        results = []
-        for row in self.conn.execute(sql, params).fetchall():
-            content = row["content_text"] if row["content_text"] else ""
-            
-            # Find snippet around match
-            query_lower = query.lower()
-            content_lower = content.lower()
-            pos = content_lower.find(query_lower)
-            
-            if pos >= 0:
-                start = max(0, pos - 50)
-                end = min(len(content), pos + len(query) + 100)
-                snippet = content[start:end]
-                if start > 0:
-                    snippet = "..." + snippet
-                if end < len(content):
-                    snippet = snippet + "..."
-            else:
-                snippet = content[:150] + "..." if len(content) > 150 else content
-            
-            # Count occurrences
-            count = content_lower.count(query_lower)
-            
-            results.append({
-                "file_id": row["file_id"],
-                "relpath": row["relpath"],
-                "source_kind": row["kind"],
-                "source_name": row["source_name"],
-                "match_count": count,
-                "snippet": snippet,
-            })
-        
-        return results
     
     def close(self):
         """Close database connection."""

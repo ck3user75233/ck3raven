@@ -124,6 +124,25 @@ def _get_playset_id() -> int:
     return _playset_id
 
 
+def _get_lens(no_lens: bool = False):
+    """
+    Get the active playset lens for filtering queries.
+    
+    The lens is like putting on glasses - you only see content from the active playset.
+    
+    Args:
+        no_lens: If True, return None to search ALL content (take glasses off)
+    
+    Returns:
+        PlaysetLens object or None if no_lens=True or no playset configured
+    """
+    if no_lens:
+        return None
+    
+    db = _get_db()
+    return db.get_active_lens()
+
+
 # Cached session scope data
 _session_scope: Optional[dict] = None
 
@@ -539,7 +558,10 @@ def ck3_search_symbols(
     symbol_type: Optional[str] = None,
     mod_filter: Optional[list[str]] = None,
     adjacency: Literal["auto", "strict", "fuzzy"] = "auto",
-    limit: int = 50
+    limit: int = 50,
+    include_references: bool = False,
+    verbose: bool = False,
+    no_lens: bool = False
 ) -> dict:
     """
     Search symbols in the ck3raven database with adjacency pattern expansion.
@@ -555,36 +577,56 @@ def ck3_search_symbols(
         mod_filter: Only search in these mods (list of mod_id strings)
         adjacency: Pattern expansion mode ("auto", "strict", "fuzzy")
         limit: Maximum results to return
+        include_references: If True, also return which mods reference the symbol
+        verbose: If True, include code snippets for definitions
+        no_lens: If True, search ALL content (not just active playset)
     
     Returns:
-        List of matching symbols with location info
+        {
+            results: [...],  # Exact matches with file/line
+            adjacencies: [...],  # Similar names
+            definitions_by_mod: {...},  # Grouped by mod for easy reading
+            references_by_mod: {...}  # If include_references=True
+        }
     """
     db = _get_db()
     trace = _get_trace()
-    playset_id = _get_playset_id()
+    lens = _get_lens(no_lens=no_lens)
     
     results = db.search_symbols(
-        playset_id=playset_id,
+        lens=lens,
         query=query,
         symbol_type=symbol_type,
         adjacency=adjacency,
-        limit=limit
+        limit=limit,
+        include_references=include_references,
+        verbose=verbose
     )
     
     trace.log("ck3lens.search_symbols", {
         "query": query,
         "symbol_type": symbol_type,
         "adjacency": adjacency,
-        "limit": limit
-    }, {"results_count": len(results)})
+        "include_references": include_references,
+        "no_lens": no_lens
+    }, {
+        "results_count": len(results.get("results", [])),
+        "adjacencies_count": len(results.get("adjacencies", []))
+    })
     
-    return {"results": results, "query": query, "adjacency_mode": adjacency}
+    # Add lens info to response
+    results["query"] = query
+    results["adjacency_mode"] = adjacency
+    results["lens"] = lens.playset_name if lens else "ALL CONTENT (no lens)"
+    
+    return results
 
 
 @mcp.tool()
 def ck3_confirm_not_exists(
     name: str,
-    symbol_type: Optional[str] = None
+    symbol_type: Optional[str] = None,
+    no_lens: bool = False
 ) -> dict:
     """
     Confirm a symbol does NOT exist before claiming it's missing.
@@ -595,6 +637,7 @@ def ck3_confirm_not_exists(
     Args:
         name: Symbol name to search for
         symbol_type: Optional type filter (trait, decision, etc.)
+        no_lens: If True, search ALL content (not just active playset)
     
     Returns:
         - can_claim_not_exists: True if exhaustive search found nothing
@@ -602,16 +645,16 @@ def ck3_confirm_not_exists(
     """
     db = _get_db()
     trace = _get_trace()
-    playset_id = _get_playset_id()
+    lens = _get_lens(no_lens=no_lens)
     
-    result = db.confirm_not_exists(playset_id, name, symbol_type)
+    result = db.confirm_not_exists(lens, name, symbol_type)
     
     trace.log("ck3lens.confirm_not_exists", {
         "name": name,
         "symbol_type": symbol_type
     }, {
         "can_claim": result["can_claim_not_exists"],
-        "similar_count": len(result["similar_matches"])
+        "adjacencies_count": len(result.get("adjacencies", []))
     })
     
     return result
@@ -621,7 +664,8 @@ def ck3_confirm_not_exists(
 def ck3_get_file(
     file_path: str,
     include_ast: bool = False,
-    max_bytes: int = 200000
+    max_bytes: int = 200000,
+    no_lens: bool = False
 ) -> dict:
     """
     Get file content from the ck3raven database.
@@ -630,15 +674,16 @@ def ck3_get_file(
         file_path: Relative path to the file (e.g., "common/traits/00_traits.txt")
         include_ast: If True, also return parsed AST representation
         max_bytes: Maximum content bytes to return
+        no_lens: If True, search ALL content (not just active playset)
     
     Returns:
         File content (raw and/or AST)
     """
     db = _get_db()
     trace = _get_trace()
-    playset_id = _get_playset_id()
+    lens = _get_lens(no_lens=no_lens)
     
-    result = db.get_file(playset_id, relpath=file_path, include_ast=include_ast)
+    result = db.get_file(lens, relpath=file_path, include_ast=include_ast)
     
     trace.log("ck3lens.get_file", {
         "file_path": file_path,
@@ -647,6 +692,9 @@ def ck3_get_file(
         "found": result is not None,
         "content_length": len(result.get("content", "")) if result else 0
     })
+    
+    if result:
+        result["lens"] = lens.playset_name if lens else "ALL CONTENT (no lens)"
     
     return result or {"error": f"File not found: {file_path}"}
 
@@ -670,10 +718,13 @@ def ck3_get_conflicts(
     """
     db = _get_db()
     trace = _get_trace()
-    playset_id = _get_playset_id()
+    lens = _get_lens()
+    
+    if not lens:
+        return {"error": "No active playset. Use ck3_set_active_playset first."}
     
     conflicts = db.get_conflicts(
-        playset_id=playset_id,
+        lens=lens,
         folder=path_pattern,
         symbol_type=symbol_type
     )
@@ -1364,32 +1415,50 @@ def ck3_get_scope_info() -> dict:
     """
     Get current session scope information.
     
-    Returns the active playset details used for all scoped operations.
-    This shows what mods are in scope and where data comes from.
+    Returns the active lens (playset) used for all scoped operations.
+    The lens is like wearing glasses - it filters what you see in the database.
     
     Returns:
         {
-            "source": "database" | "file" | "none",
+            "lens_active": bool,
             "playset_id": int or None,
             "playset_name": str,
             "mod_count": int,
-            "active_mod_ids": [str],
-            "active_roots": [str],
-            "vanilla_root": str
+            "mods": [{name, workshop_id}]
         }
     """
-    scope = _get_session_scope()
+    db = _get_db()
+    lens = _get_lens(no_lens=False)
+    
+    if not lens:
+        return {
+            "lens_active": False,
+            "playset_id": None,
+            "playset_name": None,
+            "mod_count": 0,
+            "mods": [],
+            "hint": "No active playset. Use ck3_switch_playset to activate one."
+        }
+    
+    # Get mod details for this lens
+    if lens.mod_cv_ids:
+        placeholders = ",".join("?" * len(lens.mod_cv_ids))
+        mods = db.conn.execute(f"""
+            SELECT cv.name, cv.workshop_id, pm.load_order
+            FROM content_versions cv
+            JOIN playset_mods pm ON cv.content_version_id = pm.content_version_id
+            WHERE cv.content_version_id IN ({placeholders})
+            ORDER BY pm.load_order
+        """, lens.mod_cv_ids).fetchall()
+    else:
+        mods = []
     
     return {
-        "source": scope.get("source", "unknown"),
-        "playset_id": scope.get("playset_id"),
-        "playset_name": scope.get("playset_name"),
-        "mod_count": len(scope.get("active_mod_ids", set())),
-        "active_mod_ids": list(scope.get("active_mod_ids", set()))[:20],  # Limit display
-        "active_roots_count": len(scope.get("active_roots", set())),
-        "vanilla_root": scope.get("vanilla_root"),
-        "vanilla_version_id": scope.get("vanilla_version_id"),
-        "file_path": scope.get("file_path"),  # Only present if source=file
+        "lens_active": True,
+        "playset_id": lens.playset_id,
+        "playset_name": lens.playset_name,
+        "mod_count": len(lens.mod_cv_ids),
+        "mods": [{"name": m[0], "workshop_id": m[1], "load_order": m[2]} for m in mods]
     }
 
 
@@ -2216,6 +2285,56 @@ def ck3_list_playsets() -> dict:
     trace.log("ck3lens.list_playsets", {}, {"count": len(playsets)})
     
     return result
+
+
+@mcp.tool()
+def ck3_switch_playset(playset_id: int) -> dict:
+    """
+    Switch the active playset (change the lens).
+    
+    This instantly changes which playset is used for all lens-scoped operations.
+    Like changing glasses - you see the same database through a different filter.
+    
+    The playset itself is not modified - this just changes which playset is marked
+    as "active" for queries.
+    
+    Args:
+        playset_id: ID of the playset to switch to
+    
+    Returns:
+        Success status with new active playset info
+    """
+    db = _get_db()
+    trace = _get_trace()
+    
+    # Verify playset exists
+    playset = db.conn.execute(
+        "SELECT playset_id, name FROM playsets WHERE playset_id = ?",
+        (playset_id,)
+    ).fetchone()
+    
+    if not playset:
+        return {"success": False, "error": f"Playset {playset_id} not found"}
+    
+    # Update is_active flags
+    db.conn.execute("UPDATE playsets SET is_active = 0")
+    db.conn.execute("UPDATE playsets SET is_active = 1 WHERE playset_id = ?", (playset_id,))
+    db.conn.commit()
+    
+    # Invalidate cached lens
+    db.invalidate_lens_cache()
+    
+    trace.log("ck3lens.switch_playset", {
+        "playset_id": playset_id,
+        "playset_name": playset[1]
+    }, {"success": True})
+    
+    return {
+        "success": True,
+        "message": f"Switched to playset: {playset[1]}",
+        "playset_id": playset_id,
+        "playset_name": playset[1]
+    }
 
 
 @mcp.tool()
@@ -3390,7 +3509,8 @@ def ck3_get_unit_content(
 def ck3_search_files(
     pattern: str,
     source_filter: Optional[str] = None,
-    limit: int = 100
+    limit: int = 100,
+    no_lens: bool = False
 ) -> dict:
     """
     Search for files by path pattern.
@@ -3402,22 +3522,29 @@ def ck3_search_files(
         pattern: SQL LIKE pattern for file path (e.g., "%on_action%" or "common/traits/%")
         source_filter: Filter by source ("vanilla", mod name, or mod ID)
         limit: Maximum results to return
+        no_lens: If True, search ALL content (not just active playset)
     
     Returns:
         List of matching files with source info
     """
     db = _get_db()
     trace = _get_trace()
-    playset_id = _get_playset_id()
+    lens = _get_lens(no_lens=no_lens)
     
-    files = db.search_files(playset_id, pattern, source_filter, limit)
+    files = db.search_files(lens, pattern, source_filter, limit)
     
     trace.log("ck3lens.search_files", {
         "pattern": pattern,
         "source_filter": source_filter,
+        "no_lens": no_lens
     }, {"count": len(files)})
     
-    return {"pattern": pattern, "count": len(files), "files": files}
+    return {
+        "pattern": pattern, 
+        "count": len(files), 
+        "files": files,
+        "lens": lens.playset_name if lens else "ALL CONTENT (no lens)"
+    }
 
 
 @mcp.tool()
@@ -3425,35 +3552,62 @@ def ck3_search_content(
     query: str,
     file_pattern: Optional[str] = None,
     source_filter: Optional[str] = None,
-    limit: int = 50
+    limit: int = 50,
+    verbose: bool = False,
+    no_lens: bool = False
 ) -> dict:
     """
     Search file contents for text matches (grep-style).
     
-    Use this when you need to search for specific text inside files,
-    like finding where a specific effect or trigger is used.
+    Returns line numbers and snippets for EACH match within files.
     
     Args:
         query: Text to search for (case-insensitive substring match)
         file_pattern: SQL LIKE pattern to limit which files are searched
         source_filter: Filter by source ("vanilla", mod name, or mod ID)
-        limit: Maximum results to return
+        limit: Maximum files to return
+        verbose: If True, return ALL matches per file (default: max 5 per file)
+        no_lens: If True, search ALL content (not just active playset)
     
     Returns:
-        List of matching files with context snippets
+        List of files with line-by-line match details:
+        {
+            "file_id": 123,
+            "relpath": "common/traits/00_traits.txt",
+            "match_count": 15,
+            "matches": [
+                {"line": 45, "snippet": "...brave = {..."},
+                {"line": 234, "snippet": "...has_trait = brave..."}
+            ],
+            "truncated": true  # if more matches exist
+        }
     """
     db = _get_db()
     trace = _get_trace()
-    playset_id = _get_playset_id()
+    lens = _get_lens(no_lens=no_lens)
     
-    results = db.search_content(playset_id, query, file_pattern, source_filter, limit)
+    results = db.search_content(
+        lens=lens,
+        query=query,
+        file_pattern=file_pattern,
+        source_filter=source_filter,
+        limit=limit,
+        verbose=verbose
+    )
     
     trace.log("ck3lens.search_content", {
         "query": query,
         "file_pattern": file_pattern,
+        "verbose": verbose,
+        "no_lens": no_lens
     }, {"count": len(results)})
     
-    return {"query": query, "count": len(results), "results": results}
+    return {
+        "query": query, 
+        "count": len(results), 
+        "results": results,
+        "lens": lens.playset_name if lens else "ALL CONTENT (no lens)"
+    }
 
 
 # ============================================================================
