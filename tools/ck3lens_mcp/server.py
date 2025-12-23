@@ -4541,6 +4541,13 @@ def ck3_get_mode_instructions(
             "ck3raven-dev": "Development mode: All tools available for infrastructure work.",
         }
         
+        # Log mode initialization to trace
+        trace = _get_trace()
+        trace.log("ck3lens.mode_initialized", {"mode": mode}, {
+            "mode": mode,
+            "source_file": str(instructions_path),
+        })
+        
         return {
             "mode": mode,
             "note": mode_notes.get(mode, ""),
@@ -4549,6 +4556,84 @@ def ck3_get_mode_instructions(
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+@mcp.tool()
+def ck3_get_detected_mode() -> dict:
+    """
+    Get the currently detected agent mode from trace log.
+    
+    Analyzes recent trace entries to determine which mode
+    the agent is operating in based on:
+    - Recent mode_initialized events
+    - validate_policy calls with mode parameter
+    
+    Returns:
+        {
+            "detected_mode": str or null,
+            "confidence": "high" | "medium" | "low",
+            "last_activity": timestamp,
+            "evidence": list of trace entries supporting detection
+        }
+    """
+    trace = _get_trace()
+    
+    # Get recent events (last 100)
+    events = trace.read_recent(max_events=100)
+    
+    detected_mode = None
+    confidence = "low"
+    evidence = []
+    last_activity = None
+    
+    # Look for mode evidence in reverse chronological order
+    for event in events:
+        tool = event.get("tool", "")
+        ts = event.get("ts", 0)
+        
+        # Direct mode initialization is the strongest signal
+        if tool == "ck3lens.mode_initialized":
+            mode = event.get("result", {}).get("mode") or event.get("args", {}).get("mode")
+            if mode:
+                detected_mode = mode
+                confidence = "high"
+                evidence.append({
+                    "tool": tool,
+                    "mode": mode,
+                    "ts": ts
+                })
+                last_activity = ts
+                break  # Most recent mode init wins
+        
+        # validate_policy calls also indicate mode
+        if tool == "ck3lens.validate_policy":
+            mode = event.get("args", {}).get("mode")
+            if mode and not detected_mode:
+                detected_mode = mode
+                confidence = "high"
+                evidence.append({
+                    "tool": tool,
+                    "mode": mode,
+                    "ts": ts
+                })
+                last_activity = ts
+                break
+        
+        # init_session indicates activity but not mode
+        if tool == "ck3lens.init_session" and not last_activity:
+            last_activity = ts
+    
+    # If no mode detected, check if there's any recent activity
+    if not detected_mode and events:
+        confidence = "none"
+        last_activity = events[0].get("ts") if events else None
+    
+    return {
+        "detected_mode": detected_mode,
+        "confidence": confidence,
+        "last_activity": last_activity,
+        "evidence": evidence[:5]  # Limit evidence entries
+    }
 
 
 @mcp.tool()

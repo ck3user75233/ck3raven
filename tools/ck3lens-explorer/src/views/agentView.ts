@@ -152,101 +152,141 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
     }
 
     /**
-     * Check if MCP server is working by checking vscode.lm.tools for ck3_ prefixed tools.
-     * This directly monitors VS Code's actual MCP connection state.
+     * Check if MCP server is working by attempting to invoke the ping tool.
+     * This is the most reliable way to check actual connectivity.
      */
     private async checkMcpConfiguration(): Promise<void> {
         try {
-            // Check vscode.lm.tools for ck3 lens tools - this reflects the ACTUAL connection state
+            // First check if ck3lens tools are listed
             const allTools = vscode.lm.tools;
             const ck3Tools = allTools.filter(tool => tool.name.startsWith('mcp_ck3lens_ck3_'));
             
-            if (ck3Tools.length > 0) {
-                this.state.mcpServer = { 
-                    status: 'connected', 
-                    serverName: `ck3lens (${ck3Tools.length} tools)` 
-                };
-                this.logger.info(`MCP server connected: ${ck3Tools.length} ck3lens tools available`);
-                
-                // Check for policy tool to determine policy enforcement status
-                const hasPolicyTool = ck3Tools.some(t => t.name.includes('policy') || t.name.includes('validate'));
-                if (hasPolicyTool) {
-                    this.state.policyEnforcement = { status: 'connected', message: 'active' };
-                } else {
-                    this.state.policyEnforcement = { status: 'connected', message: 'no policy tools' };
+            if (ck3Tools.length === 0) {
+                // No tools listed at all - definitely not connected
+                await this.markMcpDisconnected('no tools');
+                return;
+            }
+
+            // Tools are listed, but we need to verify the server is actually responding
+            // Try to invoke the ping tool (or instance_info as fallback)
+            const pingTool = ck3Tools.find(t => t.name === 'mcp_ck3lens_ck3_ping');
+            const infoTool = ck3Tools.find(t => t.name === 'mcp_ck3lens_ck3_get_instance_info');
+            const testTool = pingTool || infoTool;
+
+            if (testTool) {
+                try {
+                    // Actually invoke the tool to verify connectivity
+                    const result = await vscode.lm.invokeTool(testTool.name, { 
+                        input: {},
+                        toolInvocationToken: undefined
+                    });
+                    
+                    // If we got here, the server is truly connected
+                    this.state.mcpServer = { 
+                        status: 'connected', 
+                        serverName: `ck3lens (${ck3Tools.length} tools)` 
+                    };
+                    this.logger.info(`MCP server verified connected: ${ck3Tools.length} tools`);
+                    
+                    // Check for policy tools
+                    const hasPolicyTool = ck3Tools.some(t => t.name.includes('policy') || t.name.includes('validate'));
+                    this.state.policyEnforcement = hasPolicyTool 
+                        ? { status: 'connected', message: 'active' }
+                        : { status: 'connected', message: 'no policy tools' };
+                } catch (invokeError) {
+                    // Tool invocation failed - server is listed but not responding
+                    this.logger.warn(`MCP tool invocation failed: ${invokeError}`);
+                    await this.markMcpDisconnected('not responding');
                 }
             } else {
-                // No ck3 tools found - check if MCP config exists
-                const fs = require('fs');
-                const path = require('path');
-                const os = require('os');
-                
-                const possiblePaths = [
-                    process.env.APPDATA ? path.join(process.env.APPDATA, 'Code', 'User', 'mcp.json') : null,
-                    path.join(os.homedir(), 'AppData', 'Roaming', 'Code', 'User', 'mcp.json'),
-                ].filter(Boolean);
-
-                let configExists = false;
-                for (const mcpConfigPath of possiblePaths) {
-                    try {
-                        if (mcpConfigPath && fs.existsSync(mcpConfigPath)) {
-                            let content = fs.readFileSync(mcpConfigPath, 'utf-8');
-                            if (content.charCodeAt(0) === 0xFEFF) {
-                                content = content.slice(1);
-                            }
-                            const config = JSON.parse(content);
-                            if (config.servers?.ck3lens) {
-                                configExists = true;
-                                break;
-                            }
-                        }
-                    } catch (error) {
-                        this.logger.debug(`MCP config check failed for ${mcpConfigPath}: ${error}`);
-                    }
-                }
-
-                if (configExists) {
-                    // Config exists but no tools available - server is down or not started
-                    this.state.mcpServer = { status: 'disconnected', serverName: 'not running' };
-                    this.logger.info('MCP server configured but not running (no tools available)');
-                } else {
-                    this.state.mcpServer = { status: 'disconnected', serverName: 'not configured' };
-                    this.logger.info('No MCP configuration found');
-                }
-                this.state.policyEnforcement = { status: 'disconnected', message: 'MCP offline' };
+                // Tools listed but no ping/info tool - assume connected based on tool list
+                this.state.mcpServer = { 
+                    status: 'connected', 
+                    serverName: `ck3lens (${ck3Tools.length} tools, unverified)` 
+                };
+                this.state.policyEnforcement = { status: 'connected', message: 'unverified' };
             }
         } catch (error) {
-            this.state.mcpServer = { status: 'disconnected', serverName: 'error' };
-            this.state.policyEnforcement = { status: 'disconnected', message: 'check failed' };
             this.logger.error('MCP status check error:', error);
+            await this.markMcpDisconnected('error');
         }
 
         this.persistState();
         this.refresh();
     }
 
+    /**
+     * Mark MCP as disconnected with a reason
+     */
+    private async markMcpDisconnected(reason: string): Promise<void> {
+        const fs = require('fs');
+        const path = require('path');
+        const os = require('os');
+        
+        // Check if config exists
+        const possiblePaths = [
+            process.env.APPDATA ? path.join(process.env.APPDATA, 'Code', 'User', 'mcp.json') : null,
+            path.join(os.homedir(), 'AppData', 'Roaming', 'Code', 'User', 'mcp.json'),
+        ].filter(Boolean);
+
+        let configExists = false;
+        for (const mcpConfigPath of possiblePaths) {
+            try {
+                if (mcpConfigPath && fs.existsSync(mcpConfigPath)) {
+                    let content = fs.readFileSync(mcpConfigPath, 'utf-8');
+                    if (content.charCodeAt(0) === 0xFEFF) {
+                        content = content.slice(1);
+                    }
+                    const config = JSON.parse(content);
+                    if (config.servers?.ck3lens) {
+                        configExists = true;
+                        break;
+                    }
+                }
+            } catch (error) {
+                this.logger.debug(`MCP config check failed: ${error}`);
+            }
+        }
+
+        if (configExists) {
+            this.state.mcpServer = { status: 'disconnected', serverName: reason };
+            this.logger.info(`MCP server configured but: ${reason}`);
+        } else {
+            this.state.mcpServer = { status: 'disconnected', serverName: 'not configured' };
+            this.logger.info('No MCP configuration found');
+        }
+        this.state.policyEnforcement = { status: 'disconnected', message: 'MCP offline' };
+    }
+
     private loadState(): AgentState {
-        // Always start fresh on extension activation
-        // Agent mode can only be determined by explicit initialization or trace detection
-        // Don't persist agent mode across reloads since we can't verify it's still valid
-        
-        // Start with default VS Code agent (no mode)
-        const defaultAgent: AgentInstance = {
-            id: this.generateId(),
-            mode: 'none',
-            initializedAt: new Date().toISOString(),
-            label: 'Agent',
-            isLocal: false
-        };
-        
-        // Get connection status from stored state (these can persist)
+        // Get stored state
         const stored = this.context.globalState.get<AgentState>('ck3lens.agentState');
+        
+        // Restore agents from storage, or create default
+        let agents: AgentInstance[];
+        if (stored?.agents && stored.agents.length > 0) {
+            // Restore persisted agents but mark them as needing verification
+            agents = stored.agents.map(a => ({
+                ...a,
+                isLocal: false  // Mark as not locally verified
+            }));
+            this.logger.info(`Restored ${agents.length} agent(s) from storage`);
+        } else {
+            // Start with default VS Code agent (no mode)
+            agents = [{
+                id: this.generateId(),
+                mode: 'none' as LensMode,
+                initializedAt: new Date().toISOString(),
+                label: 'Agent',
+                isLocal: false
+            }];
+        }
         
         return {
             pythonBridge: stored?.pythonBridge || { status: 'disconnected' },
             mcpServer: stored?.mcpServer || { status: 'disconnected' },
             policyEnforcement: stored?.policyEnforcement || { status: 'disconnected' },
-            agents: [defaultAgent],  // Always reset to default agent
+            agents: agents,  // Use restored or default agents
             session: { id: this.generateId(), startedAt: new Date().toISOString() }
         };
     }
