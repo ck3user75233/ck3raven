@@ -202,6 +202,27 @@ pytest tests/ -v
 
 **All Python code MUST pass validation before being considered complete.**
 
+### Policy Enforcement (CRITICAL)
+
+**Definition of "Done":** A task is complete ONLY when `git commit` succeeds.
+
+The pre-commit hook runs `ck3_validate_policy` and blocks commits that fail validation.
+This is the only definition of completion - not "I wrote the code" or "tests pass".
+
+```
+✅ "Done" = Commit succeeded (implies validation passed)
+❌ "Done" ≠ "I finished writing"
+❌ "Done" ≠ "It compiles"
+❌ "Done" ≠ "I think it's ready"
+```
+
+**Before committing:**
+1. All Python files pass `get_errors` 
+2. Policy validation passes: `ck3_validate_policy(mode="ck3raven-dev")`
+3. Then and only then: `git commit`
+
+The hook is at `.githooks/pre-commit`. It reads the trace log and validates all tool calls.
+
 ### Before Making Changes
 1. Run `get_errors` on target files to understand existing state
 2. Check if imports exist using terminal or `mcp_pylance_mcp_s_pylanceRunCodeSnippet`

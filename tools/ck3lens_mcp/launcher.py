@@ -1,4 +1,4 @@
-﻿"""
+"""
 CK3 Lens MCP Server Launcher
 
 This launcher script enables multiple independent MCP server instances.
@@ -8,18 +8,38 @@ Usage:
     python launcher.py                     # Auto-generates instance ID
     python launcher.py --instance-id abc   # Uses specific instance ID
     python launcher.py --list              # Lists running instances
+    python launcher.py --cleanup           # Remove stale instances
 """
 import sys
 import os
 import uuid
 import argparse
-import subprocess
 from pathlib import Path
 import json
 import tempfile
 
 # Instance tracking file
 INSTANCES_FILE = Path(tempfile.gettempdir()) / "ck3lens_instances.json"
+
+
+def is_pid_running(pid: int) -> bool:
+    """Check if a process with the given PID is still running."""
+    if sys.platform == "win32":
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        SYNCHRONIZE = 0x00100000
+        process = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+        if process:
+            kernel32.CloseHandle(process)
+            return True
+        return False
+    else:
+        # Unix-like systems
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
 
 
 def get_running_instances() -> dict:
@@ -32,8 +52,31 @@ def get_running_instances() -> dict:
     return {}
 
 
+def cleanup_stale_instances() -> int:
+    """Remove instances where the PID is no longer running. Returns count removed."""
+    instances = get_running_instances()
+    if not instances:
+        return 0
+    
+    stale = []
+    for iid, info in instances.items():
+        pid = info.get("pid")
+        if pid and not is_pid_running(pid):
+            stale.append(iid)
+    
+    if stale:
+        for iid in stale:
+            del instances[iid]
+        INSTANCES_FILE.write_text(json.dumps(instances, indent=2))
+    
+    return len(stale)
+
+
 def register_instance(instance_id: str, pid: int) -> None:
     """Register a new instance."""
+    # First cleanup stale instances
+    cleanup_stale_instances()
+    
     instances = get_running_instances()
     instances[instance_id] = {
         "pid": pid,
@@ -51,15 +94,22 @@ def unregister_instance(instance_id: str) -> None:
 
 
 def list_instances() -> None:
-    """Print all registered instances."""
+    """Print all registered instances with live status."""
+    # Cleanup first
+    removed = cleanup_stale_instances()
+    if removed:
+        print(f"Cleaned up {removed} stale instance(s).")
+    
     instances = get_running_instances()
     if not instances:
         print("No running instances found.")
         return
-    
+
     print(f"Running CK3 Lens instances ({len(instances)}):")
     for iid, info in instances.items():
-        print(f"  {iid}: PID {info.get('pid')} started {info.get('started_at', 'unknown')}")
+        pid = info.get('pid')
+        status = "RUNNING" if is_pid_running(pid) else "STALE"
+        print(f"  {iid}: PID {pid} [{status}] started {info.get('started_at', 'unknown')}")
 
 
 def main():
@@ -75,38 +125,48 @@ def main():
         help="List running instances and exit.",
     )
     parser.add_argument(
+        "--cleanup", "-c",
+        action="store_true",
+        help="Clean up stale instances and exit.",
+    )
+    parser.add_argument(
         "--config",
         help="Path to ck3lens_config.yaml (optional)",
         default=None,
     )
-    
+
     args = parser.parse_args()
-    
+
+    if args.cleanup:
+        removed = cleanup_stale_instances()
+        print(f"Removed {removed} stale instance(s).")
+        list_instances()
+        return
+
     if args.list:
         list_instances()
         return
-    
+
     # Generate instance ID if not provided
     instance_id = args.instance_id or f"ck3lens-{uuid.uuid4().hex[:8]}"
-    
+
     # Set environment variable for the server to pick up
     os.environ["CK3LENS_INSTANCE_ID"] = instance_id
-    
+
     if args.config:
         os.environ["CK3LENS_CONFIG"] = args.config
-    
+
     # Register this instance
     register_instance(instance_id, os.getpid())
-    
+
     print(f"Starting CK3 Lens MCP Server (instance: {instance_id})", file=sys.stderr)
-    
     try:
         # Ensure the ck3lens package is importable
         # The package is in the same directory as this launcher
         package_dir = Path(__file__).parent
         if str(package_dir) not in sys.path:
             sys.path.insert(0, str(package_dir))
-        
+
         # Import and run the server module properly
         # Using runpy.run_path preserves proper module semantics
         import runpy

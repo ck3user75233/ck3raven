@@ -1,0 +1,49 @@
+#!/bin/sh
+#
+# Pre-commit hook for ck3raven policy validation
+#
+# This hook runs policy validation before allowing commits.
+# It ensures agent behavior followed all rules during the session.
+#
+# Exit codes:
+#   0 = Commit allowed
+#   1 = Commit blocked (validation failed)
+#
+# Environment variables:
+#   CK3LENS_MODE - Validation mode (default: ck3raven-dev)
+#   CK3LENS_SKIP_VALIDATION - Set to "1" to skip (use with caution)
+#
+
+# Allow bypass with explicit environment variable
+if [ "$CK3LENS_SKIP_VALIDATION" = "1" ]; then
+    echo "⚠️  Policy validation SKIPPED (CK3LENS_SKIP_VALIDATION=1)"
+    exit 0
+fi
+
+# Find the script - .githooks is at repo root, so go up one level
+HOOK_DIR="$(dirname "$0")"
+REPO_ROOT="$(cd "$HOOK_DIR/.." && pwd)"
+SCRIPT="$REPO_ROOT/scripts/pre-commit-policy-check.py"
+
+if [ ! -f "$SCRIPT" ]; then
+    echo "❌ Policy validation script not found: $SCRIPT"
+    echo "   Commit blocked. Restore scripts/pre-commit-policy-check.py"
+    exit 1
+fi
+
+# Find Python - prefer venv (venv is in AI Workspace, repo is ck3raven)
+if [ -f "$REPO_ROOT/../.venv/Scripts/python.exe" ]; then
+    PYTHON="$REPO_ROOT/../.venv/Scripts/python.exe"
+elif [ -f "$REPO_ROOT/../.venv/bin/python" ]; then
+    PYTHON="$REPO_ROOT/../.venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+    PYTHON="python3"
+elif command -v python >/dev/null 2>&1; then
+    PYTHON="python"
+else
+    echo "❌ Python not found"
+    exit 1
+fi
+
+# Run validation
+exec "$PYTHON" "$SCRIPT"

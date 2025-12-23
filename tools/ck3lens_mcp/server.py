@@ -48,7 +48,8 @@ def _check_policy_health() -> dict:
     from ck3lens import policy
     
     try:
-        # Force reload to ensure fresh imports
+        # Reload at health check time only (startup) to verify imports work.
+        # The actual validate_policy calls must NOT reload - they must be pure.
         importlib.reload(policy)
         
         # Verify required functions exist
@@ -331,6 +332,25 @@ def ck3_get_instance_info() -> dict:
         "is_isolated": _instance_id != "default",
     }
 
+
+@mcp.tool()
+def ck3_ping() -> dict:
+    """
+    Simple health check - always returns success.
+    
+    Use this to verify MCP server connectivity is working.
+    Unlike other tools, this has no dependencies and will
+    always succeed if the server is reachable.
+    
+    Returns:
+        {"status": "ok", "instance_id": str, "timestamp": str}
+    """
+    from datetime import datetime
+    return {
+        "status": "ok",
+        "instance_id": _instance_id,
+        "timestamp": datetime.now().isoformat(),
+    }
 
 
 @mcp.tool()
@@ -1732,9 +1752,8 @@ def ck3_validate_policy(
         }, {"deliverable": False, "error": "policy_broken"})
         return error_result
     
-    # Import with fresh reload
+    # Import policy module (no reload - validation must be pure and deterministic)
     from ck3lens import policy
-    importlib.reload(policy)
     
     # Get trace events
     if session_start_ts:
