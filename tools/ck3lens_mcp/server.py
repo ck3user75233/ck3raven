@@ -560,7 +560,7 @@ def ck3_search(
     symbol_type: Optional[str] = None,
     adjacency: Literal["auto", "strict", "fuzzy"] = "auto",
     limit: int = 50,
-    include_references: bool = False,
+    definitions_only: bool = False,
     verbose: bool = False,
     no_lens: bool = False
 ) -> dict:
@@ -569,10 +569,12 @@ def ck3_search(
     
     This is THE search tool - it searches EVERYTHING:
     1. Symbol definitions (traits, events, decisions, etc.)
-    2. File content (grep-style text matches with line numbers)
-    3. File paths (if query looks like a path or file_pattern provided)
+    2. Symbol USAGES (where symbols are referenced - DEFAULT behavior)
+    3. File content (grep-style text matches with line numbers)
+    4. File paths (if query looks like a path or file_pattern provided)
     
-    No need to decide if something is a symbol - the search finds it.
+    By default, shows BOTH definitions AND usages - critical for compatch work
+    where you need to understand how something is used, not just where it's defined.
     
     Args:
         query: Search term (symbol name, text to find, or file path)
@@ -581,14 +583,19 @@ def ck3_search(
         symbol_type: Filter symbols by type (trait, event, decision, etc.)
         adjacency: Pattern expansion ("auto", "strict", "fuzzy")
         limit: Max results per category
-        include_references: Include which mods reference found symbols
+        definitions_only: If True, skip references (faster but less useful)
         verbose: More detail (all matches per file, snippets)
         no_lens: If True, search ALL content (not just active playset)
     
     Returns:
         {
             "query": str,
-            "symbols": {count, results, adjacencies, definitions_by_mod},
+            "symbols": {
+                "count": int,           # Definition count
+                "results": [...],       # Definitions with file/line
+                "definitions_by_mod": {...},
+                "references_by_mod": {...}  # WHERE it's used (DEFAULT!)
+            },
             "content": {count, results (line-by-line matches)},
             "files": {count, results (matching file paths)}
         }
@@ -600,6 +607,9 @@ def ck3_search(
     db = _get_db()
     trace = _get_trace()
     lens = _get_lens(no_lens=no_lens)
+    
+    # By default, include references (usages) - this is what compatch needs
+    include_references = not definitions_only
     
     result = db.unified_search(
         lens=lens,
@@ -619,9 +629,11 @@ def ck3_search(
         "file_pattern": file_pattern,
         "symbol_type": symbol_type,
         "adjacency": adjacency,
+        "definitions_only": definitions_only,
         "no_lens": no_lens
     }, {
         "symbols_count": result["symbols"]["count"],
+        "references_count": len(result["symbols"].get("references_by_mod", {})),
         "content_count": result["content"]["count"],
         "files_count": result["files"]["count"]
     })
