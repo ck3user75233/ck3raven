@@ -45,12 +45,15 @@ Given a playset (vanilla + mods in load order), it:
 
 | Table | Count | Notes |
 |-------|-------|-------|
-| mod_packages | ~105 | ✅ All mods indexed |
-| content_versions | ~110 | ✅ |
-| file_contents | ~80,000 | ✅ 26 GB deduplicated |
-| files | ~85,000 | ✅ |
-| symbols | ~1,200,000 | ✅ Extracted |
-| playsets | 1 | ✅ Active playset configured |
+| files | ~54,000 | ✅ Vanilla + mods indexed |
+| asts | ~13,000 | ✅ Parsed ASTs |
+| symbols | ~120,000 | ✅ Definitions extracted |
+| refs | ~130,000 | ✅ Symbol references |
+| localization_entries | ~1,600,000 | ✅ Loc keys (THIS is 1.6M) |
+| trait_lookups | ~650 | ✅ Trait metadata |
+| event_lookups | ~18,000 | ✅ Event metadata |
+| decision_lookups | ~700 | ✅ Decision metadata |
+| playsets | 1+ | ✅ Active playset configured |
 
 ---
 
@@ -289,14 +292,26 @@ Or use `mcp_pylance_mcp_s_pylanceRunCodeSnippet` to validate imports.
 ## Quick Commands
 
 ```bash
-# Build database (indexes vanilla + mods)
-python scripts/build_database.py
+# IMPORTANT: Always use the venv Python!
+VENV_PYTHON="C:\Users\Nathan\Documents\AI Workspace\.venv\Scripts\python.exe"
 
-# Create playset from active mods
-python scripts/create_playset.py
+# Build database (detached daemon - runs in background)
+& $VENV_PYTHON builder/daemon.py start
 
-# Extract symbols from indexed content
-python scripts/populate_symbols.py
+# Force full rebuild (clears all data)
+& $VENV_PYTHON builder/daemon.py start --force
+
+# Build only active playset mods
+& $VENV_PYTHON builder/daemon.py start --playset-file "path/to/active_mod_paths.json"
+
+# Check build status
+& $VENV_PYTHON builder/daemon.py status
+
+# View build logs (follow mode)
+& $VENV_PYTHON builder/daemon.py logs -f
+
+# Stop daemon
+& $VENV_PYTHON builder/daemon.py stop
 
 # Run tests
 pytest tests/ -v
@@ -309,8 +324,7 @@ python -m tools.ck3lens_mcp.server
 
 ## Immediate Tasks (Priority Order)
 
-1. **Fix version detection** in `build_database.py` line 43
-2. **Fix column names** in `db_queries.py` (content → content_text/blob, file_size → size)
-3. **Run `create_playset.py`** to populate playsets table
-4. **Run `populate_symbols.py`** to extract symbols
-5. **Test MCP tools** with `ck3_init_session` → `ck3_search_symbols`
+1. **Database build in progress** - daemon running, check with `python builder/daemon.py status`
+2. **Localization phase order** - move to Phase 3 (after parsing, before symbols)
+3. **Add more lookup extractors** - currently have trait/event/decision, need culture/religion
+4. **Test MCP tools** with `ck3_init_session` → `ck3_search` → verify results

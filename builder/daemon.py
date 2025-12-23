@@ -1382,33 +1382,98 @@ def extract_symbols_from_stored_asts(conn, logger: DaemonLogger, status: StatusW
     - Doesn't delete existing valid symbols (unless force_rebuild)
     - Uses centralized file routing from file_routes.py
     - Maintains full source traceability
+    
+    Enhanced logging:
+    - Progress every 50 ASTs with timing
+    - Bloat file tracking (large ASTs)
+    - File routing verification
     """
     from ck3raven.db.symbols import extract_symbols_incremental
+    from ck3raven.db.file_routes import get_file_route, FileRoute
+    import json as _json
 
     logger.info("Starting incremental symbol extraction...")
+    
+    # Track timing and bloat files
+    start_time = time.time()
+    last_log_time = start_time
+    last_log_count = 0
+    bloat_files = []  # Files with large ASTs or many symbols
+    
+    # Verify file routing is working - sample check
+    sample_routes = conn.execute("""
+        SELECT relpath, 
+               CASE WHEN relpath LIKE 'localization/%' THEN 'localization'
+                    WHEN relpath LIKE 'gfx/%' OR relpath LIKE 'gui/%' THEN 'skip'
+                    ELSE 'script' END as expected_route
+        FROM files WHERE deleted = 0
+        ORDER BY RANDOM() LIMIT 5
+    """).fetchall()
+    
+    logger.info("File routing spot-check:")
+    for relpath, expected in sample_routes:
+        actual_route, reason = get_file_route(relpath)
+        match = "✓" if actual_route.value == expected else "✗"
+        logger.info(f"  {match} {relpath[:60]} -> {actual_route.value} (expected {expected})")
 
     def progress_callback(processed, total, symbols):
+        nonlocal last_log_time, last_log_count
         write_heartbeat()
         pct = (processed / total * 100) if total > 0 else 0
         status.update(
             progress=pct,
             message=f"Symbols: {processed}/{total} ASTs, {symbols} symbols"
         )
-        if processed % 2000 == 0:
-            logger.info(f"Symbol progress: {processed}/{total} ({pct:.1f}%), {symbols} symbols")
+        
+        # Log every 50 ASTs with timing info
+        if processed - last_log_count >= 50 or processed == total:
+            now = time.time()
+            elapsed_batch = now - last_log_time
+            elapsed_total = now - start_time
+            rate = (processed - last_log_count) / elapsed_batch if elapsed_batch > 0 else 0
+            avg_rate = processed / elapsed_total if elapsed_total > 0 else 0
+            eta_sec = (total - processed) / avg_rate if avg_rate > 0 else 0
+            eta_min = eta_sec / 60
+            
+            logger.info(
+                f"Symbol progress: {processed}/{total} ({pct:.1f}%) | "
+                f"{symbols} symbols | {rate:.1f} AST/s (avg {avg_rate:.1f}) | "
+                f"ETA: {eta_min:.1f}min"
+            )
+            last_log_time = now
+            last_log_count = processed
 
     result = extract_symbols_incremental(
         conn,
-        batch_size=500,
+        batch_size=50,  # Smaller batches for more frequent logging
         progress_callback=progress_callback,
         force_rebuild=force_rebuild
     )
+    
+    total_time = time.time() - start_time
 
     logger.info(
-        f"Symbol extraction complete: extracted={result['symbols_extracted']}, "
+        f"Symbol extraction complete in {total_time:.1f}s: "
+        f"extracted={result['symbols_extracted']}, "
         f"inserted={result['symbols_inserted']}, duplicates={result['duplicates']}, "
-        f"errors={result['errors']}"
+        f"errors={result['errors']}, skipped={result.get('files_skipped', 0)}"
     )
+    
+    # Report bloat files (top 10 largest ASTs by symbol count)
+    bloat_query = conn.execute("""
+        SELECT f.relpath, COUNT(s.symbol_id) as sym_count
+        FROM symbols s
+        JOIN files f ON s.defining_file_id = f.file_id
+        GROUP BY f.file_id
+        ORDER BY sym_count DESC
+        LIMIT 10
+    """).fetchall()
+    
+    if bloat_query:
+        logger.info("Top 10 files by symbol count (bloat check):")
+        for relpath, sym_count in bloat_query:
+            logger.info(f"  {sym_count:5d} symbols: {relpath[:70]}")
+    
     return {'extracted': result['symbols_extracted'], 'inserted': result['symbols_inserted'], 
             'duplicates': result['duplicates'], 'errors': result['errors']}
 
@@ -1419,6 +1484,11 @@ def extract_refs_from_stored_asts(conn, logger: DaemonLogger, status: StatusWrit
     import json
     
     logger.info("Starting reference extraction from stored ASTs...")
+    
+    # Track timing
+    start_time = time.time()
+    last_log_time = start_time
+    last_log_count = 0
     
     # Clear old refs
     conn.execute("DELETE FROM refs")
@@ -1434,7 +1504,7 @@ def extract_refs_from_stored_asts(conn, logger: DaemonLogger, status: StatusWrit
     
     logger.info(f"Processing {total_count} files for refs")
     
-    chunk_size = 500
+    chunk_size = 50  # Smaller chunks for more frequent logging
     offset = 0
     total_refs = 0
     errors = 0
@@ -1488,10 +1558,26 @@ def extract_refs_from_stored_asts(conn, logger: DaemonLogger, status: StatusWrit
             message=f"Refs: {offset}/{total_count} files, {total_refs} refs"
         )
         
-        if offset % 2000 == 0:
-            logger.info(f"Ref progress: {offset}/{total_count} ({pct:.1f}%), {total_refs} refs")
+        # Log every 50 files with timing
+        if offset - last_log_count >= 50 or offset >= total_count:
+            now = time.time()
+            elapsed_batch = now - last_log_time
+            elapsed_total = now - start_time
+            rate = (offset - last_log_count) / elapsed_batch if elapsed_batch > 0 else 0
+            avg_rate = offset / elapsed_total if elapsed_total > 0 else 0
+            eta_sec = (total_count - offset) / avg_rate if avg_rate > 0 else 0
+            eta_min = eta_sec / 60
+            
+            logger.info(
+                f"Ref progress: {offset}/{total_count} ({pct:.1f}%) | "
+                f"{total_refs} refs | {rate:.1f} files/s (avg {avg_rate:.1f}) | "
+                f"ETA: {eta_min:.1f}min"
+            )
+            last_log_time = now
+            last_log_count = offset
     
-    logger.info(f"Ref extraction complete: {total_refs} refs, {errors} errors")
+    total_time = time.time() - start_time
+    logger.info(f"Ref extraction complete in {total_time:.1f}s: {total_refs} refs, {errors} errors")
     return {'extracted': total_refs, 'errors': errors}
 
 
