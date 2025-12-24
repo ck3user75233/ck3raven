@@ -1758,6 +1758,75 @@ def ck3_get_scope_info() -> dict:
 # ============================================================================
 
 @mcp.tool()
+def ck3_validate_syntax(
+    content: str,
+    filename: str = "inline.txt"
+) -> dict:
+    """
+    Validate CK3 script syntax.
+    
+    Use this tool to check if CK3 script content is syntactically valid
+    BEFORE writing it to a file. This is the primary syntax validation tool
+    for agents working on CK3 mod content.
+    
+    Args:
+        content: CK3 script content to validate
+        filename: Optional filename for error messages
+    
+    Returns:
+        {
+            "valid": bool,           # True if no syntax errors
+            "error_count": int,      # Number of errors found
+            "errors": [              # List of syntax errors
+                {
+                    "line": 5,
+                    "column": 10,
+                    "message": "Expected value after operator",
+                    "severity": "error"
+                },
+                ...
+            ]
+        }
+    
+    Example usage:
+        result = ck3_validate_syntax(my_script)
+        if result["valid"]:
+            # Safe to write
+            ck3_write_file(mod_name, path, my_script)
+        else:
+            # Fix errors first
+            for err in result["errors"]:
+                print(f"Line {err['line']}: {err['message']}")
+    """
+    trace = _get_trace()
+    
+    result = parse_content(content, filename, recover=True)
+    
+    # Simplify errors for agent consumption
+    simple_errors = []
+    for err in result.get("errors", []):
+        simple_errors.append({
+            "line": err.get("line", 0),
+            "column": err.get("column", 0),
+            "message": err.get("message", "Unknown error"),
+            "severity": err.get("severity", "error"),
+        })
+    
+    response = {
+        "valid": result["success"],
+        "error_count": len(simple_errors),
+        "errors": simple_errors,
+    }
+    
+    trace.log("ck3lens.validate_syntax", {
+        "filename": filename,
+        "content_length": len(content)
+    }, response)
+    
+    return response
+
+
+@mcp.tool()
 def ck3_parse_content(
     content: str,
     filename: str = "inline.txt"
@@ -1767,6 +1836,9 @@ def ck3_parse_content(
     
     Uses error-recovering parser that collects ALL errors instead of
     stopping at the first one. Returns partial AST even when errors occur.
+    
+    For simple syntax validation, prefer ck3_validate_syntax instead.
+    Use this when you need the actual AST for analysis.
     
     Args:
         content: CK3 script content to parse

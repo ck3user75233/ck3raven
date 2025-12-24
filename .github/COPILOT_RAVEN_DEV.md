@@ -209,8 +209,8 @@ pytest tests/ -v
 
 **Definition of "Done":** A task is complete ONLY when `git commit` succeeds.
 
-The pre-commit hook runs `ck3_validate_policy` and blocks commits that fail validation.
-This is the only definition of completion - not "I wrote the code" or "tests pass".
+The pre-commit hook runs policy validation and **BLOCKS commits that fail**.
+This is the PRIMARY enforcement mechanism - not advisory.
 
 ```
 ✅ "Done" = Commit succeeded (implies validation passed)
@@ -219,12 +219,30 @@ This is the only definition of completion - not "I wrote the code" or "tests pas
 ❌ "Done" ≠ "I think it's ready"
 ```
 
-**Before committing:**
-1. All Python files pass `get_errors` 
-2. Policy validation passes: `ck3_validate_policy(mode="ck3raven-dev")`
-3. Then and only then: `git commit`
+### Installing the Hook (REQUIRED after clone)
 
-The hook is at `.githooks/pre-commit`. It reads the trace log and validates all tool calls.
+The pre-commit hook lives in `scripts/hooks/` and must be installed:
+
+```powershell
+python scripts/install-hooks.py
+```
+
+This copies the hook to `.git/hooks/pre-commit`. Without this, enforcement is disabled.
+
+### What the Hook Does
+
+1. Reads trace log (`ck3lens_trace.jsonl`)
+2. Runs `validate_for_mode("ck3raven-dev", trace)`
+3. **Exit 0** = Commit allowed
+4. **Exit 1** = Commit blocked, violations printed
+
+### Emergency Bypass
+
+```bash
+git commit --no-verify  # USE SPARINGLY
+```
+
+Document why bypass was needed. Abuse will be caught in audit.
 
 ### Before Making Changes
 1. Run `get_errors` on target files to understand existing state

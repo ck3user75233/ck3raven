@@ -1,0 +1,20 @@
+#!/bin/sh
+#
+# Pre-commit hook for ck3raven policy enforcement
+# 
+# This hook BLOCKS commits that fail policy validation.
+# It is the PRIMARY enforcement mechanism - not advisory.
+#
+# To bypass in emergencies: git commit --no-verify
+# (This should be rare and documented)
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+VENV_PYTHON="$REPO_ROOT/../.venv/Scripts/python.exe"
+
+# Use venv if it exists, otherwise fall back to system python
+if [ -f "$VENV_PYTHON" ]; then
+    "$VENV_PYTHON" "$REPO_ROOT/scripts/pre-commit-policy-check.py"
+else
+    python "$REPO_ROOT/scripts/pre-commit-policy-check.py"
+fi
+exit $?
