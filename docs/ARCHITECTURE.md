@@ -123,18 +123,18 @@ ck3raven/
 
 | File | Description |
 |------|-------------|
-| `daemon.py` | 7-phase pipeline: ingest → parse → symbols → refs → localization → lookups |
+| `daemon.py` | Multi-phase pipeline with file routing |
 | `config.py` | Paths, vanilla detection, config loading |
 | `debug/session.py` | `DebugSession` class for phase-agnostic instrumentation |
 
-**Phases:**
+**Current Phases (7):**
 1. **Vanilla Ingest** - Discover and store vanilla CK3 files
 2. **Mod Ingest** - Discover and store mod files (active playset)
 3. **AST Generation** - Parse files into ASTs
 4. **Symbol Extraction** - Extract trait, event, decision definitions
 5. **Ref Extraction** - Extract symbol references
 6. **Localization Parsing** - Parse YML localization files
-7. **Lookup Tables** - Build trait_lookups, event_lookups, decision_lookups
+7. **Lookup Tables** - ~~trait_lookups, event_lookups, decision_lookups~~ (to be replaced)
 
 **Debug Mode:**
 ```bash
@@ -144,6 +144,345 @@ python builder/daemon.py start --debug all --debug-limit 10
 Outputs:
 - `~/.ck3raven/daemon/debug_trace.jsonl` - JSONL event stream
 - `~/.ck3raven/daemon/debug_summary.json` - Aggregated stats per phase
+
+---
+
+## File Routing
+
+> **Last Updated:** December 25, 2025
+
+Different CK3 file types serve different purposes and require different processing pipelines.
+Files are routed based on their path patterns to the appropriate processing pipeline.
+
+### Routing Decision Tree
+
+```
+File Discovered
+     │
+     ├─ Is it graphics/generated? ──────────────→ SKIP (no output)
+     │     (gfx/, ethnicities/, dna_data/, coat_of_arms/, *.dds, *.png)
+     │
+     ├─ Is it localization YAML? ───────────────→ YAML Parser → localization_entries
+     │     (localization/**/*.yml)
+     │
+     ├─ Is it ID-keyed data? ───────────────────→ Lookup Extractor → lookup tables
+     │     (history/*, dynasties, name_lists, holy_sites, definition.csv)
+     │
+     └─ Is it script with logic? ───────────────→ AST → Symbols → Refs
+           (events, scripted_*, on_action, decisions, traits, buildings, etc.)
+```
+
+### Complete Routing Table
+
+| Folder / Pattern | Pipeline | Output Tables | Status |
+|-----------------|----------|---------------|--------|
+| **DATA FILES → LOOKUP ONLY** ||||
+| `map_data/definition.csv` | CSV Parser → Lookup | `province_lookup` | 🔴 NOT BUILT |
+| `history/provinces/*.txt` | Lookup Extractor | `province_lookup` | 🔴 NOT BUILT |
+| `history/characters/*.txt` | Lookup Extractor | `character_lookup` | 🔴 NOT BUILT |
+| `history/titles/*.txt` | Lookup Extractor | `title_history_lookup` | 🔴 NOT BUILT |
+| `common/dynasties/*.txt` | Lookup Extractor | `dynasty_lookup` | 🔴 NOT BUILT |
+| `common/landed_titles/*.txt` | Lookup Extractor | `title_lookup` | 🔴 NOT BUILT |
+| `common/culture/name_lists/*.txt` | Lookup Extractor | `name_list_lookup` | 🔴 NOT BUILT |
+| `common/religion/holy_sites/*.txt` | Lookup Extractor | `holy_site_lookup` | 🔴 NOT BUILT |
+| `common/culture/cultures/*.txt` | AST + Lookup | AST, symbols, refs, `culture_lookup` | 🟡 AST only |
+| **LOCALIZATION → SPECIALIZED** ||||
+| `localization/**/*.yml` | YAML Parser | `localization_entries` | 🟢 BUILT |
+| **SCRIPT FILES → AST + SYMBOLS + REFS** ||||
+| `events/**/*.txt` | AST → Symbols → Refs | `asts`, `symbols`, `refs` | 🟢 BUILT |
+| `common/scripted_effects/*.txt` | AST → Symbols → Refs | `asts`, `symbols`, `refs` | 🟢 BUILT |
+| `common/scripted_triggers/*.txt` | AST → Symbols → Refs | `asts`, `symbols`, `refs` | 🟢 BUILT |
+| `common/on_action/*.txt` | AST → Symbols → Refs | `asts`, `symbols`, `refs` | 🟢 BUILT |
+| `common/decisions/*.txt` | AST → Symbols → Refs | `asts`, `symbols`, `refs` | 🟢 BUILT |
+| `common/traits/*.txt` | AST → Symbols → Refs | `asts`, `symbols`, `refs` | 🟢 BUILT |
+| `common/buildings/*.txt` | AST → Symbols → Refs | `asts`, `symbols`, `refs` | 🟢 BUILT |
+| `common/government/*.txt` | AST → Symbols → Refs | `asts`, `symbols`, `refs` | 🟢 BUILT |
+| `common/laws/*.txt` | AST → Symbols → Refs | `asts`, `symbols`, `refs` | 🟢 BUILT |
+| `common/religion/religions/*.txt` | AST → Symbols → Refs | `asts`, `symbols`, `refs` | 🟢 BUILT |
+| **SKIP ENTIRELY** ||||
+| `gfx/**/*` | Skip | None | N/A |
+| `common/ethnicities/**` | Skip | None | N/A |
+| `common/dna_data/**` | Skip | None | N/A |
+| `common/coat_of_arms/**` | Skip | None | N/A |
+| `map_data/*.png` | Skip | None | N/A |
+
+### Why Lookup vs AST?
+
+**Lookup tables** are for **ID-keyed data** where:
+- You encounter an opaque ID (e.g., `capital = 2333`, `dynasty = 1687`)
+- You need to resolve it to a name/definition
+- The data has minimal logic (no triggers/effects)
+- Query pattern is: "What is ID X?" or "Find all with property Y"
+
+**AST + Symbols + Refs** are for **logic-heavy files** where:
+- Content contains triggers, effects, conditions, modifiers
+- You need to understand code flow and dependencies
+- Query pattern is: "Where is X used?" or "What does X do?"
+
+### Lookup Tables Schema (Planned)
+
+#### `province_lookup` 🔴 NOT BUILT
+```sql
+CREATE TABLE province_lookup (
+    province_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,                    -- From definition.csv
+    rgb_r INTEGER, rgb_g INTEGER, rgb_b INTEGER,
+    culture TEXT,                          -- From history/provinces (at latest date)
+    religion TEXT,
+    holding_type TEXT,
+    terrain TEXT,
+    content_version_id INTEGER             -- Source mod
+);
+```
+
+#### `character_lookup` 🔴 NOT BUILT
+```sql
+CREATE TABLE character_lookup (
+    character_id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    dynasty_id INTEGER,
+    dynasty_house TEXT,
+    culture TEXT,
+    religion TEXT,
+    birth_date TEXT,
+    death_date TEXT,
+    father_id INTEGER,
+    mother_id INTEGER,
+    traits_json TEXT,                      -- JSON array of trait names
+    content_version_id INTEGER
+);
+```
+
+#### `dynasty_lookup` 🔴 NOT BUILT
+```sql
+CREATE TABLE dynasty_lookup (
+    dynasty_id INTEGER PRIMARY KEY,
+    name_key TEXT NOT NULL,                -- e.g., "dynn_Orsini"
+    prefix TEXT,                           -- e.g., "dynnp_de"
+    culture TEXT,
+    motto TEXT,
+    content_version_id INTEGER
+);
+```
+
+#### `title_lookup` 🔴 NOT BUILT
+```sql
+CREATE TABLE title_lookup (
+    title_key TEXT PRIMARY KEY,            -- e.g., "k_france", "c_paris"
+    tier TEXT,                             -- 'e', 'k', 'd', 'c', 'b'
+    capital_county TEXT,                   -- Reference to another title
+    capital_province_id INTEGER,           -- Resolved province ID
+    de_jure_liege TEXT,                    -- Parent title key
+    color_r INTEGER, color_g INTEGER, color_b INTEGER,
+    definite_form INTEGER,
+    landless INTEGER,
+    content_version_id INTEGER
+);
+```
+
+#### `title_history_lookup` 🔴 NOT BUILT
+```sql
+CREATE TABLE title_history_lookup (
+    id INTEGER PRIMARY KEY,
+    title_key TEXT NOT NULL,
+    effective_date TEXT NOT NULL,          -- e.g., "867.1.1"
+    holder_id INTEGER,                     -- character_id or 0
+    liege_title TEXT,
+    government TEXT,
+    succession_laws_json TEXT,
+    content_version_id INTEGER
+);
+CREATE INDEX idx_title_history_key_date ON title_history_lookup(title_key, effective_date);
+```
+
+#### `holy_site_lookup` 🔴 NOT BUILT
+```sql
+CREATE TABLE holy_site_lookup (
+    holy_site_key TEXT PRIMARY KEY,        -- e.g., "jerusalem"
+    county_key TEXT NOT NULL,              -- e.g., "c_jerusalem"
+    province_id INTEGER,
+    faith_key TEXT,                        -- Owning faith
+    flag TEXT,
+    content_version_id INTEGER
+);
+```
+
+#### `name_list_lookup` 🔴 NOT BUILT
+```sql
+CREATE TABLE name_list_lookup (
+    name_list_key TEXT PRIMARY KEY,        -- e.g., "name_list_french"
+    male_names_json TEXT,                  -- JSON array
+    female_names_json TEXT,
+    dynasty_names_json TEXT,
+    content_version_id INTEGER
+);
+```
+
+#### `culture_lookup` 🔴 NOT BUILT
+```sql
+CREATE TABLE culture_lookup (
+    culture_key TEXT PRIMARY KEY,          -- e.g., "french"
+    heritage TEXT,                         -- e.g., "heritage_frankish"
+    ethos TEXT,                            -- e.g., "ethos_bellicose"
+    language TEXT,
+    martial_custom TEXT,
+    name_list_key TEXT,
+    traditions_json TEXT,                  -- JSON array
+    parents_json TEXT,                     -- JSON array of parent cultures
+    content_version_id INTEGER
+);
+```
+
+### Tables to DELETE (Wrong Approach)
+
+These tables were incorrectly implemented - they denormalize AST data that's already
+searchable via symbols:
+
+| Table | Reason for Deletion |
+|-------|---------------------|
+| `trait_lookups` | Traits are string-keyed, use symbols + AST |
+| `event_lookups` | Events are string-keyed, use symbols + AST |
+| `decision_lookups` | Decisions are string-keyed, use symbols + AST |
+
+### Builder Daemon Updates Required
+
+#### Phase Changes
+
+| Current | Planned | Notes |
+|---------|---------|-------|
+| Phase 7: "Lookup Tables" | Phase 7: "Lookup Extraction" | Complete rewrite |
+| - trait_lookups | REMOVE | |
+| - event_lookups | REMOVE | |
+| - decision_lookups | REMOVE | |
+| | ADD: province_lookup | From definition.csv + history/provinces/ |
+| | ADD: character_lookup | From history/characters/ |
+| | ADD: dynasty_lookup | From common/dynasties/ |
+| | ADD: title_lookup | From common/landed_titles/ |
+| | ADD: title_history_lookup | From history/titles/ |
+| | ADD: holy_site_lookup | From common/religion/holy_sites/ |
+| | ADD: name_list_lookup | From common/culture/name_lists/ |
+| | ADD: culture_lookup | From common/culture/cultures/ |
+
+#### New Files Required
+
+| File | Purpose |
+|------|---------|
+| `src/ck3raven/db/lookups_v2.py` | New lookup extractors for all 8 tables |
+| `src/ck3raven/db/csv_parser.py` | Parse map_data/definition.csv |
+| `builder/file_router.py` | Centralized routing logic |
+
+#### File Router Implementation
+
+```python
+# builder/file_router.py (PLANNED)
+
+class FileRoute(Enum):
+    SKIP = "skip"
+    AST_PIPELINE = "ast"              # → asts, symbols, refs
+    LOCALIZATION = "localization"      # → localization_entries
+    LOOKUP_PROVINCE = "lookup_province"
+    LOOKUP_CHARACTER = "lookup_character"
+    LOOKUP_DYNASTY = "lookup_dynasty"
+    LOOKUP_TITLE = "lookup_title"
+    LOOKUP_TITLE_HISTORY = "lookup_title_history"
+    LOOKUP_HOLY_SITE = "lookup_holy_site"
+    LOOKUP_NAME_LIST = "lookup_name_list"
+    LOOKUP_CULTURE = "lookup_culture"
+
+def route_file(relpath: str) -> FileRoute:
+    """Determine processing pipeline for a file."""
+    
+    # Skip patterns (graphics, generated, DNA)
+    skip_patterns = [
+        'gfx/', 'common/ethnicities/', 'common/dna_data/',
+        'common/coat_of_arms/', '.dds', '.png', '.tga'
+    ]
+    if any(p in relpath.lower() for p in skip_patterns):
+        return FileRoute.SKIP
+    
+    # Localization
+    if relpath.startswith('localization/') and relpath.endswith('.yml'):
+        return FileRoute.LOCALIZATION
+    
+    # Province lookups
+    if relpath == 'map_data/definition.csv':
+        return FileRoute.LOOKUP_PROVINCE
+    if relpath.startswith('history/provinces/'):
+        return FileRoute.LOOKUP_PROVINCE
+    
+    # Character lookups
+    if relpath.startswith('history/characters/'):
+        return FileRoute.LOOKUP_CHARACTER
+    
+    # Dynasty lookups
+    if relpath.startswith('common/dynasties/'):
+        return FileRoute.LOOKUP_DYNASTY
+    
+    # Title lookups
+    if relpath.startswith('common/landed_titles/'):
+        return FileRoute.LOOKUP_TITLE
+    if relpath.startswith('history/titles/'):
+        return FileRoute.LOOKUP_TITLE_HISTORY
+    
+    # Holy site lookups
+    if relpath.startswith('common/religion/holy_sites/'):
+        return FileRoute.LOOKUP_HOLY_SITE
+    
+    # Name list lookups (skip AST)
+    if relpath.startswith('common/culture/name_lists/'):
+        return FileRoute.LOOKUP_NAME_LIST
+    
+    # Culture lookups (ALSO goes to AST for symbol extraction)
+    if relpath.startswith('common/culture/cultures/'):
+        return FileRoute.LOOKUP_CULTURE  # Special: AST + lookup
+    
+    # Default: AST pipeline for script files
+    if relpath.endswith('.txt'):
+        return FileRoute.AST_PIPELINE
+    
+    return FileRoute.SKIP
+```
+
+#### Daemon Phase Updates
+
+```python
+# In builder/daemon.py (PLANNED CHANGES)
+
+def run_rebuild(...):
+    # Existing phases
+    phase_1_vanilla_ingest(...)
+    phase_2_mod_ingest(...)
+    phase_3_ast_generation(...)      # Only for FileRoute.AST_PIPELINE files
+    phase_4_symbol_extraction(...)
+    phase_5_ref_extraction(...)
+    phase_6_localization(...)        # Only for FileRoute.LOCALIZATION files
+    
+    # NEW Phase 7: Lookup Extraction
+    phase_7_lookup_extraction(...)   # For all LOOKUP_* routes
+    
+def phase_7_lookup_extraction(conn, logger, status):
+    """Extract lookup tables from data files."""
+    from ck3raven.db.lookups_v2 import (
+        extract_province_lookups,
+        extract_character_lookups,
+        extract_dynasty_lookups,
+        extract_title_lookups,
+        extract_title_history_lookups,
+        extract_holy_site_lookups,
+        extract_name_list_lookups,
+        extract_culture_lookups,
+    )
+    
+    # Each extractor reads from files table and writes to lookup table
+    extract_province_lookups(conn, logger, status)      # definition.csv + history/provinces/
+    extract_character_lookups(conn, logger, status)     # history/characters/
+    extract_dynasty_lookups(conn, logger, status)       # common/dynasties/
+    extract_title_lookups(conn, logger, status)         # common/landed_titles/
+    extract_title_history_lookups(conn, logger, status) # history/titles/
+    extract_holy_site_lookups(conn, logger, status)     # common/religion/holy_sites/
+    extract_name_list_lookups(conn, logger, status)     # common/culture/name_lists/
+    extract_culture_lookups(conn, logger, status)       # common/culture/cultures/
+```
 
 ---
 
