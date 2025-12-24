@@ -1,6 +1,6 @@
 # ck3raven Architecture
 
-> **Last Updated:** December 20, 2025
+> **Last Updated:** December 25, 2025
 
 ## Overview
 
@@ -15,25 +15,29 @@ ck3raven is a CK3 game state emulator that answers: *"What does the game actuall
 │                         CK3 Lens MCP Server                                 │
 │  ┌───────────────┐  ┌────────────────┐  ┌─────────────┐  ┌──────────────┐  │
 │  │ Query Tools   │  │ Conflict Tools │  │ Write Tools │  │  Git Tools   │  │
-│  │ (DB read)     │  │ (unit-level)   │  │ (sandbox)   │  │  (live mods) │  │
+│  │ (DB read)     │  │ (unit-level)   │  │ (filesystem)│  │  (live mods) │  │
 │  └───────┬───────┘  └───────┬────────┘  └──────┬──────┘  └──────┬───────┘  │
 └──────────┼──────────────────┼──────────────────┼────────────────┼──────────┘
            │                  │                  │                │
-┌──────────▼──────────────────▼──────────────────┼────────────────┼──────────┐
-│                     ck3raven SQLite Database                    │          │
-│  ┌─────────────┐  ┌────────────────┐  ┌───────────────────┐    │          │
-│  │ files       │  │ symbols        │  │ contribution_units│    │          │
-│  │ file_conten │  │ refs           │  │ conflict_units    │    │          │
-│  │ asts        │  │ playsets       │  │ resolution_choice │    │          │
-│  └─────────────┘  └────────────────┘  └───────────────────┘    │          │
-└────────────────────────────────────────────────────────────────┼──────────┘
-                                                                 │
-┌────────────────────────────────────────────────────────────────▼──────────┐
-│                           Live Mod Directories                             │
-│  ┌─────────────┐  ┌───────────────┐  ┌──────────────┐  ┌───────────────┐  │
-│  │ MSC         │  │ MSCRE         │  │ LRE          │  │ MRP           │  │
-│  └─────────────┘  └───────────────┘  └──────────────┘  └───────────────┘  │
-└────────────────────────────────────────────────────────────────────────────┘
+           │ READ             │ READ             │ WRITE          │ WRITE
+           ▼                  ▼                  ▼                ▼
+┌──────────────────────────────────────┐  ┌───────────────────────────────────┐
+│      ck3raven SQLite Database        │  │         Configuration             │
+│  ┌─────────────┐  ┌────────────────┐ │  │  ┌─────────────┐  ┌────────────┐ │
+│  │ files       │  │ symbols        │ │  │  │ playsets/   │  │ live mods  │ │
+│  │ file_conten │  │ refs           │ │  │  │ (JSON)      │  │ (files)    │ │
+│  │ asts        │  │ lookups        │ │  │  └─────────────┘  └────────────┘ │
+│  └─────────────┘  └────────────────┘ │  └───────────────────────────────────┘
+│         ▲                            │
+│         │ WRITE (only)               │
+│         │                            │
+└─────────┼────────────────────────────┘
+          │
+┌─────────┴───────────────────────────────────────────────────────────────────┐
+│                           Builder Daemon                                    │
+│  Reads: vanilla game, mods, playset JSON                                    │
+│  Writes: database only                                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -65,11 +69,10 @@ ck3raven/
 │   │   ├── queries/              # READ operations [PLANNED - currently flat]
 │   │   │   ├── symbols.py        # Symbol search, adjacency matching
 │   │   │   ├── files.py          # File content retrieval
-│   │   │   ├── playsets.py       # Playset queries
 │   │   │   ├── conflicts.py      # Conflict queries
 │   │   │   └── lookups.py        # Lookup table queries
 │   │   ├── search.py             # FTS5 full-text search
-│   │   ├── playsets.py           # Playset CRUD operations
+│   │   ├── lens.py               # Runtime playset filter (reads JSON, filters queries)
 │   │   └── cryo.py               # Snapshot export/import
 │   │
 │   ├── logs/                     # CK3 log parsing [PARTIAL]
@@ -197,20 +200,33 @@ ck3raven/
 
 ### Separation of Concerns
 
-| Layer | Location | Responsibility | Operations |
-|-------|----------|----------------|------------|
-| **Consumers** | `tools/`, `src/ck3raven/cli.py` | User-facing applications | READ only |
-| **Shared Libraries** | `src/ck3raven/` | Schema, queries, parsing, resolution | READ + schema |
-| **Builder** | `builder/` | Database population | WRITE only |
-| **Database** | `~/.ck3raven/` | Persistent storage | - |
+| Layer | Location | Responsibility | Database | Config |
+|-------|----------|----------------|----------|--------|
+| **Consumers** | `tools/`, CLI | User-facing applications | READ | READ/WRITE |
+| **Shared Libraries** | `src/ck3raven/` | Schema, queries, parsing | READ | READ |
+| **Builder** | `builder/` | Database population | WRITE | READ |
+| **Database** | `~/.ck3raven/db` | Indexed content | - | - |
+| **Config** | `~/.ck3raven/playsets/` | Playset definitions | - | - |
 
-### Key Principle
+### Key Principles
 
-**The builder is the ONLY component that writes to the database.**
+**1. The builder is the ONLY component that writes to the database.**
 
 - `src/ck3raven/db/` defines schema and provides READ queries
 - `builder/extractors/` populates tables using that schema
 - Consumers (MCP, VS Code, CLI) only READ through `src/ck3raven/db/`
+
+**2. Playsets are configuration, not content.**
+
+- Stored as JSON files in `~/.ck3raven/playsets/`
+- Managed by MCP server and CLI (not in database)
+- Applied as runtime filter to database queries
+
+**3. Agent file edits flow through builder.**
+
+- Agent writes to filesystem (live mod directories)
+- Builder refreshes changed files into database
+- No direct database writes from consumers
 
 ---
 
@@ -701,16 +717,86 @@ The `ContributionsManager` is the primary interface for conflict analysis. It:
 
 #### Staleness Tracking
 
-The `playsets` table tracks contribution state:
+---
 
-| Column | Purpose |
-|--------|---------|
-| `contributions_stale` | 1 = needs rescan, 0 = up to date |
-| `contributions_hash` | Hash of load order for cache validation |
-| `contributions_scanned_at` | When last scanned |
+### Playset Configuration (`~/.ck3raven/playsets/`)
 
-When any playset operation changes composition or order, `contributions_stale` is set to 1.
-When `ContributionsManager.refresh()` completes successfully, it's set back to 0.
+**Purpose:** Define which mods to include and in what order. Playsets are configuration, not indexed content.
+
+#### Storage Structure
+
+```
+~/.ck3raven/
+├── ck3raven.db              # Indexed content ONLY
+└── playsets/
+    ├── active.txt           # Single line: name of active playset
+    ├── MyPlayset.json       # Playset definition
+    ├── VanillaOnly.json
+    └── Testing.json
+```
+
+#### Playset JSON Schema
+
+```json
+{
+  "name": "MyPlayset",
+  "created_at": "2025-12-25T10:00:00Z",
+  "mods": [
+    {"name": "MSC", "enabled": true},
+    {"name": "RICE", "enabled": true},
+    {"name": "BuggyMod", "enabled": false}
+  ],
+  "notes": "My main modding playset"
+}
+```
+
+#### Runtime Filter Pattern
+
+Playset is applied as a runtime filter to any database query:
+
+```python
+def get_playset_filter(conn: sqlite3.Connection) -> set[int]:
+    """Read active playset JSON, return content_version_ids to include."""
+    active_name = Path("~/.ck3raven/playsets/active.txt").read_text().strip()
+    playset = json.loads(Path(f"~/.ck3raven/playsets/{active_name}.json").read_text())
+    
+    enabled_mods = [m["name"] for m in playset["mods"] if m["enabled"]]
+    
+    # Always include vanilla
+    cv_ids = conn.execute("""
+        SELECT cv.content_version_id 
+        FROM content_versions cv WHERE cv.kind = 'vanilla'
+    """).fetchall()
+    
+    # Add enabled mods
+    if enabled_mods:
+        mod_cv_ids = conn.execute("""
+            SELECT cv.content_version_id 
+            FROM content_versions cv
+            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            WHERE mp.name IN (?)
+        """, enabled_mods).fetchall()
+        cv_ids.extend(mod_cv_ids)
+    
+    return {row[0] for row in cv_ids}
+```
+
+#### Conflict Report Embedding
+
+Conflict reports embed the full playset state for reproducibility:
+
+```json
+{
+  "report_version": "1.0",
+  "generated_at": "2025-12-25T12:00:00Z",
+  "playset_snapshot": {
+    "name": "MyPlayset",
+    "mods": ["MSC", "RICE"],
+    "load_order": ["vanilla", "MSC", "RICE"]
+  },
+  "conflicts": [...]
+}
+```
 
 ---
 
@@ -727,11 +813,13 @@ When `ContributionsManager.refresh()` completes successfully, it's set back to 0
 | `asts` | Cached ASTs by (content_hash, parser_version) |
 | `symbols` | Extracted symbol definitions |
 | `refs` | Symbol references |
-| `playsets` | User-defined mod collections |
-| `playset_mods` | Mod membership with load order |
+| `mod_packages` | Known mods with source paths |
+| `content_versions` | Mod versions linking to mod_packages |
 | `contribution_units` | Unit-level contributions |
 | `conflict_units` | Grouped conflicts with risk scores |
 | `resolution_choices` | User conflict decisions |
+
+> **Note:** `playsets` and `playset_mods` tables are deprecated. Playsets are now JSON config files.
 
 #### Content-Addressed Storage
 
@@ -759,7 +847,7 @@ ASTs are cached by (content_hash, parser_version):
 | **Session** | `ck3_init_session` | Initialize database connection |
 | **Search** | `ck3_search_symbols`, `ck3_confirm_not_exists` | Find symbols with adjacency matching |
 | **Files** | `ck3_get_file`, `ck3_list_live_files` | Read content from database |
-| **Playset** | `ck3_get_active_playset`, `ck3_add_mod_to_playset`, `ck3_import_playset_from_launcher`, `ck3_reorder_mod_in_playset` | Manage mod collections |
+| **Playset** | `ck3_get_active_playset`, `ck3_switch_playset`, `ck3_create_playset` | Manage playset JSON config files |
 | **Conflicts** | `ck3_scan_unit_conflicts`, `ck3_list_conflict_units` | Unit-level conflict analysis |
 | **Live Ops** | `ck3_write_file`, `ck3_edit_file` | Sandboxed file modifications |
 | **Git** | `ck3_git_status`, `ck3_git_commit` | Version control for live mods |
