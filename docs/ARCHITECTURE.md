@@ -40,78 +40,177 @@ ck3raven is a CK3 game state emulator that answers: *"What does the game actuall
 
 ## Directory Structure
 
+> **Status:** Current structure shown with planned changes marked [PLANNED]
+
 ```
 ck3raven/
-├── src/ck3raven/
-│   ├── parser/                   # Lexer + Parser → AST
-│   │   ├── lexer.py              # 100% regex-free tokenizer
-│   │   └── parser.py             # AST nodes: RootNode, BlockNode, etc.
+│
+├── src/ck3raven/                 # SHARED LIBRARIES (importable by all consumers)
 │   │
-│   ├── resolver/                 # Conflict Resolution Layer
-│   │   ├── policies.py           # 4 merge policies + content type configs
+│   ├── parser/                   # Text → AST transformation
+│   │   ├── lexer.py              # 100% regex-free tokenizer
+│   │   └── parser.py             # Recursive descent → RootNode, BlockNode, etc.
+│   │
+│   ├── resolver/                 # Conflict resolution logic
+│   │   ├── policies.py           # 4 merge policies (OVERRIDE, CONTAINER_MERGE, etc.)
 │   │   ├── sql_resolver.py       # File-level and symbol-level resolution
 │   │   ├── contributions.py      # Data contracts (ContributionUnit, ConflictUnit)
-│   │   └── conflict_analyzer.py  # Unit-level conflict extraction and grouping
+│   │   ├── conflict_analyzer.py  # Unit extraction, grouping, risk scoring
+│   │   └── manager.py            # ContributionsManager lifecycle
 │   │
-│   ├── db/                       # Database Storage Layer
-│   │   ├── schema.py             # SQLite schema (20+ tables)
-│   │   ├── models.py             # Dataclass models
-│   │   ├── content.py            # Content-addressed storage (SHA256)
-│   │   ├── ingest.py             # Vanilla/mod ingestion
-│   │   ├── ast_cache.py          # AST cache by (content_hash, parser_version)
-│   │   ├── symbols.py            # Symbol/reference extraction
-│   │   ├── search.py             # FTS5 search
-│   │   ├── playsets.py           # Playset management
+│   ├── db/                       # Database schema + READ operations
+│   │   ├── schema.py             # All table definitions (CREATE TABLE statements)
+│   │   ├── models.py             # Dataclass models for type safety
+│   │   ├── connection.py         # Connection management, retries, locking
+│   │   ├── queries/              # READ operations [PLANNED - currently flat]
+│   │   │   ├── symbols.py        # Symbol search, adjacency matching
+│   │   │   ├── files.py          # File content retrieval
+│   │   │   ├── playsets.py       # Playset queries
+│   │   │   ├── conflicts.py      # Conflict queries
+│   │   │   └── lookups.py        # Lookup table queries
+│   │   ├── search.py             # FTS5 full-text search
+│   │   ├── playsets.py           # Playset CRUD operations
 │   │   └── cryo.py               # Snapshot export/import
 │   │
-│   ├── emulator/                 # (Future) Full game state building
+│   ├── logs/                     # CK3 log parsing [PARTIAL]
+│   │   ├── error_parser.py       # Parse error.log
+│   │   └── crash_parser.py       # Parse crash folders
+│   │
+│   ├── emulator/                 # Game state building [FUTURE]
+│   │
 │   └── cli.py                    # Command-line interface
 │
-├── tools/
+├── builder/                      # BUILD PIPELINE (WRITE operations)
+│   │
+│   ├── daemon.py                 # Build orchestration, phase runner
+│   ├── config.py                 # Paths, vanilla detection, settings
+│   ├── file_router.py            # Route files to pipelines [PLANNED]
+│   │
+│   ├── debug/                    # Debug infrastructure
+│   │   ├── __init__.py
+│   │   └── session.py            # DebugSession with span/emit pattern
+│   │
+│   ├── extractors/               # Populate database [PLANNED - currently in daemon.py]
+│   │   ├── __init__.py
+│   │   ├── ingest.py             # File discovery and storage
+│   │   ├── ast.py                # Parse files → AST blobs
+│   │   ├── symbols.py            # AST → symbol definitions
+│   │   ├── refs.py               # AST → symbol references
+│   │   ├── localization.py       # YAML → localization_entries
+│   │   │
+│   │   └── lookups/              # Data files → lookup tables [PLANNED]
+│   │       ├── __init__.py
+│   │       ├── province.py       # definition.csv + history/provinces/
+│   │       ├── character.py      # history/characters/
+│   │       ├── dynasty.py        # common/dynasties/
+│   │       ├── title.py          # common/landed_titles/
+│   │       ├── title_history.py  # history/titles/
+│   │       ├── holy_site.py      # common/religion/holy_sites/
+│   │       ├── name_list.py      # common/culture/name_lists/
+│   │       └── culture.py        # common/culture/cultures/
+│   │
+│   └── modes/                    # Build strategies [PLANNED]
+│       ├── full.py               # Complete rebuild
+│       ├── incremental.py        # Only changed files
+│       └── partial.py            # Specific phases only
+│
+├── tools/                        # CONSUMER APPLICATIONS
+│   │
 │   ├── ck3lens_mcp/              # MCP Server for AI Agents
-│   │   ├── server.py             # FastMCP with 28+ tools
+│   │   ├── server.py             # FastMCP with 30+ tools
 │   │   ├── ck3lens/
 │   │   │   ├── workspace.py      # Live mod whitelist
-│   │   │   └── db_queries.py     # Query layer: symbols, files, content, conflicts
+│   │   │   └── db_queries.py     # Query layer for tools
 │   │   └── docs/
 │   │       ├── SETUP.md
 │   │       ├── TOOLS.md
-│   │       ├── TESTING.md
 │   │       └── DESIGN.md
 │   │
 │   └── ck3lens-explorer/         # VS Code Extension
 │       ├── src/
-│       │   ├── extension.ts      # Entry point, command registration
-│       │   ├── session.ts        # CK3LensSession lifecycle
-│       │   ├── bridge/           # Python JSON-RPC bridge
+│       │   ├── extension.ts      # Entry point, activation
+│       │   ├── session.ts        # Python bridge lifecycle
+│       │   ├── bridge/           # JSON-RPC communication
 │       │   ├── linting/          # Real-time validation
-│       │   │   ├── lintingProvider.ts   # Full Python validation
-│       │   │   └── quickValidator.ts    # Quick TS validation
-│       │   ├── views/            # UI panels
-│       │   │   ├── explorerView.ts      # Database-driven tree
-│       │   │   ├── astViewerPanel.ts    # AST viewer webview
-│       │   │   └── studioPanel.ts       # File creation studio
-│       │   └── widget/           # Floating widget
+│       │   ├── views/            # UI panels (explorer, AST viewer, studio)
+│       │   └── widget/           # Floating mode widget
 │       └── bridge/
 │           └── server.py         # Python JSON-RPC server
 │
-├── builder/                      # Detached build daemon
-│   ├── daemon.py                 # Main daemon with 7-phase pipeline
-│   ├── config.py                 # Configuration and paths
-│   └── debug/                    # Debug infrastructure
-│       ├── session.py            # DebugSession class with span/emit
-│       └── __init__.py
-│
 ├── scripts/                      # Utility scripts
-│   ├── hooks/                    # Git hooks (install with install-hooks.py)
-│   │   └── pre-commit            # Policy enforcement hook
+│   ├── hooks/                    # Git hooks
+│   │   └── pre-commit            # Policy enforcement
 │   ├── install-hooks.py          # Hook installer
-│   └── pre-commit-policy-check.py  # Policy validation logic
+│   ├── pre-commit-policy-check.py
+│   └── sample_db.py              # Database sampling for review
 │
-├── docs/                         # Design documentation
-├── tests/                        # Pytest suite
-└── scripts/                      # Utility scripts
+├── docs/                         # Documentation
+│   ├── ARCHITECTURE.md           # This file
+│   ├── COPILOT_RAVEN_DEV.md      # AI agent rules
+│   └── *.md                      # Design documents
+│
+└── tests/                        # Pytest suite
+    ├── test_parser.py
+    ├── test_resolver.py
+    ├── test_builder_daemon.py
+    └── ...
 ```
+
+### Architectural Boundaries
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              CONSUMERS                                       │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐              │
+│  │ MCP Server      │  │ VS Code Ext     │  │ CLI             │              │
+│  │ (tools/)        │  │ (tools/)        │  │ (src/)          │              │
+│  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘              │
+└───────────┼────────────────────┼────────────────────┼────────────────────────┘
+            │                    │                    │
+            │ READ               │ READ               │ READ
+            ▼                    ▼                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         SHARED LIBRARIES (src/ck3raven/)                     │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐              │
+│  │ db/             │  │ parser/         │  │ resolver/       │              │
+│  │ (schema+query)  │  │ (text→AST)      │  │ (conflicts)     │              │
+│  └────────┬────────┘  └─────────────────┘  └─────────────────┘              │
+└───────────┼─────────────────────────────────────────────────────────────────┘
+            │
+            │ SCHEMA
+            ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              SQLite Database                                 │
+│                         (~/.ck3raven/ck3raven.db)                           │
+└───────────▲─────────────────────────────────────────────────────────────────┘
+            │
+            │ WRITE
+            │
+┌───────────┴─────────────────────────────────────────────────────────────────┐
+│                           BUILDER (builder/)                                 │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐              │
+│  │ daemon.py       │  │ file_router.py  │  │ extractors/     │              │
+│  │ (orchestration) │  │ (routing)       │  │ (population)    │              │
+│  └─────────────────┘  └─────────────────┘  └─────────────────┘              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Separation of Concerns
+
+| Layer | Location | Responsibility | Operations |
+|-------|----------|----------------|------------|
+| **Consumers** | `tools/`, `src/ck3raven/cli.py` | User-facing applications | READ only |
+| **Shared Libraries** | `src/ck3raven/` | Schema, queries, parsing, resolution | READ + schema |
+| **Builder** | `builder/` | Database population | WRITE only |
+| **Database** | `~/.ck3raven/` | Persistent storage | - |
+
+### Key Principle
+
+**The builder is the ONLY component that writes to the database.**
+
+- `src/ck3raven/db/` defines schema and provides READ queries
+- `builder/extractors/` populates tables using that schema
+- Consumers (MCP, VS Code, CLI) only READ through `src/ck3raven/db/`
 
 ---
 
