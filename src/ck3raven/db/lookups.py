@@ -1,5 +1,5 @@
 """
-Lookup Table Extractors (TBC - To Be Completed)
+Lookup Table Extractors
 
 This module extracts structured reference data from stored ASTs into 
 denormalized lookup tables for easy querying.
@@ -13,7 +13,14 @@ Design Pattern (from CWTools/jomini analysis):
 1. Parser (generic): text → AST  (already done)
 2. Extractor (domain-specific): AST → reference rows  (this module)
 
-Status: PROVISIONAL - basic trait extraction implemented, others TBC.
+Implemented:
+- trait_lookups: category, group, level, genetic/physical flags, modifiers
+- event_lookups: namespace, type, theme, is_hidden
+- decision_lookups: major flag, ai_check_interval
+
+Note: Lookups only make sense for types with QUERYABLE PROPERTIES.
+Types like on_actions, scripted_effects, scripted_triggers are just
+code blocks - use the symbol table and refs for those.
 """
 
 import json

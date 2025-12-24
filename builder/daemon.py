@@ -1401,40 +1401,102 @@ def parse_localization_files(conn, logger: DaemonLogger, status: StatusWriter, f
 
 def extract_lookup_tables(conn, logger: DaemonLogger, status: StatusWriter):
     """
-    Extract structured lookup data from ASTs into denormalized tables.
+    Extract ID-keyed lookup data into denormalized tables.
     
-    This is Phase 7 (TBC - provisional implementation).
+    This is Phase 7: Lookup Extraction.
     
-    Extracts:
-    - trait_lookups: category, group, level, flags, modifiers
-    - event_lookups: namespace, type, theme
-    - decision_lookups: major flag, ai_check_interval
+    Lookups are for OPAQUE NUMERIC IDs that need resolution to names:
+    - province_lookup: province ID → name, RGB, culture, religion
+    - character_lookup: character ID → name, dynasty, dates
+    - dynasty_lookup: dynasty ID → name key, culture
+    - title_lookup: title key → tier, capital, colors
+    
+    Note: traits, events, decisions are STRING-KEYED and use symbols table.
     """
-    from ck3raven.db.lookups import extract_lookups_from_symbols
+    from pathlib import Path
+    from builder.config import get_config
     
-    logger.info("Starting lookup table extraction (TBC - provisional)...")
+    logger.info("Starting ID-keyed lookup table extraction...")
     
     total_extracted = 0
     total_errors = 0
+    results = {}
     
-    for symbol_type in ['trait', 'event', 'decision']:
-        write_heartbeat()
-        
-        status.update(
-            message=f"Extracting {symbol_type} lookups..."
-        )
-        
-        try:
-            stats = extract_lookups_from_symbols(conn, symbol_type)
-            logger.info(f"  {symbol_type}: extracted={stats['extracted']}, skipped={stats['skipped']}, errors={stats['errors']}")
-            total_extracted += stats['extracted']
-            total_errors += stats['errors']
-        except Exception as e:
-            logger.warning(f"  {symbol_type} extraction failed: {e}")
-            total_errors += 1
+    # Get vanilla content_version_id
+    vanilla_cv_row = conn.execute("""
+        SELECT cv.content_version_id 
+        FROM content_versions cv
+        WHERE cv.kind = 'vanilla'
+        ORDER BY cv.content_version_id DESC
+        LIMIT 1
+    """).fetchone()
     
-    logger.info(f"Lookup extraction complete: {total_extracted} lookups, {total_errors} errors")
-    return {'total': total_extracted, 'errors': total_errors}
+    if not vanilla_cv_row:
+        logger.warning("No vanilla content_version found, skipping lookups")
+        return {'total': 0, 'errors': 0, 'status': 'no_vanilla'}
+    
+    vanilla_cv_id = vanilla_cv_row[0]
+    config = get_config()
+    vanilla_path = config.vanilla_path
+    
+    # 1. Province lookup (from definition.csv)
+    write_heartbeat()
+    status.update(message="Extracting province lookups from definition.csv...")
+    try:
+        from builder.extractors.lookups.province import extract_provinces
+        stats = extract_provinces(conn, vanilla_path, vanilla_cv_id)
+        logger.info(f"  provinces: inserted={stats['inserted']}, errors={stats['errors']}")
+        results['provinces'] = stats
+        total_extracted += stats['inserted']
+        total_errors += stats['errors']
+    except Exception as e:
+        logger.warning(f"  province extraction failed: {e}")
+        total_errors += 1
+    
+    # 2. Dynasty lookup (from common/dynasties/ ASTs)
+    write_heartbeat()
+    status.update(message="Extracting dynasty lookups...")
+    try:
+        from builder.extractors.lookups.dynasty import extract_dynasties
+        stats = extract_dynasties(conn, vanilla_cv_id)
+        logger.info(f"  dynasties: inserted={stats['inserted']}, errors={stats['errors']}")
+        results['dynasties'] = stats
+        total_extracted += stats['inserted']
+        total_errors += stats['errors']
+    except Exception as e:
+        logger.warning(f"  dynasty extraction failed: {e}")
+        total_errors += 1
+    
+    # 3. Character lookup (from history/characters/ ASTs)
+    write_heartbeat()
+    status.update(message="Extracting character lookups...")
+    try:
+        from builder.extractors.lookups.character import extract_characters
+        stats = extract_characters(conn, vanilla_cv_id)
+        logger.info(f"  characters: inserted={stats['inserted']}, errors={stats['errors']}")
+        results['characters'] = stats
+        total_extracted += stats['inserted']
+        total_errors += stats['errors']
+    except Exception as e:
+        logger.warning(f"  character extraction failed: {e}")
+        total_errors += 1
+    
+    # 4. Title lookup (from common/landed_titles/ ASTs)
+    write_heartbeat()
+    status.update(message="Extracting title lookups...")
+    try:
+        from builder.extractors.lookups.title import extract_titles
+        stats = extract_titles(conn, vanilla_cv_id)
+        logger.info(f"  titles: inserted={stats['inserted']}, errors={stats['errors']}")
+        results['titles'] = stats
+        total_extracted += stats['inserted']
+        total_errors += stats['errors']
+    except Exception as e:
+        logger.warning(f"  title extraction failed: {e}")
+        total_errors += 1
+    
+    logger.info(f"Lookup extraction complete: {total_extracted} records, {total_errors} errors")
+    return {'total': total_extracted, 'errors': total_errors, 'details': results}
 
 # =============================================================================
 # SYMBOL/REF EXTRACTION FROM STORED ASTs
@@ -1638,7 +1700,7 @@ def extract_refs_from_stored_asts(conn, logger: DaemonLogger, status: StatusWrit
         if batch_refs:
             conn.executemany("""
                 INSERT OR IGNORE INTO refs
-                (ref_type, name, using_file_id, ast_id, line_number, context, content_version_id)
+                (ref_type, name, using_file_id, using_ast_id, line_number, context, content_version_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
             """, batch_refs)
             batch_refs = []  # Reset for next chunk

@@ -543,21 +543,133 @@ CREATE INDEX IF NOT EXISTS idx_locref_locid ON localization_refs(loc_id);
 CREATE INDEX IF NOT EXISTS idx_locref_value ON localization_refs(ref_value);
 
 -- ============================================================================
--- LOOKUP TABLES (TBC - Extracted reference data from ASTs)
+-- LOOKUP TABLES - ID-keyed reference data
 -- ============================================================================
--- These tables provide denormalized, easily-queryable views of commonly-needed
--- game data extracted from ASTs. This is NOT a different parse - it's a 
--- deterministic extraction pass over stored ASTs.
+-- These tables store mappings from numeric IDs to human-readable data.
+-- Unlike symbols (which are string-keyed and in ASTs), these are for:
+--   - province IDs (e.g., 2333 → Paris)
+--   - character IDs (e.g., 163110 → Charlemagne)  
+--   - dynasty IDs (e.g., 699 → Karling)
+--   - title mappings
 --
--- Rationale: While symbols table gives us names and locations, lookup tables
--- provide the semantic details (e.g., trait category, group, level, flags)
--- that are frequently needed for validation, autocomplete, and analysis.
+-- The key insight: lookups are for OPAQUE NUMERIC IDs where you need to
+-- know "what does ID 2333 mean?" Symbols are for string keys where you
+-- need to know "is brave a valid trait?"
 
--- Trait lookup table - extracted from common/traits/*.txt ASTs
+-- Province lookup - from map_data/definition.csv + history/provinces/
+CREATE TABLE IF NOT EXISTS province_lookup (
+    province_id INTEGER PRIMARY KEY,          -- The numeric ID from definition.csv
+    name TEXT NOT NULL,                       -- Province name from definition.csv col 4
+    rgb_r INTEGER,                            -- RGB color from definition.csv
+    rgb_g INTEGER,
+    rgb_b INTEGER,
+    culture TEXT,                             -- From history/provinces (at latest date)
+    religion TEXT,
+    holding_type TEXT,                        -- castle, city, temple, tribal, etc.
+    terrain TEXT,
+    content_version_id INTEGER,               -- Which mod/vanilla provides this
+    FOREIGN KEY (content_version_id) REFERENCES content_versions(content_version_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_province_name ON province_lookup(name);
+
+-- Character lookup - from history/characters/
+CREATE TABLE IF NOT EXISTS character_lookup (
+    character_id INTEGER PRIMARY KEY,         -- The numeric character ID
+    name TEXT NOT NULL,                       -- Character's name
+    dynasty_id INTEGER,                       -- FK to dynasty_lookup
+    dynasty_house TEXT,                       -- House name if applicable
+    culture TEXT,
+    religion TEXT,
+    birth_date TEXT,                          -- e.g., "768.4.2"
+    death_date TEXT,                          -- e.g., "814.1.28" or NULL if immortal/scripted
+    father_id INTEGER,                        -- FK to another character
+    mother_id INTEGER,
+    traits_json TEXT,                         -- JSON array of trait names
+    content_version_id INTEGER,
+    FOREIGN KEY (content_version_id) REFERENCES content_versions(content_version_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_character_name ON character_lookup(name);
+CREATE INDEX IF NOT EXISTS idx_character_dynasty ON character_lookup(dynasty_id);
+
+-- Dynasty lookup - from common/dynasties/
+CREATE TABLE IF NOT EXISTS dynasty_lookup (
+    dynasty_id INTEGER PRIMARY KEY,           -- The numeric dynasty ID
+    name_key TEXT NOT NULL,                   -- Localization key, e.g., "dynn_Orsini"
+    prefix TEXT,                              -- e.g., "dynnp_de"
+    culture TEXT,
+    motto TEXT,                               -- Motto localization key
+    content_version_id INTEGER,
+    FOREIGN KEY (content_version_id) REFERENCES content_versions(content_version_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dynasty_name ON dynasty_lookup(name_key);
+
+-- Title lookup - from common/landed_titles/
+CREATE TABLE IF NOT EXISTS title_lookup (
+    title_key TEXT PRIMARY KEY,               -- e.g., "k_france", "c_paris"
+    tier TEXT,                                -- 'e', 'k', 'd', 'c', 'b'
+    capital_county TEXT,                      -- Reference to another title
+    capital_province_id INTEGER,              -- Resolved province ID
+    de_jure_liege TEXT,                       -- Parent title key
+    color_r INTEGER,
+    color_g INTEGER,
+    color_b INTEGER,
+    definite_form INTEGER DEFAULT 0,
+    landless INTEGER DEFAULT 0,
+    content_version_id INTEGER,
+    FOREIGN KEY (content_version_id) REFERENCES content_versions(content_version_id),
+    FOREIGN KEY (capital_province_id) REFERENCES province_lookup(province_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_title_tier ON title_lookup(tier);
+CREATE INDEX IF NOT EXISTS idx_title_liege ON title_lookup(de_jure_liege);
+
+-- Title history lookup - from history/titles/
+CREATE TABLE IF NOT EXISTS title_history_lookup (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title_key TEXT NOT NULL,                  -- e.g., "k_france"
+    effective_date TEXT NOT NULL,             -- e.g., "867.1.1"
+    holder_id INTEGER,                        -- character_id or 0
+    liege_title TEXT,                         -- Parent title at this date
+    government TEXT,                          -- Government type
+    succession_laws_json TEXT,                -- JSON array of law keys
+    content_version_id INTEGER,
+    FOREIGN KEY (content_version_id) REFERENCES content_versions(content_version_id),
+    FOREIGN KEY (holder_id) REFERENCES character_lookup(character_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_title_history_key ON title_history_lookup(title_key);
+CREATE INDEX IF NOT EXISTS idx_title_history_date ON title_history_lookup(title_key, effective_date);
+
+-- Holy site lookup - from common/religion/holy_sites/
+CREATE TABLE IF NOT EXISTS holy_site_lookup (
+    holy_site_key TEXT PRIMARY KEY,           -- e.g., "jerusalem"
+    county_key TEXT NOT NULL,                 -- e.g., "c_jerusalem"
+    province_id INTEGER,                      -- Resolved province ID
+    faith_key TEXT,                           -- Owning faith
+    flag TEXT,                                -- Associated flag
+    content_version_id INTEGER,
+    FOREIGN KEY (content_version_id) REFERENCES content_versions(content_version_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_holy_site_county ON holy_site_lookup(county_key);
+
+-- ============================================================================
+-- DEPRECATED LOOKUP TABLES (to be removed)
+-- ============================================================================
+-- These were based on a misunderstanding: traits, events, decisions are
+-- STRING-KEYED and already in the symbols table with full AST data.
+-- They don't need separate lookup tables - use symbols + AST queries.
+--
+-- Keeping temporarily for backward compatibility but not populated.
+
+-- DEPRECATED: Trait lookup table - use symbols table instead
 CREATE TABLE IF NOT EXISTS trait_lookups (
     trait_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    symbol_id INTEGER NOT NULL,               -- FK to symbols table
-    name TEXT NOT NULL,                       -- trait name (e.g., 'brave')
+    symbol_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
     category TEXT,                            -- education, personality, lifestyle, etc.
     trait_group TEXT,                         -- group = X value
     level INTEGER,                            -- level = X value (for tiered traits)
