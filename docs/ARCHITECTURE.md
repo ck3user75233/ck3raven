@@ -95,6 +95,19 @@ ck3raven/
 │       └── bridge/
 │           └── server.py         # Python JSON-RPC server
 │
+├── builder/                      # Detached build daemon
+│   ├── daemon.py                 # Main daemon with 7-phase pipeline
+│   ├── config.py                 # Configuration and paths
+│   └── debug/                    # Debug infrastructure
+│       ├── session.py            # DebugSession class with span/emit
+│       └── __init__.py
+│
+├── scripts/                      # Utility scripts
+│   ├── hooks/                    # Git hooks (install with install-hooks.py)
+│   │   └── pre-commit            # Policy enforcement hook
+│   ├── install-hooks.py          # Hook installer
+│   └── pre-commit-policy-check.py  # Policy validation logic
+│
 ├── docs/                         # Design documentation
 ├── tests/                        # Pytest suite
 └── scripts/                      # Utility scripts
@@ -103,6 +116,36 @@ ck3raven/
 ---
 
 ## Core Modules
+
+### Builder Daemon (`builder/`)
+
+**Purpose:** Detached background process that builds the database.
+
+| File | Description |
+|------|-------------|
+| `daemon.py` | 7-phase pipeline: ingest → parse → symbols → refs → localization → lookups |
+| `config.py` | Paths, vanilla detection, config loading |
+| `debug/session.py` | `DebugSession` class for phase-agnostic instrumentation |
+
+**Phases:**
+1. **Vanilla Ingest** - Discover and store vanilla CK3 files
+2. **Mod Ingest** - Discover and store mod files (active playset)
+3. **AST Generation** - Parse files into ASTs
+4. **Symbol Extraction** - Extract trait, event, decision definitions
+5. **Ref Extraction** - Extract symbol references
+6. **Localization Parsing** - Parse YML localization files
+7. **Lookup Tables** - Build trait_lookups, event_lookups, decision_lookups
+
+**Debug Mode:**
+```bash
+python builder/daemon.py start --debug all --debug-limit 10
+```
+
+Outputs:
+- `~/.ck3raven/daemon/debug_trace.jsonl` - JSONL event stream
+- `~/.ck3raven/daemon/debug_summary.json` - Aggregated stats per phase
+
+---
 
 ### Parser (`src/ck3raven/parser/`)
 
@@ -684,3 +727,97 @@ These are superseded by ck3raven equivalents:
 | `ck3_syntax_validator.py` | Move to ck3raven | `ck3lens/semantic.py` |
 | `validator/` folder | Review | May merge useful parts |
 
+---
+
+## Policy Enforcement
+
+### Overview
+
+Policy enforcement ensures AI agents follow defined rules during development.
+The system uses a git pre-commit hook as the primary enforcement mechanism.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            Agent Tool Calls                                 │
+└───────────────────────────────────┬─────────────────────────────────────────┘
+                                    │ Traced to JSONL
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  ck3lens_trace.jsonl (~/Documents/Paradox Interactive/CK3/mod/)            │
+└───────────────────────────────────┬─────────────────────────────────────────┘
+                                    │ Read by hook
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  .git/hooks/pre-commit → scripts/pre-commit-policy-check.py                │
+│  ├─ Reads trace log                                                        │
+│  ├─ Calls validate_for_mode("ck3raven-dev", trace)                        │
+│  ├─ Exit 0 if passed → commit allowed                                      │
+│  └─ Exit 1 if failed → commit blocked                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Installing Hooks
+
+After cloning the repository:
+
+```bash
+python scripts/install-hooks.py
+```
+
+This copies `scripts/hooks/pre-commit` to `.git/hooks/pre-commit`.
+
+### Policy Files
+
+| File | Description |
+|------|-------------|
+| `tools/ck3lens_mcp/ck3lens/policy/agent_policy.yaml` | Policy definitions |
+| `tools/ck3lens_mcp/ck3lens/policy/validator.py` | `validate_for_mode()` function |
+| `tools/ck3lens_mcp/ck3lens/policy/ck3raven_dev_rules.py` | Rules for dev mode |
+| `tools/ck3lens_mcp/ck3lens/policy/ck3lens_rules.py` | Rules for modding mode |
+
+### Emergency Bypass
+
+```bash
+git commit --no-verify  # Use sparingly, document why
+```
+
+---
+
+## Debug Infrastructure
+
+### DebugSession (`builder/debug/`)
+
+Phase-agnostic instrumentation for the daemon pipeline.
+
+**Design Principles:**
+1. **Observe, don't re-implement** - Hooks into real phases, not separate logic
+2. **Phase-agnostic** - Phases call `debug.emit()`/`debug.span()`, session handles output
+3. **Data-driven** - Collect timings, row deltas, sizes uniformly
+4. **Non-invasive** - No phase-specific logic in debug layer
+
+**Usage:**
+
+```python
+from builder.debug import DebugSession
+
+with DebugSession.from_config(output_dir, sample_limit=100) as debug:
+    debug.phase_start("parse")
+    
+    for file in files:
+        with debug.span("file", phase="parse", path=file.path) as s:
+            ast = parse(file.content)
+            s.add(output_bytes=len(ast), output_count=node_count)
+    
+    debug.phase_end("parse")
+```
+
+**Output:**
+- `debug_trace.jsonl` - JSONL event stream (machine-readable)
+- `debug_summary.json` - Aggregated stats per phase
+
+**CLI:**
+```bash
+python builder/daemon.py start --debug all --debug-limit 100
+```

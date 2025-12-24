@@ -1677,13 +1677,15 @@ def extract_refs_from_stored_asts(conn, logger: DaemonLogger, status: StatusWrit
 
 def debug_daemon_phase(db_path: Path, phase: str, limit: int = 10) -> Path:
     """
-    Debug any daemon phase with detailed block-by-block timing and bloat measurement.
+    Debug any daemon phase using DebugSession architecture.
     
-    Outputs results to a JSON file (not terminal) so it can run in background
-    without keyboard interrupt issues. Results are saved to:
-        ~/.ck3raven/daemon/debug_output.json
+    Uses the unified DebugSession for phase-agnostic instrumentation.
+    Outputs:
+        - ~/.ck3raven/daemon/debug_trace.jsonl (JSONL event stream)
+        - ~/.ck3raven/daemon/debug_summary.json (aggregated stats)
     
     Supported phases:
+        - "all": Run all phases sequentially
         - "ingest": File discovery and content storage timing
         - "parse": Content → AST parsing 
         - "symbols": AST → symbol extraction
@@ -1691,23 +1693,212 @@ def debug_daemon_phase(db_path: Path, phase: str, limit: int = 10) -> Path:
         - "localization": YML → localization_entries extraction
         - "lookups": Symbol → lookup table extraction
     
-    Block timing includes phase-specific metrics:
-        - read_ms: Time to read content
-        - decode_ms: Time to decode (AST blob, etc.)
-        - extract_ms: Time to extract data
-        - insert_ms: Time to insert to database (if applicable)
-        - input_size_bytes: Size of input data
-        - output_count: Number of items produced
-        - efficiency: Items produced per KB of input
-    
     Args:
         db_path: Path to database
         phase: Which phase to debug
         limit: Number of files to process
         
     Returns:
-        Path to output JSON file
+        Path to output directory containing debug_trace.jsonl and debug_summary.json
     """
+    import sqlite3
+    from builder.debug import DebugSession
+    
+    conn = sqlite3.connect(db_path)
+    
+    # Determine which phases to run
+    if phase == "all":
+        phases = ["ingest", "parse", "symbols", "refs", "localization", "lookups"]
+    else:
+        phases = [phase]
+    
+    # Create debug session
+    with DebugSession.from_config(
+        output_dir=DAEMON_DIR,
+        enabled=True,
+        sample_limit=limit,
+        phase_filter=phases if phase != "all" else None,
+    ) as debug:
+        
+        for p in phases:
+            debug.phase_start(p)
+            
+            try:
+                if p == "ingest":
+                    _debug_ingest_with_session(conn, debug, limit)
+                elif p == "parse":
+                    _debug_parse_with_session(conn, debug, limit)
+                elif p == "symbols":
+                    _debug_symbols_with_session(conn, debug, limit)
+                elif p == "refs":
+                    _debug_refs_with_session(conn, debug, limit)
+                elif p == "localization":
+                    _debug_localization_with_session(conn, debug, limit)
+                elif p == "lookups":
+                    _debug_lookups_with_session(conn, debug, limit)
+                else:
+                    debug.emit("error", message=f"Unknown phase: {p}")
+            except Exception as e:
+                debug.emit("error", message=str(e), phase=p)
+            
+            debug.phase_end(p)
+        
+    conn.close()
+    
+    # Also write legacy format for backwards compatibility
+    _write_legacy_debug_output(db_path, phase, limit)
+    
+    return DAEMON_DIR
+
+
+def _debug_ingest_with_session(conn, debug, limit: int):
+    """Debug ingest phase using DebugSession."""
+    rows = conn.execute("""
+        SELECT f.file_id, f.relpath, f.content_hash, fc.size, fc.is_binary
+        FROM files f
+        JOIN file_contents fc ON f.content_hash = fc.content_hash
+        LIMIT ?
+    """, (limit,)).fetchall()
+    
+    for file_id, relpath, content_hash, size, is_binary in rows:
+        with debug.span("file", phase="ingest", path=relpath) as s:
+            s.add(
+                file_id=file_id,
+                input_bytes=size,
+                is_binary=bool(is_binary),
+                output_count=1,  # One file stored
+            )
+
+
+def _debug_parse_with_session(conn, debug, limit: int):
+    """Debug parse phase using DebugSession."""
+    from ck3raven.parser import parse_source
+    import json as json_mod
+    
+    rows = conn.execute("""
+        SELECT f.file_id, f.relpath, fc.content_text
+        FROM files f
+        JOIN file_contents fc ON f.content_hash = fc.content_hash
+        WHERE f.relpath LIKE '%.txt'
+        AND fc.content_text IS NOT NULL
+        AND LENGTH(fc.content_text) < 500000
+        LIMIT ?
+    """, (limit,)).fetchall()
+    
+    for file_id, relpath, content_text in rows:
+        with debug.span("file", phase="parse", path=relpath) as s:
+            input_bytes = len(content_text) if content_text else 0
+            s.add(input_bytes=input_bytes)
+            
+            try:
+                ast = parse_source(content_text, relpath)
+                if ast:
+                    ast_dict = ast.to_dict() if hasattr(ast, 'to_dict') else ast
+                    ast_json = json_mod.dumps(ast_dict, separators=(',', ':'))
+                    s.add(
+                        output_bytes=len(ast_json),
+                        output_count=ast_json.count('{'),  # node count estimate
+                        ok=True,
+                    )
+                else:
+                    s.add(ok=False, output_count=0)
+            except Exception as e:
+                s.add(ok=False, error=str(e)[:100])
+                debug.emit("error", phase="parse", path=relpath, message=str(e)[:200])
+
+
+def _debug_symbols_with_session(conn, debug, limit: int):
+    """Debug symbols phase using DebugSession."""
+    from ck3raven.db.symbols import extract_symbols_from_ast
+    import json as json_mod
+    
+    rows = conn.execute("""
+        SELECT f.file_id, f.relpath, f.content_hash, a.ast_blob, a.ast_id
+        FROM files f
+        JOIN asts a ON f.content_hash = a.content_hash
+        WHERE a.parse_ok = 1
+        LIMIT ?
+    """, (limit,)).fetchall()
+    
+    for file_id, relpath, content_hash, ast_blob, ast_id in rows:
+        with debug.span("file", phase="symbols", path=relpath) as s:
+            s.add(input_bytes=len(ast_blob) if ast_blob else 0, ast_id=ast_id)
+            
+            try:
+                ast_dict = json_mod.loads(ast_blob.decode('utf-8'))
+                symbols = list(extract_symbols_from_ast(ast_dict, relpath, content_hash))
+                s.add(output_count=len(symbols), ok=True)
+            except Exception as e:
+                s.add(ok=False, error=str(e)[:100])
+                debug.emit("error", phase="symbols", path=relpath, message=str(e)[:200])
+
+
+def _debug_refs_with_session(conn, debug, limit: int):
+    """Debug refs phase using DebugSession."""
+    from ck3raven.db.symbols import extract_refs_from_ast
+    import json as json_mod
+    
+    rows = conn.execute("""
+        SELECT f.file_id, f.relpath, f.content_hash, a.ast_blob, a.ast_id
+        FROM files f
+        JOIN asts a ON f.content_hash = a.content_hash
+        WHERE a.parse_ok = 1
+        LIMIT ?
+    """, (limit,)).fetchall()
+    
+    for file_id, relpath, content_hash, ast_blob, ast_id in rows:
+        with debug.span("file", phase="refs", path=relpath) as s:
+            s.add(input_bytes=len(ast_blob) if ast_blob else 0, ast_id=ast_id)
+            
+            try:
+                ast_dict = json_mod.loads(ast_blob.decode('utf-8'))
+                refs = list(extract_refs_from_ast(ast_dict, relpath, content_hash))
+                s.add(output_count=len(refs), ok=True)
+            except Exception as e:
+                s.add(ok=False, error=str(e)[:100])
+                debug.emit("error", phase="refs", path=relpath, message=str(e)[:200])
+
+
+def _debug_localization_with_session(conn, debug, limit: int):
+    """Debug localization phase using DebugSession."""
+    from ck3raven.parser.localization import parse_localization
+    
+    rows = conn.execute("""
+        SELECT f.file_id, f.relpath, fc.content_text
+        FROM files f
+        JOIN file_contents fc ON f.content_hash = fc.content_hash
+        WHERE f.relpath LIKE '%_l_english.yml'
+        AND fc.content_text IS NOT NULL
+        LIMIT ?
+    """, (limit,)).fetchall()
+    
+    for file_id, relpath, content_text in rows:
+        with debug.span("file", phase="localization", path=relpath) as s:
+            s.add(input_bytes=len(content_text) if content_text else 0)
+            
+            try:
+                loc_file = parse_localization(content_text, relpath)
+                s.add(output_count=len(loc_file.entries), ok=True)
+            except Exception as e:
+                s.add(ok=False, error=str(e)[:100])
+                debug.emit("error", phase="localization", path=relpath, message=str(e)[:200])
+
+
+def _debug_lookups_with_session(conn, debug, limit: int):
+    """Debug lookups phase using DebugSession."""
+    tables = ["trait_lookups", "event_lookups", "decision_lookups"]
+    
+    for table in tables:
+        with debug.span("file", phase="lookups", path=table) as s:
+            try:
+                count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                s.add(output_count=count, ok=True)
+            except Exception as e:
+                s.add(ok=False, error=str(e)[:100])
+
+
+def _write_legacy_debug_output(db_path: Path, phase: str, limit: int):
+    """Write legacy debug_output.json format for backwards compatibility."""
     import sqlite3
     
     conn = sqlite3.connect(db_path)
@@ -1718,14 +1909,13 @@ def debug_daemon_phase(db_path: Path, phase: str, limit: int = 10) -> Path:
         "limit": limit,
         "db_path": str(db_path),
         "files": [],
-        "blocks": {},  # Phase-specific block breakdown
+        "blocks": {},
         "summary": {},
         "errors": []
     }
     
     try:
         if phase == "all":
-            # Run all phases sequentially
             phases = ["ingest", "parse", "symbols", "refs", "localization", "lookups"]
             output["phases"] = {}
             for p in phases:
@@ -1746,36 +1936,30 @@ def debug_daemon_phase(db_path: Path, phase: str, limit: int = 10) -> Path:
                 except Exception as e:
                     phase_output["errors"].append(str(e))
                 output["phases"][p] = phase_output
-            # Build combined summary
             output["summary"] = {"phases_run": len(phases)}
-        elif phase == "ingest":
-            _debug_ingest_phase(conn, output, limit)
-        elif phase == "parse":
-            _debug_parse_phase(conn, output, limit)
-        elif phase == "symbols":
-            _debug_symbols_phase(conn, output, limit)
-        elif phase == "refs":
-            _debug_refs_phase(conn, output, limit)
-        elif phase == "localization":
-            _debug_localization_phase(conn, output, limit)
-        elif phase == "lookups":
-            _debug_lookups_phase(conn, output, limit)
         else:
-            output["errors"].append(f"Unknown phase: {phase}. Valid: all, ingest, parse, symbols, refs, localization, lookups")
-            
+            if phase == "ingest":
+                _debug_ingest_phase(conn, output, limit)
+            elif phase == "parse":
+                _debug_parse_phase(conn, output, limit)
+            elif phase == "symbols":
+                _debug_symbols_phase(conn, output, limit)
+            elif phase == "refs":
+                _debug_refs_phase(conn, output, limit)
+            elif phase == "localization":
+                _debug_localization_phase(conn, output, limit)
+            elif phase == "lookups":
+                _debug_lookups_phase(conn, output, limit)
     except Exception as e:
-        import traceback
-        output["errors"].append({"phase": "main", "error": str(e), "traceback": traceback.format_exc()})
-    
+        output["errors"].append(str(e))
     finally:
         conn.close()
     
     output["completed_at"] = datetime.now().isoformat()
     _write_debug_output(output)
-    
-    return DEBUG_OUTPUT_FILE
 
 
+# Legacy debug functions - kept for backwards compatibility
 def _debug_ingest_phase(conn: sqlite3.Connection, output: dict, limit: int):
     """Debug file ingestion - measure file discovery and content storage."""
     
@@ -2301,24 +2485,42 @@ def main():
         if args.debug:
             # Debug a specific phase - outputs to file, not terminal
             print(f"Running {args.debug} phase debug on {args.debug_limit} files...")
-            print(f"Output will be written to: {DEBUG_OUTPUT_FILE}")
-            output_path = debug_daemon_phase(args.db, args.debug, args.debug_limit)
-            print(f"\nDebug complete. Results saved to: {output_path}")
-            # Print summary from the file
+            print(f"Output will be written to: {DAEMON_DIR}")
+            output_dir = debug_daemon_phase(args.db, args.debug, args.debug_limit)
+            print(f"\nDebug complete. Results saved to: {output_dir}")
+            
+            # Print summary from the new debug_summary.json
+            summary_file = output_dir / "debug_summary.json"
+            legacy_file = output_dir / "debug_output.json"
+            
             try:
-                result = json.loads(output_path.read_text())
-                if result.get("summary"):
-                    s = result["summary"]
-                    print(f"\nSummary:")
-                    for key, value in s.items():
-                        if isinstance(value, float):
-                            print(f"  {key}: {value:.1f}")
-                        else:
-                            print(f"  {key}: {value}")
-                if result.get("errors"):
-                    print(f"\nErrors: {len(result['errors'])}")
-                    for err in result["errors"][:3]:  # Show first 3
-                        print(f"  - {err}")
+                if summary_file.exists():
+                    result = json.loads(summary_file.read_text())
+                    print(f"\n=== DebugSession Summary ===")
+                    print(f"Run ID: {result.get('run_id', 'N/A')}")
+                    print(f"Duration: {result.get('duration_sec', 0):.1f}s")
+                    for phase_name, phase_stats in result.get("phases", {}).items():
+                        print(f"\n{phase_name}:")
+                        print(f"  Files: {phase_stats.get('files_processed', 0)}")
+                        print(f"  Rate: {phase_stats.get('rate_per_sec', 0):.1f} files/sec")
+                        print(f"  Errors: {phase_stats.get('errors', 0)}")
+                
+                # Also show legacy format summary
+                if legacy_file.exists():
+                    legacy = json.loads(legacy_file.read_text())
+                    if legacy.get("summary"):
+                        s = legacy["summary"]
+                        print(f"\n=== Legacy Summary ===")
+                        for key, value in s.items():
+                            if isinstance(value, float):
+                                print(f"  {key}: {value:.1f}")
+                            else:
+                                print(f"  {key}: {value}")
+                    if legacy.get("errors"):
+                        print(f"\nErrors: {len(legacy['errors'])}")
+                        for err in legacy["errors"][:3]:
+                            print(f"  - {err}")
+                            
             except Exception as e:
                 print(f"Error reading output: {e}")
             sys.exit(0)

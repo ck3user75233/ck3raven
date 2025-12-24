@@ -301,9 +301,10 @@ Side scripts cause problems:
 
 ### Builder-Daemon Debug Interface
 
-**Unified debug mode for any daemon phase:**
+**Modern debug mode using DebugSession architecture:**
+
 ```bash
-# Debug any phase with detailed timing (outputs to ~/.ck3raven/daemon/debug_output.json)
+# Debug any phase with detailed timing
 & $VENV_PYTHON builder/daemon.py start --debug PHASE --debug-limit N
 
 # Available phases:
@@ -327,14 +328,52 @@ Side scripts cause problems:
 & $VENV_PYTHON builder/daemon.py start --test --skip-mods
 ```
 
-**Debug output includes:**
-- Per-file timing breakdown (decode_ms, extract_ms, total_ms)
-- Input/output sizes (bloat measurement)
-- Efficiency metrics (items per KB, ms per KB)
-- Summary statistics with projected rates
+**Debug output (in `~/.ck3raven/daemon/`):**
+- `debug_trace.jsonl` - JSONL event stream (machine-readable)
+- `debug_summary.json` - Aggregated stats per phase
+- `debug_output.json` - Legacy format (backwards compatible)
+
+**DebugSession Architecture (builder/debug/session.py):**
+```python
+from builder.debug import DebugSession
+
+with DebugSession.from_config(output_dir, sample_limit=100) as debug:
+    debug.phase_start("parse")
+    
+    for file in files:
+        with debug.span("file", phase="parse", path=file.path) as s:
+            ast = parse(file.content)
+            s.add(output_bytes=len(ast), output_count=node_count)
+    
+    debug.phase_end("parse")
+```
+
+**Design principles:**
+- **Observe, don't re-implement** - Hooks into real phases
+- **Phase-agnostic** - Session handles output format
+- **Data-driven** - Uniform metrics across all phases
 
 When you need new debugging capability, add it to the daemon or create a proper 
 module in `builder/` or `scripts/`.
+
+---
+
+## MCP Tools for Agents
+
+### Syntax Validation
+
+Use `ck3_validate_syntax` to check CK3 script syntax BEFORE writing files:
+
+```python
+result = ck3_validate_syntax(my_script)
+if result["valid"]:
+    ck3_write_file(mod_name, path, my_script)
+else:
+    for err in result["errors"]:
+        print(f"Line {err['line']}: {err['message']}")
+```
+
+For AST access, use `ck3_parse_content` instead.
 
 ---
 
