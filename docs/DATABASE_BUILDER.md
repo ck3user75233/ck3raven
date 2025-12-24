@@ -211,7 +211,7 @@ The builder tracks changes at multiple levels:
 
 When a mod is updated (e.g., Steam Workshop update):
 
-1. **Fast mtime scan** - Compare stored mtime vs filesystem mtime
+1. **Fast mtime scan** - Compare stored `files.mtime` vs filesystem mtime
 2. **Hash check for changed** - Only read files where mtime differs, compute hash
 3. **Categorize** - Files are `added`, `removed`, `changed`, or `unchanged`
 4. **Clean up replaced/removed files**:
@@ -220,8 +220,12 @@ When a mod is updated (e.g., Steam Workshop update):
    - Delete `asts` (by content_hash, only if no other files reference it)
    - Delete `file_contents` (by content_hash, only if orphaned)
 5. **Store new content** - Insert new file_contents and file records with mtime
-6. **Mark stale** - Set `is_stale=1`, `symbols_extracted_at=NULL` on content_version
+6. **Clear extraction timestamps** - Set `symbols_extracted_at=NULL` on content_version
 7. **Daemon routing** - Existing daemon file routing regenerates ASTs/symbols
+
+> **Note on `is_stale` column**: The `content_versions.is_stale` column is **deprecated** and 
+> scheduled for removal. Change detection happens at the **file level** via `files.mtime`, not
+> via this flag. The column is always set to 1 and not used for decisions.
 
 ### Key Implementation Details
 

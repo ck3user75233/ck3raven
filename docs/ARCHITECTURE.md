@@ -431,11 +431,14 @@ ConflictUnit → User Decision → ResolutionChoice → Patch Generation
 
 ## Future Work
 
-### Update Detection System (Pending)
-- Detect when vanilla/mod source directories have changed (mtime comparison)
-- Mark content_versions as stale when source files are modified
-- Trigger automatic re-ingestion and re-extraction
-- Uses `source_mtime` and `is_stale` columns in content_versions table
+### Update Detection System (Implemented)
+- Detect when vanilla/mod source directories have changed via **file-level mtime comparison**
+- Trigger automatic re-ingestion when mtime differs from stored value
+- Re-extract symbols for changed files  
+- Uses `files.mtime` column for per-file change detection
+
+> **Deprecation note:** The `content_versions.is_stale` and `content_versions.source_mtime` 
+> columns are deprecated and not used. Change detection happens at file level, not content_version level.
 
 ### Change Logging System (Pending)
 - Track when mods/vanilla are updated with detailed summaries
