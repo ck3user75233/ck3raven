@@ -538,6 +538,336 @@ def ck3_get_db_status() -> dict:
 
 
 @mcp.tool()
+def ck3_db_delete(
+    target: Literal["asts", "symbols", "refs", "files", "content_versions", "lookups", "playsets", "build_tracking"],
+    scope: Literal["all", "mods_only", "by_ids", "by_content_version"],
+    ids: Optional[list[int | str]] = None,
+    content_version_ids: Optional[list[int]] = None,
+    confirm: bool = False
+) -> dict:
+    """
+    Flexible database cleanup tool for surgical deletion of indexed data.
+    
+    Use this to clear cached/derived data when:
+    - Mods have been updated from Steam and need re-ingestion
+    - Schema changes require re-extraction
+    - Debugging requires fresh data
+    
+    Args:
+        target: What type of data to delete:
+            - "asts": Parsed AST cache (can be regenerated from files)
+            - "symbols": Extracted symbol definitions
+            - "refs": Extracted symbol references  
+            - "files": File entries (deletes ASTs/symbols/refs too)
+            - "content_versions": Mod/vanilla entries (cascades to files)
+            - "lookups": All lookup tables (trait_lookups, event_lookups, etc.)
+            - "playsets": Playset configuration
+            - "build_tracking": builder_runs, builder_steps, build_lock
+            
+        scope: How to filter what gets deleted:
+            - "all": Delete ALL entries of this target type
+            - "mods_only": Delete mod data, preserve vanilla (content_version_id > 1)
+            - "by_ids": Delete specific IDs (requires `ids` parameter)
+            - "by_content_version": Delete by content_version_id (requires `content_version_ids`)
+            
+        ids: List of IDs to delete when scope="by_ids"
+            - Integers: [1, 5, 10]
+            - Ranges as strings: ["1-100", "500-600"]
+            - Mixed: [1, 5, "10-20", 100]
+            
+        content_version_ids: List of content_version_ids when scope="by_content_version"
+        
+        confirm: Must be True to actually delete. If False, returns preview of what would be deleted.
+        
+    Returns:
+        {
+            "success": bool,
+            "target": str,
+            "scope": str,
+            "rows_deleted": int,  # or "rows_would_delete" if confirm=False
+            "details": {...}
+        }
+    
+    Examples:
+        # Preview deleting all mod ASTs
+        ck3_db_delete(target="asts", scope="mods_only", confirm=False)
+        
+        # Actually delete all mod data
+        ck3_db_delete(target="content_versions", scope="mods_only", confirm=True)
+        
+        # Delete specific content_versions by ID
+        ck3_db_delete(target="content_versions", scope="by_ids", ids=[2, 3, 4], confirm=True)
+        
+        # Delete ASTs for content_versions 5-10
+        ck3_db_delete(target="asts", scope="by_content_version", content_version_ids=[5,6,7,8,9,10], confirm=True)
+    """
+    db = _get_db()
+    trace = _get_trace()
+    cur = db.conn.cursor()
+    
+    result = {
+        "success": False,
+        "target": target,
+        "scope": scope,
+        "confirm": confirm,
+    }
+    
+    # Parse ID ranges into flat list
+    def expand_ids(id_list: list) -> list[int]:
+        expanded = []
+        for item in id_list:
+            if isinstance(item, int):
+                expanded.append(item)
+            elif isinstance(item, str) and "-" in item:
+                start, end = item.split("-", 1)
+                expanded.extend(range(int(start), int(end) + 1))
+            else:
+                expanded.append(int(item))
+        return expanded
+    
+    # Build WHERE clause based on scope
+    def get_where_clause(table: str, id_column: str) -> tuple[str, list]:
+        if scope == "all":
+            return "", []
+        elif scope == "mods_only":
+            if table == "content_versions":
+                return "WHERE kind = 'mod'", []
+            elif table in ("files", "asts", "symbols", "refs"):
+                if table == "files":
+                    return "WHERE content_version_id > 1", []
+                else:
+                    return f"WHERE file_id IN (SELECT file_id FROM files WHERE content_version_id > 1)", []
+            else:
+                return "", []  # For other tables, mods_only = all
+        elif scope == "by_ids":
+            if not ids:
+                raise ValueError("scope='by_ids' requires 'ids' parameter")
+            expanded = expand_ids(ids)
+            placeholders = ",".join("?" * len(expanded))
+            return f"WHERE {id_column} IN ({placeholders})", expanded
+        elif scope == "by_content_version":
+            if not content_version_ids:
+                raise ValueError("scope='by_content_version' requires 'content_version_ids' parameter")
+            placeholders = ",".join("?" * len(content_version_ids))
+            if table == "content_versions":
+                return f"WHERE content_version_id IN ({placeholders})", content_version_ids
+            elif table == "files":
+                return f"WHERE content_version_id IN ({placeholders})", content_version_ids
+            else:
+                return f"WHERE file_id IN (SELECT file_id FROM files WHERE content_version_id IN ({placeholders}))", content_version_ids
+        else:
+            raise ValueError(f"Unknown scope: {scope}")
+    
+    try:
+        # Target-specific deletion logic
+        if target == "asts":
+            where, params = get_where_clause("asts", "ast_id")
+            count_sql = f"SELECT COUNT(*) FROM asts {where}"
+            delete_sql = f"DELETE FROM asts {where}"
+            
+        elif target == "symbols":
+            where, params = get_where_clause("symbols", "symbol_id")
+            count_sql = f"SELECT COUNT(*) FROM symbols {where}"
+            delete_sql = f"DELETE FROM symbols {where}"
+            
+        elif target == "refs":
+            where, params = get_where_clause("refs", "ref_id")
+            count_sql = f"SELECT COUNT(*) FROM refs {where}"
+            delete_sql = f"DELETE FROM refs {where}"
+            
+        elif target == "files":
+            where, params = get_where_clause("files", "file_id")
+            # Files cascade - need to delete symbols, refs, asts first
+            count_sql = f"SELECT COUNT(*) FROM files {where}"
+            
+            if confirm:
+                # Get content_version_ids for the files being deleted
+                cv_where = where.replace("WHERE content_version_id", "WHERE content_version_id")
+                if scope == "mods_only":
+                    # Delete symbols/refs by content_version_id > 1
+                    cur.execute("DELETE FROM symbols WHERE content_version_id > 1")
+                    symbols_deleted = cur.rowcount
+                    cur.execute("DELETE FROM refs WHERE content_version_id > 1")
+                    refs_deleted = cur.rowcount
+                else:
+                    # Get file_ids first, then find their content_version_ids
+                    cur.execute(f"SELECT DISTINCT content_version_id FROM files {where}", params)
+                    cv_ids = [r[0] for r in cur.fetchall()]
+                    if cv_ids:
+                        placeholders = ",".join("?" * len(cv_ids))
+                        cur.execute(f"DELETE FROM symbols WHERE content_version_id IN ({placeholders})", cv_ids)
+                        symbols_deleted = cur.rowcount
+                        cur.execute(f"DELETE FROM refs WHERE content_version_id IN ({placeholders})", cv_ids)
+                        refs_deleted = cur.rowcount
+                    else:
+                        symbols_deleted = refs_deleted = 0
+                
+                # Delete ASTs by content_hash (ASTs are content-addressed)
+                cur.execute(f"DELETE FROM asts WHERE content_hash IN (SELECT content_hash FROM files {where})", params)
+                asts_deleted = cur.rowcount
+                cur.execute(f"DELETE FROM files {where}", params)
+                files_deleted = cur.rowcount
+                db.conn.commit()
+                
+                result["success"] = True
+                result["rows_deleted"] = files_deleted
+                result["cascade"] = {
+                    "symbols_deleted": symbols_deleted,
+                    "refs_deleted": refs_deleted,
+                    "asts_deleted": asts_deleted,
+                }
+                trace.log("ck3lens.db_delete", {"target": target, "scope": scope}, result)
+                return result
+            
+        elif target == "content_versions":
+            where, params = get_where_clause("content_versions", "content_version_id")
+            count_sql = f"SELECT COUNT(*) FROM content_versions {where}"
+            
+            if confirm:
+                # Get IDs first for cascade
+                cur.execute(f"SELECT content_version_id FROM content_versions {where}", params)
+                cv_ids = [r[0] for r in cur.fetchall()]
+                
+                if cv_ids:
+                    placeholders = ",".join("?" * len(cv_ids))
+                    # Cascade delete
+                    cur.execute(f"DELETE FROM symbols WHERE file_id IN (SELECT file_id FROM files WHERE content_version_id IN ({placeholders}))", cv_ids)
+                    symbols_deleted = cur.rowcount
+                    cur.execute(f"DELETE FROM refs WHERE file_id IN (SELECT file_id FROM files WHERE content_version_id IN ({placeholders}))", cv_ids)
+                    refs_deleted = cur.rowcount
+                    cur.execute(f"DELETE FROM asts WHERE file_id IN (SELECT file_id FROM files WHERE content_version_id IN ({placeholders}))", cv_ids)
+                    asts_deleted = cur.rowcount
+                    cur.execute(f"DELETE FROM files WHERE content_version_id IN ({placeholders})", cv_ids)
+                    files_deleted = cur.rowcount
+                    cur.execute(f"DELETE FROM playset_mods WHERE content_version_id IN ({placeholders})", cv_ids)
+                    playset_mods_deleted = cur.rowcount
+                    cur.execute(f"DELETE FROM content_versions {where}", params)
+                    cv_deleted = cur.rowcount
+                    # Also clean mod_packages for deleted mods
+                    cur.execute("DELETE FROM mod_packages WHERE mod_package_id NOT IN (SELECT DISTINCT mod_package_id FROM content_versions WHERE mod_package_id IS NOT NULL)")
+                    mod_packages_deleted = cur.rowcount
+                    db.conn.commit()
+                    
+                    result["success"] = True
+                    result["rows_deleted"] = cv_deleted
+                    result["cascade"] = {
+                        "files_deleted": files_deleted,
+                        "symbols_deleted": symbols_deleted,
+                        "refs_deleted": refs_deleted,
+                        "asts_deleted": asts_deleted,
+                        "playset_mods_deleted": playset_mods_deleted,
+                        "mod_packages_deleted": mod_packages_deleted,
+                    }
+                else:
+                    result["success"] = True
+                    result["rows_deleted"] = 0
+                    
+                trace.log("ck3lens.db_delete", {"target": target, "scope": scope}, result)
+                return result
+                
+        elif target == "lookups":
+            # Delete all lookup tables
+            lookup_tables = ["trait_lookups", "event_lookups", "decision_lookups", "culture_lookups", "religion_lookups"]
+            if not confirm:
+                counts = {}
+                for table in lookup_tables:
+                    try:
+                        cur.execute(f"SELECT COUNT(*) FROM {table}")
+                        counts[table] = cur.fetchone()[0]
+                    except:
+                        counts[table] = 0
+                result["rows_would_delete"] = sum(counts.values())
+                result["details"] = counts
+                trace.log("ck3lens.db_delete", {"target": target, "scope": scope}, result)
+                return result
+            else:
+                total = 0
+                counts = {}
+                for table in lookup_tables:
+                    try:
+                        cur.execute(f"DELETE FROM {table}")
+                        counts[table] = cur.rowcount
+                        total += cur.rowcount
+                    except:
+                        counts[table] = 0
+                db.conn.commit()
+                result["success"] = True
+                result["rows_deleted"] = total
+                result["details"] = counts
+                trace.log("ck3lens.db_delete", {"target": target, "scope": scope}, result)
+                return result
+                
+        elif target == "playsets":
+            if not confirm:
+                cur.execute("SELECT COUNT(*) FROM playsets")
+                playsets = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM playset_mods")
+                playset_mods = cur.fetchone()[0]
+                result["rows_would_delete"] = playsets + playset_mods
+                result["details"] = {"playsets": playsets, "playset_mods": playset_mods}
+                trace.log("ck3lens.db_delete", {"target": target, "scope": scope}, result)
+                return result
+            else:
+                cur.execute("DELETE FROM playset_mods")
+                pm_deleted = cur.rowcount
+                cur.execute("DELETE FROM playsets")
+                p_deleted = cur.rowcount
+                db.conn.commit()
+                result["success"] = True
+                result["rows_deleted"] = p_deleted + pm_deleted
+                result["details"] = {"playsets": p_deleted, "playset_mods": pm_deleted}
+                trace.log("ck3lens.db_delete", {"target": target, "scope": scope}, result)
+                return result
+                
+        elif target == "build_tracking":
+            if not confirm:
+                cur.execute("SELECT COUNT(*) FROM builder_runs")
+                runs = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM builder_steps")
+                steps = cur.fetchone()[0]
+                result["rows_would_delete"] = runs + steps
+                result["details"] = {"builder_runs": runs, "builder_steps": steps}
+                trace.log("ck3lens.db_delete", {"target": target, "scope": scope}, result)
+                return result
+            else:
+                cur.execute("DELETE FROM build_lock")
+                cur.execute("DELETE FROM builder_steps")
+                steps = cur.rowcount
+                cur.execute("DELETE FROM builder_runs")
+                runs = cur.rowcount
+                db.conn.commit()
+                result["success"] = True
+                result["rows_deleted"] = runs + steps
+                result["details"] = {"builder_runs": runs, "builder_steps": steps}
+                trace.log("ck3lens.db_delete", {"target": target, "scope": scope}, result)
+                return result
+        else:
+            result["error"] = f"Unknown target: {target}"
+            return result
+        
+        # Preview mode - count what would be deleted
+        if not confirm:
+            cur.execute(count_sql, params)
+            count = cur.fetchone()[0]
+            result["rows_would_delete"] = count
+            result["preview"] = True
+            trace.log("ck3lens.db_delete", {"target": target, "scope": scope, "preview": True}, result)
+            return result
+        
+        # Actual delete
+        cur.execute(delete_sql, params)
+        result["success"] = True
+        result["rows_deleted"] = cur.rowcount
+        db.conn.commit()
+        
+    except Exception as e:
+        result["error"] = str(e)
+        
+    trace.log("ck3lens.db_delete", {"target": target, "scope": scope}, result)
+    return result
+
+
+@mcp.tool()
 def ck3_get_policy_status() -> dict:
     """
     Check if policy enforcement is working.
