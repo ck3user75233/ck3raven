@@ -937,6 +937,35 @@ def ck3_list_live_mods() -> dict:
 
 
 @mcp.tool()
+def _refresh_file_in_db(mod_name: str, rel_path: str, content: str = None, deleted: bool = False) -> dict:
+    """
+    Internal helper to refresh a file in the database after write/edit/delete.
+    
+    This is the incremental update path - much faster than full rebuild.
+    """
+    try:
+        # Add builder path
+        import sys
+        from pathlib import Path
+        builder_path = Path(__file__).parent.parent.parent / "builder"
+        if str(builder_path) not in sys.path:
+            sys.path.insert(0, str(builder_path))
+        
+        from builder.incremental import refresh_single_file, mark_file_deleted
+        from ck3raven.db.schema import get_connection, DEFAULT_DB_PATH
+        
+        conn = get_connection(DEFAULT_DB_PATH)
+        
+        if deleted:
+            return mark_file_deleted(conn, mod_name, rel_path)
+        else:
+            return refresh_single_file(conn, mod_name, rel_path, content=content)
+            
+    except Exception as e:
+        # Don't fail the write operation if refresh fails
+        return {"success": False, "error": str(e)}
+
+
 def ck3_read_live_file(
     mod_name: str,
     rel_path: str,
@@ -1004,6 +1033,11 @@ def ck3_write_file(
     
     result = live_mods.write_file(session, mod_name, rel_path, content)
     
+    # Auto-refresh in database after successful write
+    if result.get("success"):
+        db_refresh = _refresh_file_in_db(mod_name, rel_path, content=content)
+        result["db_refresh"] = db_refresh
+    
     trace.log("ck3lens.write_file", {
         "mod_name": mod_name,
         "rel_path": rel_path,
@@ -1040,13 +1074,27 @@ def ck3_edit_file(
     result = live_mods.edit_file(session, mod_name, rel_path, old_content, new_content)
     
     # Validate resulting file if requested
+    updated_content = None
     if result.get("success") and validate_syntax and rel_path.endswith(".txt"):
         read_result = live_mods.read_live_file(session, mod_name, rel_path)
         if read_result.get("success"):
-            parse_result = parse_content(read_result["content"], rel_path)
+            updated_content = read_result["content"]
+            parse_result = parse_content(updated_content, rel_path)
             result["syntax_valid"] = parse_result["success"]
             if not parse_result["success"]:
                 result["syntax_warnings"] = parse_result["errors"]
+    
+    # Auto-refresh in database after successful edit
+    if result.get("success"):
+        # Read content if not already read for validation
+        if updated_content is None:
+            read_result = live_mods.read_live_file(session, mod_name, rel_path)
+            if read_result.get("success"):
+                updated_content = read_result["content"]
+        
+        if updated_content:
+            db_refresh = _refresh_file_in_db(mod_name, rel_path, content=updated_content)
+            result["db_refresh"] = db_refresh
     
     trace.log("ck3lens.edit_file", {
         "mod_name": mod_name,
@@ -1075,6 +1123,11 @@ def ck3_delete_file(
     trace = _get_trace()
     
     result = live_mods.delete_file(session, mod_name, rel_path)
+    
+    # Mark file as deleted in database
+    if result.get("success"):
+        db_refresh = _refresh_file_in_db(mod_name, rel_path, deleted=True)
+        result["db_refresh"] = db_refresh
     
     trace.log("ck3lens.delete_file", {
         "mod_name": mod_name,
@@ -1106,10 +1159,72 @@ def ck3_rename_file(
     
     result = live_mods.rename_file(session, mod_name, old_rel_path, new_rel_path)
     
+    # Handle DB refresh for rename: mark old as deleted, refresh new
+    if result.get("success"):
+        _refresh_file_in_db(mod_name, old_rel_path, deleted=True)
+        # Read the new file content and refresh
+        new_content = live_mods.read_live_file(session, mod_name, new_rel_path)
+        if new_content.get("success"):
+            db_refresh = _refresh_file_in_db(mod_name, new_rel_path, content=new_content["content"])
+            result["db_refresh"] = db_refresh
+    
     trace.log("ck3lens.rename_file", {
         "mod_name": mod_name,
         "old_rel_path": old_rel_path,
         "new_rel_path": new_rel_path
+    }, {"success": result.get("success", False)})
+    
+    return result
+
+
+@mcp.tool()
+def ck3_refresh_file(
+    mod_name: str,
+    rel_path: str
+) -> dict:
+    """
+    Manually refresh a file in the database.
+    
+    Use this after editing a file outside of MCP tools (e.g., with VS Code).
+    Reads the current file from disk and updates the database:
+    - Updates content hash
+    - Re-parses AST (if script file)
+    - Re-extracts symbols and references
+    
+    Typical time: < 500ms for normal script files.
+    
+    Args:
+        mod_name: Name of the live mod
+        rel_path: Relative path within the mod
+    
+    Returns:
+        {
+            "success": bool,
+            "ingested": bool,
+            "parsed": bool,
+            "symbols": int,
+            "refs": int,
+            "time_ms": float
+        }
+    """
+    session = _get_session()
+    trace = _get_trace()
+    
+    # Read current file content
+    read_result = live_mods.read_live_file(session, mod_name, rel_path)
+    
+    if not read_result.get("success"):
+        if not read_result.get("exists", True):
+            # File was deleted - mark as deleted in DB
+            result = _refresh_file_in_db(mod_name, rel_path, deleted=True)
+        else:
+            result = {"success": False, "error": read_result.get("error", "Failed to read file")}
+    else:
+        result = _refresh_file_in_db(mod_name, rel_path, content=read_result["content"])
+    
+    trace.log("ck3lens.refresh_file", {
+        "mod_name": mod_name,
+        "rel_path": rel_path
     }, {"success": result.get("success", False)})
     
     return result
