@@ -35,9 +35,11 @@ from dataclasses import dataclass, field
 DEFAULT_DB_PATH = Path.home() / ".ck3raven" / "ck3raven.db"
 DAEMON_DIR = Path.home() / ".ck3raven" / "daemon"
 PID_FILE = DAEMON_DIR / "rebuild.pid"
+LOCK_FILE = DAEMON_DIR / "rebuild.lock"
 STATUS_FILE = DAEMON_DIR / "rebuild_status.json"
 LOG_FILE = DAEMON_DIR / "rebuild.log"
 HEARTBEAT_FILE = DAEMON_DIR / "heartbeat"
+DEBUG_OUTPUT_FILE = DAEMON_DIR / "debug_output.json"
 
 # Ensure daemon directory exists
 DAEMON_DIR.mkdir(parents=True, exist_ok=True)
@@ -475,15 +477,79 @@ def is_daemon_running() -> bool:
         return False
 
 
+def acquire_exclusive_lock() -> bool:
+    """
+    Acquire exclusive lock to prevent multiple daemon instances.
+    
+    Uses a lockfile with exclusive access. This is more robust than just
+    PID checking because:
+    1. The lock is held by the OS, not just a file we created
+    2. If the process crashes, the OS releases the lock automatically
+    3. Prevents race conditions between checking and starting
+    
+    Returns:
+        True if lock acquired, False if another instance is running
+    """
+    import msvcrt
+    
+    try:
+        # Open lockfile for exclusive access
+        lock_fd = os.open(str(LOCK_FILE), os.O_CREAT | os.O_RDWR)
+        
+        try:
+            # Try to acquire exclusive lock (non-blocking)
+            msvcrt.locking(lock_fd, msvcrt.LK_NBLCK, 1)
+            
+            # Write our PID to the lock file
+            os.write(lock_fd, str(os.getpid()).encode())
+            os.fsync(lock_fd)
+            
+            # Keep the file descriptor open (held until process exits)
+            # Store in module global so it doesn't get garbage collected
+            global _lock_fd
+            _lock_fd = lock_fd
+            return True
+            
+        except (IOError, OSError):
+            # Lock is held by another process
+            os.close(lock_fd)
+            return False
+            
+    except Exception as e:
+        print(f"Lock acquisition error: {e}")
+        return False
+
+
+def release_exclusive_lock():
+    """Release the exclusive lock if we hold it."""
+    global _lock_fd
+    try:
+        if '_lock_fd' in globals() and _lock_fd is not None:
+            import msvcrt
+            try:
+                msvcrt.locking(_lock_fd, msvcrt.LK_UNLCK, 1)
+            except Exception:
+                pass
+            os.close(_lock_fd)
+            _lock_fd = None
+    except Exception:
+        pass
+
+
+# Module global for lock file descriptor
+_lock_fd = None
+
+
 def write_pid():
     """Write current process PID."""
     PID_FILE.write_text(str(os.getpid()))
 
 
 def cleanup_pid():
-    """Remove PID file."""
+    """Remove PID file and release lock."""
     try:
         PID_FILE.unlink(missing_ok=True)
+        release_exclusive_lock()
     except Exception:
         pass
 
@@ -1479,7 +1545,13 @@ def extract_symbols_from_stored_asts(conn, logger: DaemonLogger, status: StatusW
 
 
 def extract_refs_from_stored_asts(conn, logger: DaemonLogger, status: StatusWriter):
-    """Extract references from stored ASTs (not re-parsing)."""
+    """Extract references from stored ASTs (not re-parsing).
+    
+    Optimized for performance:
+    - Batch inserts instead of individual INSERTs
+    - Pre-fetch content_version_id to avoid subquery per ref
+    - Process in larger batches
+    """
     from ck3raven.db.symbols import extract_refs_from_ast
     import json
     
@@ -1494,6 +1566,14 @@ def extract_refs_from_stored_asts(conn, logger: DaemonLogger, status: StatusWrit
     conn.execute("DELETE FROM refs")
     conn.commit()
     
+    # Build file_id -> content_version_id lookup for performance
+    logger.info("Building content_version_id lookup...")
+    cv_lookup = {}
+    cv_rows = conn.execute("SELECT file_id, content_version_id FROM files WHERE deleted = 0").fetchall()
+    for file_id, cv_id in cv_rows:
+        cv_lookup[file_id] = cv_id
+    logger.info(f"Cached {len(cv_lookup)} file -> content_version mappings")
+    
     # Query files that have ASTs
     total_count = conn.execute("""
         SELECT COUNT(*) FROM files f
@@ -1504,16 +1584,17 @@ def extract_refs_from_stored_asts(conn, logger: DaemonLogger, status: StatusWrit
     
     logger.info(f"Processing {total_count} files for refs")
     
-    chunk_size = 50  # Smaller chunks for more frequent logging
+    chunk_size = 100  # Larger chunks for better performance
     offset = 0
     total_refs = 0
     errors = 0
+    batch_refs = []  # Accumulate refs for batch insert
     
     while offset < total_count:
         write_heartbeat()
         
         rows = conn.execute("""
-            SELECT f.file_id, f.relpath, f.content_hash, a.ast_blob
+            SELECT f.file_id, f.relpath, f.content_hash, a.ast_id, a.ast_blob
             FROM files f
             JOIN asts a ON f.content_hash = a.content_hash
             WHERE f.deleted = 0 AND a.parse_ok = 1
@@ -1525,29 +1606,42 @@ def extract_refs_from_stored_asts(conn, logger: DaemonLogger, status: StatusWrit
         if not rows:
             break
         
-        for file_id, relpath, content_hash, ast_blob in rows:
+        for file_id, relpath, content_hash, ast_id, ast_blob in rows:
             try:
                 # Decode AST from blob
                 ast_dict = json.loads(ast_blob.decode('utf-8'))
                 
                 refs = list(extract_refs_from_ast(ast_dict, relpath, content_hash))
                 
-                for ref in refs:
-                    name = ref.name
-                    kind = ref.kind
-                    line = ref.line
-                    context = ref.context
-                    
-                    conn.execute("""
-                        INSERT OR IGNORE INTO refs
-                        (ref_type, name, using_file_id, line_number, context, content_version_id)
-                        VALUES (?, ?, ?, ?, ?, (SELECT content_version_id FROM files WHERE file_id = ?))
-                    """, (kind, name, file_id, line, context, file_id))
+                # Use cached content_version_id instead of subquery per ref
+                cv_id = cv_lookup.get(file_id)
+                if cv_id is None:
+                    # Fallback query if not in cache (shouldn't happen)
+                    row = conn.execute(
+                        "SELECT content_version_id FROM files WHERE file_id = ?", (file_id,)
+                    ).fetchone()
+                    cv_id = row[0] if row else None
+                
+                if cv_id is not None:
+                    for ref in refs:
+                        batch_refs.append((
+                            ref.kind, ref.name, file_id, ast_id, 
+                            ref.line, ref.context, cv_id
+                        ))
                 
                 total_refs += len(refs)
                 
             except Exception as e:
                 errors += 1
+        
+        # Batch insert all refs from this chunk
+        if batch_refs:
+            conn.executemany("""
+                INSERT OR IGNORE INTO refs
+                (ref_type, name, using_file_id, ast_id, line_number, context, content_version_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, batch_refs)
+            batch_refs = []  # Reset for next chunk
         
         conn.commit()
         offset += len(rows)
@@ -1579,6 +1673,458 @@ def extract_refs_from_stored_asts(conn, logger: DaemonLogger, status: StatusWrit
     total_time = time.time() - start_time
     logger.info(f"Ref extraction complete in {total_time:.1f}s: {total_refs} refs, {errors} errors")
     return {'extracted': total_refs, 'errors': errors}
+
+
+def debug_daemon_phase(db_path: Path, phase: str, limit: int = 10) -> Path:
+    """
+    Debug any daemon phase with detailed block-by-block timing and bloat measurement.
+    
+    Outputs results to a JSON file (not terminal) so it can run in background
+    without keyboard interrupt issues. Results are saved to:
+        ~/.ck3raven/daemon/debug_output.json
+    
+    Supported phases:
+        - "ingest": File discovery and content storage timing
+        - "parse": Content → AST parsing 
+        - "symbols": AST → symbol extraction
+        - "refs": AST → reference extraction
+        - "localization": YML → localization_entries extraction
+        - "lookups": Symbol → lookup table extraction
+    
+    Block timing includes phase-specific metrics:
+        - read_ms: Time to read content
+        - decode_ms: Time to decode (AST blob, etc.)
+        - extract_ms: Time to extract data
+        - insert_ms: Time to insert to database (if applicable)
+        - input_size_bytes: Size of input data
+        - output_count: Number of items produced
+        - efficiency: Items produced per KB of input
+    
+    Args:
+        db_path: Path to database
+        phase: Which phase to debug
+        limit: Number of files to process
+        
+    Returns:
+        Path to output JSON file
+    """
+    import sqlite3
+    
+    conn = sqlite3.connect(db_path)
+    
+    output = {
+        "started_at": datetime.now().isoformat(),
+        "phase": phase,
+        "limit": limit,
+        "db_path": str(db_path),
+        "files": [],
+        "blocks": {},  # Phase-specific block breakdown
+        "summary": {},
+        "errors": []
+    }
+    
+    try:
+        if phase == "all":
+            # Run all phases sequentially
+            phases = ["ingest", "parse", "symbols", "refs", "localization", "lookups"]
+            output["phases"] = {}
+            for p in phases:
+                phase_output = {"files": [], "summary": {}, "errors": []}
+                try:
+                    if p == "ingest":
+                        _debug_ingest_phase(conn, phase_output, limit)
+                    elif p == "parse":
+                        _debug_parse_phase(conn, phase_output, limit)
+                    elif p == "symbols":
+                        _debug_symbols_phase(conn, phase_output, limit)
+                    elif p == "refs":
+                        _debug_refs_phase(conn, phase_output, limit)
+                    elif p == "localization":
+                        _debug_localization_phase(conn, phase_output, limit)
+                    elif p == "lookups":
+                        _debug_lookups_phase(conn, phase_output, limit)
+                except Exception as e:
+                    phase_output["errors"].append(str(e))
+                output["phases"][p] = phase_output
+            # Build combined summary
+            output["summary"] = {"phases_run": len(phases)}
+        elif phase == "ingest":
+            _debug_ingest_phase(conn, output, limit)
+        elif phase == "parse":
+            _debug_parse_phase(conn, output, limit)
+        elif phase == "symbols":
+            _debug_symbols_phase(conn, output, limit)
+        elif phase == "refs":
+            _debug_refs_phase(conn, output, limit)
+        elif phase == "localization":
+            _debug_localization_phase(conn, output, limit)
+        elif phase == "lookups":
+            _debug_lookups_phase(conn, output, limit)
+        else:
+            output["errors"].append(f"Unknown phase: {phase}. Valid: all, ingest, parse, symbols, refs, localization, lookups")
+            
+    except Exception as e:
+        import traceback
+        output["errors"].append({"phase": "main", "error": str(e), "traceback": traceback.format_exc()})
+    
+    finally:
+        conn.close()
+    
+    output["completed_at"] = datetime.now().isoformat()
+    _write_debug_output(output)
+    
+    return DEBUG_OUTPUT_FILE
+
+
+def _debug_ingest_phase(conn: sqlite3.Connection, output: dict, limit: int):
+    """Debug file ingestion - measure file discovery and content storage."""
+    
+    # Get sample of files with their content
+    rows = conn.execute("""
+        SELECT f.file_id, f.relpath, f.content_hash, fc.size, fc.is_binary
+        FROM files f
+        JOIN file_contents fc ON f.content_hash = fc.content_hash
+        LIMIT ?
+    """, (limit,)).fetchall()
+    
+    if not rows:
+        output["errors"].append("No files found in database")
+        return
+    
+    total_size = 0
+    for file_id, relpath, content_hash, size, is_binary in rows:
+        file_result = {
+            "file": relpath,
+            "file_id": file_id,
+            "content_hash": content_hash[:16] + "...",
+            "size_bytes": size,
+            "is_binary": bool(is_binary)
+        }
+        output["files"].append(file_result)
+        total_size += size or 0
+    
+    output["summary"] = {
+        "files_sampled": len(rows),
+        "total_size_bytes": total_size,
+        "avg_size_bytes": round(total_size / len(rows), 0) if rows else 0,
+        "note": "Ingest timing requires running actual ingest - this shows stored data stats"
+    }
+
+
+def _debug_parse_phase(conn: sqlite3.Connection, output: dict, limit: int):
+    """Debug parsing - measure content → AST timing."""
+    from ck3raven.parser import parse_source_recovering
+    
+    # Get files that need parsing (have content but no AST, or sample existing)
+    rows = conn.execute("""
+        SELECT f.file_id, f.relpath, f.content_hash, fc.content_text
+        FROM files f
+        JOIN file_contents fc ON f.content_hash = fc.content_hash
+        WHERE fc.is_binary = 0 AND fc.content_text IS NOT NULL
+        AND f.relpath LIKE '%.txt'
+        LIMIT ?
+    """, (limit,)).fetchall()
+    
+    if not rows:
+        output["errors"].append("No parseable files found")
+        return
+    
+    total_parse_ms = 0
+    total_size = 0
+    parsed_count = 0
+    
+    for file_id, relpath, content_hash, content_text in rows:
+        file_result = {
+            "file": relpath,
+            "file_id": file_id,
+            "input_size_bytes": len(content_text) if content_text else 0
+        }
+        
+        try:
+            # Time the parsing - use recovering parser to get error info
+            t0 = time.time()
+            result = parse_source_recovering(content_text, filename=relpath)
+            parse_ms = (time.time() - t0) * 1000
+            
+            file_result["parse_ms"] = round(parse_ms, 2)
+            file_result["parse_ok"] = result.success
+            file_result["error_count"] = len([d for d in result.diagnostics if d.severity == "error"])
+            
+            if result.ast:
+                file_result["node_count"] = _count_ast_nodes(result.ast.to_dict())
+                # Measure AST bloat
+                ast_json = json.dumps(result.ast.to_dict())
+                file_result["output_size_bytes"] = len(ast_json)
+                file_result["bloat_ratio"] = round(len(ast_json) / max(1, len(content_text)), 2)
+            
+            total_parse_ms += parse_ms
+            total_size += len(content_text) if content_text else 0
+            parsed_count += 1
+            
+        except Exception as e:
+            file_result["error"] = str(e)
+            output["errors"].append({"file": relpath, "error": str(e)})
+        
+        output["files"].append(file_result)
+    
+    if parsed_count > 0:
+        avg_ms = total_parse_ms / parsed_count
+        output["summary"] = {
+            "files_parsed": parsed_count,
+            "total_parse_ms": round(total_parse_ms, 2),
+            "avg_parse_ms": round(avg_ms, 2),
+            "projected_rate_per_sec": round(1000 / avg_ms, 1) if avg_ms > 0 else 0,
+            "total_input_bytes": total_size,
+            "avg_input_bytes": round(total_size / parsed_count, 0)
+        }
+
+
+def _debug_symbols_phase(conn: sqlite3.Connection, output: dict, limit: int):
+    """Debug symbol extraction - measure AST → symbols timing."""
+    from ck3raven.db.symbols import extract_symbols_from_ast
+    
+    rows = conn.execute("""
+        SELECT f.file_id, f.relpath, f.content_hash, a.ast_blob, a.ast_id
+        FROM asts a
+        JOIN files f ON a.content_hash = f.content_hash
+        WHERE a.parse_ok = 1
+        LIMIT ?
+    """, (limit,)).fetchall()
+    
+    if not rows:
+        output["errors"].append("No ASTs found in database")
+        return
+    
+    total_extract_ms = 0
+    total_symbols = 0
+    
+    for file_id, relpath, content_hash, ast_blob, ast_id in rows:
+        file_result = {
+            "file": relpath,
+            "file_id": file_id,
+            "ast_id": ast_id,
+            "ast_size_bytes": len(ast_blob) if ast_blob else 0
+        }
+        
+        try:
+            # Decode AST
+            t0 = time.time()
+            ast_dict = json.loads(ast_blob.decode('utf-8'))
+            decode_ms = (time.time() - t0) * 1000
+            file_result["decode_ms"] = round(decode_ms, 2)
+            
+            # Extract symbols
+            t1 = time.time()
+            symbols = list(extract_symbols_from_ast(ast_dict, relpath, content_hash))
+            extract_ms = (time.time() - t1) * 1000
+            file_result["extract_ms"] = round(extract_ms, 2)
+            file_result["symbols_count"] = len(symbols)
+            file_result["total_ms"] = round(decode_ms + extract_ms, 2)
+            
+            total_extract_ms += decode_ms + extract_ms
+            total_symbols += len(symbols)
+            
+        except Exception as e:
+            file_result["error"] = str(e)
+            output["errors"].append({"file": relpath, "error": str(e)})
+        
+        output["files"].append(file_result)
+    
+    valid = [f for f in output["files"] if "total_ms" in f]
+    if valid:
+        avg_ms = sum(f["total_ms"] for f in valid) / len(valid)
+        output["summary"] = {
+            "files_processed": len(valid),
+            "total_symbols": total_symbols,
+            "avg_ms_per_file": round(avg_ms, 2),
+            "projected_rate_per_sec": round(1000 / avg_ms, 1) if avg_ms > 0 else 0
+        }
+
+
+def _debug_refs_phase(conn: sqlite3.Connection, output: dict, limit: int):
+    """Debug ref extraction - measure AST → refs timing."""
+    from ck3raven.db.symbols import extract_refs_from_ast
+    
+    rows = conn.execute("""
+        SELECT f.file_id, f.relpath, f.content_hash, a.ast_blob, a.ast_id
+        FROM asts a
+        JOIN files f ON a.content_hash = f.content_hash
+        WHERE a.parse_ok = 1
+        LIMIT ?
+    """, (limit,)).fetchall()
+    
+    if not rows:
+        output["errors"].append("No ASTs found in database")
+        return
+    
+    total_decode_ms = 0
+    total_extract_ms = 0
+    total_refs = 0
+    
+    for file_id, relpath, content_hash, ast_blob, ast_id in rows:
+        file_result = {
+            "file": relpath,
+            "file_id": file_id,
+            "ast_id": ast_id,
+            "ast_size_bytes": len(ast_blob) if ast_blob else 0
+        }
+        
+        try:
+            # Block 1: Decode AST
+            t0 = time.time()
+            ast_dict = json.loads(ast_blob.decode('utf-8'))
+            decode_ms = (time.time() - t0) * 1000
+            file_result["decode_ms"] = round(decode_ms, 2)
+            total_decode_ms += decode_ms
+            
+            file_result["ast_node_count"] = _count_ast_nodes(ast_dict)
+            
+            # Block 2: Extract refs
+            t1 = time.time()
+            refs = list(extract_refs_from_ast(ast_dict, relpath, content_hash))
+            extract_ms = (time.time() - t1) * 1000
+            file_result["extract_ms"] = round(extract_ms, 2)
+            file_result["refs_count"] = len(refs)
+            total_refs += len(refs)
+            total_extract_ms += extract_ms
+            
+            file_result["total_ms"] = round(decode_ms + extract_ms, 2)
+            
+            if file_result["ast_size_bytes"] > 0:
+                file_result["refs_per_kb"] = round(
+                    len(refs) / (file_result["ast_size_bytes"] / 1024), 2
+                )
+                
+        except Exception as e:
+            file_result["error"] = str(e)
+            output["errors"].append({"file": relpath, "error": str(e)})
+        
+        output["files"].append(file_result)
+    
+    valid = [f for f in output["files"] if "total_ms" in f]
+    if valid:
+        times = [f["total_ms"] for f in valid]
+        sizes = [f["ast_size_bytes"] for f in valid]
+        avg_ms = sum(times) / len(times)
+        
+        output["summary"] = {
+            "files_processed": len(valid),
+            "total_refs": total_refs,
+            "total_decode_ms": round(total_decode_ms, 2),
+            "total_extract_ms": round(total_extract_ms, 2),
+            "avg_ms_per_file": round(avg_ms, 2),
+            "min_ms": round(min(times), 2),
+            "max_ms": round(max(times), 2),
+            "projected_rate_per_sec": round(1000 / avg_ms, 1) if avg_ms > 0 else 0,
+            "total_ast_bytes": sum(sizes),
+            "bloat_indicator": round(sum(sizes) / (total_refs + 1), 2)
+        }
+
+
+def _debug_localization_phase(conn: sqlite3.Connection, output: dict, limit: int):
+    """Debug localization extraction - measure YML → loc entries timing."""
+    from ck3raven.parser.localization import parse_localization
+    
+    # Get YML files
+    rows = conn.execute("""
+        SELECT f.file_id, f.relpath, fc.content_text
+        FROM files f
+        JOIN file_contents fc ON f.content_hash = fc.content_hash
+        WHERE f.relpath LIKE '%_l_english.yml'
+        AND fc.content_text IS NOT NULL
+        LIMIT ?
+    """, (limit,)).fetchall()
+    
+    if not rows:
+        output["errors"].append("No localization files found")
+        return
+    
+    total_parse_ms = 0
+    total_entries = 0
+    
+    for file_id, relpath, content_text in rows:
+        file_result = {
+            "file": relpath,
+            "file_id": file_id,
+            "input_size_bytes": len(content_text) if content_text else 0
+        }
+        
+        try:
+            t0 = time.time()
+            loc_file = parse_localization(content_text, relpath)
+            parse_ms = (time.time() - t0) * 1000
+            
+            file_result["parse_ms"] = round(parse_ms, 2)
+            file_result["entries_count"] = len(loc_file.entries)
+            file_result["entries_per_kb"] = round(
+                len(loc_file.entries) / max(1, len(content_text) / 1024), 2
+            )
+            
+            total_parse_ms += parse_ms
+            total_entries += len(loc_file.entries)
+            
+        except Exception as e:
+            file_result["error"] = str(e)
+            output["errors"].append({"file": relpath, "error": str(e)})
+        
+        output["files"].append(file_result)
+    
+    valid = [f for f in output["files"] if "parse_ms" in f]
+    if valid:
+        avg_ms = total_parse_ms / len(valid)
+        output["summary"] = {
+            "files_processed": len(valid),
+            "total_entries": total_entries,
+            "avg_ms_per_file": round(avg_ms, 2),
+            "projected_rate_per_sec": round(1000 / avg_ms, 1) if avg_ms > 0 else 0
+        }
+
+
+def _debug_lookups_phase(conn: sqlite3.Connection, output: dict, limit: int):
+    """Debug lookup extraction - show current lookup table stats."""
+    
+    # This phase doesn't process files individually, so just show stats
+    tables = ["trait_lookups", "event_lookups", "decision_lookups"]
+    
+    table_stats = {}
+    for table in tables:
+        try:
+            count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            table_stats[table] = {"count": count}
+        except Exception as e:
+            table_stats[table] = {"error": str(e)}
+    
+    # Sample some lookups
+    try:
+        traits = conn.execute("SELECT name, category FROM trait_lookups LIMIT ?", (limit,)).fetchall()
+        output["files"] = [{"name": t[0], "category": t[1]} for t in traits]
+        output["summary"] = {
+            "note": "Lookups phase builds aggregate tables from symbols",
+            "tables": table_stats
+        }
+    except Exception as e:
+        output["errors"].append({"phase": "lookups", "error": str(e)})
+
+
+def _count_ast_nodes(node, depth=0) -> int:
+    """Count nodes in AST for bloat measurement."""
+    if depth > 100:  # Prevent infinite recursion
+        return 1
+    
+    if isinstance(node, dict):
+        count = 1
+        for v in node.values():
+            count += _count_ast_nodes(v, depth + 1)
+        return count
+    elif isinstance(node, list):
+        return sum(_count_ast_nodes(item, depth + 1) for item in node)
+    else:
+        return 1
+
+
+def _write_debug_output(output: dict):
+    """Write debug output to JSON file."""
+    DEBUG_OUTPUT_FILE.write_text(json.dumps(output, indent=2))
 
 
 def start_detached(db_path: Path, force: bool, symbols_only: bool = False, playset_file: Path = None):
@@ -1732,6 +2278,13 @@ def main():
     parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH, help="Database path")
     parser.add_argument("-f", "--follow", action="store_true", help="Follow log output")
     
+    # Debug mode options - unified for any phase
+    parser.add_argument("--debug", type=str, metavar="PHASE",
+                        choices=["all", "ingest", "parse", "symbols", "refs", "localization", "lookups"],
+                        help="Debug daemon phase(s) with detailed timing. Use 'all' for all phases. Output to ~/.ck3raven/daemon/debug_output.json")
+    parser.add_argument("--debug-limit", type=int, default=10, metavar="N",
+                        help="Number of files to process in debug mode (default: 10)")
+    
     # Test mode options
     parser.add_argument("--test", action="store_true", 
                         help="Run synchronously with verbose output (for testing)")
@@ -1745,6 +2298,31 @@ def main():
     args = parser.parse_args()
     
     if args.command == "start":
+        if args.debug:
+            # Debug a specific phase - outputs to file, not terminal
+            print(f"Running {args.debug} phase debug on {args.debug_limit} files...")
+            print(f"Output will be written to: {DEBUG_OUTPUT_FILE}")
+            output_path = debug_daemon_phase(args.db, args.debug, args.debug_limit)
+            print(f"\nDebug complete. Results saved to: {output_path}")
+            # Print summary from the file
+            try:
+                result = json.loads(output_path.read_text())
+                if result.get("summary"):
+                    s = result["summary"]
+                    print(f"\nSummary:")
+                    for key, value in s.items():
+                        if isinstance(value, float):
+                            print(f"  {key}: {value:.1f}")
+                        else:
+                            print(f"  {key}: {value}")
+                if result.get("errors"):
+                    print(f"\nErrors: {len(result['errors'])}")
+                    for err in result["errors"][:3]:  # Show first 3
+                        print(f"  - {err}")
+            except Exception as e:
+                print(f"Error reading output: {e}")
+            sys.exit(0)
+        
         if args.test:
             # Run synchronously for testing - no daemon, no duplicate check
             print(f"Running in TEST mode (synchronous, verbose)")
@@ -1762,9 +2340,11 @@ def main():
             )
             sys.exit(0)
         
+        # Check for running instance using both PID check and exclusive lock
         if is_daemon_running():
-            print("Daemon is already running. Use 'stop' first.")
+            print("Daemon is already running (PID check). Use 'stop' first.")
             sys.exit(1)
+        
         start_detached(args.db, args.force, args.symbols_only, playset_file=args.playset_file)
     
     elif args.command == "status":
@@ -1778,6 +2358,11 @@ def main():
     
     elif args.command == "_run_daemon":
         # Internal: actually run the daemon
+        # Try to acquire exclusive lock first
+        if not acquire_exclusive_lock():
+            # Another daemon has the lock - exit silently
+            sys.exit(1)
+        
         write_pid()
         logger = DaemonLogger(LOG_FILE)
         status = StatusWriter(STATUS_FILE)

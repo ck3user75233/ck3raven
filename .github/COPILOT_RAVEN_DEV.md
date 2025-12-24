@@ -254,6 +254,72 @@ Or use `mcp_pylance_mcp_s_pylanceRunCodeSnippet` to validate imports.
 
 ---
 
+## Debugging Policy (CRITICAL)
+
+### NO SIDE SCRIPTS
+
+**All debugging code MUST live inside ck3raven source directories.**
+
+When diagnosing issues (build failures, performance problems, data anomalies):
+
+✅ **DO:**
+- Use existing daemon flags: `--debug-refs N`, `--test`, `--symbols-only`
+- Add new flags/functions to `builder/daemon.py` for diagnostic features
+- Add debug modes to existing library code
+- Create proper modules in `builder/`, `src/ck3raven/`, or `scripts/`
+
+❌ **DO NOT:**
+- Create one-off Python scripts in AI Workspace or other external folders
+- Write temporary debugging scripts outside ck3raven source
+- Develop features in side scripts that should be library code
+- Use Jupyter notebooks for debugging (use proper test files instead)
+
+### Rationale
+Side scripts cause problems:
+1. **Lost context** - Scripts get lost, duplicated, or forgotten
+2. **No testing** - Side scripts bypass the test suite
+3. **Code rot** - Features developed outside the library never get maintained
+4. **Policy bypass** - Side scripts skip pre-commit validation
+
+### Builder-Daemon Debug Interface
+
+**Unified debug mode for any daemon phase:**
+```bash
+# Debug any phase with detailed timing (outputs to ~/.ck3raven/daemon/debug_output.json)
+& $VENV_PYTHON builder/daemon.py start --debug PHASE --debug-limit N
+
+# Available phases:
+#   all          - Run ALL phases sequentially
+#   ingest       - File discovery and content storage
+#   parse        - Content → AST parsing
+#   symbols      - AST → symbol extraction
+#   refs         - AST → reference extraction  
+#   localization - YML → localization entries
+#   lookups      - Symbol → lookup tables
+
+# Examples:
+& $VENV_PYTHON builder/daemon.py start --debug all --debug-limit 10
+& $VENV_PYTHON builder/daemon.py start --debug refs --debug-limit 20
+& $VENV_PYTHON builder/daemon.py start --debug parse --debug-limit 50
+
+# Run synchronously with full output (no background daemon)
+& $VENV_PYTHON builder/daemon.py start --test
+
+# Skip mods (vanilla only)
+& $VENV_PYTHON builder/daemon.py start --test --skip-mods
+```
+
+**Debug output includes:**
+- Per-file timing breakdown (decode_ms, extract_ms, total_ms)
+- Input/output sizes (bloat measurement)
+- Efficiency metrics (items per KB, ms per KB)
+- Summary statistics with projected rates
+
+When you need new debugging capability, add it to the daemon or create a proper 
+module in `builder/` or `scripts/`.
+
+---
+
 ## Roadmap
 
 ### Phase 2: Game State Emulator (NEXT)

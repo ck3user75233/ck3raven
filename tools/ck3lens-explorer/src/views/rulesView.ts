@@ -19,8 +19,8 @@ interface RulesConfig {
     [ruleName: string]: RuleConfig;
 }
 
-export class RulesViewProvider implements vscode.TreeDataProvider<RuleItem> {
-    private _onDidChangeTreeData = new vscode.EventEmitter<RuleItem | undefined>();
+export class RulesViewProvider implements vscode.TreeDataProvider<RuleItem | WarningItem> {
+    private _onDidChangeTreeData = new vscode.EventEmitter<RuleItem | WarningItem | undefined>();
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
     
     // Support checkbox state changes
@@ -28,7 +28,9 @@ export class RulesViewProvider implements vscode.TreeDataProvider<RuleItem> {
     
     private configPath: string;
     private rules: RulesConfig = {};
-    private treeView: vscode.TreeView<RuleItem> | undefined;
+    private treeView: vscode.TreeView<RuleItem | WarningItem> | undefined;
+    private mcpConnected: boolean = false;
+    private mcpCheckInterval: NodeJS.Timeout | undefined;
     
     // Rule metadata for display
     private readonly ruleMetadata: { [key: string]: { displayName: string; description: string; mode: string } } = {
@@ -142,20 +144,59 @@ export class RulesViewProvider implements vscode.TreeDataProvider<RuleItem> {
         );
         this.configPath = path.join(aiWorkspace, 'ck3lens_config.yaml');
         this.loadConfig();
+        
+        // Check MCP status immediately and periodically
+        this.checkMcpStatus();
+        this.mcpCheckInterval = setInterval(() => this.checkMcpStatus(), 15000); // Every 15 seconds
+    }
+    
+    /**
+     * Check if MCP server tools are available
+     */
+    private checkMcpStatus(): void {
+        try {
+            const allTools = vscode.lm.tools;
+            const ck3Tools = allTools.filter(tool => tool.name.startsWith('mcp_ck3lens_ck3_'));
+            const wasConnected = this.mcpConnected;
+            this.mcpConnected = ck3Tools.length > 0;
+            
+            // Refresh if status changed
+            if (wasConnected !== this.mcpConnected) {
+                this.logger?.info(`MCP status changed: ${this.mcpConnected ? 'connected' : 'disconnected'}`);
+                this._onDidChangeTreeData.fire(undefined);
+            }
+        } catch (error) {
+            if (this.mcpConnected) {
+                this.mcpConnected = false;
+                this._onDidChangeTreeData.fire(undefined);
+            }
+        }
+    }
+    
+    /**
+     * Clean up interval on dispose
+     */
+    dispose(): void {
+        if (this.mcpCheckInterval) {
+            clearInterval(this.mcpCheckInterval);
+        }
     }
     
     /**
      * Register tree view to handle checkbox changes
      */
-    registerTreeView(treeView: vscode.TreeView<RuleItem>): void {
+    registerTreeView(treeView: vscode.TreeView<RuleItem | WarningItem>): void {
         this.treeView = treeView;
         treeView.onDidChangeCheckboxState(async (e) => {
             for (const [item, state] of e.items) {
-                const enabled = state === vscode.TreeItemCheckboxState.Checked;
-                if (!this.rules[item.ruleId]) {
-                    this.rules[item.ruleId] = { enabled, severity: 'error' };
-                } else {
-                    this.rules[item.ruleId].enabled = enabled;
+                // Only process RuleItem, not WarningItem
+                if (item instanceof RuleItem) {
+                    const enabled = state === vscode.TreeItemCheckboxState.Checked;
+                    if (!this.rules[item.ruleId]) {
+                        this.rules[item.ruleId] = { enabled, severity: 'error' };
+                    } else {
+                        this.rules[item.ruleId].enabled = enabled;
+                    }
                 }
             }
             this.saveConfig();
@@ -202,18 +243,27 @@ export class RulesViewProvider implements vscode.TreeDataProvider<RuleItem> {
         this._onDidChangeTreeData.fire(undefined);
     }
     
-    getTreeItem(element: RuleItem): vscode.TreeItem {
+    getTreeItem(element: RuleItem | WarningItem): vscode.TreeItem {
         return element;
     }
     
-    getChildren(element?: RuleItem): RuleItem[] {
+    getChildren(element?: RuleItem | WarningItem): (RuleItem | WarningItem)[] {
         if (element) {
             return []; // No nested items
         }
         
-        // Build rule items from metadata
-        const items: RuleItem[] = [];
+        const items: (RuleItem | WarningItem)[] = [];
         
+        // Show warning if MCP is not connected
+        if (!this.mcpConnected) {
+            items.push(new WarningItem(
+                '⚠️ MCP Server Offline',
+                'Policy rules are NOT being enforced! The agent can bypass all rules below.',
+                'Start the MCP server to enable policy enforcement.'
+            ));
+        }
+        
+        // Build rule items from metadata
         for (const [ruleId, meta] of Object.entries(this.ruleMetadata)) {
             const config = this.rules[ruleId] || { enabled: true, severity: 'error' };
             items.push(new RuleItem(
@@ -320,6 +370,30 @@ export class RulesViewProvider implements vscode.TreeDataProvider<RuleItem> {
             return this.configPath;
         }
         return undefined;
+    }
+}
+
+/**
+ * Warning item shown when policies are not being enforced
+ */
+class WarningItem extends vscode.TreeItem {
+    constructor(
+        label: string,
+        private readonly warningMessage: string,
+        private readonly actionHint: string
+    ) {
+        super(label, vscode.TreeItemCollapsibleState.None);
+        
+        this.iconPath = new vscode.ThemeIcon('warning', new vscode.ThemeColor('problemsWarningIcon.foreground'));
+        this.description = 'rules not enforced';
+        
+        this.tooltip = new vscode.MarkdownString();
+        this.tooltip.appendMarkdown(`**⚠️ Policy Enforcement Inactive**\n\n`);
+        this.tooltip.appendMarkdown(`${this.warningMessage}\n\n`);
+        this.tooltip.appendMarkdown(`---\n\n`);
+        this.tooltip.appendMarkdown(`**Action:** ${this.actionHint}`);
+        
+        this.contextValue = 'warning';
     }
 }
 

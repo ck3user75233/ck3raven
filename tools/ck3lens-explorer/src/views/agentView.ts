@@ -62,7 +62,7 @@ export const MODE_DEFINITIONS: Record<string, {
 class AgentTreeItem extends vscode.TreeItem {
     constructor(
         public readonly label: string,
-        public readonly itemType: 'python-bridge' | 'mcp-server' | 'agent' | 'action' | 'info',
+        public readonly itemType: 'python-bridge' | 'mcp-server' | 'policy-enforcement' | 'agent' | 'action' | 'info',
         public readonly collapsibleState: vscode.TreeItemCollapsibleState = vscode.TreeItemCollapsibleState.None,
         public readonly agent?: AgentInstance,
         public readonly actionCommand?: string
@@ -152,63 +152,88 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
     }
 
     /**
-     * Check if MCP server is working by attempting to invoke the ping tool.
-     * This is the most reliable way to check actual connectivity.
+     * Track when we last saw ck3lens tools available
+     */
+    private lastToolCount: number = 0;
+    private toolsLastSeen: number = 0;
+    private readonly TOOL_STALE_THRESHOLD_MS = 60000; // Consider tools stale after 60 seconds without reconfirmation
+
+    /**
+     * Check if MCP server is working by checking tool availability.
+     * 
+     * Note: vscode.lm.invokeTool() requires a valid toolInvocationToken which is only
+     * available during an active language model request context. We cannot call it
+     * directly from extension code. Instead, we check tool list freshness and 
+     * validate the MCP config file exists.
      */
     private async checkMcpConfiguration(): Promise<void> {
         try {
-            // First check if ck3lens tools are listed
+            // Check if ck3lens tools are currently listed
             const allTools = vscode.lm.tools;
             const ck3Tools = allTools.filter(tool => tool.name.startsWith('mcp_ck3lens_ck3_'));
+            const now = Date.now();
             
             if (ck3Tools.length === 0) {
-                // No tools listed at all - definitely not connected
-                await this.markMcpDisconnected('no tools');
+                // No tools listed at all
+                this.lastToolCount = 0;
+                await this.markMcpDisconnected('no tools registered');
                 return;
             }
 
-            // Tools are listed, but we need to verify the server is actually responding
-            // Try to invoke the ping tool (or instance_info as fallback)
-            const pingTool = ck3Tools.find(t => t.name === 'mcp_ck3lens_ck3_ping');
-            const infoTool = ck3Tools.find(t => t.name === 'mcp_ck3lens_ck3_get_instance_info');
-            const testTool = pingTool || infoTool;
+            // Tools are listed - but we need to verify they're fresh
+            // If tool count changed, we know VS Code just refreshed the list
+            if (ck3Tools.length !== this.lastToolCount) {
+                this.toolsLastSeen = now;
+                this.lastToolCount = ck3Tools.length;
+                this.logger.info(`MCP tools refreshed: ${ck3Tools.length} tools detected`);
+            }
 
-            if (testTool) {
-                try {
-                    // Actually invoke the tool to verify connectivity
-                    const result = await vscode.lm.invokeTool(testTool.name, { 
-                        input: {},
-                        toolInvocationToken: undefined
-                    });
-                    
-                    // If we got here, the server is truly connected
-                    this.state.mcpServer = { 
-                        status: 'connected', 
-                        serverName: `ck3lens (${ck3Tools.length} tools)` 
-                    };
-                    this.logger.info(`MCP server verified connected: ${ck3Tools.length} tools`);
-                    
-                    // Check for policy tools
-                    const hasPolicyTool = ck3Tools.some(t => t.name.includes('policy') || t.name.includes('validate'));
-                    this.state.policyEnforcement = hasPolicyTool 
-                        ? { status: 'connected', message: 'active' }
-                        : { status: 'connected', message: 'no policy tools' };
-                } catch (invokeError) {
-                    // Tool invocation failed - server is listed but not responding
-                    this.logger.warn(`MCP tool invocation failed: ${invokeError}`);
-                    await this.markMcpDisconnected('not responding');
-                }
-            } else {
-                // Tools listed but no ping/info tool - assume connected based on tool list
+            // Also verify the MCP config file exists and is configured
+            const configValid = await this.verifyMcpConfigFile();
+            if (!configValid) {
+                await this.markMcpDisconnected('config missing');
+                return;
+            }
+
+            // If we haven't seen a tool count change in a while, be cautious
+            // But still mark as connected if tools exist (VS Code manages the lifecycle)
+            const toolsAreFresh = (now - this.toolsLastSeen) < this.TOOL_STALE_THRESHOLD_MS;
+            
+            if (toolsAreFresh || this.toolsLastSeen === 0) {
+                // First check or tools recently refreshed - mark as connected
+                this.toolsLastSeen = now; // Initialize on first run
                 this.state.mcpServer = { 
                     status: 'connected', 
-                    serverName: `ck3lens (${ck3Tools.length} tools, unverified)` 
+                    serverName: `ck3lens (${ck3Tools.length} tools)` 
                 };
-                this.state.policyEnforcement = { status: 'connected', message: 'unverified' };
+                
+                // Check for policy tools
+                const hasPolicyTool = ck3Tools.some(t => 
+                    t.name.includes('policy') || t.name.includes('validate')
+                );
+                this.state.policyEnforcement = hasPolicyTool 
+                    ? { status: 'connected', message: 'active' }
+                    : { status: 'disconnected', message: 'no policy tools found' };
+            } else {
+                // Tools exist but haven't been refreshed - still report as connected
+                // VS Code manages MCP lifecycle, if tools are listed they should work
+                this.state.mcpServer = { 
+                    status: 'connected', 
+                    serverName: `ck3lens (${ck3Tools.length} tools)` 
+                };
+                
+                const hasPolicyTool = ck3Tools.some(t => 
+                    t.name.includes('policy') || t.name.includes('validate')
+                );
+                this.state.policyEnforcement = hasPolicyTool 
+                    ? { status: 'connected', message: 'active' }
+                    : { status: 'disconnected', message: 'no policy tools found' };
             }
+            
+            this.logger.debug(`MCP check: ${ck3Tools.length} tools, fresh=${toolsAreFresh}`);
         } catch (error) {
             this.logger.error('MCP status check error:', error);
-            await this.markMcpDisconnected('error');
+            await this.markMcpDisconnected('check error');
         }
 
         this.persistState();
@@ -216,20 +241,18 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
     }
 
     /**
-     * Mark MCP as disconnected with a reason
+     * Verify that the MCP config file exists and has ck3lens configured
      */
-    private async markMcpDisconnected(reason: string): Promise<void> {
+    private async verifyMcpConfigFile(): Promise<boolean> {
         const fs = require('fs');
         const path = require('path');
         const os = require('os');
         
-        // Check if config exists
         const possiblePaths = [
             process.env.APPDATA ? path.join(process.env.APPDATA, 'Code', 'User', 'mcp.json') : null,
             path.join(os.homedir(), 'AppData', 'Roaming', 'Code', 'User', 'mcp.json'),
         ].filter(Boolean);
 
-        let configExists = false;
         for (const mcpConfigPath of possiblePaths) {
             try {
                 if (mcpConfigPath && fs.existsSync(mcpConfigPath)) {
@@ -239,14 +262,21 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
                     }
                     const config = JSON.parse(content);
                     if (config.servers?.ck3lens) {
-                        configExists = true;
-                        break;
+                        return true;
                     }
                 }
             } catch (error) {
                 this.logger.debug(`MCP config check failed: ${error}`);
             }
         }
+        return false;
+    }
+
+    /**
+     * Mark MCP as disconnected with a reason
+     */
+    private async markMcpDisconnected(reason: string): Promise<void> {
+        const configExists = await this.verifyMcpConfigFile();
 
         if (configExists) {
             this.state.mcpServer = { status: 'disconnected', serverName: reason };
@@ -255,7 +285,7 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
             this.state.mcpServer = { status: 'disconnected', serverName: 'not configured' };
             this.logger.info('No MCP configuration found');
         }
-        this.state.policyEnforcement = { status: 'disconnected', message: 'MCP offline' };
+        this.state.policyEnforcement = { status: 'disconnected', message: 'MCP offline - policies not enforced!' };
     }
 
     private loadState(): AgentState {
@@ -358,10 +388,10 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
         }
         items.push(mcpItem);
 
-        // Policy Enforcement status
+        // Policy Enforcement status - ALWAYS show warning when inactive
         const policyLabel = this.state.policyEnforcement.status === 'connected'
             ? 'Policy Rules: active'
-            : 'Policy Rules: inactive';
+            : 'Policy Rules: ⚠️ INACTIVE';
         const policyItem = new AgentTreeItem(
             policyLabel,
             'policy-enforcement'
@@ -370,9 +400,19 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
             this.state.policyEnforcement.status === 'connected' ? 'shield' : 'warning',
             this.state.policyEnforcement.status === 'connected'
                 ? new vscode.ThemeColor('testing.iconPassed')
-                : new vscode.ThemeColor('testing.iconFailed')
+                : new vscode.ThemeColor('problemsWarningIcon.foreground')
         );
-        if (this.state.policyEnforcement.message && this.state.policyEnforcement.status === 'disconnected') {
+        // Always show description/warning for policy status
+        if (this.state.policyEnforcement.status === 'disconnected') {
+            policyItem.description = this.state.policyEnforcement.message || 'policies not enforced!';
+            policyItem.tooltip = new vscode.MarkdownString(
+                `⚠️ **Policy Enforcement Inactive**\n\n` +
+                `Reason: ${this.state.policyEnforcement.message || 'Unknown'}\n\n` +
+                `Agent actions are NOT being validated against policy rules. ` +
+                `This means the agent may perform actions that violate CK3 modding policies.\n\n` +
+                `**To fix:** Ensure the MCP server is running and connected.`
+            );
+        } else if (this.state.policyEnforcement.message) {
             policyItem.description = this.state.policyEnforcement.message;
         }
         items.push(policyItem);
