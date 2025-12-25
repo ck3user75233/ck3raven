@@ -202,18 +202,17 @@ def git_pull(
     }
 
 
-def git_log(session: Session, mod_id: str, limit: int = 10) -> dict:
+def git_log(session: Session, mod_id: str, limit: int = 10, file_path: Optional[str] = None) -> dict:
     """Recent commit history."""
     mod = session.get_live_mod(mod_id)
     if not mod:
         return {"error": f"Unknown mod_id: {mod_id}"}
-    
-    ok, out, err = _run_git(
-        mod.path, 
-        "log", 
-        f"-{limit}", 
-        "--pretty=format:%H|%an|%ai|%s"
-    )
+    args = ["log", f"-{limit}", "--pretty=format:%H|%an|%ai|%s"]
+    if file_path:
+        args.append("--")
+        args.append(file_path)
+
+    ok, out, err = _run_git(mod.path, *args)
     if not ok:
         return {"error": err}
     

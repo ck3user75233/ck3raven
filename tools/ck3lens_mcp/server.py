@@ -2773,26 +2773,26 @@ def ck3_git_diff(
 @mcp.tool()
 def ck3_git_add(
     mod_name: str,
-    paths: Optional[list[str]] = None
+    paths: Optional[list[str]] = None,
+    all_files: bool = False
 ) -> dict:
     """
     Stage files for commit in a live mod.
     
     Args:
         mod_name: Name of the live mod
-        paths: List of paths to stage (default: all changes)
-    
+        paths: List of paths to stage (default: all if all_files=True)
+        all_files: If True, stage all changes (git add -A)
     Returns:
         Success status
     """
     session = _get_session()
     trace = _get_trace()
     
-    result = git_ops.git_add(session, mod_name, paths)
     
-    trace.log("ck3lens.git_add", {"mod_name": mod_name, "paths": paths}, {"success": result.get("success", False)})
+    result = git_ops.git_add(session, mod_name, paths, all_files)
     
-    return result
+    trace.log("ck3lens.git_add", {"mod_name": mod_name, "paths": paths, "all_files": all_files}, {"success": result.get("success", False)})
 
 
 @mcp.tool()
