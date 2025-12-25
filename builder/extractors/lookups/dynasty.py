@@ -4,6 +4,11 @@ Dynasty Lookup Extractor
 Extracts dynasty data from common/dynasties/*.txt files.
 These files define dynasties with their IDs, names, cultures, and prefixes.
 
+ARCHITECTURE NOTE:
+Dynasty files follow the LOOKUPS route in file_routes.py.
+They do NOT get ASTs - we parse raw content directly here.
+This is a specialized extractor per the file routing table.
+
 Format example:
     2 = {
         name = "dynn_Orsini"
@@ -16,11 +21,12 @@ Format example:
     }
 """
 
-import json
 import sqlite3
-from pathlib import Path
 from typing import Dict, Optional, List
 from dataclasses import dataclass
+
+# Use the shared parser
+from ck3raven.parser import parse_source
 
 
 @dataclass
@@ -33,41 +39,54 @@ class DynastyData:
     motto: Optional[str] = None
 
 
-def extract_dynasties_from_ast(
+def extract_dynasties_from_raw_content(
     conn: sqlite3.Connection,
     content_version_id: int,
+    progress_callback=None,
 ) -> Dict[str, int]:
     """
-    Extract dynasty data from already-parsed ASTs in the database.
+    Extract dynasty data from raw file content in the database.
+    
+    Per file routing table, dynasty files (common/dynasties/*.txt) are
+    LOOKUPS route - they don't get ASTs. We parse raw content directly.
     
     Args:
         conn: Database connection
         content_version_id: Content version to filter by
+        progress_callback: Optional (processed, total) callback
         
     Returns:
         {'inserted': N, 'skipped': N, 'errors': N}
     """
     stats = {'inserted': 0, 'skipped': 0, 'errors': 0}
     
-    # Get all ASTs from common/dynasties/ files
+    # Get raw file content for dynasty files (no AST join - they don't have ASTs)
     rows = conn.execute("""
-        SELECT a.ast_id, a.ast_blob, f.file_id, f.relpath
+        SELECT f.file_id, f.relpath, fc.content_text
         FROM files f
         JOIN file_contents fc ON f.content_hash = fc.content_hash
-        JOIN asts a ON a.content_hash = fc.content_hash
         WHERE f.content_version_id = ?
         AND f.relpath LIKE '%common/dynasties/%'
         AND f.relpath LIKE '%.txt'
         AND f.deleted = 0
-        AND a.parse_ok = 1
+        AND fc.content_text IS NOT NULL
     """, (content_version_id,)).fetchall()
+    
+    if not rows:
+        return {'inserted': 0, 'skipped': 0, 'errors': 0, 'note': 'no dynasty files found'}
     
     batch = []
     batch_size = 500
+    total_files = len(rows)
     
-    for ast_id, ast_blob, file_id, relpath in rows:
+    for i, (file_id, relpath, content_text) in enumerate(rows):
         try:
-            ast_dict = json.loads(ast_blob.decode('utf-8') if isinstance(ast_blob, bytes) else ast_blob)
+            # Parse raw content directly using shared parser
+            ast_dict = parse_source(content_text, filename=relpath)
+            
+            if ast_dict is None:
+                stats['errors'] += 1
+                continue
             
             # Each top-level block is a dynasty: dynasty_id = { ... }
             for child in ast_dict.get('children', []):
@@ -92,6 +111,9 @@ def extract_dynasties_from_ast(
                         
         except Exception as e:
             stats['errors'] += 1
+        
+        if progress_callback:
+            progress_callback(i + 1, total_files)
     
     # Final batch
     if batch:
@@ -157,6 +179,6 @@ def extract_dynasties(
 ) -> Dict[str, int]:
     """
     Main entry point for dynasty extraction.
-    Uses AST-based extraction from parsed common/dynasties/ files.
+    Parses raw content directly (LOOKUPS route - no ASTs).
     """
-    return extract_dynasties_from_ast(conn, content_version_id)
+    return extract_dynasties_from_raw_content(conn, content_version_id, progress_callback)

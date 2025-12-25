@@ -200,6 +200,89 @@ agents:
         severity: warning
         status: tbc
 
+      database_write_protection:
+        description: >
+          ONLY the builder-daemon may write to the ck3raven database.
+          Direct database writes via scripts, ad-hoc commands, or MCP
+          tools other than builder-daemon are FORBIDDEN. This includes:
+          - INSERT, UPDATE, DELETE operations
+          - Schema migrations
+          - Data corrections
+          If the database needs modification, use builder-daemon 
+          (rebuild, refresh, debug commands).
+        enforcement_stage: pre_call_wrapper
+        severity: error
+        blocks_patterns:
+          - "quick script"
+          - "create.*script"
+          - "ephemeral"
+          - "test script"
+          - "one-off"
+        exception_only: builder-daemon CLI or rebuild commands
+
+      ephemeral_script_prohibition:
+        description: >
+          Features and functions that belong in ck3raven MUST be developed
+          in the official project architecture, NOT as quick/ephemeral scripts.
+          Triggers when patterns like "create.*script", "quick script",
+          "let me write a quick", "one-off" are detected.
+          
+          Violations:
+          - Creating standalone Python files to test database operations
+          - Writing ad-hoc scripts instead of using existing ck3raven tools
+          - Circumventing broken ck3raven code with throwaway scripts
+          
+          Correct approach:
+          - Fix broken code in ck3raven
+          - Use existing builder-daemon -test and -debug functions
+          - Add new features to the appropriate ck3raven module
+        enforcement_stage: pattern_detection
+        severity: error
+        trigger_patterns:
+          - "quick script"
+          - "create.*script"
+          - "let me create a.*script"
+          - "write a.*script"
+          - "ephemeral"
+          - "one-off"
+          - "standalone.*test"
+        required_justification: >
+          If complex CLI operations are genuinely needed, agent must
+          justify in trace log why ck3raven libraries cannot be used.
+          "Something is broken" is NOT acceptable - fix the broken code.
+
+      architecture_first_rule:
+        description: >
+          Before implementing ANY new feature or function, agent MUST:
+          1. Review ARCHITECTURE.md to confirm where feature fits
+          2. Check exhaustively whether feature already exists in ck3raven
+          3. Verify file routing table if feature involves file processing
+          
+          This prevents duplicate implementations and architectural drift.
+        enforcement_stage: pre_implementation_check
+        severity: error
+        required_checks:
+          - architecture_location_confirmed
+          - existing_implementation_search
+          - file_route_compliance_if_applicable
+
+      file_routing_compliance:
+        description: >
+          All file processing MUST follow the file routing table in
+          src/ck3raven/db/file_routes.py. The routing table determines:
+          - Which files get ASTs (SCRIPT route)
+          - Which files go directly to lookups (LOOKUPS route)
+          - Which files are localization (LOCALIZATION route)
+          - Which files are skipped (SKIP route)
+          
+          Extractors MUST NOT query for data that routing says shouldn't exist.
+          Example: Dynasty files are LOOKUPS route, so extractors must NOT
+          query the AST table for dynasty content - they should parse raw
+          content from file_contents.
+        enforcement_stage: code_review
+        severity: error
+        routing_table: src/ck3raven/db/file_routes.py
+
 # -------------------------------------------------------------------
 # VALIDATION DOMAINS
 # Invoked only when relevant to the content being produced

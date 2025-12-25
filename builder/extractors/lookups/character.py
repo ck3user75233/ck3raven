@@ -5,6 +5,11 @@ Extracts character data from history/characters/*.txt files.
 These files define historical characters with their IDs, names, dynasties,
 birth/death dates, traits, and family relationships.
 
+ARCHITECTURE NOTE:
+Character files follow the LOOKUPS route in file_routes.py.
+They do NOT get ASTs - we parse raw content directly here.
+This is a specialized extractor per the file routing table.
+
 Format example:
     98 = {
         name = "Eadgar"
@@ -18,11 +23,12 @@ Format example:
     }
 """
 
-import json
 import sqlite3
-from pathlib import Path
 from typing import Dict, Optional, List
 from dataclasses import dataclass, field
+
+# Use the shared parser
+from ck3raven.parser import parse_source
 
 
 @dataclass
@@ -41,61 +47,54 @@ class CharacterData:
     traits: List[str] = field(default_factory=list)
 
 
-def extract_characters_from_ast(
+def extract_characters_from_raw_content(
     conn: sqlite3.Connection,
     content_version_id: int,
+    progress_callback=None,
 ) -> Dict[str, int]:
     """
-    Extract character data from already-parsed ASTs in the database.
+    Extract character data from raw file content in the database.
     
-    Characters are stored in history/characters/*.txt which are parsed
-    into ASTs. We query those ASTs to extract character data.
+    Per file routing table, character files (history/characters/*.txt) are
+    LOOKUPS route - they don't get ASTs. We parse raw content directly.
     
     Args:
         conn: Database connection  
         content_version_id: Content version to filter by
+        progress_callback: Optional (processed, total) callback
         
     Returns:
         {'inserted': N, 'skipped': N, 'errors': N}
     """
     stats = {'inserted': 0, 'skipped': 0, 'errors': 0}
     
-    # Get all ASTs from history/characters/ files
+    # Get raw file content for character files (no AST join - they don't have ASTs)
     rows = conn.execute("""
-        SELECT a.ast_id, a.ast_blob, f.file_id, f.relpath
-        FROM asts a
-        JOIN files f ON a.content_hash = (
-            SELECT fc.content_hash FROM file_contents fc
-            JOIN files f2 ON f2.content_hash = fc.content_hash
-            WHERE f2.file_id = f.file_id
-        )
+        SELECT f.file_id, f.relpath, fc.content_text
+        FROM files f
+        JOIN file_contents fc ON f.content_hash = fc.content_hash
         WHERE f.content_version_id = ?
         AND f.relpath LIKE '%history/characters/%'
         AND f.relpath LIKE '%.txt'
         AND f.deleted = 0
-        AND a.parse_ok = 1
+        AND fc.content_text IS NOT NULL
     """, (content_version_id,)).fetchall()
     
     if not rows:
-        # Try alternative join path
-        rows = conn.execute("""
-            SELECT a.ast_id, a.ast_blob, f.file_id, f.relpath
-            FROM files f
-            JOIN file_contents fc ON f.content_hash = fc.content_hash
-            JOIN asts a ON a.content_hash = fc.content_hash
-            WHERE f.content_version_id = ?
-            AND f.relpath LIKE '%history/characters/%'
-            AND f.relpath LIKE '%.txt'
-            AND f.deleted = 0
-            AND a.parse_ok = 1
-        """, (content_version_id,)).fetchall()
+        return {'inserted': 0, 'skipped': 0, 'errors': 0, 'note': 'no character files found'}
     
     batch = []
     batch_size = 500
+    total_files = len(rows)
     
-    for ast_id, ast_blob, file_id, relpath in rows:
+    for i, (file_id, relpath, content_text) in enumerate(rows):
         try:
-            ast_dict = json.loads(ast_blob.decode('utf-8') if isinstance(ast_blob, bytes) else ast_blob)
+            # Parse raw content directly using shared parser
+            ast_dict = parse_source(content_text, filename=relpath)
+            
+            if ast_dict is None:
+                stats['errors'] += 1
+                continue
             
             # Each top-level block is a character: char_id = { ... }
             for child in ast_dict.get('children', []):
@@ -120,6 +119,9 @@ def extract_characters_from_ast(
                         
         except Exception as e:
             stats['errors'] += 1
+        
+        if progress_callback:
+            progress_callback(i + 1, total_files)
     
     # Final batch
     if batch:
@@ -183,6 +185,7 @@ def _parse_character_block(char_id: int, block: Dict) -> Optional[CharacterData]
 
 def _character_to_row(char: CharacterData, content_version_id: int) -> tuple:
     """Convert CharacterData to database row tuple."""
+    import json
     return (
         char.character_id,
         char.name,
@@ -221,6 +224,6 @@ def extract_characters(
 ) -> Dict[str, int]:
     """
     Main entry point for character extraction.
-    Uses AST-based extraction from parsed history/characters/ files.
+    Parses raw content directly (LOOKUPS route - no ASTs).
     """
-    return extract_characters_from_ast(conn, content_version_id)
+    return extract_characters_from_raw_content(conn, content_version_id, progress_callback)
