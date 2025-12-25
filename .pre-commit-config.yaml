@@ -45,6 +45,26 @@ repos:
         args: [--fix, --exit-non-zero-on-fix]
       - id: ruff-format
 
+  # Code-Diff Guard - prevents duplicate implementations
+  - repo: local
+    hooks:
+      - id: code-diff-guard
+        name: Code-Diff Guard
+        entry: python scripts/guards/code_diff_guard.py --base HEAD
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-commit]
+        verbose: true
+
+      - id: policy-check
+        name: Policy Validation
+        entry: python scripts/pre-commit-policy-check.py
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+        verbose: true
+
 # Configuration for hooks
 default_language_version:
   python: python3.11

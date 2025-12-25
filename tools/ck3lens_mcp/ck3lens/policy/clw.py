@@ -1,0 +1,406 @@
+"""
+Command Line Wrapper (CLW) Policy Engine
+
+This module classifies commands and enforces policy decisions:
+- ALLOW: Command can proceed without token
+- DENY: Command is blocked (never allowed)
+- REQUIRE_TOKEN: Command needs approval token
+
+Policy enforcement integrates with:
+- Work Contracts: Active contract provides scope
+- Approval Tokens: HMAC-signed tokens for risky operations
+- Canonical Domains: Code-diff guard classification
+"""
+from __future__ import annotations
+
+import fnmatch
+import re
+from dataclasses import dataclass, field
+from enum import Enum, auto
+from pathlib import Path
+from typing import Literal, Optional
+
+from .tokens import validate_token
+
+
+# ============================================================================
+# Enums and Types
+# ============================================================================
+
+class Decision(Enum):
+    """Policy decision for a command."""
+    ALLOW = auto()      # Command can proceed
+    DENY = auto()       # Command is blocked
+    REQUIRE_TOKEN = auto()  # Command needs approval token
+
+
+class CommandCategory(Enum):
+    """Categories of commands by risk level."""
+    READ_ONLY = auto()          # Safe read operations
+    WRITE_IN_SCOPE = auto()     # Write within contract scope
+    WRITE_OUT_OF_SCOPE = auto() # Write outside contract scope
+    DESTRUCTIVE = auto()        # File deletion, data loss
+    GIT_SAFE = auto()           # git status, log, diff
+    GIT_MODIFY = auto()         # git commit, branch
+    GIT_DANGEROUS = auto()      # git push, rebase, force
+    NETWORK = auto()            # curl, wget, etc.
+    SYSTEM = auto()             # System commands
+    BLOCKED = auto()            # Never allowed
+
+
+# ============================================================================
+# Command Patterns
+# ============================================================================
+
+# Commands that are always allowed
+SAFE_COMMANDS = {
+    # File reading
+    "cat", "type", "more", "less", "head", "tail", "bat",
+    # Directory listing
+    "ls", "dir", "tree", "find", "fd", "rg", "grep",
+    # Git read-only
+    "git status", "git log", "git diff", "git show", "git branch -a",
+    "git remote -v", "git stash list",
+    # Python/tools
+    "python -c", "python -m pytest", "python -m mypy",
+    # Info commands
+    "pwd", "echo", "which", "where", "whoami",
+}
+
+# Commands that are NEVER allowed
+BLOCKED_COMMANDS = {
+    # System modification
+    "rm -rf /", "del /s /q c:\\",
+    "format", "diskpart", "shutdown", "reboot",
+    # Package management (risky)
+    "pip uninstall", "npm uninstall",
+    # History rewriting
+    "git filter-branch", "git reset --hard origin",
+    # Destructive force
+    "git push --force origin main", "git push -f origin main",
+}
+
+# Patterns requiring tokens by token type
+TOKEN_REQUIRED_PATTERNS: dict[str, list[str]] = {
+    "FS_DELETE_CODE": [
+        r"rm\s+.*\.py",
+        r"del\s+.*\.py",
+        r"rmdir",
+        r"rm\s+-r",
+        r"rd\s+/s",
+    ],
+    "CMD_RUN_DESTRUCTIVE": [
+        r"drop\s+table",
+        r"truncate\s+table",
+        r"delete\s+from",
+    ],
+    "GIT_PUSH": [
+        r"git\s+push(?!\s+--force)",
+    ],
+    "GIT_FORCE_PUSH": [
+        r"git\s+push\s+(--force|-f)",
+    ],
+    "GIT_REWRITE_HISTORY": [
+        r"git\s+rebase",
+        r"git\s+reset\s+--hard",
+        r"git\s+cherry-pick",
+    ],
+    "CMD_RUN_ARBITRARY": [
+        r"curl\s+.*\|\s*(bash|sh|python)",
+        r"wget\s+.*-O-\s*\|",
+        r"powershell\s+-c",
+        r"cmd\s+/c",
+    ],
+}
+
+# Git commands that modify local state
+GIT_MODIFY_PATTERNS = [
+    r"git\s+add",
+    r"git\s+commit",
+    r"git\s+stash",
+    r"git\s+checkout",
+    r"git\s+switch",
+    r"git\s+merge",
+    r"git\s+branch\s+(?!-a|-v)",  # Creating branches
+]
+
+
+# ============================================================================
+# Command Request
+# ============================================================================
+
+@dataclass
+class CommandRequest:
+    """
+    A command request to be evaluated by the policy engine.
+    """
+    command: str
+    working_dir: str
+    target_paths: list[str] = field(default_factory=list)  # Files being affected
+    
+    # Context
+    contract_id: Optional[str] = None
+    token_id: Optional[str] = None
+    
+    def __post_init__(self):
+        self.command = self.command.strip()
+
+
+@dataclass
+class PolicyResult:
+    """
+    Result of policy evaluation.
+    """
+    decision: Decision
+    reason: str
+    required_token_type: Optional[str] = None
+    category: Optional[CommandCategory] = None
+    
+    # For audit
+    command: str = ""
+    contract_id: Optional[str] = None
+    token_id: Optional[str] = None
+
+
+# ============================================================================
+# Policy Engine
+# ============================================================================
+
+def classify_command(command: str) -> CommandCategory:
+    """
+    Classify a command into a risk category.
+    
+    Args:
+        command: The command string
+    
+    Returns:
+        CommandCategory
+    """
+    cmd_lower = command.lower()
+    
+    # Check blocked first
+    for blocked in BLOCKED_COMMANDS:
+        if blocked in cmd_lower:
+            return CommandCategory.BLOCKED
+    
+    # Check safe commands
+    for safe in SAFE_COMMANDS:
+        if cmd_lower.startswith(safe):
+            return CommandCategory.READ_ONLY
+    
+    # Git classification
+    if cmd_lower.startswith("git "):
+        if any(re.search(p, cmd_lower) for p in [r"push.*--force", r"push.*-f"]):
+            return CommandCategory.GIT_DANGEROUS
+        if "push" in cmd_lower or "rebase" in cmd_lower or "reset --hard" in cmd_lower:
+            return CommandCategory.GIT_DANGEROUS
+        if any(re.search(p, cmd_lower) for p in GIT_MODIFY_PATTERNS):
+            return CommandCategory.GIT_MODIFY
+        return CommandCategory.GIT_SAFE
+    
+    # Destructive patterns
+    if any(re.search(p, cmd_lower) for patterns in TOKEN_REQUIRED_PATTERNS.values() 
+           for p in patterns if "rm" in p or "del" in p or "drop" in p):
+        return CommandCategory.DESTRUCTIVE
+    
+    # Network
+    if any(x in cmd_lower for x in ["curl", "wget", "invoke-webrequest"]):
+        return CommandCategory.NETWORK
+    
+    # Write operations (heuristic)
+    if any(x in cmd_lower for x in [">", ">>", "| tee", "out-file"]):
+        return CommandCategory.WRITE_OUT_OF_SCOPE
+    
+    # Default to system
+    return CommandCategory.SYSTEM
+
+
+def evaluate_policy(request: CommandRequest) -> PolicyResult:
+    """
+    Evaluate a command request against the policy.
+    
+    Args:
+        request: CommandRequest to evaluate
+    
+    Returns:
+        PolicyResult with decision
+    """
+    cmd = request.command
+    category = classify_command(cmd)
+    
+    # BLOCKED is always denied
+    if category == CommandCategory.BLOCKED:
+        return PolicyResult(
+            decision=Decision.DENY,
+            reason="Command is in blocked list",
+            category=category,
+            command=cmd,
+        )
+    
+    # READ_ONLY and GIT_SAFE are always allowed
+    if category in (CommandCategory.READ_ONLY, CommandCategory.GIT_SAFE):
+        return PolicyResult(
+            decision=Decision.ALLOW,
+            reason="Safe command",
+            category=category,
+            command=cmd,
+        )
+    
+    # Check if command requires token
+    for token_type, patterns in TOKEN_REQUIRED_PATTERNS.items():
+        for pattern in patterns:
+            if re.search(pattern, cmd, re.IGNORECASE):
+                # Token is required - check if provided and valid
+                if request.token_id:
+                    # Determine capability from token type
+                    capability = token_type
+                    valid, msg = validate_token(
+                        request.token_id,
+                        capability,
+                        path=request.target_paths[0] if request.target_paths else None,
+                        command=cmd,
+                    )
+                    if valid:
+                        return PolicyResult(
+                            decision=Decision.ALLOW,
+                            reason=f"Token validated: {msg}",
+                            category=category,
+                            command=cmd,
+                            token_id=request.token_id,
+                        )
+                    else:
+                        return PolicyResult(
+                            decision=Decision.DENY,
+                            reason=f"Token invalid: {msg}",
+                            required_token_type=token_type,
+                            category=category,
+                            command=cmd,
+                        )
+                else:
+                    return PolicyResult(
+                        decision=Decision.REQUIRE_TOKEN,
+                        reason=f"Command requires {token_type} token",
+                        required_token_type=token_type,
+                        category=category,
+                        command=cmd,
+                    )
+    
+    # GIT_MODIFY is allowed within contract
+    if category == CommandCategory.GIT_MODIFY:
+        if request.contract_id:
+            return PolicyResult(
+                decision=Decision.ALLOW,
+                reason="Git modification allowed within contract",
+                category=category,
+                command=cmd,
+                contract_id=request.contract_id,
+            )
+        else:
+            return PolicyResult(
+                decision=Decision.REQUIRE_TOKEN,
+                reason="Git modification requires active contract or token",
+                required_token_type="GIT_PUSH",
+                category=category,
+                command=cmd,
+            )
+    
+    # WRITE_OUT_OF_SCOPE needs contract or token
+    if category == CommandCategory.WRITE_OUT_OF_SCOPE:
+        return PolicyResult(
+            decision=Decision.REQUIRE_TOKEN,
+            reason="Write operation outside contract scope",
+            required_token_type="FS_WRITE_OUTSIDE_CONTRACT",
+            category=category,
+            command=cmd,
+        )
+    
+    # NETWORK is allowed with warning
+    if category == CommandCategory.NETWORK:
+        return PolicyResult(
+            decision=Decision.ALLOW,
+            reason="Network command allowed (logged)",
+            category=category,
+            command=cmd,
+        )
+    
+    # SYSTEM commands - allow by default but log
+    return PolicyResult(
+        decision=Decision.ALLOW,
+        reason="System command allowed (logged)",
+        category=category,
+        command=cmd,
+    )
+
+
+def check_path_in_scope(
+    path: str,
+    contract_paths: list[str],
+) -> bool:
+    """
+    Check if a path is within the contract's allowed scope.
+    
+    Args:
+        path: Path to check
+        contract_paths: List of allowed path patterns from contract
+    
+    Returns:
+        True if path is in scope
+    """
+    if not contract_paths:
+        return True  # No restriction
+    
+    path = path.replace("\\", "/")
+    
+    for pattern in contract_paths:
+        pattern = pattern.replace("\\", "/")
+        if fnmatch.fnmatch(path, pattern):
+            return True
+        # Also check if path is under a directory pattern
+        if pattern.endswith("/*") or pattern.endswith("/**"):
+            dir_pattern = pattern.rstrip("/*")
+            if path.startswith(dir_pattern):
+                return True
+    
+    return False
+
+
+# ============================================================================
+# High-Level API
+# ============================================================================
+
+def can_execute(
+    command: str,
+    working_dir: str = ".",
+    target_paths: Optional[list[str]] = None,
+    contract_id: Optional[str] = None,
+    token_id: Optional[str] = None,
+) -> tuple[bool, str, Optional[str]]:
+    """
+    Simple API: Can this command be executed?
+    
+    Args:
+        command: Command to execute
+        working_dir: Working directory
+        target_paths: Paths being affected
+        contract_id: Active work contract
+        token_id: Approval token
+    
+    Returns:
+        (allowed, reason, required_token_type_if_blocked)
+    """
+    request = CommandRequest(
+        command=command,
+        working_dir=working_dir,
+        target_paths=target_paths or [],
+        contract_id=contract_id,
+        token_id=token_id,
+    )
+    
+    result = evaluate_policy(request)
+    
+    if result.decision == Decision.ALLOW:
+        return True, result.reason, None
+    elif result.decision == Decision.DENY:
+        return False, result.reason, None
+    else:  # REQUIRE_TOKEN
+        return False, result.reason, result.required_token_type

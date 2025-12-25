@@ -3,6 +3,9 @@ CK3 Lens Rules
 
 Policy validation rules specific to the ck3lens agent mode.
 These rules enforce CK3 modding constraints and best practices.
+
+CRITICAL: ck3lens agents can ONLY edit CK3 mod files in whitelisted live_mods.
+They CANNOT edit Python code, core ck3raven code, or any infrastructure files.
 """
 from __future__ import annotations
 from typing import Any, TYPE_CHECKING
@@ -21,6 +24,153 @@ from .trace_helpers import (
 
 if TYPE_CHECKING:
     from ..contracts import ArtifactBundle
+
+
+# =============================================================================
+# FILE PATH RESTRICTIONS FOR CK3LENS
+# =============================================================================
+
+# Extensions that ck3lens is ALLOWED to edit (CK3 mod files only)
+CK3_ALLOWED_EXTENSIONS = frozenset({
+    ".txt",      # CK3 script files
+    ".yml",      # Localization
+    ".gui",      # GUI definitions
+    ".gfx",      # Graphics definitions
+    ".dds",      # Texture files
+    ".asset",    # 3D asset definitions
+    ".mesh",     # 3D meshes
+    ".shader",   # Shaders
+    ".settings", # Settings files
+    ".info",     # Mod info files
+    ".mod",      # Mod descriptor
+})
+
+# Paths that ck3lens is FORBIDDEN from editing (infrastructure/Python)
+CK3LENS_FORBIDDEN_PATHS = (
+    "src/",           # Core ck3raven code
+    "builder/",       # Database builder
+    "tests/",         # Test files
+    "scripts/",       # Maintenance scripts
+    "tools/",         # Tool implementations
+    ".vscode/",       # VS Code config
+    ".github/",       # GitHub workflows
+    ".git/",          # Git internals
+    "docs/",          # Documentation
+)
+
+# File extensions ck3lens is FORBIDDEN from editing
+CK3LENS_FORBIDDEN_EXTENSIONS = frozenset({
+    ".py",            # Python code
+    ".pyc",           # Compiled Python
+    ".json",          # Config files
+    ".yaml",          # Config files
+    ".toml",          # Config files
+    ".md",            # Documentation
+    ".rst",           # Documentation
+    ".sh",            # Shell scripts
+    ".ps1",           # PowerShell scripts
+    ".bat",           # Batch scripts
+    ".cmd",           # Command scripts
+})
+
+
+# =============================================================================
+# CK3LENS PATH ENFORCEMENT (CRITICAL SECURITY RULE)
+# =============================================================================
+
+def enforce_ck3lens_file_restrictions(
+    ctx: ValidationContext,
+    bundle: "ArtifactBundle",
+    violations: list[Violation],
+    summary: dict[str, Any],
+) -> None:
+    """
+    Enforce: ck3lens agents can ONLY edit CK3 mod files.
+    
+    Rule: no_python_editing, live_mods_only
+    Severity: ERROR (HARD GATE)
+    
+    ck3lens is for CK3 modding ONLY. It cannot:
+    - Edit Python files (.py)
+    - Edit infrastructure code (src/, builder/, tools/, etc.)
+    - Edit configuration files (.json, .yaml, .toml)
+    - Edit documentation (.md, .rst)
+    
+    This prevents ck3lens agents from modifying the ck3raven codebase itself.
+    Infrastructure changes require ck3raven-dev mode.
+    """
+    forbidden_files = []
+    forbidden_extensions = []
+    forbidden_paths = []
+    
+    for artifact in bundle.artifacts:
+        path = getattr(artifact, "path", "")
+        if not path:
+            continue
+        
+        path_normalized = path.replace("\\", "/").lower()
+        filename = path_normalized.split("/")[-1]
+        
+        # Get extension
+        if "." in filename:
+            ext = "." + filename.rsplit(".", 1)[-1]
+        else:
+            ext = ""
+        
+        # Check forbidden extensions
+        if ext in CK3LENS_FORBIDDEN_EXTENSIONS:
+            forbidden_extensions.append({
+                "path": path,
+                "extension": ext,
+                "reason": f"ck3lens cannot edit {ext} files - use ck3raven-dev mode"
+            })
+        
+        # Check forbidden paths
+        for forbidden in CK3LENS_FORBIDDEN_PATHS:
+            if path_normalized.startswith(forbidden) or f"/{forbidden}" in path_normalized:
+                forbidden_paths.append({
+                    "path": path,
+                    "forbidden_prefix": forbidden,
+                    "reason": f"ck3lens cannot edit files in {forbidden} - use ck3raven-dev mode"
+                })
+                break
+        
+        # Check if extension is allowed (for non-forbidden paths)
+        if ext and ext not in CK3_ALLOWED_EXTENSIONS:
+            # Not in forbidden list but also not in allowed list
+            if ext not in CK3LENS_FORBIDDEN_EXTENSIONS:
+                forbidden_files.append({
+                    "path": path,
+                    "extension": ext,
+                    "reason": f"Extension {ext} not in allowed CK3 file types"
+                })
+    
+    # Collect all violations
+    all_forbidden = forbidden_extensions + forbidden_paths + forbidden_files
+    summary["ck3lens_forbidden_files"] = all_forbidden
+    
+    if forbidden_extensions:
+        violations.append(Violation(
+            severity=Severity.ERROR,
+            code="CK3LENS_FORBIDDEN_EXTENSION",
+            message="ck3lens agents CANNOT edit Python or infrastructure files.",
+            details={
+                "files": forbidden_extensions,
+                "suggestion": "Use ck3raven-dev mode for Python/infrastructure changes",
+            },
+        ))
+    
+    if forbidden_paths:
+        violations.append(Violation(
+            severity=Severity.ERROR,
+            code="CK3LENS_FORBIDDEN_PATH",
+            message="ck3lens agents CANNOT edit core ck3raven code.",
+            details={
+                "files": forbidden_paths,
+                "forbidden_prefixes": list(CK3LENS_FORBIDDEN_PATHS),
+                "suggestion": "Use ck3raven-dev mode for infrastructure changes",
+            },
+        ))
 
 
 def enforce_active_playset_scope(
@@ -431,6 +581,9 @@ def validate_ck3lens_rules(
     
     # ArtifactBundle-specific rules
     if bundle is not None:
+        # CRITICAL: ck3lens cannot edit Python/infrastructure files
+        enforce_ck3lens_file_restrictions(ctx, bundle, violations, summary)
+        
         enforce_ck3_file_model_required(ctx, bundle, violations, summary)
         enforce_ck3_validation_called(ctx, bundle, violations, summary)
         enforce_symbol_manifest(ctx, bundle, violations, summary)

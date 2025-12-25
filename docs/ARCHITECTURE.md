@@ -106,8 +106,6 @@ ck3raven/
 │   │       ├── province.py       # definition.csv + history/provinces/
 │   │       ├── character.py      # history/characters/
 │   │       ├── dynasty.py        # common/dynasties/
-│   │       ├── title.py          # common/landed_titles/
-│   │       ├── title_history.py  # history/titles/
 │   │       ├── holy_site.py      # common/religion/holy_sites/
 │   │       ├── name_list.py      # common/culture/name_lists/
 │   │       └── culture.py        # common/culture/cultures/
@@ -281,7 +279,7 @@ File Discovered
      │     (localization/**/*.yml)
      │
      ├─ Is it ID-keyed data? ───────────────────→ Lookup Extractor → lookup tables
-     │     (history/*, dynasties, name_lists, holy_sites, definition.csv)
+     │     (history/provinces, history/characters, dynasties, name_lists, holy_sites, definition.csv)
      │
      └─ Is it script with logic? ───────────────→ AST → Symbols → Refs
            (events, scripted_*, on_action, decisions, traits, buildings, etc.)
@@ -295,9 +293,7 @@ File Discovered
 | `map_data/definition.csv` | CSV Parser → Lookup | `province_lookup` | 🔴 NOT BUILT |
 | `history/provinces/*.txt` | Lookup Extractor | `province_lookup` | 🔴 NOT BUILT |
 | `history/characters/*.txt` | Lookup Extractor | `character_lookup` | 🔴 NOT BUILT |
-| `history/titles/*.txt` | Lookup Extractor | `title_history_lookup` | 🔴 NOT BUILT |
 | `common/dynasties/*.txt` | Lookup Extractor | `dynasty_lookup` | 🔴 NOT BUILT |
-| `common/landed_titles/*.txt` | Lookup Extractor | `title_lookup` | 🔴 NOT BUILT |
 | `common/culture/name_lists/*.txt` | Lookup Extractor | `name_list_lookup` | 🔴 NOT BUILT |
 | `common/religion/holy_sites/*.txt` | Lookup Extractor | `holy_site_lookup` | 🔴 NOT BUILT |
 | `common/culture/cultures/*.txt` | AST + Lookup | AST, symbols, refs, `culture_lookup` | 🟡 AST only |
@@ -314,6 +310,8 @@ File Discovered
 | `common/government/*.txt` | AST → Symbols → Refs | `asts`, `symbols`, `refs` | 🟢 BUILT |
 | `common/laws/*.txt` | AST → Symbols → Refs | `asts`, `symbols`, `refs` | 🟢 BUILT |
 | `common/religion/religions/*.txt` | AST → Symbols → Refs | `asts`, `symbols`, `refs` | 🟢 BUILT |
+| `common/landed_titles/*.txt` | AST → Symbols → Refs | `asts`, `symbols`, `refs` | 🟢 BUILT |
+| `history/titles/*.txt` | AST → Symbols → Refs | `asts`, `symbols`, `refs` | 🟢 BUILT |
 | **SKIP ENTIRELY** ||||
 | `gfx/**/*` | Skip | None | N/A |
 | `common/ethnicities/**` | Skip | None | N/A |
@@ -380,36 +378,6 @@ CREATE TABLE dynasty_lookup (
 );
 ```
 
-#### `title_lookup` 🔴 NOT BUILT
-```sql
-CREATE TABLE title_lookup (
-    title_key TEXT PRIMARY KEY,            -- e.g., "k_france", "c_paris"
-    tier TEXT,                             -- 'e', 'k', 'd', 'c', 'b'
-    capital_county TEXT,                   -- Reference to another title
-    capital_province_id INTEGER,           -- Resolved province ID
-    de_jure_liege TEXT,                    -- Parent title key
-    color_r INTEGER, color_g INTEGER, color_b INTEGER,
-    definite_form INTEGER,
-    landless INTEGER,
-    content_version_id INTEGER
-);
-```
-
-#### `title_history_lookup` 🔴 NOT BUILT
-```sql
-CREATE TABLE title_history_lookup (
-    id INTEGER PRIMARY KEY,
-    title_key TEXT NOT NULL,
-    effective_date TEXT NOT NULL,          -- e.g., "867.1.1"
-    holder_id INTEGER,                     -- character_id or 0
-    liege_title TEXT,
-    government TEXT,
-    succession_laws_json TEXT,
-    content_version_id INTEGER
-);
-CREATE INDEX idx_title_history_key_date ON title_history_lookup(title_key, effective_date);
-```
-
 #### `holy_site_lookup` 🔴 NOT BUILT
 ```sql
 CREATE TABLE holy_site_lookup (
@@ -472,8 +440,6 @@ searchable via symbols:
 | | ADD: province_lookup | From definition.csv + history/provinces/ |
 | | ADD: character_lookup | From history/characters/ |
 | | ADD: dynasty_lookup | From common/dynasties/ |
-| | ADD: title_lookup | From common/landed_titles/ |
-| | ADD: title_history_lookup | From history/titles/ |
 | | ADD: holy_site_lookup | From common/religion/holy_sites/ |
 | | ADD: name_list_lookup | From common/culture/name_lists/ |
 | | ADD: culture_lookup | From common/culture/cultures/ |
@@ -498,8 +464,6 @@ class FileRoute(Enum):
     LOOKUP_PROVINCE = "lookup_province"
     LOOKUP_CHARACTER = "lookup_character"
     LOOKUP_DYNASTY = "lookup_dynasty"
-    LOOKUP_TITLE = "lookup_title"
-    LOOKUP_TITLE_HISTORY = "lookup_title_history"
     LOOKUP_HOLY_SITE = "lookup_holy_site"
     LOOKUP_NAME_LIST = "lookup_name_list"
     LOOKUP_CULTURE = "lookup_culture"
@@ -532,12 +496,6 @@ def route_file(relpath: str) -> FileRoute:
     # Dynasty lookups
     if relpath.startswith('common/dynasties/'):
         return FileRoute.LOOKUP_DYNASTY
-    
-    # Title lookups
-    if relpath.startswith('common/landed_titles/'):
-        return FileRoute.LOOKUP_TITLE
-    if relpath.startswith('history/titles/'):
-        return FileRoute.LOOKUP_TITLE_HISTORY
     
     # Holy site lookups
     if relpath.startswith('common/religion/holy_sites/'):
@@ -581,8 +539,6 @@ def phase_7_lookup_extraction(conn, logger, status):
         extract_province_lookups,
         extract_character_lookups,
         extract_dynasty_lookups,
-        extract_title_lookups,
-        extract_title_history_lookups,
         extract_holy_site_lookups,
         extract_name_list_lookups,
         extract_culture_lookups,
@@ -592,8 +548,6 @@ def phase_7_lookup_extraction(conn, logger, status):
     extract_province_lookups(conn, logger, status)      # definition.csv + history/provinces/
     extract_character_lookups(conn, logger, status)     # history/characters/
     extract_dynasty_lookups(conn, logger, status)       # common/dynasties/
-    extract_title_lookups(conn, logger, status)         # common/landed_titles/
-    extract_title_history_lookups(conn, logger, status) # history/titles/
     extract_holy_site_lookups(conn, logger, status)     # common/religion/holy_sites/
     extract_name_list_lookups(conn, logger, status)     # common/culture/name_lists/
     extract_culture_lookups(conn, logger, status)       # common/culture/cultures/
@@ -719,84 +673,106 @@ The `ContributionsManager` is the primary interface for conflict analysis. It:
 
 ---
 
-### Playset Configuration (`~/.ck3raven/playsets/`)
+### Playset Configuration (`playsets/`)
 
-**Purpose:** Define which mods to include and in what order. Playsets are configuration, not indexed content.
+**Purpose:** Define which mods to include and in what order. Playsets are configuration files, NOT database content.
+
+> **Note:** As of December 2025, playsets are stored as JSON files in the `playsets/` folder.
+> The database tables `playsets` and `playset_mods` are deprecated.
 
 #### Storage Structure
 
 ```
-~/.ck3raven/
-├── ck3raven.db              # Indexed content ONLY
+ck3raven/
+├── ck3raven.db              # Indexed content ONLY (no playset config)
 └── playsets/
-    ├── active.txt           # Single line: name of active playset
-    ├── MyPlayset.json       # Playset definition
-    ├── VanillaOnly.json
-    └── Testing.json
+    ├── playset.schema.json       # JSON Schema for validation
+    ├── example_playset.json      # Template to copy
+    ├── sub_agent_templates.json  # Sub-agent briefing templates
+    └── MSC.json                  # User playset (created by user)
 ```
 
 #### Playset JSON Schema
 
 ```json
 {
-  "name": "MyPlayset",
+  "name": "MSC",
+  "description": "Mini Super Compatch testing playset",
   "created_at": "2025-12-25T10:00:00Z",
   "mods": [
-    {"name": "MSC", "enabled": true},
-    {"name": "RICE", "enabled": true},
-    {"name": "BuggyMod", "enabled": false}
+    {"name": "EPE", "steam_id": "2216659254", "enabled": true, "load_order": 1},
+    {"name": "CFP", "steam_id": "2216670956", "enabled": true, "load_order": 2},
+    {"name": "MSC", "path": "C:/Users/.../mod/MSC", "enabled": true, "load_order": 3}
   ],
-  "notes": "My main modding playset"
+  "live_mods": ["MSC", "LocalizationPatch", "CrashFixes"],
+  "agent_briefing": {
+    "context": "Developing MSC compatibility patch",
+    "error_analysis_notes": [
+      "Errors from Morven's compatch target mods are expected",
+      "Focus on steady-play errors, not loading errors"
+    ],
+    "conflict_resolution_notes": [
+      "Morven's compatch handles the 8 mods before it",
+      "Don't duplicate conflict resolution Morven already does"
+    ],
+    "priorities": ["1. Crashes", "2. Gameplay bugs", "3. Visual issues"]
+  },
+  "sub_agent_config": {
+    "error_analysis": {"enabled": true, "auto_spawn_threshold": 50}
+  }
 }
 ```
+
+#### Key Fields
+
+| Field | Description |
+|-------|-------------|
+| `name` | Playset identifier (used in MCP tools) |
+| `mods` | Ordered list of mods with load order |
+| `live_mods` | Mods the agent can write to (whitelist) |
+| `agent_briefing` | Context notes for sub-agents |
+| `sub_agent_config` | Auto-spawn settings for sub-agents |
 
 #### Runtime Filter Pattern
 
 Playset is applied as a runtime filter to any database query:
 
 ```python
-def get_playset_filter(conn: sqlite3.Connection) -> set[int]:
-    """Read active playset JSON, return content_version_ids to include."""
-    active_name = Path("~/.ck3raven/playsets/active.txt").read_text().strip()
-    playset = json.loads(Path(f"~/.ck3raven/playsets/{active_name}.json").read_text())
+def _get_session_scope() -> dict:
+    """Read active playset JSON, return session scope."""
+    # Find .json files in playsets/
+    playset_dir = Path("playsets/")
+    playset_files = list(playset_dir.glob("*.json"))
     
-    enabled_mods = [m["name"] for m in playset["mods"] if m["enabled"]]
+    if not playset_files:
+        return {"playset_name": None, "mods": [], "live_mods": []}
     
-    # Always include vanilla
-    cv_ids = conn.execute("""
-        SELECT cv.content_version_id 
-        FROM content_versions cv WHERE cv.kind = 'vanilla'
-    """).fetchall()
-    
-    # Add enabled mods
-    if enabled_mods:
-        mod_cv_ids = conn.execute("""
-            SELECT cv.content_version_id 
-            FROM content_versions cv
-            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-            WHERE mp.name IN (?)
-        """, enabled_mods).fetchall()
-        cv_ids.extend(mod_cv_ids)
-    
-    return {row[0] for row in cv_ids}
+    # Use first playset found (or implement active selection)
+    playset = json.loads(playset_files[0].read_text())
+    return {
+        "playset_name": playset["name"],
+        "mods": [m["name"] for m in playset["mods"] if m.get("enabled", True)],
+        "live_mods": playset.get("live_mods", []),
+        "agent_briefing": playset.get("agent_briefing", {})
+    }
 ```
 
-#### Conflict Report Embedding
+#### MCP Tools for Playset Management
 
-Conflict reports embed the full playset state for reproducibility:
+| Tool | Purpose |
+|------|---------|
+| `ck3_list_playsets()` | List all playset JSON files |
+| `ck3_get_active_playset()` | Get current playset configuration |
+| `ck3_switch_playset(name)` | Switch to a different playset |
+| `ck3_get_agent_briefing()` | Get briefing notes for sub-agents |
 
-```json
-{
-  "report_version": "1.0",
-  "generated_at": "2025-12-25T12:00:00Z",
-  "playset_snapshot": {
-    "name": "MyPlayset",
-    "mods": ["MSC", "RICE"],
-    "load_order": ["vanilla", "MSC", "RICE"]
-  },
-  "conflicts": [...]
-}
+#### Importing from CK3 Launcher
+
+```bash
+python scripts/launcher_to_playset.py "My Playset Export.json" -o playsets/MyPlayset.json
 ```
+
+See [playsets/README.md](../playsets/README.md) for full documentation.
 
 ---
 
@@ -840,44 +816,71 @@ ASTs are cached by (content_hash, parser_version):
 
 **Purpose:** Expose ck3raven capabilities to AI agents via Model Context Protocol.
 
-#### Tool Categories
+#### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            AI Agent (Copilot)                               │
+└───────────────────────────────────┬─────────────────────────────────────────┘
+                                    │ MCP Protocol
+┌───────────────────────────────────▼─────────────────────────────────────────┐
+│                         CK3 Lens MCP Server                                 │
+│  ┌───────────────┐  ┌────────────────┐  ┌─────────────┐  ┌──────────────┐  │
+│  │ Query Tools   │  │ Conflict Tools │  │ Write Tools │  │ Policy Layer │  │
+│  │ (DB read)     │  │ (unit-level)   │  │ (sandboxed) │  │ (validation) │  │
+│  └───────────────┘  └────────────────┘  └─────────────┘  └──────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Tool Categories (~30 tools)
 
 | Category | Tools | Purpose |
 |----------|-------|---------|
-| **Session** | `ck3_init_session` | Initialize database connection |
-| **Search** | `ck3_search_symbols`, `ck3_confirm_not_exists` | Find symbols with adjacency matching |
-| **Files** | `ck3_get_file`, `ck3_list_live_files` | Read content from database |
-| **Playset** | `ck3_get_active_playset`, `ck3_switch_playset`, `ck3_create_playset` | Manage playset JSON config files |
-| **Conflicts** | `ck3_scan_unit_conflicts`, `ck3_list_conflict_units` | Unit-level conflict analysis |
-| **Live Ops** | `ck3_write_file`, `ck3_edit_file` | Sandboxed file modifications |
-| **Git** | `ck3_git_status`, `ck3_git_commit` | Version control for live mods |
+| **Session** | `ck3_init_session`, `ck3_get_workspace_config` | Initialize and configure |
+| **Search** | `ck3_search`, `ck3_confirm_not_exists` | Find symbols with adjacency matching |
+| **Files** | `ck3_get_file`, `ck3_list_live_files`, `ck3_list_dir` | Read content from database |
+| **Playset** | `ck3_list_playsets`, `ck3_get_active_playset`, `ck3_switch_playset`, `ck3_get_agent_briefing` | Manage playset JSON files |
+| **Conflicts** | `ck3_scan_unit_conflicts`, `ck3_list_conflict_units`, `ck3_get_symbol_conflicts` | Unit-level conflict analysis |
+| **Live Ops** | `ck3_write_file`, `ck3_edit_file`, `ck3_create_override_patch` | Sandboxed file modifications |
+| **Git** | `ck3_git_status`, `ck3_git_commit`, `ck3_git_push` | Version control for live mods |
+| **Validation** | `ck3_validate_syntax`, `ck3_validate_python`, `ck3_validate_policy` | Pre-write validation |
+| **Logs** | `ck3_parse_error_log`, `ck3_get_crash_report` | Error analysis |
+| **Database** | `ck3_get_db_status`, `ck3_db_delete`, `ck3_refresh_file` | Database management |
 
-#### Playset Import from Launcher
+#### Agent Modes
 
-The `ck3_import_playset_from_launcher` tool enables importing playsets directly from
-CK3 Launcher's exported JSON files:
+The server supports two modes with different capabilities:
 
-```python
-# Import a playset from launcher export
-result = ck3_import_playset_from_launcher(
-    launcher_json_path="C:/path/to/MSC_Playset.json",
-    local_mod_paths=["C:/Users/.../mod/LocalMod"],  # Optional local mods
-    set_active=True
-)
-# Returns: { playset_id: 2, mods_linked: 102, mods_skipped: [...] }
-```
+| Mode | Purpose | Allowed Operations |
+|------|---------|-------------------|
+| `ck3lens` | CK3 modding | Search, read, write CK3 files in live mods |
+| `ck3raven-dev` | Infrastructure | All operations including Python editing |
 
-**Workflow:**
-1. Export playset from Paradox Launcher (Settings → Export Playset)
-2. Call `ck3_import_playset_from_launcher` with the JSON path
-3. Tool matches Steam IDs to indexed mods and creates playset
-4. Optionally adds local mods at end of load order
+Mode is determined by the work context and enforced by policy rules.
 
 #### Adjacency Search
 
 Automatic pattern expansion for fuzzy matching:
 - `brave` → also matches `trait_brave`, `is_brave`, `brave_modifier`
 - Modes: `strict`, `auto`, `fuzzy`
+
+#### Work Contracts (CLW)
+
+For privileged operations, agents use HMAC-signed work contracts:
+
+```python
+# Request a contract token
+token = ck3_request_token(
+    scope="edit_python",
+    reason="Fix parsing bug in lexer.py",
+    files=["src/ck3raven/parser/lexer.py"]
+)
+
+# Execute with token
+result = ck3_exec(token, operation="edit", ...)
+```
+
+See [TOOLS.md](../tools/ck3lens_mcp/docs/TOOLS.md) for complete tool reference.
 
 ---
 
@@ -1258,12 +1261,20 @@ These are superseded by ck3raven equivalents:
 
 ---
 
-## Policy Enforcement
+## Policy Enforcement & CLI Wrapping Layer (CLW)
 
 ### Overview
 
-Policy enforcement ensures AI agents follow defined rules during development.
-The system uses a git pre-commit hook as the primary enforcement mechanism.
+The CLI Wrapping Layer (CLW) provides comprehensive policy enforcement for AI agents,
+ensuring they follow defined rules during development. The system enforces rules at
+multiple levels: tool call tracing, pre-commit hooks, CI gates, and runtime validation.
+
+### Agent Modes
+
+| Mode | Purpose | File Restrictions |
+|------|---------|-------------------|
+| `ck3lens` | CK3 modding work | Can ONLY edit CK3 files (.txt, .gui, .gfx, .yml) in live mods |
+| `ck3raven-dev` | Infrastructure development | Can edit Python, YAML, JSON in allowed paths |
 
 ### Architecture
 
@@ -1271,45 +1282,97 @@ The system uses a git pre-commit hook as the primary enforcement mechanism.
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                            Agent Tool Calls                                 │
 └───────────────────────────────────┬─────────────────────────────────────────┘
-                                    │ Traced to JSONL
+                                    │ 1. Pre-validation (path restrictions)
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  ck3lens_trace.jsonl (~/Documents/Paradox Interactive/CK3/mod/)            │
+│  Policy Rules Engine (ck3lens_rules.py, ck3raven_dev_rules.py)             │
+│  ├─ enforce_ck3lens_file_restrictions() - blocks Python from ck3lens       │
+│  ├─ validate_path_policy() - checks allowed paths                          │
+│  └─ validate_artifact_bundle() - validates output structure                │
 └───────────────────────────────────┬─────────────────────────────────────────┘
-                                    │ Read by hook
+                                    │ 2. Tool execution
                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  .git/hooks/pre-commit → scripts/pre-commit-policy-check.py                │
-│  ├─ Reads trace log                                                        │
-│  ├─ Calls validate_for_mode("ck3raven-dev", trace)                        │
-│  ├─ Exit 0 if passed → commit allowed                                      │
-│  └─ Exit 1 if failed → commit blocked                                      │
+│  ck3lens_trace.jsonl (logged tool calls)                                   │
+└───────────────────────────────────┬─────────────────────────────────────────┘
+                                    │ 3. Pre-commit validation
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  Pre-commit Hooks                                                          │
+│  ├─ .pre-commit-config.yaml - hook configuration                           │
+│  ├─ scripts/code-diff-guard.py - pattern detection                         │
+│  └─ scripts/pre-commit-policy-check.py - policy validation                 │
+└───────────────────────────────────┬─────────────────────────────────────────┘
+                                    │ 4. CI gate
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  GitHub Actions (.github/workflows/ck3raven-ci.yml)                        │
+│  ├─ Runs pre-commit hooks on push/PR                                       │
+│  └─ Blocks merge on violations                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Installing Hooks
+### Validation Rules
 
-After cloning the repository:
+Rules are defined in `ck3lens_config.yaml` and enforced at multiple stages:
 
-```bash
-python scripts/install-hooks.py
+| Rule | Mode | Severity | Purpose |
+|------|------|----------|---------|
+| `allowed_python_paths` | ck3lens | ERROR | Blocks Python/infrastructure editing |
+| `scripts_must_be_documented` | ck3raven-dev | ERROR | Prevents orphan scripts |
+| `ephemeral_scripts_location` | ck3raven-dev | ERROR | Forces temp scripts to .artifacts/ |
+| `bugfix_requires_core_change` | ck3raven-dev | ERROR | No workaround scripts |
+| `bugfix_requires_test` | ck3raven-dev | ERROR | Tests required for fixes |
+| `architecture_intent_required` | ck3raven-dev | ERROR | Document rationale |
+| `python_validation_required` | ck3raven-dev | ERROR | Syntax validation before commit |
+| `schema_change_declaration` | ck3raven-dev | WARNING | Declare breaking changes |
+| `preserve_uncertainty` | ck3raven-dev | WARNING | Document unknowns |
+
+### File Restrictions (ck3lens mode)
+
+When in `ck3lens` mode, agents can ONLY edit CK3 modding files:
+
+**Allowed extensions:**
+```
+.txt, .gui, .gfx, .yml, .dds, .png, .tga, .shader, .fxh
 ```
 
-This copies `scripts/hooks/pre-commit` to `.git/hooks/pre-commit`.
+**Forbidden paths (always blocked):**
+```
+src/, builder/, tools/ck3lens_mcp/ck3lens/, scripts/,
+tests/, .github/, .vscode/, ck3lens_config.yaml,
+pyproject.toml, *.py
+```
 
 ### Policy Files
 
 | File | Description |
 |------|-------------|
-| `tools/ck3lens_mcp/ck3lens/policy/agent_policy.yaml` | Policy definitions |
-| `tools/ck3lens_mcp/ck3lens/policy/validator.py` | `validate_for_mode()` function |
-| `tools/ck3lens_mcp/ck3lens/policy/ck3raven_dev_rules.py` | Rules for dev mode |
-| `tools/ck3lens_mcp/ck3lens/policy/ck3lens_rules.py` | Rules for modding mode |
+| `ck3lens_config.yaml` | Main configuration with validation_rules section |
+| `tools/ck3lens_mcp/ck3lens/policy/agent_policy.yaml` | Policy specifications (VS Code reads this) |
+| `tools/ck3lens_mcp/ck3lens/policy/ck3lens_rules.py` | CK3 modding rules implementation |
+| `tools/ck3lens_mcp/ck3lens/policy/ck3raven_dev_rules.py` | Infrastructure rules implementation |
+| `docs/NO_DUPLICATE_IMPLEMENTATIONS.md` | Duplicate prevention policy |
+| `docs/CLW_DECISIONS.md` | Implementation decisions record |
+
+### Pre-commit Hooks
+
+Install hooks after cloning:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+Or manually:
+```bash
+python scripts/install-hooks.py
+```
 
 ### Emergency Bypass
 
 ```bash
-git commit --no-verify  # Use sparingly, document why
+git commit --no-verify  # Use sparingly, document why in commit message
 ```
 
 ---

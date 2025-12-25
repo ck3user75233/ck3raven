@@ -1,0 +1,208 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CK3Raven Playset",
+  "description": "Schema for CK3Raven playset configuration files",
+  "type": "object",
+  
+  "required": ["playset_name", "vanilla", "mods"],
+  
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Reference to this schema file"
+    },
+    
+    "playset_name": {
+      "type": "string",
+      "description": "Human-readable name for this playset"
+    },
+    
+    "description": {
+      "type": "string",
+      "description": "Description of what this playset is for"
+    },
+    
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "Date playset was created"
+    },
+    
+    "last_modified": {
+      "type": "string",
+      "format": "date",
+      "description": "Date playset was last modified"
+    },
+    
+    "vanilla": {
+      "type": "object",
+      "description": "Vanilla game configuration",
+      "required": ["path"],
+      "properties": {
+        "version": {
+          "type": "string",
+          "description": "CK3 version string"
+        },
+        "path": {
+          "type": "string",
+          "description": "Path to vanilla game files"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether vanilla is included in searches"
+        }
+      }
+    },
+    
+    "mods": {
+      "type": "array",
+      "description": "Mods in this playset (in load order)",
+      "items": {
+        "type": "object",
+        "required": ["name", "path", "load_order"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Mod display name"
+          },
+          "steam_id": {
+            "type": "string",
+            "description": "Steam Workshop ID"
+          },
+          "path": {
+            "type": "string",
+            "description": "Path to mod files"
+          },
+          "load_order": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Load order position (0 = first)"
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether mod is active"
+          },
+          "is_compatch": {
+            "type": "boolean",
+            "default": false,
+            "description": "True if this is a compatibility patch (conflicts expected)"
+          },
+          "notes": {
+            "type": "string",
+            "description": "Notes about this mod"
+          }
+        }
+      }
+    },
+    
+    "live_mods": {
+      "type": "array",
+      "description": "Mods the agent can write to",
+      "items": {
+        "type": "object",
+        "required": ["mod_id", "name", "path"],
+        "properties": {
+          "mod_id": {
+            "type": "string",
+            "description": "Unique identifier for the mod"
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name"
+          },
+          "path": {
+            "type": "string",
+            "description": "Path to mod folder (~ allowed)"
+          },
+          "description": {
+            "type": "string",
+            "description": "What this mod is for"
+          }
+        }
+      }
+    },
+    
+    "agent_briefing": {
+      "type": "object",
+      "description": "Instructions for AI agents working with this playset",
+      "properties": {
+        "context": {
+          "type": "string",
+          "description": "Overall context for what this playset is used for"
+        },
+        "error_analysis_notes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Notes for error analysis (which errors to prioritize, ignore, etc.)"
+        },
+        "conflict_resolution_notes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Notes for conflict resolution (which conflicts are expected, etc.)"
+        },
+        "mod_relationships": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "mod": { "type": "string" },
+              "relationship": {
+                "type": "string",
+                "enum": ["handles_conflicts_for", "extends", "overrides", "conflicts_with"]
+              },
+              "targets": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "notes": { "type": "string" }
+            }
+          },
+          "description": "Relationships between mods (for understanding conflict expectations)"
+        },
+        "priorities": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Priority order for issues (crashes first, then bugs, etc.)"
+        },
+        "custom_instructions": {
+          "type": "string",
+          "description": "Any additional custom instructions for agents"
+        }
+      }
+    },
+    
+    "sub_agent_config": {
+      "type": "object",
+      "description": "Configuration for sub-agent spawning",
+      "properties": {
+        "error_analysis": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "auto_spawn_threshold": {
+              "type": "integer",
+              "default": 50,
+              "description": "Spawn sub-agent when error count exceeds this"
+            },
+            "output_format": {
+              "type": "string",
+              "enum": ["markdown", "json", "summary"],
+              "default": "markdown"
+            },
+            "include_recommendations": { "type": "boolean", "default": true }
+          }
+        },
+        "conflict_review": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "min_risk_score": { "type": "integer", "default": 70 },
+            "require_approval": { "type": "boolean", "default": true }
+          }
+        }
+      }
+    }
+  }
+}

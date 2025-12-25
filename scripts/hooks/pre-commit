@@ -8,13 +8,37 @@
 # To bypass in emergencies: git commit --no-verify
 # (This should be rare and documented)
 
+set -e  # Exit on first failure
+
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 VENV_PYTHON="$REPO_ROOT/../.venv/Scripts/python.exe"
 
-# Use venv if it exists, otherwise fall back to system python
+# Determine which Python to use
 if [ -f "$VENV_PYTHON" ]; then
-    "$VENV_PYTHON" "$REPO_ROOT/scripts/pre-commit-policy-check.py"
+    PYTHON="$VENV_PYTHON"
 else
-    python "$REPO_ROOT/scripts/pre-commit-policy-check.py"
+    PYTHON="python"
 fi
-exit $?
+
+echo "🔍 Running Code-Diff Guard..."
+"$PYTHON" "$REPO_ROOT/scripts/guards/code_diff_guard.py" --base HEAD
+CDG_EXIT=$?
+
+if [ $CDG_EXIT -ne 0 ]; then
+    echo "❌ Code-Diff Guard failed. Commit blocked."
+    exit 1
+fi
+echo "✅ Code-Diff Guard passed"
+
+echo ""
+echo "🔍 Running Policy Validation..."
+"$PYTHON" "$REPO_ROOT/scripts/pre-commit-policy-check.py"
+POLICY_EXIT=$?
+
+if [ $POLICY_EXIT -ne 0 ]; then
+    echo "❌ Policy validation failed. Commit blocked."
+    exit 1
+fi
+echo "✅ Policy validation passed"
+
+exit 0

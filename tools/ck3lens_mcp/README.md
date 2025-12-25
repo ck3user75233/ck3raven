@@ -22,6 +22,8 @@ Agent (Copilot, etc.)    →  Search, read, write, validate
 
 4. **Validation before write**: Content must parse and pass reference checks before writing.
 
+5. **CLI Wrapping (CLW)**: All shell commands go through policy enforcement with HMAC-signed approval tokens for risky operations.
+
 ## Documentation
 
 - **[SETUP.md](docs/SETUP.md)** - Complete installation and configuration guide
@@ -61,30 +63,43 @@ Initialize CK3 Lens and search for traits related to "combat"
 
 See [SETUP.md](docs/SETUP.md) for complete setup instructions.
 
-## Available Tools (20 total)
+## Available Tools (~20 Active)
+
+### Unified Power Tools (NEW)
+- **`ck3_logs`** - All log operations (errors, crashes, game.log) - replaces 11 tools
+- **`ck3_conflicts`** - All conflict operations (scan, list, resolve) - replaces 8 tools
+- **`ck3_contract`** - Work contract management (CLW)
+- **`ck3_exec`** - Policy-enforced command execution (CLW)
+- **`ck3_token`** - Approval token management (CLW)
 
 ### Query Tools (Database Read-Only)
-- `ck3_init_session` - Initialize session with DB and live mods
-- `ck3_search_symbols` - Search with adjacency expansion
+- `ck3_search` - Unified search (symbols, content, files)
 - `ck3_confirm_not_exists` - Exhaustive search before claiming missing
 - `ck3_get_file` - Get file content (raw or AST)
-- `ck3_qr_conflicts` - Quick-resolve conflict analysis
+- `ck3_db_query` - Direct database queries
 
 ### Live Mod Tools (Sandboxed Writes)
-- `ck3_list_live_mods` - List writable mods
-- `ck3_read_live_file` - Read from live mod
 - `ck3_write_file` - Write with syntax validation
 - `ck3_edit_file` - Search-replace edit
 - `ck3_delete_file` - Delete file
-- `ck3_list_live_files` - List files in mod
+- `ck3_create_override_patch` - Create override patch files
 
-### Validation Tools
-- `ck3_parse_content` - Parse CK3 script, return AST/errors
-- `ck3_validate_patchdraft` - Validate PatchDraft contract
+### Validation & Session Tools
+- `ck3_validate_references` - Check reference validity
+- `ck3_get_scope_info` - Playset/lens info
+- `ck3_get_db_status` - Database build status
 
-### Git Tools
-- `ck3_git_status`, `ck3_git_diff`, `ck3_git_add`, `ck3_git_commit`
-- `ck3_git_push`, `ck3_git_pull`, `ck3_git_log`
+## CLI Wrapping Layer (CLW)
+
+Agents cannot run arbitrary shell commands. All commands go through `ck3_exec`:
+
+```
+Safe commands (cat, git status)     → ALLOW automatically
+Risky commands (rm *.py, git push)  → REQUIRE_TOKEN (get via ck3_token)
+Blocked commands (rm -rf /)         → DENY always
+```
+
+Work contracts (`ck3_contract`) define scope and constraints for agent tasks.
 
 ## Default Live Mods Whitelist
 

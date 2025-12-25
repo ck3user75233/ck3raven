@@ -1,0 +1,182 @@
+﻿# CI workflow for ck3raven
+# Runs on push and pull requests to main branch
+#
+# This is the AUTHORITATIVE enforcement - pre-commit is advisory,
+# CI is the final gate that blocks merges.
+
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.11"
+  CK3LENS_MODE: "ck3raven-dev"
+
+jobs:
+  # ============================================================================
+  # Code Quality Gates
+  # ============================================================================
+  
+  code-diff-guard:
+    name: Code-Diff Guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # Need parent commit for diff
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Run Code-Diff Guard
+        run: |
+          python scripts/guards/code_diff_guard.py --base HEAD~1 --strict
+  
+  policy-check:
+    name: Policy Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install dependencies
+        run: |
+          pip install -e ".[dev]"
+      
+      - name: Run Policy Check
+        env:
+          CK3LENS_MODE: ${{ env.CK3LENS_MODE }}
+        run: |
+          python scripts/pre-commit-policy-check.py
+  
+  # ============================================================================
+  # Code Quality
+  # ============================================================================
+  
+  lint:
+    name: Lint (Ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install Ruff
+        run: pip install ruff
+      
+      - name: Run Ruff Linter
+        run: ruff check .
+      
+      - name: Run Ruff Formatter Check
+        run: ruff format --check .
+  
+  type-check:
+    name: Type Check (Pyright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install dependencies
+        run: |
+          pip install -e ".[dev]"
+          pip install pyright
+      
+      - name: Run Pyright
+        run: pyright
+  
+  # ============================================================================
+  # Tests
+  # ============================================================================
+  
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install dependencies
+        run: |
+          pip install -e ".[dev]"
+      
+      - name: Run Tests
+        run: |
+          pytest tests/ -v --tb=short
+  
+  # ============================================================================
+  # Security
+  # ============================================================================
+  
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install Bandit
+        run: pip install bandit
+      
+      - name: Run Bandit
+        run: |
+          bandit -r src/ tools/ -ll --skip B101,B311
+  
+  # ============================================================================
+  # Final Gate
+  # ============================================================================
+  
+  ci-pass:
+    name: CI Passed
+    needs: [code-diff-guard, policy-check, lint, type-check, test]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check all jobs passed
+        run: |
+          if [[ "${{ needs.code-diff-guard.result }}" != "success" ]]; then
+            echo "❌ Code-Diff Guard failed"
+            exit 1
+          fi
+          if [[ "${{ needs.policy-check.result }}" != "success" ]]; then
+            echo "❌ Policy Check failed"
+            exit 1
+          fi
+          if [[ "${{ needs.lint.result }}" != "success" ]]; then
+            echo "❌ Lint failed"
+            exit 1
+          fi
+          if [[ "${{ needs.type-check.result }}" != "success" ]]; then
+            echo "❌ Type Check failed"
+            exit 1
+          fi
+          if [[ "${{ needs.test.result }}" != "success" ]]; then
+            echo "❌ Tests failed"
+            exit 1
+          fi
+          echo "✅ All CI checks passed"

@@ -113,7 +113,34 @@ def list_instances() -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="CK3 Lens MCP Server Launcher")
+    parser = argparse.ArgumentParser(
+        description="""CK3 Lens MCP Server Launcher
+
+CK3 Lens is the MCP (Model Context Protocol) server for ck3raven that provides
+AI agents with safe, structured access to CK3 mod content.
+
+UNIFIED POWER TOOLS (NEW):
+  ck3_logs       - All log operations (errors, crashes, game.log)
+  ck3_conflicts  - All conflict operations (scan, list, resolve)
+  ck3_contract   - Work contract management (CLW)
+  ck3_exec       - Policy-enforced command execution
+  ck3_token      - Approval token management
+
+CLI WRAPPING LAYER (CLW):
+  Safe commands (cat, git status)     → ALLOW automatically
+  Risky commands (rm *.py, git push)  → REQUIRE_TOKEN
+  Blocked commands (rm -rf /)         → DENY always
+
+USAGE:
+  Start server:     python -m tools.ck3lens_mcp.launcher
+  List instances:   python -m tools.ck3lens_mcp.launcher --list
+  Clean up stale:   python -m tools.ck3lens_mcp.launcher --cleanup
+
+DOCUMENTATION:
+  Full tool reference: tools/ck3lens_mcp/docs/TOOLS.md
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument(
         "--instance-id", "-i",
         help="Unique instance identifier. Auto-generated if not provided.",

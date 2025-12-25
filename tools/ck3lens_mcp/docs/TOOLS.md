@@ -419,3 +419,265 @@ The following tools were removed - use `ck3_search` instead:
 - ~~`ck3_search_symbols`~~ → Use `ck3_search(query, symbol_type="...")`
 - ~~`ck3_search_files`~~ → Use `ck3_search(query, file_pattern="...")`
 - ~~`ck3_search_content`~~ → Use `ck3_search(query)`
+
+---
+
+## Unified Tools (NEW - Power Tools)
+
+These consolidated tools replace many granular tools, reducing cognitive load while providing more capability.
+
+### `ck3_logs` - Unified Log Analysis
+
+Consolidated tool for all log operations (replaces 11 deprecated tools).
+
+```python
+ck3_logs(
+    source: "error" | "game" | "crash" | "all",
+    command: "summary" | "list" | "search" | "read" | "categories" | "cascades" | "detail",
+    # For list/search:
+    priority: int = None,           # 1=critical, 2=high, 3=medium, 4=low, 5=info
+    category: str = None,           # e.g., "missing_reference", "script_error"
+    mod_filter: str = None,         # Filter by mod name
+    limit: int = 50,
+    # For search:
+    query: str = None,
+    # For read:
+    log_type: str = None,           # "error", "game", "console", "system"
+    lines: int = 100,
+    from_end: bool = True,
+    # For crash detail:
+    crash_id: str = None
+) -> dict
+```
+
+**Commands:**
+| Command | Source | Description |
+|---------|--------|-------------|
+| `summary` | error | Error counts by priority/category/mod |
+| `list` | error | Filtered error list with fix hints |
+| `search` | error | Search for specific error patterns |
+| `cascades` | error | Detect cascading error patterns |
+| `categories` | game | List all game.log categories with counts |
+| `read` | game/error | Read raw log content |
+| `detail` | crash | Get crash report details |
+
+**Examples:**
+```python
+ck3_logs("error", "summary")                      # Overview of all errors
+ck3_logs("error", "list", priority=2, limit=20)   # High-priority errors
+ck3_logs("error", "search", query="brave")        # Find errors mentioning "brave"
+ck3_logs("crash", "detail", crash_id="ck3_20251225_120000")
+ck3_logs("game", "read", lines=500)               # Last 500 lines of game.log
+```
+
+### `ck3_conflicts` - Unified Conflict Management
+
+Consolidated tool for all conflict operations (replaces 8 deprecated tools).
+
+```python
+ck3_conflicts(
+    command: "summary" | "list" | "scan" | "detail" | "content" | "resolve" | "report" | "high_risk",
+    # For list:
+    risk_filter: str = None,        # "critical", "high", "medium", "low"
+    domain_filter: str = None,      # "on_action", "traits", "decisions", etc.
+    status_filter: str = None,      # "unresolved", "resolved"
+    limit: int = 50,
+    # For scan:
+    folder_filter: str = None,      # e.g., "common/on_action"
+    force: bool = False,
+    # For detail/content/resolve:
+    unit_key: str = None,           # e.g., "on_action:on_yearly_pulse"
+    conflict_id: str = None,
+    # For resolve:
+    resolution: str = None,         # "adopt_last", "merge", "manual", etc.
+    rationale: str = None,
+    # For report:
+    include_resolved: bool = False
+) -> dict
+```
+
+**Commands:**
+| Command | Description |
+|---------|-------------|
+| `summary` | Conflict overview with counts by risk/domain/status |
+| `list` | Filtered conflict list |
+| `scan` | Full conflict scan (slower, extracts ContributionUnits) |
+| `detail` | Detailed info for one conflict |
+| `content` | Side-by-side content comparison for a unit |
+| `resolve` | Record resolution decision |
+| `report` | Generate conflict report document |
+| `high_risk` | Get prioritized high-risk conflicts |
+
+**Examples:**
+```python
+ck3_conflicts("summary")                          # Overview
+ck3_conflicts("list", risk_filter="high")         # High-risk conflicts only
+ck3_conflicts("detail", unit_key="on_action:on_yearly_pulse")
+ck3_conflicts("resolve", unit_key="...", resolution="merge", rationale="Combined triggers")
+ck3_conflicts("high_risk", limit=10)              # Top 10 priority conflicts
+```
+
+### `ck3_contract` - Work Contract Management (CLW)
+
+Manages work contracts for CLI wrapping - defines scope and constraints for agent tasks.
+
+```python
+ck3_contract(
+    command: "open" | "close" | "cancel" | "status" | "list" | "flush",
+    # For open:
+    intent: str = None,             # What work will be done
+    canonical_domains: list = None, # ["parser", "routing", "builder", "extraction", "query", "cli"]
+    allowed_paths: list = None,     # Glob patterns for allowed files
+    capabilities: list = None,      # Requested capabilities
+    expires_hours: float = 8.0,
+    notes: str = None,
+    # For close/cancel:
+    contract_id: str = None,
+    closure_commit: str = None,     # Git SHA for close
+    cancel_reason: str = None,
+    # For list:
+    status_filter: str = None,
+    include_archived: bool = False
+) -> dict
+```
+
+**Canonical Domains:**
+- `parser` - Lexer/parser/AST code
+- `routing` - File routing and classification
+- `builder` - Database building and ingestion
+- `extraction` - Symbol/reference extraction
+- `query` - Database queries and search
+- `cli` - CLI tools and MCP server
+
+**Examples:**
+```python
+ck3_contract("status")                            # Check active contract
+ck3_contract("open", intent="Fix trait extraction", canonical_domains=["extraction"])
+ck3_contract("close", closure_commit="abc123")    # Close after work complete
+ck3_contract("list", status_filter="active")
+```
+
+### `ck3_exec` - Policy-Enforced Command Execution (CLW)
+
+Execute shell commands with policy enforcement - the ONLY safe way for agents to run commands.
+
+```python
+ck3_exec(
+    command: str,                   # Shell command
+    working_dir: str = None,
+    target_paths: list = None,      # Files being affected
+    token_id: str = None,           # Approval token for risky commands
+    dry_run: bool = False           # Check policy without executing
+) -> {
+    "allowed": bool,
+    "executed": bool,
+    "output": str,
+    "exit_code": int,
+    "policy": {
+        "decision": "ALLOW" | "DENY" | "REQUIRE_TOKEN",
+        "reason": str,
+        "required_token_type": str,
+        "category": str
+    }
+}
+```
+
+**Policy Decisions:**
+| Category | Examples | Decision |
+|----------|----------|----------|
+| Safe | `cat`, `git status`, `python -c` | ALLOW |
+| Risky | `rm *.py`, `git push` | REQUIRE_TOKEN |
+| Blocked | `rm -rf /`, `git push --force origin main` | DENY |
+
+**Examples:**
+```python
+ck3_exec("git status")                            # Safe - allowed
+ck3_exec("git push", dry_run=True)                # Check if would be allowed
+ck3_exec("rm test.py", token_id="tok-abc123")     # Risky - needs token
+```
+
+### `ck3_token` - Approval Token Management (CLW)
+
+Manage HMAC-signed approval tokens for risky operations.
+
+```python
+ck3_token(
+    command: "request" | "list" | "validate" | "revoke",
+    # For request:
+    token_type: str = None,         # See TOKEN_TYPES below
+    reason: str = None,             # Why this token is needed
+    path_patterns: list = None,     # Allowed paths
+    command_patterns: list = None,  # Allowed commands
+    ttl_minutes: int = None,        # Override default TTL
+    # For validate/revoke:
+    token_id: str = None,
+    capability: str = None,
+    path: str = None
+) -> dict
+```
+
+**Token Types:**
+| Type | Risk | Default TTL | Use Case |
+|------|------|-------------|----------|
+| `FS_DELETE_CODE` | High | 30 min | Delete .py/.txt files |
+| `FS_WRITE_OUTSIDE_CONTRACT` | High | 60 min | Write outside contract scope |
+| `CMD_RUN_DESTRUCTIVE` | High | 15 min | DROP TABLE, etc. |
+| `CMD_RUN_ARBITRARY` | Critical | 10 min | curl\|bash patterns |
+| `GIT_PUSH` | Medium | 60 min | Push to remote |
+| `GIT_FORCE_PUSH` | Critical | 10 min | Force push |
+| `GIT_REWRITE_HISTORY` | Critical | 15 min | Rebase, reset |
+| `DB_SCHEMA_MIGRATE` | High | 30 min | Schema changes |
+| `DB_DELETE_DATA` | Critical | 15 min | Delete DB rows |
+
+**Examples:**
+```python
+ck3_token("list")                                 # List active tokens
+ck3_token("request", token_type="FS_DELETE_CODE", reason="Remove test file")
+ck3_token("validate", token_id="tok-abc", capability="FS_DELETE_CODE", path="test.py")
+ck3_token("revoke", token_id="tok-abc")
+```
+
+---
+
+## Tool Count Summary
+
+| Category | Count | Tools |
+|----------|-------|-------|
+| **Search** | 2 | `ck3_search`, `ck3_confirm_not_exists` |
+| **Unified Logs** | 1 | `ck3_logs` (replaces 11 tools) |
+| **Unified Conflicts** | 1 | `ck3_conflicts` (replaces 8 tools) |
+| **CLI Wrapping** | 3 | `ck3_contract`, `ck3_exec`, `ck3_token` |
+| **File Access** | 1 | `ck3_get_file` |
+| **Live Mod Ops** | 5 | `ck3_write_file`, `ck3_edit_file`, `ck3_delete_file`, `ck3_create_override_patch`, etc. |
+| **Validation** | 2 | `ck3_validate_references`, `ck3_validate_artifact_bundle` |
+| **Session** | 3 | `ck3_get_scope_info`, `ck3_get_db_status`, `ck3_db_query` |
+| **Total Active** | ~20 | Down from ~80 (deprecated 19 tools) |
+
+---
+
+## Deprecated Tools Reference
+
+### Log Tools (Use `ck3_logs` instead)
+| Old Tool | New Equivalent |
+|----------|---------------|
+| `ck3_get_error_summary` | `ck3_logs("error", "summary")` |
+| `ck3_get_errors` | `ck3_logs("error", "list", ...)` |
+| `ck3_search_errors` | `ck3_logs("error", "search", query=...)` |
+| `ck3_get_error_cascades` | `ck3_logs("error", "cascades")` |
+| `ck3_get_crash_reports` | `ck3_logs("crash", "summary")` |
+| `ck3_get_crash_detail` | `ck3_logs("crash", "detail", crash_id=...)` |
+| `ck3_read_log` | `ck3_logs("game", "read", ...)` |
+| `ck3_list_game_logs` | `ck3_logs("game", "list")` |
+| `ck3_get_game_log_categories` | `ck3_logs("game", "categories")` |
+
+### Conflict Tools (Use `ck3_conflicts` instead)
+| Old Tool | New Equivalent |
+|----------|---------------|
+| `ck3_scan_unit_conflicts` | `ck3_conflicts("scan", ...)` |
+| `ck3_get_conflict_summary` | `ck3_conflicts("summary")` |
+| `ck3_list_conflict_units` | `ck3_conflicts("list", ...)` |
+| `ck3_get_conflict_detail` | `ck3_conflicts("detail", ...)` |
+| `ck3_resolve_conflict` | `ck3_conflicts("resolve", ...)` |
+| `ck3_get_unit_content` | `ck3_conflicts("content", ...)` |
+| `ck3_generate_conflict_report` | `ck3_conflicts("report", ...)` |
+| `ck3_get_high_risk_conflicts` | `ck3_conflicts("high_risk", ...)` |

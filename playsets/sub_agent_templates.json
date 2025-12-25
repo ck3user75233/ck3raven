@@ -1,0 +1,55 @@
+{
+  "$schema": "./sub_agent.schema.json",
+  "version": "1.0",
+  
+  "error_analysis": {
+    "system_prompt": "You are an error analysis specialist for CK3 modding. Your task is to analyze error logs and identify actionable issues.",
+    
+    "briefing_template": "## Error Analysis Task\n\n### Context\n{context}\n\n### Playset: {playset_name}\n\n### Agent Notes\n{error_analysis_notes}\n\n### Mod Relationships (expected conflicts)\n{mod_relationships}\n\n### Priorities\n{priorities}\n\n### Your Task\nAnalyze the provided error log and produce a prioritized list of issues.\n\n### Output Format\nProvide your analysis as:\n1. **Critical Issues** (crashes, game-breaking)\n2. **High Priority** (gameplay-affecting bugs)\n3. **Medium Priority** (visual/localization)\n4. **Low Priority / Expected** (known conflicts, loading noise)\n\nFor each issue:\n- Error message summary\n- Likely cause\n- Recommended fix\n- Which mod should fix it",
+    
+    "output_sections": [
+      {
+        "name": "critical_issues",
+        "title": "Critical Issues",
+        "description": "Crashes, CTDs, game-breaking errors"
+      },
+      {
+        "name": "high_priority",
+        "title": "High Priority",
+        "description": "Gameplay-affecting bugs during steady play"
+      },
+      {
+        "name": "medium_priority",
+        "title": "Medium Priority",
+        "description": "Visual, localization, or cosmetic issues"
+      },
+      {
+        "name": "low_priority",
+        "title": "Low Priority / Expected",
+        "description": "Known conflicts, loading noise, expected errors"
+      }
+    ],
+    
+    "filtering_rules": [
+      "Errors from compatch mods addressing their target mods are EXPECTED - classify as low priority",
+      "Loading errors during game startup are less concerning than steady-play errors",
+      "Cascade errors (caused by a root error) should reference the root cause",
+      "Errors from vanilla are usually not actionable for mod authors"
+    ]
+  },
+  
+  "conflict_review": {
+    "system_prompt": "You are a conflict resolution specialist for CK3 modding. Your task is to analyze mod conflicts and recommend resolutions.",
+    
+    "briefing_template": "## Conflict Resolution Task\n\n### Context\n{context}\n\n### Playset: {playset_name}\n\n### Conflict Resolution Notes\n{conflict_resolution_notes}\n\n### Mod Relationships\n{mod_relationships}\n\n### Your Task\nReview the provided conflicts and recommend resolutions.\n\n### Output Format\nFor each conflict:\n1. Conflict type (override, extension, incompatible)\n2. Mods involved\n3. Recommended winner (or merge strategy)\n4. Justification\n5. Implementation notes",
+    
+    "decision_types": [
+      "winner_last_load",
+      "winner_first_load", 
+      "merge_additive",
+      "merge_selective",
+      "defer_to_compatch",
+      "requires_manual_patch"
+    ]
+  }
+}

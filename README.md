@@ -27,7 +27,8 @@ Essential for compatch authors, mod compatibility analysis, and understanding co
 | `parser/` | ✅ Complete | 100% regex-free lexer/parser, 100% vanilla parse rate |
 | `resolver/` | ✅ Complete | 4 merge policies, file/symbol/unit-level conflict detection |
 | `db/` | ✅ Complete | SQLite with content-addressed storage, AST cache, FTS search |
-| `tools/ck3lens_mcp/` | ✅ Phase 1.5 | MCP server with 25+ tools for AI agent integration |
+| `tools/ck3lens_mcp/` | ✅ Complete | MCP server with ~30 tools, policy enforcement, CLW |
+| `playsets/` | ✅ Complete | JSON-based playset configuration with agent briefing |
 | `emulator/` | 🔲 Stubs Only | Full game state building from playset |
 | CLI | 🔲 Minimal | Basic structure only |
 
@@ -35,17 +36,37 @@ Essential for compatch authors, mod compatibility analysis, and understanding co
 
 The `tools/ck3lens_mcp/` directory contains a Model Context Protocol server that exposes ck3raven's capabilities to AI agents (GitHub Copilot, etc.):
 
-- **25+ MCP tools** for symbol search, file access, conflict detection, live mod editing
+- **~30 unified MCP tools** (consolidated from 80+ granular tools)
+- **Two agent modes**: `ck3lens` (CK3 modding) and `ck3raven-dev` (infrastructure development)
+- **CLI Wrapping Layer (CLW)** - Policy-enforced command execution with HMAC tokens
+- **Unified power tools**: `ck3_logs`, `ck3_conflicts`, `ck3_contract`, `ck3_exec`, `ck3_token`
 - **Unit-level conflict analysis** with risk scoring and resolution tracking
 - **Adjacency search** - automatic pattern expansion for fuzzy symbol matching
 - **Sandboxed writes** - only whitelisted mods can be modified
-- **Git integration** - status, diff, commit, push/pull for live mods
+- **Work contracts** - Define scope and constraints for agent tasks
+- **Playset JSON system** - Human-readable configuration with agent briefing
+
+### Policy Enforcement
+
+Comprehensive policy rules prevent common agent errors:
+
+| Rule | Mode | Purpose |
+|------|------|---------|
+| `allowed_python_paths` | ck3lens | Blocks Python/infrastructure editing from modding agents |
+| `scripts_must_be_documented` | ck3raven-dev | Prevents orphan "quick fix" scripts |
+| `bugfix_requires_core_change` | ck3raven-dev | Enforces architectural fixes over workarounds |
+| `architecture_intent_required` | ck3raven-dev | Documents rationale for new code |
+
+See [docs/NO_DUPLICATE_IMPLEMENTATIONS.md](docs/NO_DUPLICATE_IMPLEMENTATIONS.md) for the duplicate prevention policy.
+
+### Documentation
 
 See [tools/ck3lens_mcp/docs/](tools/ck3lens_mcp/docs/) for:
 - [SETUP.md](tools/ck3lens_mcp/docs/SETUP.md) - Installation and configuration
 - [TESTING.md](tools/ck3lens_mcp/docs/TESTING.md) - Validation procedures
 - [TOOLS.md](tools/ck3lens_mcp/docs/TOOLS.md) - Complete tool reference
 - [DESIGN.md](tools/ck3lens_mcp/docs/DESIGN.md) - V1 architecture specification
+- [POLICY_ENFORCEMENT_ARCHITECTURE.md](tools/ck3lens_mcp/docs/POLICY_ENFORCEMENT_ARCHITECTURE.md) - Policy system design
 
 ---
 
@@ -73,16 +94,32 @@ ck3raven/
 │   │   ├── ast_cache.py  # AST cache keyed by (content_hash, parser_version)
 │   │   ├── symbols.py    # Symbol/reference extraction from AST
 │   │   ├── search.py     # FTS5 search (symbols, refs, content)
-│   │   ├── playsets.py   # Playset management (max 5 active)
 │   │   └── cryo.py       # Snapshot export/import for offline analysis
 │   │
 │   ├── emulator/         # (Future) Full game state building
 │   └── cli.py            # Command-line interface
 │
-├── docs/                 # Design documentation (9 docs + ARCHITECTURE.md)
-├── tests/                # Test suite
 ├── builder/              # Database builder daemon
 │   └── daemon.py         # Detached rebuild daemon (long-running builds)
+│
+├── playsets/             # Playset configuration (JSON)
+│   ├── playset.schema.json    # JSON Schema for validation
+│   ├── example_playset.json   # Template to copy and customize
+│   └── sub_agent_templates.json # Sub-agent briefing templates
+│
+├── tools/ck3lens_mcp/    # MCP Server for AI Agents
+│   ├── server.py         # FastMCP with ~30 tools
+│   ├── ck3lens/
+│   │   ├── workspace.py  # Live mod whitelist
+│   │   ├── policy/       # Policy enforcement engine
+│   │   │   ├── agent_policy.yaml    # Policy rules specification
+│   │   │   ├── ck3lens_rules.py     # CK3 modding rules
+│   │   │   └── ck3raven_dev_rules.py # Infrastructure rules
+│   │   └── work_contracts.py # Work contracts with HMAC tokens
+│   └── docs/             # MCP documentation
+│
+├── docs/                 # Design documentation (9 docs + ARCHITECTURE.md)
+├── tests/                # Test suite
 └── scripts/              # Utility scripts (NOT for building - use builder/daemon.py)
 ```
 
@@ -201,12 +238,23 @@ for r in results:
 - [x] Cryo snapshot export/import
 
 ### Phase 1.5: MCP Integration ✅ Complete
-- [x] CK3 Lens MCP server (20 tools)
+- [x] CK3 Lens MCP server (~30 tools)
 - [x] Adjacency search with pattern expansion
 - [x] Live mod file operations (sandboxed)
 - [x] Git operations for live mods
 - [x] CK3 script validation (parse + AST)
 - [x] Complete documentation (SETUP, TESTING, TOOLS, DESIGN)
+
+### Phase 1.7: CLI Wrapping Layer (CLW) ✅ Complete
+- [x] Policy enforcement engine (agent_policy.yaml)
+- [x] Two agent modes: ck3lens (modding) and ck3raven-dev (infrastructure)
+- [x] Path restrictions (ck3lens can't edit Python/infrastructure)
+- [x] Work contracts with HMAC tokens
+- [x] Playset JSON system (replaces database storage)
+- [x] Agent briefing for sub-agents
+- [x] Pre-commit hooks (code-diff-guard.py)
+- [x] CI workflow (GitHub Actions)
+- [x] Validation rules: scripts_must_be_documented, bugfix_requires_core_change, etc.
 
 ### Phase 2: Game State Emulator (Next)
 - [ ] `emulator/` module: load playset → resolve all folders → final state

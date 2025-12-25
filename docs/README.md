@@ -4,6 +4,13 @@ Design documents and specifications for the CK3 Game State Emulator.
 
 ## Document Index
 
+### Core Architecture
+| Doc | Description |
+|-----|-------------|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Full system architecture, data flow, module details |
+| [DATABASE_BUILDER.md](DATABASE_BUILDER.md) | Database builder and incremental rebuild roadmap |
+
+### Design Documents
 | Doc | Description |
 |-----|-------------|
 | [00_ORIGINAL_CONCEPT](00_ORIGINAL_CONCEPT.md) | Original vision: feed a playset, get resolved game state |
@@ -14,10 +21,23 @@ Design documents and specifications for the CK3 Game State Emulator.
 | [05_ACCURATE_MERGE_OVERRIDE_RULES](05_ACCURATE_MERGE_OVERRIDE_RULES.md) | CK3's actual merge behavior (corrected) |
 | [06_CONTAINER_MERGE_OVERRIDE_TABLE](06_CONTAINER_MERGE_OVERRIDE_TABLE.md) | Complete reference by folder/content type |
 | [07_TEST_MOD_AND_LOGGING_COMPATCH](07_TEST_MOD_AND_LOGGING_COMPATCH.md) | Testing and instrumentation ideas |
+| [08_MAP_MOD_CONVERSION_AGENT](08_MAP_MOD_CONVERSION_AGENT.md) | Map mod compatibility agent design |
+
+### Policy & Governance
+| Doc | Description |
+|-----|-------------|
+| [NO_DUPLICATE_IMPLEMENTATIONS](NO_DUPLICATE_IMPLEMENTATIONS.md) | Agent instruction block for duplicate prevention |
+| [CLW_DECISIONS](CLW_DECISIONS.md) | CLI Wrapping Layer implementation decisions |
+
+### Research & Planning
+| Doc | Description |
+|-----|-------------|
+| [SYNTAX_VALIDATOR_RESEARCH](SYNTAX_VALIDATOR_RESEARCH.md) | Syntax validation approaches |
+| [VISUALIZATION_DESIGN](VISUALIZATION_DESIGN.md) | UI/UX design for visualizations |
 
 ---
 
-## Project Status (December 2024)
+## Project Status (December 2025)
 
 ### ✅ Phase 1: Foundation - COMPLETE
 
@@ -25,7 +45,25 @@ Design documents and specifications for the CK3 Game State Emulator.
 |--------|--------|--------------|
 | `parser/` | ✅ | 100% regex-free, 100% vanilla parse rate, handles all edge cases |
 | `resolver/` | ✅ | 4 merge policies, 15+ content types, conflict detection |
-| `db/` | ✅ | SQLite, content dedup, AST cache, FTS search, playsets, cryo |
+| `db/` | ✅ | SQLite, content dedup, AST cache, FTS search, cryo |
+
+### ✅ Phase 1.5: MCP Integration - COMPLETE
+
+| Module | Status | Key Features |
+|--------|--------|--------------|
+| `tools/ck3lens_mcp/` | ✅ | ~30 MCP tools, policy enforcement, adjacency search |
+| `playsets/` | ✅ | JSON-based configuration with agent briefing |
+
+### ✅ Phase 1.7: CLI Wrapping Layer - COMPLETE
+
+| Feature | Status | Key Components |
+|---------|--------|----------------|
+| Policy enforcement | ✅ | agent_policy.yaml, ck3lens_rules.py, ck3raven_dev_rules.py |
+| Agent modes | ✅ | ck3lens (modding) and ck3raven-dev (infrastructure) |
+| Path restrictions | ✅ | ck3lens blocked from editing Python/infrastructure |
+| Pre-commit hooks | ✅ | code-diff-guard.py, pattern detection |
+| CI gates | ✅ | GitHub Actions workflow |
+| Work contracts | ✅ | HMAC-signed tokens for privileged operations |
 
 ### 🔲 Phase 2: Game State Emulator - NEXT
 

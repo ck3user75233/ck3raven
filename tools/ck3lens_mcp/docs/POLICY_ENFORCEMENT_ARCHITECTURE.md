@@ -304,15 +304,143 @@ Rules currently at `severity: warning` with `status: enhancement`:
 
 ---
 
-## 9. File Locations
+## 9. File Path Restrictions (ck3lens mode)
+
+### 9.1 Allowed File Extensions
+
+When in `ck3lens` mode, agents can ONLY edit CK3 modding files:
+
+```python
+CK3_ALLOWED_EXTENSIONS = {
+    '.txt', '.gui', '.gfx', '.yml', '.dds', '.png', '.tga', '.shader', '.fxh'
+}
+```
+
+### 9.2 Forbidden Paths
+
+These paths are ALWAYS blocked for ck3lens mode, regardless of extension:
+
+```python
+CK3LENS_FORBIDDEN_PATHS = [
+    'src/',
+    'builder/',
+    'tools/ck3lens_mcp/ck3lens/',
+    'scripts/',
+    'tests/',
+    '.github/',
+    '.vscode/',
+    'ck3lens_config.yaml',
+    'pyproject.toml'
+]
+```
+
+### 9.3 Enforcement
+
+The `enforce_ck3lens_file_restrictions()` function in `ck3lens_rules.py` validates every file operation:
+
+```python
+def enforce_ck3lens_file_restrictions(file_path: str, mode: str) -> list[Violation]:
+    """Block ck3lens agents from editing Python/infrastructure files."""
+    if mode != "ck3lens":
+        return []
+    
+    # Check extension
+    ext = Path(file_path).suffix.lower()
+    if ext not in CK3_ALLOWED_EXTENSIONS:
+        return [Violation(
+            code="CK3LENS_FORBIDDEN_EXTENSION",
+            severity="error",
+            message=f"ck3lens mode cannot edit {ext} files"
+        )]
+    
+    # Check forbidden paths
+    for forbidden in CK3LENS_FORBIDDEN_PATHS:
+        if forbidden in file_path:
+            return [Violation(
+                code="CK3LENS_FORBIDDEN_PATH",
+                severity="error",
+                message=f"ck3lens mode cannot edit files in {forbidden}"
+            )]
+    
+    return []
+```
+
+---
+
+## 10. Configuration Rules (ck3lens_config.yaml)
+
+### 10.1 Rule Definitions
+
+Rules are defined in `ck3lens_config.yaml` under the `validation_rules` section:
+
+```yaml
+validation_rules:
+  # Core validation rules
+  python_validation_required:
+    enabled: true
+    severity: error
+    description: "Python files must pass syntax/import validation"
+  
+  schema_change_declaration:
+    enabled: true
+    severity: warning
+    description: "Schema changes must be declared as breaking/non-breaking"
+  
+  # Repo hygiene rules
+  allowed_python_paths:
+    enabled: true
+    severity: error
+    description: "Python files only allowed in specific paths"
+    
+  scripts_must_be_documented:
+    enabled: true
+    severity: error
+    description: "Scripts must have docstring documenting purpose"
+    
+  ephemeral_scripts_location:
+    enabled: true
+    severity: error
+    description: "Temp scripts must go in .artifacts/"
+    
+  bugfix_requires_core_change:
+    enabled: true
+    severity: error
+    description: "Bugfixes must be in core modules, not workaround scripts"
+    
+  bugfix_requires_test:
+    enabled: true
+    severity: error
+    description: "Bugfixes require regression tests"
+    
+  architecture_intent_required:
+    enabled: true
+    severity: error
+    description: "New code must document architectural intent"
+```
+
+### 10.2 Rule Enforcement Points
+
+| Rule | Enforcement Stage |
+|------|-------------------|
+| `python_validation_required` | Pre-commit, CI |
+| `allowed_python_paths` | Pre-call wrapper, Pre-commit |
+| `scripts_must_be_documented` | Pre-commit |
+| `bugfix_requires_core_change` | Pre-commit, Code review |
+| `bugfix_requires_test` | CI (test coverage) |
+| `architecture_intent_required` | Pre-commit, Code review |
+
+---
+
+## 11. File Locations
 
 | File | Purpose |
 |------|---------|
-| `policy/agent_policy.yaml` | Policy specification |
+| `ck3lens_config.yaml` | Main configuration with validation_rules |
+| `policy/agent_policy.yaml` | Policy specification (VS Code reads this) |
 | `policy/types.py` | Core types (Violation, PolicyOutcome, etc.) |
 | `policy/loader.py` | YAML loading with caching |
 | `policy/validator.py` | Core validation orchestrator |
-| `policy/ck3lens_rules.py` | CK3-specific rule implementations |
+| `policy/ck3lens_rules.py` | CK3-specific rule implementations + path restrictions |
 | `policy/ck3raven_dev_rules.py` | Python dev rule implementations |
 | `policy/trace_helpers.py` | Trace analysis utilities |
 | `contracts.py` | ArtifactBundle, ArtifactFile models |
@@ -320,13 +448,15 @@ Rules currently at `severity: warning` with `status: enhancement`:
 
 ---
 
-## 10. Summary
+## 12. Summary
 
 The policy enforcement architecture provides:
 
 1. **Clear separation** between MCP tools and enforcement stages
 2. **Evidence contracts** requiring claims with tool-call proof
 3. **Scope enforcement** with auto-injection and verification
-4. **Graceful degradation** for enhancement-status rules (warning not error)
-5. **Explicit upgrade paths** from warning → error as tooling matures
-6. **Testable rules** with unit and integration test coverage
+4. **Path restrictions** blocking ck3lens from infrastructure files
+5. **Graceful degradation** for enhancement-status rules (warning not error)
+6. **Explicit upgrade paths** from warning → error as tooling matures
+7. **Testable rules** with unit and integration test coverage
+8. **Pre-commit and CI gates** for additional enforcement

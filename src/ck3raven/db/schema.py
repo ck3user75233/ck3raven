@@ -768,6 +768,191 @@ CREATE TRIGGER IF NOT EXISTS refs_au AFTER UPDATE ON refs BEGIN
 END;
 """
 
+# ============================================================================
+# WRITE PROTECTION TRIGGERS (DB-level enforcement)
+# ============================================================================
+# These BEFORE triggers prevent writes to derived tables unless a builder
+# session is active. This prevents agents from accidentally corrupting
+# extracted data through ad-hoc queries.
+#
+# Protected tables: symbols, refs, *_lookups
+# Allowed: builder sessions with valid token
+#
+# To write to these tables, you must:
+# 1. Call start_builder_session() to get a session token
+# 2. Store the token in builder_sessions table
+# 3. The trigger checks for an active session before allowing writes
+
+WRITE_PROTECTION_SQL = """
+-- Builder session tracking for write protection
+-- Only active builder sessions can write to derived tables
+CREATE TABLE IF NOT EXISTS builder_sessions (
+    session_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT NOT NULL UNIQUE,              -- HMAC-signed session token
+    purpose TEXT NOT NULL,                   -- What this session is doing
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    expires_at TEXT NOT NULL,                -- Session expiry
+    is_active INTEGER NOT NULL DEFAULT 1,    -- 0 = ended/expired
+    ended_at TEXT,
+    rows_written INTEGER NOT NULL DEFAULT 0  -- Tracking for audit
+);
+
+CREATE INDEX IF NOT EXISTS idx_builder_sessions_active 
+    ON builder_sessions(is_active, expires_at);
+CREATE INDEX IF NOT EXISTS idx_builder_sessions_token 
+    ON builder_sessions(token);
+
+-- Helper view: Is there an active builder session?
+-- This is checked by the BEFORE triggers
+CREATE VIEW IF NOT EXISTS v_builder_session_active AS
+SELECT CASE 
+    WHEN EXISTS (
+        SELECT 1 FROM builder_sessions 
+        WHERE is_active = 1 
+        AND datetime(expires_at) > datetime('now')
+    ) THEN 1 
+    ELSE 0 
+END AS has_active_session;
+
+-- ============================================================================
+-- BEFORE INSERT/UPDATE/DELETE triggers on protected tables
+-- ============================================================================
+-- These triggers ABORT if no active builder session exists.
+-- This is DB-level enforcement - cannot be bypassed by application code.
+
+-- SYMBOLS table protection
+CREATE TRIGGER IF NOT EXISTS symbols_write_protect_insert
+BEFORE INSERT ON symbols
+WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: symbols table requires active builder session. Use start_builder_session().');
+END;
+
+CREATE TRIGGER IF NOT EXISTS symbols_write_protect_update
+BEFORE UPDATE ON symbols
+WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: symbols table requires active builder session. Use start_builder_session().');
+END;
+
+CREATE TRIGGER IF NOT EXISTS symbols_write_protect_delete
+BEFORE DELETE ON symbols
+WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: symbols table requires active builder session. Use start_builder_session().');
+END;
+
+-- REFS table protection
+CREATE TRIGGER IF NOT EXISTS refs_write_protect_insert
+BEFORE INSERT ON refs
+WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: refs table requires active builder session. Use start_builder_session().');
+END;
+
+CREATE TRIGGER IF NOT EXISTS refs_write_protect_update
+BEFORE UPDATE ON refs
+WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: refs table requires active builder session. Use start_builder_session().');
+END;
+
+CREATE TRIGGER IF NOT EXISTS refs_write_protect_delete
+BEFORE DELETE ON refs
+WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: refs table requires active builder session. Use start_builder_session().');
+END;
+
+-- TRAIT_LOOKUPS table protection
+CREATE TRIGGER IF NOT EXISTS trait_lookups_write_protect_insert
+BEFORE INSERT ON trait_lookups
+WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: trait_lookups table requires active builder session.');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trait_lookups_write_protect_update
+BEFORE UPDATE ON trait_lookups
+WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: trait_lookups table requires active builder session.');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trait_lookups_write_protect_delete
+BEFORE DELETE ON trait_lookups
+WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: trait_lookups table requires active builder session.');
+END;
+
+-- DECISION_LOOKUPS table protection
+CREATE TRIGGER IF NOT EXISTS decision_lookups_write_protect_insert
+BEFORE INSERT ON decision_lookups
+WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: decision_lookups table requires active builder session.');
+END;
+
+CREATE TRIGGER IF NOT EXISTS decision_lookups_write_protect_update
+BEFORE UPDATE ON decision_lookups
+WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: decision_lookups table requires active builder session.');
+END;
+
+CREATE TRIGGER IF NOT EXISTS decision_lookups_write_protect_delete
+BEFORE DELETE ON decision_lookups
+WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: decision_lookups table requires active builder session.');
+END;
+
+-- EVENT_LOOKUPS table protection
+CREATE TRIGGER IF NOT EXISTS event_lookups_write_protect_insert
+BEFORE INSERT ON event_lookups
+WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: event_lookups table requires active builder session.');
+END;
+
+CREATE TRIGGER IF NOT EXISTS event_lookups_write_protect_update
+BEFORE UPDATE ON event_lookups
+WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: event_lookups table requires active builder session.');
+END;
+
+CREATE TRIGGER IF NOT EXISTS event_lookups_write_protect_delete
+BEFORE DELETE ON event_lookups
+WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: event_lookups table requires active builder session.');
+END;
+
+-- LOCALIZATION_ENTRIES protection (if table exists)
+CREATE TRIGGER IF NOT EXISTS loc_entries_write_protect_insert
+BEFORE INSERT ON localization_entries
+WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: localization_entries table requires active builder session.');
+END;
+
+CREATE TRIGGER IF NOT EXISTS loc_entries_write_protect_update
+BEFORE UPDATE ON localization_entries
+WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: localization_entries table requires active builder session.');
+END;
+
+CREATE TRIGGER IF NOT EXISTS loc_entries_write_protect_delete
+BEFORE DELETE ON localization_entries
+WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: localization_entries table requires active builder session.');
+END;
+"""
+
 
 def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
     """
@@ -838,6 +1023,13 @@ def init_database(db_path: Optional[Path] = None, force: bool = False) -> sqlite
     conn.executescript(SCHEMA_SQL)
     conn.executescript(FTS_TRIGGERS_SQL)
     
+    # Apply write protection triggers (ignore errors if tables don't exist yet)
+    try:
+        conn.executescript(WRITE_PROTECTION_SQL)
+    except sqlite3.OperationalError:
+        # Some tables may not exist yet, that's OK
+        pass
+    
     # Set metadata
     conn.execute("""
         INSERT OR REPLACE INTO db_metadata (key, value, updated_at)
@@ -866,3 +1058,130 @@ def close_all_connections():
         for conn in _local.connections.values():
             conn.close()
         _local.connections = {}
+
+
+# ============================================================================
+# Builder Session Management
+# ============================================================================
+
+def start_builder_session(
+    conn: sqlite3.Connection,
+    purpose: str,
+    ttl_minutes: int = 60,
+) -> str:
+    """
+    Start a builder session to allow writes to protected tables.
+    
+    This is REQUIRED before writing to: symbols, refs, *_lookups, localization_entries
+    
+    Args:
+        conn: Database connection
+        purpose: Description of what this session will do
+        ttl_minutes: Session duration in minutes (default 60)
+    
+    Returns:
+        Session token (store this to end the session later)
+    """
+    import secrets
+    from datetime import datetime, timedelta
+    
+    token = f"builder-{secrets.token_hex(16)}"
+    expires_at = (datetime.now() + timedelta(minutes=ttl_minutes)).isoformat()
+    
+    conn.execute("""
+        INSERT INTO builder_sessions (token, purpose, expires_at)
+        VALUES (?, ?, ?)
+    """, (token, purpose, expires_at))
+    conn.commit()
+    
+    return token
+
+
+def end_builder_session(conn: sqlite3.Connection, token: str) -> bool:
+    """
+    End a builder session.
+    
+    Args:
+        conn: Database connection
+        token: Session token from start_builder_session()
+    
+    Returns:
+        True if session was found and ended
+    """
+    from datetime import datetime
+    
+    result = conn.execute("""
+        UPDATE builder_sessions 
+        SET is_active = 0, ended_at = ?
+        WHERE token = ? AND is_active = 1
+    """, (datetime.now().isoformat(), token))
+    conn.commit()
+    
+    return result.rowcount > 0
+
+
+def has_active_builder_session(conn: sqlite3.Connection) -> bool:
+    """
+    Check if there's an active builder session.
+    
+    Args:
+        conn: Database connection
+    
+    Returns:
+        True if an active, non-expired session exists
+    """
+    row = conn.execute("""
+        SELECT has_active_session FROM v_builder_session_active
+    """).fetchone()
+    
+    return row and row[0] == 1
+
+
+def cleanup_expired_sessions(conn: sqlite3.Connection) -> int:
+    """
+    Mark expired sessions as inactive.
+    
+    Args:
+        conn: Database connection
+    
+    Returns:
+        Number of sessions cleaned up
+    """
+    from datetime import datetime
+    
+    result = conn.execute("""
+        UPDATE builder_sessions 
+        SET is_active = 0, ended_at = ?
+        WHERE is_active = 1 AND datetime(expires_at) < datetime('now')
+    """, (datetime.now().isoformat(),))
+    conn.commit()
+    
+    return result.rowcount
+
+
+class BuilderSession:
+    """
+    Context manager for builder sessions.
+    
+    Usage:
+        conn = get_connection()
+        with BuilderSession(conn, "Extracting symbols from mod X") as session:
+            # Can write to protected tables here
+            conn.execute("INSERT INTO symbols ...")
+        # Session automatically ended
+    """
+    
+    def __init__(self, conn: sqlite3.Connection, purpose: str, ttl_minutes: int = 60):
+        self.conn = conn
+        self.purpose = purpose
+        self.ttl_minutes = ttl_minutes
+        self.token: Optional[str] = None
+    
+    def __enter__(self) -> "BuilderSession":
+        self.token = start_builder_session(self.conn, self.purpose, self.ttl_minutes)
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.token:
+            end_builder_session(self.conn, self.token)
+        return False  # Don't suppress exceptions

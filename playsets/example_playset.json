@@ -1,0 +1,82 @@
+{
+  "$schema": "./playset.schema.json",
+  
+  "playset_name": "Example Playset",
+  "description": "Template playset for CK3 modding work",
+  "created": "2025-12-25",
+  "last_modified": "2025-12-25",
+  
+  "vanilla": {
+    "version": "1.14.0",
+    "path": "C:/Program Files (x86)/Steam/steamapps/common/Crusader Kings III/game",
+    "enabled": true
+  },
+  
+  "mods": [
+    {
+      "name": "Example Mod",
+      "steam_id": "1234567890",
+      "path": "C:/Program Files (x86)/Steam/steamapps/workshop/content/1158310/1234567890",
+      "load_order": 1,
+      "enabled": true,
+      "is_compatch": false,
+      "notes": "Main content mod"
+    }
+  ],
+  
+  "live_mods": [
+    {
+      "mod_id": "MSC",
+      "name": "Mini Super Compatch",
+      "path": "~/Documents/Paradox Interactive/Crusader Kings III/mod/Mini Super Compatch",
+      "description": "Compatibility patch being developed"
+    }
+  ],
+  
+  "agent_briefing": {
+    "context": "This playset is for developing a compatibility patch.",
+    
+    "error_analysis_notes": [
+      "Errors from vanilla are expected during early game setup",
+      "Focus on errors during steady gameplay, not loading screens"
+    ],
+    
+    "conflict_resolution_notes": [
+      "Morven's compatch addresses the 8 mods that directly precede it - conflicts with those mods are expected and should NOT be addressed by MSC",
+      "Loading errors from Morven's compatch target mods should be discounted in importance",
+      "If errors occur during steady gameplay from these mods, there may be a problem to solve"
+    ],
+    
+    "mod_relationships": [
+      {
+        "mod": "Morven's Compatch",
+        "relationship": "handles_conflicts_for",
+        "targets": ["Mod A", "Mod B", "Mod C"],
+        "notes": "Do not duplicate conflict resolution that Morven already handles"
+      }
+    ],
+    
+    "priorities": [
+      "1. Crashes and game-breaking errors",
+      "2. Gameplay-affecting bugs during steady play",
+      "3. Minor visual/localization issues",
+      "4. Optimization opportunities"
+    ],
+    
+    "custom_instructions": ""
+  },
+  
+  "sub_agent_config": {
+    "error_analysis": {
+      "enabled": true,
+      "auto_spawn_threshold": 50,
+      "output_format": "markdown",
+      "include_recommendations": true
+    },
+    "conflict_review": {
+      "enabled": false,
+      "min_risk_score": 70,
+      "require_approval": true
+    }
+  }
+}
