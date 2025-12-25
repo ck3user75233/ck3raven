@@ -89,27 +89,18 @@ def extract_characters_from_raw_content(
     
     for i, (file_id, relpath, content_text) in enumerate(rows):
         try:
-            # Parse raw content directly using shared parser
-            ast_dict = parse_source(content_text, filename=relpath)
-            
-            if ast_dict is None:
-                stats['errors'] += 1
-                continue
-            
-            # Each top-level block is a character: char_id = { ... }
-            for child in ast_dict.get('children', []):
-                if child.get('_type') != 'block':
-                    continue
-                
+            # Use lightweight tokenizer - NOT full parser
+            for block_name, block_data in extract_simple_blocks(content_text):
                 try:
-                    char_id = int(child.get('name', '0'))
+                    char_id = int(block_name)
                 except ValueError:
+                    # Not a numeric character ID
                     continue
                 
                 if char_id == 0:
                     continue
                 
-                char_data = _parse_character_block(char_id, child)
+                char_data = _parse_character_from_block(char_id, block_data)
                 if char_data:
                     batch.append(_character_to_row(char_data, content_version_id))
                     
@@ -131,31 +122,23 @@ def extract_characters_from_raw_content(
     return stats
 
 
-def _parse_character_block(char_id: int, block: Dict) -> Optional[CharacterData]:
-    """Parse a character block into CharacterData."""
+def _parse_character_from_block(char_id: int, block_data: dict) -> Optional[CharacterData]:
+    """Parse a character block dict (from lightweight tokenizer) into CharacterData."""
     char = CharacterData(character_id=char_id, name="Unknown")
+    traits = []
     
-    for child in block.get('children', []):
-        if child.get('_type') != 'assignment':
-            # Check for date blocks (birth/death dates)
-            if child.get('_type') == 'block':
-                block_name = child.get('name', '')
-                # Date format like "943.8.7"
-                if '.' in block_name and block_name.replace('.', '').isdigit():
-                    for inner in child.get('children', []):
-                        if inner.get('_type') == 'assignment':
-                            key = inner.get('key', '')
-                            if key == 'birth':
-                                char.birth_date = block_name
-                            elif key == 'death':
-                                char.death_date = block_name
+    for key, value in block_data.items():
+        # Handle date blocks (birth/death) - they show up as nested dicts
+        if isinstance(value, dict):
+            # Date format like "943.8.7" containing { birth = yes } or { death = yes }
+            if 'birth' in value:
+                char.birth_date = key
+            elif 'death' in value:
+                char.death_date = key
             continue
         
-        key = child.get('key', '')
-        value = child.get('value', {}).get('value', '')
-        
         if key == 'name':
-            char.name = str(value).strip('"')
+            char.name = str(value)
         elif key == 'dynasty':
             try:
                 char.dynasty_id = int(value)
@@ -164,9 +147,9 @@ def _parse_character_block(char_id: int, block: Dict) -> Optional[CharacterData]
         elif key == 'dynasty_house':
             char.dynasty_house = str(value)
         elif key == 'culture':
-            char.culture = str(value).strip('"')
+            char.culture = str(value)
         elif key == 'religion':
-            char.religion = str(value).strip('"')
+            char.religion = str(value)
         elif key == 'father':
             try:
                 char.father_id = int(value)
@@ -178,8 +161,9 @@ def _parse_character_block(char_id: int, block: Dict) -> Optional[CharacterData]
             except ValueError:
                 pass
         elif key == 'trait':
-            char.traits.append(str(value))
+            traits.append(str(value))
     
+    char.traits = traits
     return char
 
 
@@ -224,6 +208,6 @@ def extract_characters(
 ) -> Dict[str, int]:
     """
     Main entry point for character extraction.
-    Parses raw content directly (LOOKUPS route - no ASTs).
+    Uses lightweight tokenizer (LOOKUPS route - no ASTs).
     """
     return extract_characters_from_raw_content(conn, content_version_id, progress_callback)

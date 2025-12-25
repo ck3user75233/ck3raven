@@ -6,7 +6,7 @@ These files define dynasties with their IDs, names, cultures, and prefixes.
 
 ARCHITECTURE NOTE:
 Dynasty files follow the LOOKUPS route in file_routes.py.
-They do NOT get ASTs - we parse raw content directly here.
+They do NOT get ASTs - we use the lightweight tokenizer here.
 This is a specialized extractor per the file routing table.
 
 Format example:
@@ -25,8 +25,8 @@ import sqlite3
 from typing import Dict, Optional, List
 from dataclasses import dataclass
 
-# Use the shared parser
-from ck3raven.parser import parse_source
+# Use the lightweight tokenizer - NOT the full parser
+from builder.extractors.lookups.tokenizer import extract_simple_blocks
 
 
 @dataclass
@@ -81,33 +81,31 @@ def extract_dynasties_from_raw_content(
     
     for i, (file_id, relpath, content_text) in enumerate(rows):
         try:
-            # Parse raw content directly using shared parser
-            ast_dict = parse_source(content_text, filename=relpath)
-            
-            if ast_dict is None:
-                stats['errors'] += 1
-                continue
-            
-            # Each top-level block is a dynasty: dynasty_id = { ... }
-            for child in ast_dict.get('children', []):
-                if child.get('_type') != 'block':
-                    continue
-                
+            # Use lightweight tokenizer - NOT full parser
+            for block_name, block_data in extract_simple_blocks(content_text):
                 try:
-                    dynasty_id = int(child.get('name', '0'))
+                    dynasty_id = int(block_name)
                 except ValueError:
+                    # Not a numeric dynasty ID (comment or malformed)
                     continue
                 
                 if dynasty_id == 0:
                     continue
                 
-                dynasty_data = _parse_dynasty_block(dynasty_id, child)
-                if dynasty_data:
-                    batch.append(_dynasty_to_row(dynasty_data, content_version_id))
-                    
-                    if len(batch) >= batch_size:
-                        _insert_dynasty_batch(conn, batch, stats)
-                        batch = []
+                # Extract fields from the block dict
+                dynasty = DynastyData(
+                    dynasty_id=dynasty_id,
+                    name_key=block_data.get('name', 'unknown'),
+                    prefix=block_data.get('prefix'),
+                    culture=block_data.get('culture'),
+                    motto=block_data.get('motto'),
+                )
+                
+                batch.append(_dynasty_to_row(dynasty, content_version_id))
+                
+                if len(batch) >= batch_size:
+                    _insert_dynasty_batch(conn, batch, stats)
+                    batch = []
                         
         except Exception as e:
             stats['errors'] += 1
@@ -121,29 +119,6 @@ def extract_dynasties_from_raw_content(
     
     conn.commit()
     return stats
-
-
-def _parse_dynasty_block(dynasty_id: int, block: Dict) -> Optional[DynastyData]:
-    """Parse a dynasty block into DynastyData."""
-    dynasty = DynastyData(dynasty_id=dynasty_id, name_key="unknown")
-    
-    for child in block.get('children', []):
-        if child.get('_type') != 'assignment':
-            continue
-        
-        key = child.get('key', '')
-        value = child.get('value', {}).get('value', '')
-        
-        if key == 'name':
-            dynasty.name_key = str(value).strip('"')
-        elif key == 'prefix':
-            dynasty.prefix = str(value).strip('"')
-        elif key == 'culture':
-            dynasty.culture = str(value).strip('"')
-        elif key == 'motto':
-            dynasty.motto = str(value).strip('"')
-    
-    return dynasty
 
 
 def _dynasty_to_row(dynasty: DynastyData, content_version_id: int) -> tuple:
@@ -179,6 +154,6 @@ def extract_dynasties(
 ) -> Dict[str, int]:
     """
     Main entry point for dynasty extraction.
-    Parses raw content directly (LOOKUPS route - no ASTs).
+    Uses lightweight tokenizer (LOOKUPS route - no ASTs).
     """
     return extract_dynasties_from_raw_content(conn, content_version_id, progress_callback)

@@ -91,6 +91,7 @@ SCRIPT_PARSER_FOLDERS: List[str] = [
     'common/nicknames',
     'common/bookmark_portraits',
     'common/landed_titles',  # Has symbols (title definitions)
+    'common/accolade_names',  # Has scripted triggers - needs full AST
     'events/',
 ]
 
@@ -118,7 +119,6 @@ LOOKUPS_PATTERNS: List[str] = [
     # Name lists - name validation
     'name_lists/',
     '/names/',
-    'accolade_names/',
     
     # Coat of arms definitions - CoA ID lookups
     'coat_of_arms/coat_of_arms/',

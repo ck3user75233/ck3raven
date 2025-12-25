@@ -283,6 +283,32 @@ agents:
         severity: error
         routing_table: src/ck3raven/db/file_routes.py
 
+      lookups_no_full_ast:
+        description: >
+          LOOKUPS extractors may parse raw text, but they MUST NOT:
+          1. Build or depend on the full AST model
+          2. Introduce alternate routing logic
+          3. Use the full script parser (parse_source) which creates ASTs
+          
+          The LOOKUPS route exists specifically to AVOID full AST processing.
+          Using the full parser "off the books" defeats this purpose and
+          creates divergent behavior from the daemon's canonical parsing.
+          
+          LOOKUPS extractors should use:
+          - Lightweight regex/line-based parsing for simple formats
+          - Streaming extraction that reads only needed fields
+          - Purpose-built mini-parsers for specific lookup formats
+          
+          Example: Dynasty files (id = { name = "x" }) can be parsed with
+          simple regex or line scanning, not full AST construction.
+        enforcement_stage: code_review
+        severity: error
+        forbidden_patterns:
+          - "from ck3raven.parser import parse_source"
+          - "parse_source("
+          - "ast_dict = parse"
+        applies_to: builder/extractors/lookups/
+
 # -------------------------------------------------------------------
 # VALIDATION DOMAINS
 # Invoked only when relevant to the content being produced
