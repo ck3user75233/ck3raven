@@ -43,11 +43,6 @@ EXPECTED_SYMBOLS = [
     ("on_action", None),  # Any on_action
 ]
 
-# Live mods that should be writable
-EXPECTED_LIVE_MODS = [
-    "Mini Super Compatch",
-]
-
 # Sample CK3 script for validation tests
 VALID_CK3_SCRIPT = """
 test_trait = {
@@ -139,7 +134,7 @@ def test_import_ck3lens_modules(r: TestResult):
     modules = [
         "ck3lens.workspace",
         "ck3lens.db_queries", 
-        "ck3lens.live_mods",
+        "ck3lens.local_mods",
         "ck3lens.git_ops",
         "ck3lens.validate",
         "ck3lens.contracts",
@@ -163,12 +158,12 @@ def test_mcp_tools_registered(r: TestResult):
         "ck3_confirm_not_exists",
         "ck3_get_file",
         "ck3_qr_conflicts",
-        "ck3_list_live_mods",
-        "ck3_read_live_file",
+        "ck3_list_local_mods",
+        "ck3_read_local_file",
         "ck3_write_file",
         "ck3_edit_file",
         "ck3_delete_file",
-        "ck3_list_live_files",
+        "ck3_list_local_files",
         "ck3_parse_content",
         "ck3_validate_patchdraft",
         "ck3_git_status",
@@ -366,63 +361,63 @@ def test_confirm_not_exists(r: TestResult):
 
 
 # =============================================================================
-# TEST 4: LIVE MOD OPERATIONS
+# TEST 4: LOCAL MOD OPERATIONS
 # =============================================================================
 
 def test_session_initialization(r: TestResult):
     """Test session can be initialized."""
-    from ck3lens.workspace import Session, DEFAULT_LIVE_MODS
+    from ck3lens.workspace import Session
     
     try:
         session = Session()
         r.ok(f"session initialized with mod_root: {session.mod_root}")
-        r.ok(f"live mods configured: {len(session.live_mods)}")
+        r.ok(f"local mods configured: {len(session.local_mods)}")
     except Exception as e:
         r.fail("session initialization", str(e))
 
 
-def test_live_mods_discovery(r: TestResult):
-    """Test that live mods are discovered on disk."""
+def test_local_mods_discovery(r: TestResult):
+    """Test that local mods are discovered on disk."""
     from ck3lens.workspace import Session
-    from ck3lens.live_mods import list_live_mods
+    from ck3lens.local_mods import list_local_mods
     
     try:
         session = Session()
-        mods = list_live_mods(session)
+        mods = list_local_mods(session)
         
         if mods:
-            r.ok(f"discovered {len(mods)} live mods on disk")
+            r.ok(f"discovered {len(mods)} local mods on disk")
             for mod in mods:
                 r.ok(f"  - {mod['name']}")
         else:
-            r.skip("live mods discovery", "no whitelisted mods found on disk")
+            r.skip("local mods discovery", "no local mods configured")
     except Exception as e:
-        r.fail("live mods discovery", str(e))
+        r.fail("local mods discovery", str(e))
 
 
-def test_live_file_listing(r: TestResult):
-    """Test listing files in a live mod."""
+def test_local_file_listing(r: TestResult):
+    """Test listing files in a local mod."""
     from ck3lens.workspace import Session
-    from ck3lens.live_mods import list_live_mods, list_live_files
+    from ck3lens.local_mods import list_local_mods, list_local_files
     
     try:
         session = Session()
-        mods = list_live_mods(session)
+        mods = list_local_mods(session)
         
         if not mods:
-            r.skip("live file listing", "no live mods on disk")
+            r.skip("local file listing", "no local mods configured")
             return
         
         mod_name = mods[0]["name"]
-        result = list_live_files(session, mod_name, path_prefix="common", pattern="*.txt")
+        result = list_local_files(session, mod_name, path_prefix="common", pattern="*.txt")
         
         if result.get("success"):
             files = result.get("files", [])
             r.ok(f"listed {len(files)} .txt files in {mod_name}/common/")
         else:
-            r.fail("live file listing", result.get("error", "unknown error"))
+            r.fail("local file listing", result.get("error", "unknown error"))
     except Exception as e:
-        r.fail("live file listing", str(e))
+        r.fail("local file listing", str(e))
 
 
 def test_path_validation(r: TestResult):
@@ -530,14 +525,14 @@ def test_git_status_no_crash(r: TestResult):
     """Test that git status doesn't crash (may not have git repo)."""
     from ck3lens.workspace import Session
     from ck3lens.git_ops import git_status
-    from ck3lens.live_mods import list_live_mods
+    from ck3lens.local_mods import list_local_mods
     
     try:
         session = Session()
-        mods = list_live_mods(session)
+        mods = list_local_mods(session)
         
         if not mods:
-            r.skip("git status", "no live mods on disk")
+            r.skip("git status", "no local mods configured")
             return
         
         mod_name = mods[0]["name"]
@@ -585,11 +580,11 @@ def run_all_tests():
         test_confirm_not_exists,
     ]))
     
-    # Test Group 4: Live Mod Operations
-    results.append(run_test_group("Live Mod Operations", [
+    # Test Group 4: Local Mod Operations
+    results.append(run_test_group("Local Mod Operations", [
         test_session_initialization,
-        test_live_mods_discovery,
-        test_live_file_listing,
+        test_local_mods_discovery,
+        test_local_file_listing,
         test_path_validation,
     ]))
     

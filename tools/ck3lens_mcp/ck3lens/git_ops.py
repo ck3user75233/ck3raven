@@ -32,7 +32,7 @@ def _run_git(mod_path: Path, *args: str) -> tuple[bool, str, str]:
 
 def git_status(session: Session, mod_id: str) -> dict:
     """Git status for a live mod."""
-    mod = session.get_live_mod(mod_id)
+    mod = session.get_local_mod(mod_id)
     if not mod:
         return {"error": f"Unknown mod_id: {mod_id}"}
     
@@ -80,7 +80,7 @@ def git_status(session: Session, mod_id: str) -> dict:
 
 def git_diff(session: Session, mod_id: str, staged: bool = False) -> dict:
     """Show uncommitted changes."""
-    mod = session.get_live_mod(mod_id)
+    mod = session.get_local_mod(mod_id)
     if not mod:
         return {"error": f"Unknown mod_id: {mod_id}"}
     
@@ -106,7 +106,7 @@ def git_add(
     all_files: bool = False
 ) -> dict:
     """Stage files for commit."""
-    mod = session.get_live_mod(mod_id)
+    mod = session.get_local_mod(mod_id)
     if not mod:
         return {"error": f"Unknown mod_id: {mod_id}"}
     
@@ -126,7 +126,7 @@ def git_add(
 
 def git_commit(session: Session, mod_id: str, message: str) -> dict:
     """Commit staged changes."""
-    mod = session.get_live_mod(mod_id)
+    mod = session.get_local_mod(mod_id)
     if not mod:
         return {"error": f"Unknown mod_id: {mod_id}"}
     
@@ -155,7 +155,7 @@ def git_push(
     branch: Optional[str] = None
 ) -> dict:
     """Push to remote."""
-    mod = session.get_live_mod(mod_id)
+    mod = session.get_local_mod(mod_id)
     if not mod:
         return {"error": f"Unknown mod_id: {mod_id}"}
     
@@ -182,7 +182,7 @@ def git_pull(
     branch: Optional[str] = None
 ) -> dict:
     """Pull from remote."""
-    mod = session.get_live_mod(mod_id)
+    mod = session.get_local_mod(mod_id)
     if not mod:
         return {"error": f"Unknown mod_id: {mod_id}"}
     
@@ -204,7 +204,7 @@ def git_pull(
 
 def git_log(session: Session, mod_id: str, limit: int = 10, file_path: Optional[str] = None) -> dict:
     """Recent commit history."""
-    mod = session.get_live_mod(mod_id)
+    mod = session.get_local_mod(mod_id)
     if not mod:
         return {"error": f"Unknown mod_id: {mod_id}"}
     args = ["log", f"-{limit}", "--pretty=format:%H|%an|%ai|%s"]

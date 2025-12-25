@@ -28,9 +28,9 @@ CK3RAVEN_ROOT = Path(__file__).parent.parent.parent / "src"
 if CK3RAVEN_ROOT.exists():
     sys.path.insert(0, str(CK3RAVEN_ROOT))
 
-from ck3lens.workspace import Session, DEFAULT_LIVE_MODS
+from ck3lens.workspace import Session, LocalMod
 from ck3lens.db_queries import DBQueries
-from ck3lens import live_mods, git_ops
+from ck3lens import local_mods, git_ops
 from ck3lens.validate import parse_content, validate_artifact_bundle
 from ck3lens.contracts import ArtifactBundle
 from ck3lens.trace import ToolTrace
@@ -219,13 +219,13 @@ def _load_playset_from_json(playset_file: Path) -> Optional[dict]:
         vanilla_config = data.get("vanilla", {})
         vanilla_root = vanilla_config.get("path", "C:/Program Files (x86)/Steam/steamapps/common/Crusader Kings III/game")
         
-        # Get live mods (writable)
-        live_mods = []
-        for lm in data.get("live_mods", []):
+        # Get local mods (writable)
+        local_mods_list = []
+        for lm in data.get("local_mods", []):
             path = lm.get("path", "")
             if path:
                 expanded = str(Path(path).expanduser())
-                live_mods.append({
+                local_mods_list.append({
                     "mod_id": lm.get("mod_id"),
                     "name": lm.get("name"),
                     "path": expanded,
@@ -243,7 +243,7 @@ def _load_playset_from_json(playset_file: Path) -> Optional[dict]:
             "vanilla_root": str(Path(vanilla_root).expanduser()),
             "source": "json",
             "file_path": str(playset_file),
-            "live_mods": live_mods,
+            "local_mods": local_mods_list,
             "agent_briefing": agent_briefing,
             "sub_agent_config": data.get("sub_agent_config", {}),
             "mod_list": data.get("mods", []),  # Full mod list for reference
@@ -367,8 +367,8 @@ def _get_trace() -> ToolTrace:
         from ck3lens.workspace import DEFAULT_CK3_MOD_DIR
         session = _get_session()
         mod_root = DEFAULT_CK3_MOD_DIR
-        if session.live_mods:
-            mod_root = session.live_mods[0].path.parent
+        if session.local_mods:
+            mod_root = session.local_mods[0].path.parent
         _trace = ToolTrace(mod_root / "ck3lens_trace.jsonl")
     return _trace
 
@@ -421,19 +421,19 @@ def ck3_ping() -> dict:
 @mcp.tool()
 def ck3_init_session(
     db_path: Optional[str] = None,
-    live_mods: Optional[list[str]] = None
+    local_mods: Optional[list[str]] = None
 ) -> dict:
     """
     Initialize the CK3 Lens session.
     
     Args:
         db_path: Path to ck3raven SQLite database (optional, uses default)
-        live_mods: Override list of whitelisted live mod folder names (optional)
+        local_mods: Override list of whitelisted local mod folder names (optional)
     
     Returns:
-        Session info including mod_root and live_mods list
+        Session info including mod_root and local_mods list
     """
-    from ck3lens.workspace import load_config, DEFAULT_DB_PATH, DEFAULT_CK3_MOD_DIR, LiveMod
+    from ck3lens.workspace import load_config, DEFAULT_DB_PATH, DEFAULT_CK3_MOD_DIR, LocalMod
     
     global _session, _db, _trace, _playset_id, _session_scope
     
@@ -441,32 +441,32 @@ def ck3_init_session(
     _playset_id = None
     _session_scope = None
     
-    # Use load_config to get default session with live mods
+    # Use load_config to get default session with local mods from playset
     _session = load_config()
     
     # Override DB path if provided
     if db_path:
         _session.db_path = Path(db_path)
     
-    # Override live mods if specific names provided
-    if live_mods:
-        _session.live_mods = [
-            LiveMod(mod_id=name, name=name, path=DEFAULT_CK3_MOD_DIR / name)
-            for name in live_mods
+    # Override local mods if specific names provided
+    if local_mods:
+        _session.local_mods = [
+            LocalMod(mod_id=name, name=name, path=DEFAULT_CK3_MOD_DIR / name)
+            for name in local_mods
             if (DEFAULT_CK3_MOD_DIR / name).exists()
         ]
     
     _db = DBQueries(db_path=_session.db_path)
     
-    # Get mod root from first live mod or default
+    # Get mod root from first local mod or default
     mod_root = DEFAULT_CK3_MOD_DIR
-    if _session.live_mods:
-        mod_root = _session.live_mods[0].path.parent
+    if _session.local_mods:
+        mod_root = _session.local_mods[0].path.parent
     _trace = ToolTrace(mod_root / "ck3lens_trace.jsonl")
     
-    _trace.log("ck3lens.init_session", {"db_path": db_path, "live_mods": live_mods}, {
+    _trace.log("ck3lens.init_session", {"db_path": db_path, "local_mods": local_mods}, {
         "mod_root": str(mod_root),
-        "live_mods_count": len(_session.live_mods)
+        "local_mods_count": len(_session.local_mods)
     })
     
     # Auto-detect playset
@@ -481,7 +481,7 @@ def ck3_init_session(
     
     result = {
         "mod_root": str(mod_root),
-        "live_mods": [m.name for m in _session.live_mods],
+        "local_mods": [m.name for m in _session.local_mods],
         "db_path": str(_db.db_path) if _db.db_path else None,
         "playset_id": playset_id,
         "playset_name": playset_info[0] if playset_info else None,
@@ -2465,13 +2465,13 @@ def ck3_get_symbol_conflicts(
 
 
 # ============================================================================
-# Live Mod Operations (sandboxed writes)
+# Local Mod Operations (sandboxed writes)
 # ============================================================================
 
 @mcp.tool()
-def ck3_list_live_mods() -> dict:
+def ck3_list_local_mods() -> dict:
     """
-    List whitelisted live mods that can be modified.
+    List local mods that can be modified.
     
     Returns:
         List of mod names and paths that are available for writing
@@ -2479,11 +2479,11 @@ def ck3_list_live_mods() -> dict:
     session = _get_session()
     trace = _get_trace()
     
-    mods = live_mods.list_live_mods(session)
+    mods = local_mods.list_local_mods(session)
     
-    trace.log("ck3lens.list_live_mods", {}, {"mods_count": len(mods)})
+    trace.log("ck3lens.list_local_mods", {}, {"mods_count": len(mods)})
     
-    return {"live_mods": mods}
+    return {"local_mods": mods}
 
 
 @mcp.tool()
@@ -2535,7 +2535,7 @@ def ck3_read_live_file(
     session = _get_session()
     trace = _get_trace()
     
-    result = live_mods.read_live_file(session, mod_name, rel_path, max_bytes)
+    result = local_mods.read_local_file(session, mod_name, rel_path, max_bytes)
     
     trace.log("ck3lens.read_live_file", {
         "mod_name": mod_name,
@@ -2583,7 +2583,7 @@ def ck3_write_file(
                 "parse_errors": parse_result["errors"]
             }
     
-    result = live_mods.write_file(session, mod_name, rel_path, content)
+    result = local_mods.write_file(session, mod_name, rel_path, content)
     
     # Auto-refresh in database after successful write
     if result.get("success"):
@@ -2625,12 +2625,12 @@ def ck3_edit_file(
     session = _get_session()
     trace = _get_trace()
     
-    result = live_mods.edit_file(session, mod_name, rel_path, old_content, new_content)
+    result = local_mods.edit_file(session, mod_name, rel_path, old_content, new_content)
     
     # Validate resulting file if requested
     updated_content = None
     if result.get("success") and validate_syntax and rel_path.endswith(".txt"):
-        read_result = live_mods.read_live_file(session, mod_name, rel_path)
+        read_result = local_mods.read_local_file(session, mod_name, rel_path)
         if read_result.get("success"):
             updated_content = read_result["content"]
             parse_result = parse_content(updated_content, rel_path)
@@ -2642,7 +2642,7 @@ def ck3_edit_file(
     if result.get("success"):
         # Read content if not already read for validation
         if updated_content is None:
-            read_result = live_mods.read_live_file(session, mod_name, rel_path)
+            read_result = local_mods.read_local_file(session, mod_name, rel_path)
             if read_result.get("success"):
                 updated_content = read_result["content"]
         
@@ -2678,7 +2678,7 @@ def ck3_delete_file(
     session = _get_session()
     trace = _get_trace()
     
-    result = live_mods.delete_file(session, mod_name, rel_path)
+    result = local_mods.delete_file(session, mod_name, rel_path)
     
     # Mark file as deleted in database
     if result.get("success"):
@@ -2714,13 +2714,13 @@ def ck3_rename_file(
     session = _get_session()
     trace = _get_trace()
     
-    result = live_mods.rename_file(session, mod_name, old_rel_path, new_rel_path)
+    result = local_mods.rename_file(session, mod_name, old_rel_path, new_rel_path)
     
     # Handle DB refresh for rename: mark old as deleted, refresh new
     if result.get("success"):
         _refresh_file_in_db(mod_name, old_rel_path, deleted=True)
         # Read the new file content and refresh
-        new_content = live_mods.read_live_file(session, mod_name, new_rel_path)
+        new_content = local_mods.read_local_file(session, mod_name, new_rel_path)
         if new_content.get("success"):
             db_refresh = _refresh_file_in_db(mod_name, new_rel_path, content=new_content["content"])
             result["db_refresh"] = db_refresh
@@ -2770,7 +2770,7 @@ def ck3_refresh_file(
     trace = _get_trace()
     
     # Read current file content
-    read_result = live_mods.read_live_file(session, mod_name, rel_path)
+    read_result = local_mods.read_local_file(session, mod_name, rel_path)
     
     if not read_result.get("success"):
         if not read_result.get("exists", True):
@@ -2865,12 +2865,12 @@ def ck3_create_override_patch(
 """
     
     # Write the file
-    result = live_mods.write_file(session, target_mod, target_rel_path, initial_content)
+    result = local_mods.write_file(session, target_mod, target_rel_path, initial_content)
     
     if result.get("success"):
         # Get the full path for navigation
-        live_mod = session.get_live_mod(target_mod)
-        full_path = str(live_mod.path / target_rel_path) if live_mod else None
+        local_mod = session.get_local_mod(target_mod)
+        full_path = str(local_mod.path / target_rel_path) if local_mod else None
         
         trace.log("ck3lens.create_override_patch", {
             "source_path": source_path,
@@ -2918,7 +2918,7 @@ def ck3_list_live_files(
     session = _get_session()
     trace = _get_trace()
     
-    result = live_mods.list_live_files(session, mod_name, path_prefix, pattern)
+    result = local_mods.list_local_files(session, mod_name, path_prefix, pattern)
     
     trace.log("ck3lens.list_live_files", {
         "mod_name": mod_name,
@@ -4189,7 +4189,7 @@ def ck3_get_active_playset() -> dict:
         "active_mod_ids": list(scope.get("active_mod_ids", set())),
         "active_roots": list(scope.get("active_roots", set())),
         "vanilla_root": scope.get("vanilla_root"),
-        "live_mods": scope.get("live_mods", []),
+        "local_mods": scope.get("local_mods", []),
         "agent_briefing": scope.get("agent_briefing", {}),
         "sub_agent_config": scope.get("sub_agent_config", {}),
     }
@@ -6581,9 +6581,9 @@ def ck3_get_workspace_config() -> dict:
             "path": str(session.db_path),
             "exists": session.db_path.exists(),
         },
-        "live_mods": [
+        "local_mods": [
             {"mod_id": m.mod_id, "name": m.name, "path": str(m.path)}
-            for m in (session.live_mods or [])
+            for m in (session.local_mods or [])
         ],
         "tool_sets": None,
         "mcp_config": None,

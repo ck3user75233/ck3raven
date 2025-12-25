@@ -78,7 +78,7 @@ See [SETUP.md](docs/SETUP.md) for complete setup instructions.
 - `ck3_get_file` - Get file content (raw or AST)
 - `ck3_db_query` - Direct database queries
 
-### Live Mod Tools (Sandboxed Writes)
+### Local Mod Tools (Sandboxed Writes)
 - `ck3_write_file` - Write with syntax validation
 - `ck3_edit_file` - Search-replace edit
 - `ck3_delete_file` - Delete file
@@ -101,14 +101,15 @@ Blocked commands (rm -rf /)         → DENY always
 
 Work contracts (`ck3_contract`) define scope and constraints for agent tasks.
 
-## Default Live Mods Whitelist
+## Local Mods Configuration
 
-These mods can be written to (if present on disk):
-- PVP2
-- Mini Super Compatch (MSC)
-- MSCRE
-- Lowborn Rise Expanded (LRE)
-- More Raiding and Prisoners (MRP)
+Local mods are user-configured mods that agents can write to. They are specified in your playset configuration, not hardcoded. To configure local mods:
+
+1. Create a playset JSON in `~/.ck3raven/playsets/`
+2. Add a `local_mods` section with your mod paths
+3. Set the playset as active
+
+See [SETUP.md](docs/SETUP.md) for detailed configuration instructions.
 
 ## Requirements
 

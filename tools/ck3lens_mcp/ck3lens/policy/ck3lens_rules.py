@@ -4,7 +4,7 @@ CK3 Lens Rules
 Policy validation rules specific to the ck3lens agent mode.
 These rules enforce CK3 modding constraints and best practices.
 
-CRITICAL: ck3lens agents can ONLY edit CK3 mod files in whitelisted live_mods.
+CRITICAL: ck3lens agents can ONLY edit CK3 mod files in configured local_mods.
 They CANNOT edit Python code, core ck3raven code, or any infrastructure files.
 """
 from __future__ import annotations
@@ -87,7 +87,7 @@ def enforce_ck3lens_file_restrictions(
     """
     Enforce: ck3lens agents can ONLY edit CK3 mod files.
     
-    Rule: no_python_editing, live_mods_only
+    Rule: no_python_editing, local_mods_only
     Severity: ERROR (HARD GATE)
     
     ck3lens is for CK3 modding ONLY. It cannot:

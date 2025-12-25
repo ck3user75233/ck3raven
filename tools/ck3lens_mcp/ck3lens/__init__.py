@@ -5,7 +5,7 @@ Modules:
 - db_queries: Symbol database access
 - validate: Parse and validate CK3 script
 - semantic: Syntax validation (CK3SyntaxValidator)
-- live_mods: Sandboxed live mod operations
+- local_mods: Sandboxed local mod operations (user-configured mods)
 - git_ops: Git integration for mods
 - contracts: Pydantic data models (ArtifactFile, ArtifactBundle)
 - trace: Tool call tracing

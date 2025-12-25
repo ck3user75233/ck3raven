@@ -238,44 +238,43 @@ Uses `ck3_git_status` to check uncommitted changes.
 
 ---
 
-## Live Mods Configuration
+## Local Mods Configuration
 
-### Default Whitelist
+Local mods are user-configured mods that agents can write to. There are no hardcoded defaults - you specify which mods you want to work with in your playset configuration.
 
-By default, CK3 Lens allows writes to these mods (if they exist on disk):
+### Configuring Local Mods in Playset
 
-| Mod Folder Name | Description |
-|-----------------|-------------|
-| `PVP2` | PVP2 mod |
-| `Mini Super Compatch` | MSC main mod |
-| `MSCRE` | MSC Religion Expanded |
-| `Lowborn Rise Expanded` | LRE mod |
-| `More Raiding and Prisoners` | MRP mod |
+Add a `local_mods` section to your playset JSON file (`~/.ck3raven/playsets/your_playset.json`):
 
-### Custom Live Mods
+```json
+{
+  "name": "My Playset",
+  "local_mods": [
+    {
+      "mod_id": "MyMod",
+      "name": "My Custom Mod",
+      "path": "~/Documents/Paradox Interactive/Crusader Kings III/mod/MyMod"
+    },
+    {
+      "mod_id": "PatchMod",
+      "name": "My Patch Mod",
+      "path": "~/Documents/Paradox Interactive/Crusader Kings III/mod/PatchMod"
+    }
+  ]
+}
+```
 
-Override via `ck3_init_session`:
+### Override via Session Init
+
+You can also override at runtime via `ck3_init_session`:
 
 ```python
 ck3_init_session(
-    live_mods=["My Custom Mod", "Another Mod"]
+    local_mods=["My Custom Mod", "Another Mod"]
 )
 ```
 
-### Adding New Mods to Whitelist
-
-Edit `ck3lens/workspace.py`:
-
-```python
-DEFAULT_LIVE_MODS = [
-    "PVP2",
-    "Mini Super Compatch",
-    "MSCRE",
-    "Lowborn Rise Expanded",
-    "More Raiding and Prisoners",
-    "Your New Mod Here",  # Add new mod
-]
-```
+Note: Only mods that exist on disk will be added to the session.
 
 ---
 

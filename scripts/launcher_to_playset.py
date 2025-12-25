@@ -48,7 +48,7 @@ def convert_launcher_to_playset(launcher_data: dict[str, Any]) -> dict[str, Any]
         },
         
         "mods": [],
-        "live_mods": [],
+        "local_mods": [],
         
         "agent_briefing": {
             "context": "",
@@ -156,7 +156,7 @@ def main():
     print()
     print("Next steps:")
     print("  1. Edit the playset and fill in agent_briefing notes")
-    print("  2. Add live_mods entries for mods the agent can edit")
+    print("  2. Add local_mods entries for mods the agent can edit")
     print("  3. Set is_compatch=true for compatibility patch mods")
     print("  4. Add mod_relationships for expected conflicts")
 

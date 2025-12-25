@@ -27,14 +27,14 @@ CK3 Lens provides MCP tools for AI agents to work with CK3 mod content safely an
 └────────────────────────────────────────────────────────────────┼──────────┘
                                                                  │
 ┌────────────────────────────────────────────────────────────────▼──────────┐
-│                           Live Mod Directories                             │
+│                           Local Mod Directories                            │
 │  ┌─────────────┐  ┌───────────────┐  ┌──────────────┐  ┌───────────────┐  │
-│  │ MSC         │  │ LocalizationP │  │ VanillaPatch │  │ CrashFixes    │  │
+│  │ YourMod1    │  │ YourMod2      │  │ PatchMod     │  │ DevMod        │  │
 │  └─────────────┘  └───────────────┘  └──────────────┘  └───────────────┘  │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Key Principle:** All mod content is pre-parsed and stored in ck3raven's SQLite database. The agent reads from the database, never from raw files. Writes go only to whitelisted "live mod" directories.
+**Key Principle:** All mod content is pre-parsed and stored in ck3raven's SQLite database. The agent reads from the database, never from raw files. Writes go only to user-configured "local mod" directories.
 
 ---
 
@@ -91,7 +91,7 @@ ck3_search(
 ck3_search("brave")                         # All uses of 'brave'
 ck3_search("melkite localization")          # Files with BOTH terms
 ck3_search("on_yearly_pulse", game_folder="common/on_action")
-ck3_search("brave", mod_filter=["MSC"])     # Only in MSC mod
+ck3_search("brave", mod_filter=["MyMod"])   # Only in specific mod
 ck3_search("has_trait", limit=100, verbose=True)
 ```
 

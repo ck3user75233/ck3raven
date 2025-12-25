@@ -110,8 +110,8 @@ class CK3LensBridge:
             "list_files": self.list_files,
             "get_conflicts": self.get_conflicts,
             "confirm_not_exists": self.confirm_not_exists,
-            "list_live_mods": self.list_live_mods,
-            "read_live_file": self.read_live_file,
+            "list_local_mods": self.list_local_mods,
+            "read_local_file": self.read_local_file,
             "write_file": self.write_file,
             "git_status": self.git_status,
             "get_playset_mods": self.get_playset_mods,
@@ -174,14 +174,17 @@ class CK3LensBridge:
             
             self.initialized = True
             
+            # Get local mods from playset config
+            local_mods_result = self.list_local_mods({})
+            local_mods = local_mods_result.get("local_mods", {"mods": []})
+            
             return {
                 "initialized": True,
                 "db_path": str(self.db_path),
                 "mod_root": str(Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"),
                 "playset_id": self.playset_id,
                 "playset_name": playset_name,
-                # Live mods populated by list_live_mods - just return reference here
-                "live_mods": self.list_live_mods({})["live_mods"]
+                "local_mods": local_mods
             }
         except Exception as e:
             return {
@@ -886,33 +889,53 @@ class CK3LensBridge:
         except Exception as e:
             return {"can_claim_not_exists": False, "similar_matches": [], "error": str(e)}
     
-    def list_live_mods(self, params: dict) -> dict:
-        """List live mods that can be written to."""
-        mod_root = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
+    def list_local_mods(self, params: dict) -> dict:
+        """List local mods that can be written to.
         
-        # Maps short ID -> (display_name, folder_name)
-        # TODO: Move to config file
-        live_mods_config = {
-            "MSC": ("Mini Super Compatch", "Mini Super Compatch"),
-            "MSCRE": ("MSC Religion Expanded", "MSCRE"),
-            "LRE": ("Lowborn Rise Expanded", "Lowborn Rise Expanded"),
-        }
+        Loads from playset configuration. If no playset is active, returns empty list.
+        This is valid - read-only mode with no writable mods.
+        """
+        mod_root = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
+        raven_dir = Path.home() / ".ck3raven"
         
         mods = []
-        for mod_id, (display_name, folder_name) in live_mods_config.items():
-            path = mod_root / folder_name
-            mods.append({
-                "mod_id": mod_id,
-                "name": display_name,
-                "path": str(path),
-                "exists": path.exists()
-            })
         
-        return {"live_mods": {"mods": mods}}
+        # Try to load from active playset
+        active_file = raven_dir / "playsets" / "active.txt"
+        if active_file.exists():
+            try:
+                playset_name = active_file.read_text().strip()
+                playset_file = raven_dir / "playsets" / f"{playset_name}.json"
+                if playset_file.exists():
+                    import json
+                    playset_data = json.loads(playset_file.read_text())
+                    local_mods_config = playset_data.get("local_mods", [])
+                    
+                    for mod_cfg in local_mods_config:
+                        # Support both old and new formats
+                        if isinstance(mod_cfg, dict):
+                            mod_id = mod_cfg.get("short_id", mod_cfg.get("name", ""))
+                            display_name = mod_cfg.get("name", mod_id)
+                            folder_name = mod_cfg.get("folder", display_name)
+                        else:
+                            # Legacy: just a folder name string
+                            mod_id = folder_name = display_name = mod_cfg
+                        
+                        path = mod_root / folder_name
+                        mods.append({
+                            "mod_id": mod_id,
+                            "name": display_name,
+                            "path": str(path),
+                            "exists": path.exists()
+                        })
+            except Exception:
+                pass  # Fall through to empty list
+        
+        return {"local_mods": {"mods": mods}}
 
     
-    def read_live_file(self, params: dict) -> dict:
-        """Read file from live mod."""
+    def read_local_file(self, params: dict) -> dict:
+        """Read file from local mod."""
         mod_name = params.get("mod_name", "")
         rel_path = params.get("rel_path", "")
         
@@ -1139,19 +1162,34 @@ class CK3LensBridge:
             # Build target path
             target_rel_path = str(source.parent / new_name)
             
-            # Get mod path - maps short ID to folder path
-            # TODO: Move to config file and consolidate with live_mods_config
+            # Get mod path from playset config or try direct folder match
             mod_root = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
-            mod_paths = {
-                "MSC": mod_root / "Mini Super Compatch",  # Mini Super Compatch
-                "MSCRE": mod_root / "MSCRE",  # MSC Religion Expanded
-                "LRE": mod_root / "Lowborn Rise Expanded",  # Lowborn Rise Expanded
-                "MRP": mod_root / "More Raid and Prisoners",  # More Raiding and Prisoners (1.18+)
-            }
+            mod_path = None
             
-            mod_path = mod_paths.get(target_mod)
-            if not mod_path:
-                # Try direct name match
+            # Try to load from playset config first
+            raven_dir = Path.home() / ".ck3raven"
+            active_file = raven_dir / "playsets" / "active.txt"
+            if active_file.exists():
+                try:
+                    playset_name = active_file.read_text().strip()
+                    playset_file = raven_dir / "playsets" / f"{playset_name}.json"
+                    if playset_file.exists():
+                        import json
+                        playset_data = json.loads(playset_file.read_text())
+                        for mod_cfg in playset_data.get("local_mods", []):
+                            if isinstance(mod_cfg, dict):
+                                if mod_cfg.get("short_id") == target_mod or mod_cfg.get("name") == target_mod:
+                                    folder = mod_cfg.get("folder", mod_cfg.get("name", target_mod))
+                                    mod_path = mod_root / folder
+                                    break
+                            elif mod_cfg == target_mod:
+                                mod_path = mod_root / target_mod
+                                break
+                except Exception:
+                    pass
+            
+            # Fall back to direct name match
+            if mod_path is None:
                 mod_path = mod_root / target_mod
             
             if not mod_path.exists():

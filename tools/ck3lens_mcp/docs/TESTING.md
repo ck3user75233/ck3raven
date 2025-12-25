@@ -38,14 +38,14 @@ After VS Code reloads, open Copilot Chat and test these prompts:
 Initialize the CK3 Lens session and show me what mods are available
 ```
 
-Expected: Shows mod_root path and list of live mods
+Expected: Shows mod_root path and list of local mods
 
-### Test 2: List Live Mods
+### Test 2: List Local Mods
 ```
-List the live mods that CK3 Lens can write to
+List the local mods that CK3 Lens can write to
 ```
 
-Expected: Shows MSC, MSCRE, LRE, MRP, PVP2 (whichever exist on disk)
+Expected: Shows mods configured in your playset's `local_mods` section
 
 ### Test 3: Parse CK3 Script
 ```
@@ -59,23 +59,23 @@ my_trait = {
 
 Expected: Returns AST or parse result
 
-### Test 4: List Files in Live Mod
+### Test 4: List Files in Local Mod
 ```
-List the files in the common folder of Mini Super Compatch
+List the files in the common folder of [your mod name]
 ```
 
-Expected: Shows file list from MSC/common/
+Expected: Shows file list from [mod]/common/
 
-### Test 5: Read Live File
+### Test 5: Read Local File
 ```
-Read the descriptor.mod file from Mini Super Compatch
+Read the descriptor.mod file from [your mod name]
 ```
 
 Expected: Shows file contents
 
 ### Test 6: Git Status
 ```
-Show the git status for Mini Super Compatch
+Show the git status for [your mod name]
 ```
 
 Expected: Shows git status or "not a git repo" if not initialized

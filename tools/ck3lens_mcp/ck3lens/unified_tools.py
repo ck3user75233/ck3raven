@@ -937,9 +937,9 @@ def _file_read_raw(path, justification, start_line, end_line, trace):
 
 def _file_read_live(mod_name, rel_path, max_bytes, session, trace):
     """Read file from live mod."""
-    from ck3lens import live_mods
+    from ck3lens import local_mods
     
-    result = live_mods.read_live_file(session, mod_name, rel_path, max_bytes)
+    result = local_mods.read_local_file(session, mod_name, rel_path, max_bytes)
     
     if trace:
         trace.log("ck3lens.file.read_live", {"mod_name": mod_name, "rel_path": rel_path},
@@ -950,7 +950,7 @@ def _file_read_live(mod_name, rel_path, max_bytes, session, trace):
 
 def _file_write(mod_name, rel_path, content, validate_syntax, session, trace):
     """Write file to live mod."""
-    from ck3lens import live_mods
+    from ck3lens import local_mods
     from ck3lens.validate import parse_content
     
     # Optional syntax validation
@@ -966,7 +966,7 @@ def _file_write(mod_name, rel_path, content, validate_syntax, session, trace):
                 "parse_errors": parse_result["errors"]
             }
     
-    result = live_mods.write_file(session, mod_name, rel_path, content)
+    result = local_mods.write_file(session, mod_name, rel_path, content)
     
     # Auto-refresh in database
     if result.get("success"):
@@ -982,14 +982,14 @@ def _file_write(mod_name, rel_path, content, validate_syntax, session, trace):
 
 def _file_edit(mod_name, rel_path, old_content, new_content, validate_syntax, session, trace):
     """Edit file in live mod."""
-    from ck3lens import live_mods
+    from ck3lens import local_mods
     from ck3lens.validate import parse_content
     
-    result = live_mods.edit_file(session, mod_name, rel_path, old_content, new_content)
+    result = local_mods.edit_file(session, mod_name, rel_path, old_content, new_content)
     
     updated_content = None
     if result.get("success") and validate_syntax and rel_path.endswith(".txt"):
-        read_result = live_mods.read_live_file(session, mod_name, rel_path)
+        read_result = local_mods.read_local_file(session, mod_name, rel_path)
         if read_result.get("success"):
             updated_content = read_result["content"]
             parse_result = parse_content(updated_content, rel_path)
@@ -999,7 +999,7 @@ def _file_edit(mod_name, rel_path, old_content, new_content, validate_syntax, se
     
     if result.get("success"):
         if updated_content is None:
-            read_result = live_mods.read_live_file(session, mod_name, rel_path)
+            read_result = local_mods.read_local_file(session, mod_name, rel_path)
             if read_result.get("success"):
                 updated_content = read_result["content"]
         
@@ -1016,9 +1016,9 @@ def _file_edit(mod_name, rel_path, old_content, new_content, validate_syntax, se
 
 def _file_delete(mod_name, rel_path, session, trace):
     """Delete file from live mod."""
-    from ck3lens import live_mods
+    from ck3lens import local_mods
     
-    result = live_mods.delete_file(session, mod_name, rel_path)
+    result = local_mods.delete_file(session, mod_name, rel_path)
     
     if result.get("success"):
         db_refresh = _refresh_file_in_db_internal(mod_name, rel_path, deleted=True)
@@ -1033,13 +1033,13 @@ def _file_delete(mod_name, rel_path, session, trace):
 
 def _file_rename(mod_name, old_path, new_path, session, trace):
     """Rename file in live mod."""
-    from ck3lens import live_mods
+    from ck3lens import local_mods
     
-    result = live_mods.rename_file(session, mod_name, old_path, new_path)
+    result = local_mods.rename_file(session, mod_name, old_path, new_path)
     
     if result.get("success"):
         _refresh_file_in_db_internal(mod_name, old_path, deleted=True)
-        new_content = live_mods.read_live_file(session, mod_name, new_path)
+        new_content = local_mods.read_local_file(session, mod_name, new_path)
         if new_content.get("success"):
             db_refresh = _refresh_file_in_db_internal(mod_name, new_path, content=new_content["content"])
             result["db_refresh"] = db_refresh
@@ -1053,9 +1053,9 @@ def _file_rename(mod_name, old_path, new_path, session, trace):
 
 def _file_refresh(mod_name, rel_path, session, trace):
     """Refresh file in database."""
-    from ck3lens import live_mods
+    from ck3lens import local_mods
     
-    read_result = live_mods.read_live_file(session, mod_name, rel_path)
+    read_result = local_mods.read_local_file(session, mod_name, rel_path)
     
     if not read_result.get("success"):
         if not read_result.get("exists", True):
@@ -1074,9 +1074,9 @@ def _file_refresh(mod_name, rel_path, session, trace):
 
 def _file_list(mod_name, path_prefix, pattern, session, trace):
     """List files in live mod."""
-    from ck3lens import live_mods
+    from ck3lens import local_mods
     
-    result = live_mods.list_live_files(session, mod_name, path_prefix, pattern)
+    result = local_mods.list_local_files(session, mod_name, path_prefix, pattern)
     
     if trace:
         trace.log("ck3lens.file.list", {"mod_name": mod_name, "path_prefix": path_prefix},
@@ -1681,11 +1681,11 @@ def ck3_git_impl(
     from ck3lens import git_ops
     
     # Validate mod access
-    live_mod = session.get_live_mod(mod_name) if session else None
-    if not live_mod:
+    local_mod = session.get_local_mod(mod_name) if session else None
+    if not local_mod:
         return {"error": f"Not a live mod: {mod_name}"}
     
-    mod_path = str(live_mod.path)
+    mod_path = str(local_mod.path)
     
     if command == "status":
         result = git_ops.git_status(mod_path)
