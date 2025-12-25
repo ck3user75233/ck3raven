@@ -1,21 +1,31 @@
 """
-Title Lookup Extractor
+Landed Titles Lookup Extractor
 
-Extracts title data from common/landed_titles/*.txt files.
-These files define titles with their keys, tiers, capitals, colors, and flags.
+Extracts SIMPLE lookup data from common/landed_titles/*.txt files.
+Uses parsed ASTs (landed_titles are in SCRIPT route due to scripted blocks).
+
+This extracts only the simple, non-scripted properties:
+- Title key and tier (e.g., k_france → tier 'k')
+- Capital (county or province ID)
+- De jure hierarchy (parent-child relationships)
+- Color and simple flags (landless, definite_form)
+
+Does NOT extract scripted content like:
+- can_create triggers
+- ai_primary_priority script values
+- effect blocks
 
 Format example:
     k_france = {
         color = { 20 50 160 }
-        capital = c_paris
-        definite_form = yes
+        capital = c_paris          # ← Extracted
+        definite_form = yes        # ← Extracted
+        can_create = { ... }       # ← NOT extracted (scripted)
         
-        d_normandy = {
-            color = { 166 27 41 }
+        d_normandy = {             # ← De jure child
             capital = c_rouen
-            
             c_rouen = {
-                b_rouen = { province = 75 }
+                b_rouen = { province = 75 }  # ← Province ID extracted
             }
         }
     }
@@ -224,13 +234,20 @@ def _insert_title_batch(conn: sqlite3.Connection, batch: List[tuple], stats: Dic
             stats['errors'] += 1
 
 
-def extract_titles(
+def extract_landed_titles(
     conn: sqlite3.Connection,
     content_version_id: int,
     progress_callback=None,
 ) -> Dict[str, int]:
     """
-    Main entry point for title extraction.
+    Main entry point for landed titles extraction.
+    
     Uses AST-based extraction from parsed common/landed_titles/ files.
+    Landed titles are in SCRIPT route (they have scripted blocks), but
+    we extract only simple lookup data: tier, capital, de jure hierarchy.
     """
     return extract_titles_from_ast(conn, content_version_id)
+
+
+# Alias for backwards compatibility
+extract_titles = extract_landed_titles

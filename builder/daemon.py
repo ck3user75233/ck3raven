@@ -1483,16 +1483,16 @@ def extract_lookup_tables(conn, logger: DaemonLogger, status: StatusWriter):
     
     # 4. Title lookup (from common/landed_titles/ ASTs)
     write_heartbeat()
-    status.update(message="Extracting title lookups...")
+    status.update(message="Extracting landed title lookups...")
     try:
-        from builder.extractors.lookups.title import extract_titles
-        stats = extract_titles(conn, vanilla_cv_id)
-        logger.info(f"  titles: inserted={stats['inserted']}, errors={stats['errors']}")
-        results['titles'] = stats
+        from builder.extractors.lookups.landed_titles import extract_landed_titles
+        stats = extract_landed_titles(conn, vanilla_cv_id)
+        logger.info(f"  landed_titles: inserted={stats['inserted']}, errors={stats['errors']}")
+        results['landed_titles'] = stats
         total_extracted += stats['inserted']
         total_errors += stats['errors']
     except Exception as e:
-        logger.warning(f"  title extraction failed: {e}")
+        logger.warning(f"  landed_titles extraction failed: {e}")
         total_errors += 1
     
     logger.info(f"Lookup extraction complete: {total_extracted} records, {total_errors} errors")

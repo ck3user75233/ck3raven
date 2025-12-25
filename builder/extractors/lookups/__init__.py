@@ -9,18 +9,20 @@ These handle numeric IDs that need to be resolved to human-readable names:
     - title mappings (k_france → tier='k', capital=c_paris)
 
 Unlike symbols (string-keyed, from ASTs), lookups handle opaque numeric IDs.
+
+Note: landed_titles uses AST (SCRIPT route) but extracts simple lookup data.
+      history/titles is routed to AST but has NO extractor (too much scripting).
 """
 
 from builder.extractors.lookups.province import extract_provinces
 from builder.extractors.lookups.character import extract_characters
 from builder.extractors.lookups.dynasty import extract_dynasties
-from builder.extractors.lookups.title import extract_titles
-from builder.extractors.lookups.title_history import extract_title_history
+from builder.extractors.lookups.landed_titles import extract_landed_titles, extract_titles
 
 __all__ = [
     "extract_provinces",
     "extract_characters", 
     "extract_dynasties",
-    "extract_titles",
-    "extract_title_history",
+    "extract_landed_titles",
+    "extract_titles",  # Alias for backwards compatibility
 ]

@@ -92,6 +92,7 @@ SCRIPT_PARSER_FOLDERS: List[str] = [
     'common/bookmark_portraits',
     'common/landed_titles',  # Has symbols (title definitions)
     'common/accolade_names',  # Has scripted triggers - needs full AST
+    'history/titles/',  # Has effect blocks - needs AST (no extractor)
     'events/',
 ]
 
@@ -109,9 +110,6 @@ LOOKUPS_PATTERNS: List[str] = [
     
     # Character history - needed to validate character:12345 references  
     'history/characters/',
-    
-    # Title history - needed to validate title holder references
-    'history/titles/',
     
     # Dynasty definitions - dynasty ID lookups
     'common/dynasties/',
