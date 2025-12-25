@@ -5130,6 +5130,431 @@ def ck3_get_workspace_config() -> dict:
 
 
 # ============================================================================
+# Lookup Table Query Tools
+# ============================================================================
+
+@mcp.tool()
+def ck3_query_provinces(
+    province_id: int | None = None,
+    name_pattern: str | None = None,
+    culture: str | None = None,
+    religion: str | None = None,
+    terrain: str | None = None,
+    limit: int = 50,
+) -> dict:
+    """
+    Query the province lookup table.
+    
+    Search provinces by ID, name pattern, culture, religion, or terrain.
+    At least one filter must be provided.
+    
+    Args:
+        province_id: Exact province ID (e.g., 2333 for Paris)
+        name_pattern: SQL LIKE pattern for province name (e.g., "%paris%")
+        culture: Filter by culture (e.g., "french")
+        religion: Filter by religion (e.g., "catholic")
+        terrain: Filter by terrain type (e.g., "plains")
+        limit: Maximum results (default 50)
+        
+    Returns:
+        List of matching provinces with their data
+    """
+    if not any([province_id, name_pattern, culture, religion, terrain]):
+        return {"error": "At least one filter must be provided"}
+    
+    db = _get_db()
+    
+    conditions = []
+    params = []
+    
+    if province_id is not None:
+        conditions.append("province_id = ?")
+        params.append(province_id)
+    if name_pattern:
+        conditions.append("name LIKE ?")
+        params.append(name_pattern)
+    if culture:
+        conditions.append("culture = ?")
+        params.append(culture)
+    if religion:
+        conditions.append("religion = ?")
+        params.append(religion)
+    if terrain:
+        conditions.append("terrain = ?")
+        params.append(terrain)
+    
+    where_clause = " AND ".join(conditions)
+    params.append(limit)
+    
+    try:
+        rows = db.conn.execute(f"""
+            SELECT province_id, name, culture, religion, terrain, holding_type
+            FROM province_lookup
+            WHERE {where_clause}
+            LIMIT ?
+        """, params).fetchall()
+        
+        results = [
+            {
+                "province_id": r[0],
+                "name": r[1],
+                "culture": r[2],
+                "religion": r[3],
+                "terrain": r[4],
+                "holding_type": r[5],
+            }
+            for r in rows
+        ]
+        
+        return {"count": len(results), "results": results}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def ck3_query_characters(
+    character_id: int | None = None,
+    name_pattern: str | None = None,
+    dynasty_id: int | None = None,
+    culture: str | None = None,
+    religion: str | None = None,
+    birth_after: str | None = None,
+    birth_before: str | None = None,
+    limit: int = 50,
+) -> dict:
+    """
+    Query the character lookup table.
+    
+    Search historical characters by ID, name, dynasty, culture, religion, or birth dates.
+    At least one filter must be provided.
+    
+    Args:
+        character_id: Exact character ID (e.g., 163110 for Charlemagne)
+        name_pattern: SQL LIKE pattern for character name
+        dynasty_id: Filter by dynasty ID
+        culture: Filter by culture
+        religion: Filter by religion
+        birth_after: Filter by birth date >= this (e.g., "800.1.1")
+        birth_before: Filter by birth date <= this (e.g., "900.1.1")
+        limit: Maximum results (default 50)
+        
+    Returns:
+        List of matching characters with their data
+    """
+    if not any([character_id, name_pattern, dynasty_id, culture, religion, birth_after, birth_before]):
+        return {"error": "At least one filter must be provided"}
+    
+    db = _get_db()
+    
+    conditions = []
+    params = []
+    
+    if character_id is not None:
+        conditions.append("character_id = ?")
+        params.append(character_id)
+    if name_pattern:
+        conditions.append("name LIKE ?")
+        params.append(name_pattern)
+    if dynasty_id is not None:
+        conditions.append("dynasty_id = ?")
+        params.append(dynasty_id)
+    if culture:
+        conditions.append("culture = ?")
+        params.append(culture)
+    if religion:
+        conditions.append("religion = ?")
+        params.append(religion)
+    if birth_after:
+        conditions.append("birth_date >= ?")
+        params.append(birth_after)
+    if birth_before:
+        conditions.append("birth_date <= ?")
+        params.append(birth_before)
+    
+    where_clause = " AND ".join(conditions)
+    params.append(limit)
+    
+    try:
+        rows = db.conn.execute(f"""
+            SELECT character_id, name, dynasty_id, dynasty_house, culture, religion,
+                   birth_date, death_date, father_id, mother_id
+            FROM character_lookup
+            WHERE {where_clause}
+            LIMIT ?
+        """, params).fetchall()
+        
+        results = [
+            {
+                "character_id": r[0],
+                "name": r[1],
+                "dynasty_id": r[2],
+                "dynasty_house": r[3],
+                "culture": r[4],
+                "religion": r[5],
+                "birth_date": r[6],
+                "death_date": r[7],
+                "father_id": r[8],
+                "mother_id": r[9],
+            }
+            for r in rows
+        ]
+        
+        return {"count": len(results), "results": results}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def ck3_query_dynasties(
+    dynasty_id: int | None = None,
+    name_pattern: str | None = None,
+    culture: str | None = None,
+    limit: int = 50,
+) -> dict:
+    """
+    Query the dynasty lookup table.
+    
+    Search dynasties by ID, name pattern, or culture.
+    At least one filter must be provided.
+    
+    Args:
+        dynasty_id: Exact dynasty ID (e.g., 699 for Karling)
+        name_pattern: SQL LIKE pattern for dynasty name (e.g., "%karling%")
+        culture: Filter by culture
+        limit: Maximum results (default 50)
+        
+    Returns:
+        List of matching dynasties with their data
+    """
+    if not any([dynasty_id, name_pattern, culture]):
+        return {"error": "At least one filter must be provided"}
+    
+    db = _get_db()
+    
+    conditions = []
+    params = []
+    
+    if dynasty_id is not None:
+        conditions.append("dynasty_id = ?")
+        params.append(dynasty_id)
+    if name_pattern:
+        conditions.append("name_key LIKE ?")
+        params.append(name_pattern)
+    if culture:
+        conditions.append("culture = ?")
+        params.append(culture)
+    
+    where_clause = " AND ".join(conditions)
+    params.append(limit)
+    
+    try:
+        rows = db.conn.execute(f"""
+            SELECT dynasty_id, name_key, prefix, culture, motto
+            FROM dynasty_lookup
+            WHERE {where_clause}
+            LIMIT ?
+        """, params).fetchall()
+        
+        results = [
+            {
+                "dynasty_id": r[0],
+                "name_key": r[1],
+                "prefix": r[2],
+                "culture": r[3],
+                "motto": r[4],
+            }
+            for r in rows
+        ]
+        
+        return {"count": len(results), "results": results}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def ck3_query_titles(
+    title_key: str | None = None,
+    tier: str | None = None,
+    de_jure_liege: str | None = None,
+    capital_county: str | None = None,
+    landless: bool | None = None,
+    limit: int = 100,
+) -> dict:
+    """
+    Query the landed titles lookup table.
+    
+    Search titles by key, tier, de jure liege, or capital.
+    At least one filter must be provided.
+    
+    Args:
+        title_key: Exact title key or SQL LIKE pattern (e.g., "k_france" or "d_%")
+        tier: Filter by tier ('e', 'k', 'd', 'c', 'b', 'h')
+        de_jure_liege: Filter by de jure parent title
+        capital_county: Filter by capital county
+        landless: Filter by landless flag
+        limit: Maximum results (default 100)
+        
+    Returns:
+        List of matching titles with their data
+        
+    Examples:
+        ck3_query_titles(tier="k")  # All kingdoms
+        ck3_query_titles(de_jure_liege="k_france")  # Duchies in France
+        ck3_query_titles(title_key="c_%", de_jure_liege="d_normandy")  # Counties in Normandy
+    """
+    if not any([title_key, tier, de_jure_liege, capital_county, landless is not None]):
+        return {"error": "At least one filter must be provided"}
+    
+    db = _get_db()
+    
+    conditions = []
+    params = []
+    
+    if title_key:
+        if '%' in title_key or '_' in title_key:
+            conditions.append("title_key LIKE ?")
+        else:
+            conditions.append("title_key = ?")
+        params.append(title_key)
+    if tier:
+        conditions.append("tier = ?")
+        params.append(tier)
+    if de_jure_liege:
+        conditions.append("de_jure_liege = ?")
+        params.append(de_jure_liege)
+    if capital_county:
+        conditions.append("capital_county = ?")
+        params.append(capital_county)
+    if landless is not None:
+        conditions.append("landless = ?")
+        params.append(1 if landless else 0)
+    
+    where_clause = " AND ".join(conditions)
+    params.append(limit)
+    
+    try:
+        rows = db.conn.execute(f"""
+            SELECT title_key, tier, capital_county, capital_province_id, de_jure_liege,
+                   color_r, color_g, color_b, definite_form, landless
+            FROM title_lookup
+            WHERE {where_clause}
+            LIMIT ?
+        """, params).fetchall()
+        
+        results = [
+            {
+                "title_key": r[0],
+                "tier": r[1],
+                "capital_county": r[2],
+                "capital_province_id": r[3],
+                "de_jure_liege": r[4],
+                "color": [r[5], r[6], r[7]] if r[5] is not None else None,
+                "definite_form": bool(r[8]),
+                "landless": bool(r[9]),
+            }
+            for r in rows
+        ]
+        
+        return {"count": len(results), "results": results}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def ck3_query_localization(
+    key_pattern: str | None = None,
+    value_pattern: str | None = None,
+    language: str = "english",
+    limit: int = 50,
+) -> dict:
+    """
+    Query the localization entries table.
+    
+    Search localization keys and values.
+    At least one pattern must be provided.
+    
+    Args:
+        key_pattern: SQL LIKE pattern for localization key (e.g., "%trait_brave%")
+        value_pattern: SQL LIKE pattern for localization value (e.g., "%brave%")
+        language: Language to search (default "english")
+        limit: Maximum results (default 50)
+        
+    Returns:
+        List of matching localization entries
+    """
+    if not any([key_pattern, value_pattern]):
+        return {"error": "At least one pattern (key_pattern or value_pattern) must be provided"}
+    
+    db = _get_db()
+    
+    conditions = ["language = ?"]
+    params = [language]
+    
+    if key_pattern:
+        conditions.append("loc_key LIKE ?")
+        params.append(key_pattern)
+    if value_pattern:
+        conditions.append("value LIKE ?")
+        params.append(value_pattern)
+    
+    where_clause = " AND ".join(conditions)
+    params.append(limit)
+    
+    try:
+        rows = db.conn.execute(f"""
+            SELECT loc_key, value, file_id, line_number
+            FROM localization_entries
+            WHERE {where_clause}
+            LIMIT ?
+        """, params).fetchall()
+        
+        results = [
+            {
+                "loc_key": r[0],
+                "value": r[1],
+                "file_id": r[2],
+                "line_number": r[3],
+            }
+            for r in rows
+        ]
+        
+        return {"count": len(results), "results": results, "language": language}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def ck3_get_lookup_stats() -> dict:
+    """
+    Get statistics for all lookup tables.
+    
+    Shows row counts for each lookup table to verify extraction status.
+    
+    Returns:
+        Row counts for province, character, dynasty, title, and localization tables
+    """
+    db = _get_db()
+    
+    tables = [
+        ("province_lookup", "provinces"),
+        ("character_lookup", "characters"),
+        ("dynasty_lookup", "dynasties"),
+        ("title_lookup", "titles"),
+        ("localization_entries", "localization_entries"),
+    ]
+    
+    stats = {}
+    for table_name, display_name in tables:
+        try:
+            count = db.conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+            stats[display_name] = count
+        except Exception as e:
+            stats[display_name] = f"error: {e}"
+    
+    return stats
+
+
+# ============================================================================
 # Main Entry Point
 # ============================================================================
 
