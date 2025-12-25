@@ -7,7 +7,7 @@ birth/death dates, traits, and family relationships.
 
 ARCHITECTURE NOTE:
 Character files follow the LOOKUPS route in file_routes.py.
-They do NOT get ASTs - we parse raw content directly here.
+They do NOT get ASTs - we use the lightweight tokenizer here.
 This is a specialized extractor per the file routing table.
 
 Format example:
@@ -27,8 +27,8 @@ import sqlite3
 from typing import Dict, Optional, List
 from dataclasses import dataclass, field
 
-# Use the shared parser
-from ck3raven.parser import parse_source
+# Use the lightweight tokenizer - NOT the full parser
+from builder.extractors.lookups.tokenizer import extract_simple_blocks
 
 
 @dataclass
