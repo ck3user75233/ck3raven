@@ -1274,12 +1274,12 @@ def _refresh_file_in_db(mod_name: str, rel_path: str, content: str = None, delet
     This is the incremental update path - much faster than full rebuild.
     """
     try:
-        # Add builder path
+        # Add project root to path so 'builder' package is importable
         import sys
         from pathlib import Path
-        builder_path = Path(__file__).parent.parent.parent / "builder"
-        if str(builder_path) not in sys.path:
-            sys.path.insert(0, str(builder_path))
+        project_root = Path(__file__).parent.parent.parent
+        if str(project_root) not in sys.path:
+            sys.path.insert(0, str(project_root))
         
         from builder.incremental import refresh_single_file, mark_file_deleted
         from ck3raven.db.schema import get_connection, DEFAULT_DB_PATH

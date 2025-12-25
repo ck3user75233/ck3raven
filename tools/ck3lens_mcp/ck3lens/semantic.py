@@ -905,6 +905,133 @@ class CK3SyntaxValidator:
         print(f"[OK] Loaded syntax database from {db_path}")
 
 
+# =============================================================================
+# Database-backed reference validation for MCP tools
+# =============================================================================
+
+def validate_content(
+    content: str,
+    db_path: str,
+    playset_id: int = None,
+    filename: str = "inline.txt"
+) -> dict:
+    """
+    Validate all symbol references in CK3 script content against the database.
+    
+    Uses the ck3raven database to check that referenced symbols exist.
+    This is the function called by ck3_validate_references MCP tool.
+    
+    Args:
+        content: CK3 script content to validate
+        db_path: Path to ck3raven SQLite database
+        playset_id: Optional playset for filtering (uses all if None)
+        filename: Filename for error context
+        
+    Returns:
+        {
+            "success": bool (true if no errors),
+            "errors": [{"line": int, "message": str, "ref": str}],
+            "warnings": [{"line": int, "message": str, "ref": str}]
+        }
+    """
+    import sqlite3
+    import re
+    
+    errors = []
+    warnings = []
+    
+    conn = sqlite3.connect(db_path)
+    
+    # Build a set of known symbols from database
+    try:
+        # Get all symbol names (case-insensitive lookup)
+        rows = conn.execute("""
+            SELECT DISTINCT LOWER(name), symbol_type FROM symbols
+        """).fetchall()
+        known_symbols = {name: stype for name, stype in rows}
+    except Exception as e:
+        return {"success": False, "errors": [{"line": 0, "message": f"DB error: {e}", "ref": ""}], "warnings": []}
+    finally:
+        conn.close()
+    
+    # Patterns for common reference contexts
+    reference_patterns = [
+        # has_trait = <trait>
+        (r'has_trait\s*=\s*(\w+)', 'trait'),
+        # trigger_event = <event>
+        (r'trigger_event\s*=\s*\{?\s*id\s*=\s*(\w+)', 'event'),
+        (r'trigger_event\s*=\s*(\w[\w.]+)', 'event'),
+        # has_perk = <perk>
+        (r'has_perk\s*=\s*(\w+)', 'perk'),
+        # has_focus = <focus>
+        (r'has_focus\s*=\s*(\w+)', 'focus'),
+        # has_lifestyle = <lifestyle>
+        (r'has_lifestyle\s*=\s*(\w+)', 'lifestyle'),
+        # add_trait = <trait>
+        (r'add_trait\s*=\s*(\w+)', 'trait'),
+        # remove_trait = <trait>
+        (r'remove_trait\s*=\s*(\w+)', 'trait'),
+        # has_religion = <religion>
+        (r'has_religion\s*=\s*(\w+)', 'religion'),
+        # has_culture = <culture>
+        (r'has_culture\s*=\s*(\w+)', 'culture'),
+        # has_government = <government>
+        (r'has_government\s*=\s*(\w+)', 'government_type'),
+        # scripted_trigger / scripted_effect calls
+        (r'(?:run_scripted_trigger|scripted_trigger)\s*=\s*(\w+)', 'scripted_trigger'),
+        (r'(?:run_scripted_effect|scripted_effect)\s*=\s*(\w+)', 'scripted_effect'),
+    ]
+    
+    # Built-in values that are not symbols
+    builtins = {
+        'yes', 'no', 'true', 'false', 'none', 'null',
+        'root', 'this', 'prev', 'from', 'scope', 'target',
+        'actor', 'recipient', 'primary_title', 'capital_county',
+    }
+    
+    lines = content.split('\n')
+    for line_num, line in enumerate(lines, 1):
+        # Skip comments
+        stripped = line.split('#')[0]
+        if not stripped.strip():
+            continue
+        
+        for pattern, expected_type in reference_patterns:
+            for match in re.finditer(pattern, stripped, re.IGNORECASE):
+                ref_name = match.group(1).lower()
+                
+                # Skip builtins
+                if ref_name in builtins:
+                    continue
+                
+                # Check if symbol exists
+                if ref_name not in known_symbols:
+                    errors.append({
+                        "line": line_num,
+                        "message": f"Undefined {expected_type}: '{match.group(1)}'",
+                        "ref": match.group(1),
+                        "expected_type": expected_type,
+                    })
+                else:
+                    # Optionally warn if type mismatch
+                    actual_type = known_symbols[ref_name]
+                    if expected_type and actual_type and expected_type != actual_type:
+                        # Some flexibility - don't warn for close matches
+                        if not (expected_type in actual_type or actual_type in expected_type):
+                            warnings.append({
+                                "line": line_num,
+                                "message": f"Type mismatch: '{match.group(1)}' is a {actual_type}, expected {expected_type}",
+                                "ref": match.group(1),
+                            })
+    
+    return {
+        "success": len(errors) == 0,
+        "errors": errors,
+        "warnings": warnings,
+        "filename": filename,
+    }
+
+
 def main():
     """Example usage and testing."""
     import sys
