@@ -128,7 +128,7 @@ code --install-extension ck3lens-explorer-0.1.0.vsix
   "ck3lens.enableRealTimeLinting": true,
   "ck3lens.lintOnSave": true,
   "ck3lens.lintDelay": 300,
-  "ck3lens.liveMods": ["Mini Super Compatch", "MSCRE", "LowbornRiseExpanded"]
+  "ck3lens.liveMods": ["Mini Super Compatch", "MSC Religion Expanded", "Lowborn Rise Expanded"]
 }
 ```
 

@@ -1173,6 +1173,364 @@ def ck3_conflicts(
 
 
 # ============================================================================
+# Unified File Operations
+# ============================================================================
+
+@mcp.tool()
+def ck3_file(
+    command: Literal["get", "read", "write", "edit", "delete", "rename", "refresh", "list"],
+    # Path identification
+    path: str | None = None,
+    mod_name: str | None = None,
+    rel_path: str | None = None,
+    # For get (from DB)
+    include_ast: bool = False,
+    no_lens: bool = False,
+    # For read/write
+    content: str | None = None,
+    start_line: int = 1,
+    end_line: int | None = None,
+    max_bytes: int = 200000,
+    justification: str | None = None,
+    # For edit
+    old_content: str | None = None,
+    new_content: str | None = None,
+    # For rename
+    new_path: str | None = None,
+    # For write/edit
+    validate_syntax: bool = True,
+    # For list
+    path_prefix: str | None = None,
+    pattern: str | None = None,
+) -> dict:
+    """
+    Unified file operations tool.
+    
+    Commands:
+    
+    command=get      → Get file content from database (path required)
+    command=read     → Read file from filesystem (path or mod_name+rel_path)
+    command=write    → Write file to live mod (mod_name, rel_path, content required)
+    command=edit     → Search-replace in live mod file (mod_name, rel_path, old_content, new_content)
+    command=delete   → Delete file from live mod (mod_name, rel_path required)
+    command=rename   → Rename/move file in live mod (mod_name, rel_path, new_path required)
+    command=refresh  → Re-sync file to database (mod_name, rel_path required)
+    command=list     → List files in live mod (mod_name required, path_prefix/pattern optional)
+    
+    Args:
+        command: Operation to perform
+        path: File path (for get/read from filesystem)
+        mod_name: Live mod name (for write/edit/delete/rename/refresh/list)
+        rel_path: Relative path within mod
+        include_ast: Include parsed AST (for get)
+        no_lens: Search all content, not just active playset (for get)
+        content: File content (for write)
+        start_line: Start line for read (1-indexed)
+        end_line: End line for read (inclusive)
+        max_bytes: Max bytes to return
+        justification: Audit justification for filesystem reads
+        old_content: Content to find (for edit)
+        new_content: Replacement content (for edit)
+        new_path: New path (for rename)
+        validate_syntax: Validate CK3 syntax before write/edit
+        path_prefix: Filter by path prefix (for list)
+        pattern: Glob pattern (for list)
+    
+    Returns:
+        Dict with results based on command
+    """
+    from ck3lens.unified_tools import ck3_file_impl
+    
+    session = _get_session()
+    db = _get_db()
+    trace = _get_trace()
+    lens = _get_lens(no_lens=no_lens)
+    
+    return ck3_file_impl(
+        command=command,
+        path=path,
+        mod_name=mod_name,
+        rel_path=rel_path,
+        include_ast=include_ast,
+        no_lens=no_lens,
+        content=content,
+        start_line=start_line,
+        end_line=end_line,
+        max_bytes=max_bytes,
+        justification=justification,
+        old_content=old_content,
+        new_content=new_content,
+        new_path=new_path,
+        validate_syntax=validate_syntax,
+        path_prefix=path_prefix,
+        pattern=pattern,
+        session=session,
+        db=db,
+        trace=trace,
+        lens=lens,
+    )
+
+
+# ============================================================================
+# Unified Folder Operations
+# ============================================================================
+
+@mcp.tool()
+def ck3_folder(
+    command: Literal["list", "contents", "top_level", "mod_folders"] = "contents",
+    # For list/contents
+    path: str | None = None,
+    justification: str | None = None,
+    # For mod_folders
+    content_version_id: int | None = None,
+    # For contents
+    folder_pattern: str | None = None,
+    text_search: str | None = None,
+    symbol_search: str | None = None,
+    mod_filter: list[str] | None = None,
+    file_type_filter: list[str] | None = None,
+) -> dict:
+    """
+    Unified folder operations tool.
+    
+    Commands:
+    
+    command=list        → List directory contents from filesystem (path required)
+    command=contents    → Get folder contents from database (path required)
+    command=top_level   → Get top-level folders in active playset
+    command=mod_folders → Get folders in specific mod (content_version_id required)
+    
+    Args:
+        command: Operation to perform
+        path: Folder path (for list/contents)
+        justification: Audit justification for filesystem access
+        content_version_id: Mod content version ID (for mod_folders)
+        folder_pattern: Filter by folder pattern
+        text_search: Filter by content text (FTS)
+        symbol_search: Filter by symbol name
+        mod_filter: Only show files from these mods
+        file_type_filter: Filter by file extensions
+    
+    Returns:
+        Dict with folder contents or entries
+    """
+    from ck3lens.unified_tools import ck3_folder_impl
+    
+    db = _get_db()
+    playset_id = _get_playset_id()
+    trace = _get_trace()
+    
+    return ck3_folder_impl(
+        command=command,
+        path=path,
+        justification=justification,
+        content_version_id=content_version_id,
+        folder_pattern=folder_pattern,
+        text_search=text_search,
+        symbol_search=symbol_search,
+        mod_filter=mod_filter,
+        file_type_filter=file_type_filter,
+        db=db,
+        playset_id=playset_id,
+        trace=trace,
+    )
+
+
+# ============================================================================
+# Unified Playset Operations
+# ============================================================================
+
+@mcp.tool()
+def ck3_playset(
+    command: Literal["get", "list", "switch", "mods", "add_mod", "remove_mod", "reorder", "create", "import"] = "get",
+    # For switch/add_mod/remove_mod/reorder
+    playset_name: str | None = None,
+    mod_name: str | None = None,
+    # For reorder
+    new_position: int | None = None,
+    # For create
+    name: str | None = None,
+    description: str | None = None,
+    vanilla_version_id: int | None = None,
+    mod_ids: list[int] | None = None,
+    # For import
+    launcher_playset_name: str | None = None,
+) -> dict:
+    """
+    Unified playset operations tool.
+    
+    Commands:
+    
+    command=get        → Get active playset info
+    command=list       → List all playsets
+    command=switch     → Switch to different playset (playset_name required)
+    command=mods       → Get mods in active playset
+    command=add_mod    → Add mod to playset (mod_name required)
+    command=remove_mod → Remove mod from playset (mod_name required)
+    command=reorder    → Change mod load order (mod_name, new_position required)
+    command=create     → Create new playset (name required)
+    command=import     → Import playset from CK3 launcher
+    
+    Args:
+        command: Operation to perform
+        playset_name: Playset name (for switch)
+        mod_name: Mod name (for add_mod/remove_mod/reorder)
+        new_position: New load order position (for reorder, 0-indexed)
+        name: New playset name (for create)
+        description: Playset description (for create)
+        vanilla_version_id: Vanilla content version (for create)
+        mod_ids: List of content_version_ids (for create)
+        launcher_playset_name: Launcher playset to import (for import)
+    
+    Returns:
+        Dict with playset info or operation result
+    """
+    from ck3lens.unified_tools import ck3_playset_impl
+    
+    db = _get_db()
+    playset_id = _get_playset_id()
+    trace = _get_trace()
+    
+    return ck3_playset_impl(
+        command=command,
+        playset_name=playset_name,
+        mod_name=mod_name,
+        new_position=new_position,
+        name=name,
+        description=description,
+        vanilla_version_id=vanilla_version_id,
+        mod_ids=mod_ids,
+        launcher_playset_name=launcher_playset_name,
+        db=db,
+        playset_id=playset_id,
+        trace=trace,
+    )
+
+
+# ============================================================================
+# Unified Git Operations
+# ============================================================================
+
+@mcp.tool()
+def ck3_git(
+    command: Literal["status", "diff", "add", "commit", "push", "pull", "log"],
+    mod_name: str,
+    # For diff
+    file_path: str | None = None,
+    # For add
+    files: list[str] | None = None,
+    all_files: bool = False,
+    # For commit
+    message: str | None = None,
+    # For log
+    limit: int = 10,
+) -> dict:
+    """
+    Unified git operations for live mods.
+    
+    Commands:
+    
+    command=status → Get git status (mod_name required)
+    command=diff   → Get git diff (mod_name required, file_path optional)
+    command=add    → Stage files (mod_name required, files or all_files)
+    command=commit → Commit staged changes (mod_name, message required)
+    command=push   → Push to remote (mod_name required)
+    command=pull   → Pull from remote (mod_name required)
+    command=log    → Get commit log (mod_name required, limit optional)
+    
+    Args:
+        command: Git operation to perform
+        mod_name: Live mod name (folder name)
+        file_path: Specific file for diff
+        files: List of files to stage
+        all_files: Stage all changes
+        message: Commit message
+        limit: Max commits to return for log
+    
+    Returns:
+        Dict with git operation results
+    """
+    from ck3lens.unified_tools import ck3_git_impl
+    
+    session = _get_session()
+    trace = _get_trace()
+    
+    return ck3_git_impl(
+        command=command,
+        mod_name=mod_name,
+        file_path=file_path,
+        files=files,
+        all_files=all_files,
+        message=message,
+        limit=limit,
+        session=session,
+        trace=trace,
+    )
+
+
+# ============================================================================
+# Unified Validation Operations
+# ============================================================================
+
+@mcp.tool()
+def ck3_validate(
+    target: Literal["syntax", "python", "references", "bundle", "policy"],
+    # For syntax/python
+    content: str | None = None,
+    file_path: str | None = None,
+    # For references
+    symbol_name: str | None = None,
+    symbol_type: str | None = None,
+    # For bundle
+    artifact_bundle: dict | None = None,
+    # For policy
+    mode: str | None = None,
+    trace_path: str | None = None,
+) -> dict:
+    """
+    Unified validation tool.
+    
+    Targets:
+    
+    target=syntax     → Validate CK3 script syntax (content required)
+    target=python     → Check Python syntax (content or file_path required)
+    target=references → Validate symbol references exist (symbol_name required)
+    target=bundle     → Validate artifact bundle (artifact_bundle required)
+    target=policy     → Validate against policy rules (mode required)
+    
+    Args:
+        target: What to validate
+        content: Code/script content to validate
+        file_path: File path (for python, or context for syntax)
+        symbol_name: Symbol to look up (for references)
+        symbol_type: Filter by symbol type (for references)
+        artifact_bundle: Bundle dict to validate
+        mode: Agent mode for policy validation
+        trace_path: Path to trace file for policy validation
+    
+    Returns:
+        Dict with validation results
+    """
+    from ck3lens.unified_tools import ck3_validate_impl
+    
+    db = _get_db()
+    trace = _get_trace()
+    
+    return ck3_validate_impl(
+        target=target,
+        content=content,
+        file_path=file_path,
+        symbol_name=symbol_name,
+        symbol_type=symbol_type,
+        artifact_bundle=artifact_bundle,
+        mode=mode,
+        trace_path=trace_path,
+        db=db,
+        trace=trace,
+    )
+
+
+# ============================================================================
 # Work Contract Management (CLW)
 # ============================================================================
 
@@ -1896,7 +2254,7 @@ def ck3_confirm_not_exists(
     return result
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_file(command="get")
 def ck3_get_file(
     file_path: str,
     include_ast: bool = False,
@@ -1904,6 +2262,8 @@ def ck3_get_file(
     no_lens: bool = False
 ) -> dict:
     """
+    DEPRECATED: Use ck3_file(command="get", path=...) instead.
+    
     Get file content from the ck3raven database.
     
     Args:
@@ -2129,7 +2489,7 @@ def ck3_read_live_file(
     return result
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_file(command="write")
 def ck3_write_file(
     mod_name: str,
     rel_path: str,
@@ -2137,6 +2497,8 @@ def ck3_write_file(
     validate_syntax: bool = True
 ) -> dict:
     """
+    DEPRECATED: Use ck3_file(command="write", mod_name=..., rel_path=..., content=...) instead.
+    
     Write a file to a whitelisted live mod.
     
     Args:
@@ -2181,7 +2543,7 @@ def ck3_write_file(
     return result
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_file(command="edit")
 def ck3_edit_file(
     mod_name: str,
     rel_path: str,
@@ -2190,6 +2552,8 @@ def ck3_edit_file(
     validate_syntax: bool = True
 ) -> dict:
     """
+    DEPRECATED: Use ck3_file(command="edit", mod_name=..., rel_path=..., old_content=..., new_content=...) instead.
+    
     Edit a file in a whitelisted live mod (search-replace style).
     
     Args:
@@ -2238,12 +2602,14 @@ def ck3_edit_file(
     return result
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_file(command="delete")
 def ck3_delete_file(
     mod_name: str,
     rel_path: str
 ) -> dict:
     """
+    DEPRECATED: Use ck3_file(command="delete", mod_name=..., rel_path=...) instead.
+    
     Delete a file from a whitelisted live mod.
     
     Args:
@@ -2271,13 +2637,14 @@ def ck3_delete_file(
     return result
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_file(command="rename")
 def ck3_rename_file(
     mod_name: str,
     old_rel_path: str,
     new_rel_path: str
 ) -> dict:
     """
+    DEPRECATED: Use ck3_file(command="rename", mod_name=..., rel_path=..., new_path=...) instead.
     Rename or move a file within a whitelisted live mod.
     
     Args:
@@ -2311,12 +2678,14 @@ def ck3_rename_file(
     return result
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_file(command="refresh")
 def ck3_refresh_file(
     mod_name: str,
     rel_path: str
 ) -> dict:
     """
+    DEPRECATED: Use ck3_file(command="refresh", mod_name=..., rel_path=...) instead.
+    
     Manually refresh a file in the database.
     
     Use this after editing a file outside of MCP tools (e.g., with VS Code).
@@ -2471,13 +2840,15 @@ def ck3_create_override_patch(
         return result
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_file(command="list")
 def ck3_list_live_files(
     mod_name: str,
     path_prefix: Optional[str] = None,
     pattern: Optional[str] = None
 ) -> dict:
     """
+    DEPRECATED: Use ck3_file(command="list", mod_name=...) instead.
+    
     List files in a whitelisted live mod.
     
     Args:
@@ -2509,7 +2880,7 @@ def ck3_list_live_files(
 # traceable by the policy validator. Agents should use these instead of
 # read_file, list_dir, grep_search directly when working in ck3lens mode.
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_file(command="read")
 def ck3_read_raw_file(
     path: str,
     justification: str,
@@ -2517,6 +2888,8 @@ def ck3_read_raw_file(
     end_line: Optional[int] = None
 ) -> dict:
     """
+    DEPRECATED: Use ck3_file(command="read", path=..., justification=...) instead.
+    
     Read a file from the filesystem with tracing and justification.
     
     USE THIS instead of VS Code's read_file when you need to read files
@@ -2581,7 +2954,7 @@ def ck3_read_raw_file(
         return {"success": False, "error": str(e)}
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_folder(command="list")
 def ck3_list_raw_dir(
     path: str,
     justification: str,
@@ -2589,6 +2962,8 @@ def ck3_list_raw_dir(
     recursive: bool = False
 ) -> dict:
     """
+    DEPRECATED: Use ck3_folder(command="list", path=..., justification=...) instead.
+    
     List directory contents from the filesystem with tracing.
     
     USE THIS instead of VS Code's list_dir when you need to browse files
@@ -2889,14 +3264,17 @@ def ck3_get_scope_info() -> dict:
 
 # ============================================================================
 # Validation Tools
+# DEPRECATED: Use ck3_validate(target=...) instead
 # ============================================================================
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_validate(target="syntax")
 def ck3_validate_syntax(
     content: str,
     filename: str = "inline.txt"
 ) -> dict:
     """
+    DEPRECATED: Use ck3_validate(target="syntax", content=...) instead.
+    
     Validate CK3 script syntax.
     
     Use this tool to check if CK3 script content is syntactically valid
@@ -3008,9 +3386,11 @@ def ck3_parse_content(
     return result
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_validate(target="bundle")
 def ck3_validate_artifact_bundle(artifact_bundle: dict) -> dict:
     """
+    DEPRECATED: Use ck3_validate(target="bundle", artifact_bundle=...) instead.
+    
     Validate an ArtifactBundle contract.
     
     Checks path policy, parses content, and validates references.
@@ -3033,13 +3413,15 @@ def ck3_validate_artifact_bundle(artifact_bundle: dict) -> dict:
     return report.model_dump()
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_validate(target="policy")
 def ck3_validate_policy(
     mode: Literal["ck3lens", "ck3raven-dev"],
     artifact_bundle: dict | None = None,
     session_start_ts: float | None = None,
 ) -> dict:
     """
+    DEPRECATED: Use ck3_validate(target="policy", mode=...) instead.
+    
     Validate agent behavior against the policy specification.
     
     This is the delivery gate for agent outputs. It checks:
@@ -3190,12 +3572,14 @@ def ck3_report_validation_issue(
     }
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_validate(target="python")
 def ck3_validate_python(
     file_path: str | None = None,
     code_snippet: str | None = None,
 ) -> dict:
     """
+    DEPRECATED: Use ck3_validate(target="python", file_path=..., content=...) instead.
+    
     Validate Python code for syntax and import errors.
     
     Use this before deploying any Python code changes to ensure they are valid.
@@ -3309,12 +3693,14 @@ def ck3_validate_python(
 # Semantic Analysis Tools (Autocomplete, Hover, Reference Validation)
 # ============================================================================
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_validate(target="references")
 def ck3_validate_references(
     content: str,
     filename: str = "inline.txt"
 ) -> dict:
     """
+    DEPRECATED: Use ck3_validate(target="references", content=...) instead.
+    
     Validate all references in CK3 script content.
     
     Checks that all symbol references (traits, events, decisions, etc.)
@@ -3524,11 +3910,14 @@ def ck3_get_definition(
 
 # ============================================================================
 # Git Operations
+# DEPRECATED: Use ck3_git(command=..., mod_name=...) instead
 # ============================================================================
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_git(command="status")
 def ck3_git_status(mod_name: str) -> dict:
     """
+    DEPRECATED: Use ck3_git(command="status", mod_name=...) instead.
+    
     Get git status for a live mod.
     
     Args:
@@ -3547,13 +3936,15 @@ def ck3_git_status(mod_name: str) -> dict:
     return result
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_git(command="diff")
 def ck3_git_diff(
     mod_name: str,
     file_path: Optional[str] = None,
     staged: bool = False
 ) -> dict:
     """
+    DEPRECATED: Use ck3_git(command="diff", mod_name=..., file_path=...) instead.
+    
     Get git diff for a live mod.
     
     Args:
@@ -3574,13 +3965,15 @@ def ck3_git_diff(
     return result
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_git(command="add")
 def ck3_git_add(
     mod_name: str,
     paths: Optional[list[str]] = None,
     all_files: bool = False
 ) -> dict:
     """
+    DEPRECATED: Use ck3_git(command="add", mod_name=..., files=..., all_files=...) instead.
+    
     Stage files for commit in a live mod.
     
     Args:
@@ -3599,12 +3992,14 @@ def ck3_git_add(
     trace.log("ck3lens.git_add", {"mod_name": mod_name, "paths": paths, "all_files": all_files}, {"success": result.get("success", False)})
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_git(command="commit")
 def ck3_git_commit(
     mod_name: str,
     message: str
 ) -> dict:
     """
+    DEPRECATED: Use ck3_git(command="commit", mod_name=..., message=...) instead.
+    
     Commit staged changes in a live mod.
     
     Args:
@@ -3624,9 +4019,11 @@ def ck3_git_commit(
     return result
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_git(command="push")
 def ck3_git_push(mod_name: str) -> dict:
     """
+    DEPRECATED: Use ck3_git(command="push", mod_name=...) instead.
+    
     Push commits to remote for a live mod.
     
     Args:
@@ -3645,9 +4042,11 @@ def ck3_git_push(mod_name: str) -> dict:
     return result
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_git(command="pull")
 def ck3_git_pull(mod_name: str) -> dict:
     """
+    DEPRECATED: Use ck3_git(command="pull", mod_name=...) instead.
+    
     Pull latest changes from remote for a live mod.
     
     Args:
@@ -3666,13 +4065,15 @@ def ck3_git_pull(mod_name: str) -> dict:
     return result
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_git(command="log")
 def ck3_git_log(
     mod_name: str,
     limit: int = 10,
     file_path: Optional[str] = None
 ) -> dict:
     """
+    DEPRECATED: Use ck3_git(command="log", mod_name=..., limit=...) instead.
+    
     Get git log for a live mod.
     
     Args:
@@ -3695,11 +4096,14 @@ def ck3_git_log(
 
 # ============================================================================
 # Playset Management Tools (JSON-based)
+# DEPRECATED: Use ck3_playset(command=...) instead
 # ============================================================================
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_playset(command="get")
 def ck3_get_active_playset() -> dict:
     """
+    DEPRECATED: Use ck3_playset(command="get") instead.
+    
     Get information about the currently active playset.
     
     Playsets are now stored as JSON files in the playsets/ folder.
@@ -3746,9 +4150,11 @@ def ck3_get_active_playset() -> dict:
     return result
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_playset(command="list")
 def ck3_list_playsets() -> dict:
     """
+    DEPRECATED: Use ck3_playset(command="list") instead.
+    
     List all available playsets from the playsets/ folder.
     
     Playsets are JSON files that define:
@@ -3781,9 +4187,11 @@ def ck3_list_playsets() -> dict:
     return result
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_playset(command="switch")
 def ck3_switch_playset(playset_name: str) -> dict:
     """
+    DEPRECATED: Use ck3_playset(command="switch", playset_name=...) instead.
+    
     Switch the active playset by name or file path.
     
     This changes which playset is used for all lens-scoped operations.
@@ -3998,7 +4406,7 @@ def ck3_search_mods(
     return {"results": results[:limit], "query": query}
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_playset(command="add_mod")
 def ck3_add_mod_to_playset(
     mod_identifier: str,
     position: Optional[int] = None,
@@ -4006,6 +4414,8 @@ def ck3_add_mod_to_playset(
     after_mod: Optional[str] = None
 ) -> dict:
     """
+    DEPRECATED: Use ck3_playset(command="add_mod", mod_name=...) instead.
+    
     Add a mod to the active playset, with full ingestion and symbol extraction.
     
     This is a comprehensive operation that:
@@ -4213,11 +4623,13 @@ def ck3_add_mod_to_playset(
     }
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_playset(command="remove_mod")
 def ck3_remove_mod_from_playset(
     mod_identifier: str
 ) -> dict:
     """
+    DEPRECATED: Use ck3_playset(command="remove_mod", mod_name=...) instead.
+    
     Remove a mod from the active playset.
     
     Note: This only removes from the playset, not from the database.
@@ -4281,13 +4693,15 @@ def ck3_remove_mod_from_playset(
     }
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_playset(command="create")
 def ck3_create_playset_from_indexed(
     playset_name: str | None = None,
     playset_file: str | None = None,
     set_active: bool = True
 ) -> dict:
     """
+    DEPRECATED: Use ck3_playset(command="create", name=...) instead.
+    
     Create a playset from already-indexed content in the database.
     
     This links existing content_versions to a new playset. Use this after
@@ -4472,7 +4886,7 @@ def ck3_create_playset_from_indexed(
     }
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_playset(command="import")
 def ck3_import_playset_from_launcher(
     launcher_json_path: str | None = None,
     launcher_json_content: str | None = None,
@@ -4481,6 +4895,8 @@ def ck3_import_playset_from_launcher(
     set_active: bool = True
 ) -> dict:
     """
+    DEPRECATED: Use ck3_playset(command="import", ...) instead.
+    
     Import a playset from CK3 Launcher JSON export.
     
     The launcher JSON can be exported from Paradox Launcher:
@@ -4637,7 +5053,7 @@ def ck3_import_playset_from_launcher(
     }
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_playset(command="reorder")
 def ck3_reorder_mod_in_playset(
     mod_identifier: str,
     new_position: int | None = None,
@@ -4645,6 +5061,8 @@ def ck3_reorder_mod_in_playset(
     after_mod: str | None = None
 ) -> dict:
     """
+    DEPRECATED: Use ck3_playset(command="reorder", mod_name=..., new_position=...) instead.
+    
     Move a mod to a new position in the active playset's load order.
     
     Args:
@@ -5677,11 +6095,14 @@ def ck3_get_game_log_categories() -> dict:
 
 # ============================================================================
 # Explorer Tools (for UI navigation)
+# DEPRECATED: Use ck3_playset, ck3_folder instead
 # ============================================================================
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_playset(command="mods")
 def ck3_get_playset_mods() -> dict:
     """
+    DEPRECATED: Use ck3_playset(command="mods") instead.
+    
     Get all mods in the active playset with load order.
     
     Returns list of mods with:
@@ -5727,9 +6148,11 @@ def ck3_get_playset_mods() -> dict:
     return {"mods": mods, "playset_id": playset_id}
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_folder(command="top_level")
 def ck3_get_top_level_folders() -> dict:
     """
+    DEPRECATED: Use ck3_folder(command="top_level") instead.
+    
     Get top-level folders across all mods in the active playset.
     
     Returns unique folder names with file counts.
@@ -5752,9 +6175,11 @@ def ck3_get_top_level_folders() -> dict:
     return {"folders": folders}
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_folder(command="mod_folders")
 def ck3_get_mod_folders(content_version_id: int) -> dict:
     """
+    DEPRECATED: Use ck3_folder(command="mod_folders", content_version_id=...) instead.
+    
     Get top-level folders within a specific mod.
     
     Args:
@@ -5778,7 +6203,7 @@ def ck3_get_mod_folders(content_version_id: int) -> dict:
     return {"folders": folders}
 
 
-@mcp.tool()
+# @mcp.tool()  # DEPRECATED - use ck3_folder(command="contents")
 def ck3_get_folder_contents(
     path: str,
     content_version_id: Optional[int] = None,
@@ -5789,6 +6214,8 @@ def ck3_get_folder_contents(
     file_type_filter: Optional[list[str]] = None
 ) -> dict:
     """
+    DEPRECATED: Use ck3_folder(command="contents", path=...) instead.
+    
     Get contents of a folder - subfolders and files.
     
     Args:

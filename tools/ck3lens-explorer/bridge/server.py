@@ -180,13 +180,8 @@ class CK3LensBridge:
                 "mod_root": str(Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"),
                 "playset_id": self.playset_id,
                 "playset_name": playset_name,
-                "live_mods": {
-                    "mods": [
-                        {"modId": "MSC", "name": "Mini Super Compatch", "path": "", "exists": True},
-                        {"modId": "MSCRE", "name": "MSCRE", "path": "", "exists": True},
-                        {"modId": "LRE", "name": "Lowborn Rise Expanded", "path": "", "exists": True}
-                    ]
-                }
+                # Live mods populated by list_live_mods - just return reference here
+                "live_mods": self.list_live_mods({})["live_mods"]
             }
         except Exception as e:
             return {
@@ -895,23 +890,26 @@ class CK3LensBridge:
         """List live mods that can be written to."""
         mod_root = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
         
-        live_mod_names = [
-            "Mini Super Compatch",
-            "MSCRE",
-            "Lowborn Rise Expanded"
-        ]
+        # Maps short ID -> (display_name, folder_name)
+        # TODO: Move to config file
+        live_mods_config = {
+            "MSC": ("Mini Super Compatch", "Mini Super Compatch"),
+            "MSCRE": ("MSC Religion Expanded", "MSCRE"),
+            "LRE": ("Lowborn Rise Expanded", "Lowborn Rise Expanded"),
+        }
         
         mods = []
-        for name in live_mod_names:
-            path = mod_root / name
+        for mod_id, (display_name, folder_name) in live_mods_config.items():
+            path = mod_root / folder_name
             mods.append({
-                "modId": name.replace(" ", "_"),
-                "name": name,
+                "mod_id": mod_id,
+                "name": display_name,
                 "path": str(path),
                 "exists": path.exists()
             })
         
         return {"live_mods": {"mods": mods}}
+
     
     def read_live_file(self, params: dict) -> dict:
         """Read file from live mod."""
@@ -1141,14 +1139,14 @@ class CK3LensBridge:
             # Build target path
             target_rel_path = str(source.parent / new_name)
             
-            # Get mod path
+            # Get mod path - maps short ID to folder path
+            # TODO: Move to config file and consolidate with live_mods_config
             mod_root = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
             mod_paths = {
-                "MSC": mod_root / "Mini Super Compatch",
-                "MSCRE": mod_root / "MSCRE",
-                "LRE": mod_root / "Lowborn Rise Expanded",
-                "MRP": mod_root / "More Raid and Prisoners",
-                "PVP2": mod_root / "PVP2",
+                "MSC": mod_root / "Mini Super Compatch",  # Mini Super Compatch
+                "MSCRE": mod_root / "MSCRE",  # MSC Religion Expanded
+                "LRE": mod_root / "Lowborn Rise Expanded",  # Lowborn Rise Expanded
+                "MRP": mod_root / "More Raid and Prisoners",  # More Raiding and Prisoners (1.18+)
             }
             
             mod_path = mod_paths.get(target_mod)

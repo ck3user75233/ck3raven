@@ -782,3 +782,1133 @@ def _conflict_report(
         }
     
     return result
+
+
+# ============================================================================
+# ck3_file - Unified File Operations
+# ============================================================================
+
+FileCommand = Literal["get", "read", "write", "edit", "delete", "rename", "refresh", "list"]
+
+
+def ck3_file_impl(
+    command: FileCommand,
+    # Path identification
+    path: str | None = None,
+    mod_name: str | None = None,
+    rel_path: str | None = None,
+    # For get (from DB)
+    include_ast: bool = False,
+    no_lens: bool = False,
+    # For read/write
+    content: str | None = None,
+    start_line: int = 1,
+    end_line: int | None = None,
+    max_bytes: int = 200000,
+    justification: str | None = None,
+    # For edit
+    old_content: str | None = None,
+    new_content: str | None = None,
+    # For rename
+    new_path: str | None = None,
+    # For write/edit
+    validate_syntax: bool = True,
+    # For list
+    path_prefix: str | None = None,
+    pattern: str | None = None,
+    # Dependencies (injected)
+    session=None,
+    db=None,
+    trace=None,
+    lens=None,
+) -> dict:
+    """
+    Unified file operations tool.
+    
+    Commands:
+    
+    command=get      → Get file content from database (path required)
+    command=read     → Read file from filesystem (path or mod_name+rel_path)
+    command=write    → Write file to live mod (mod_name, rel_path, content required)
+    command=edit     → Search-replace in live mod file (mod_name, rel_path, old_content, new_content)
+    command=delete   → Delete file from live mod (mod_name, rel_path required)
+    command=rename   → Rename/move file in live mod (mod_name, rel_path, new_path required)
+    command=refresh  → Re-sync file to database (mod_name, rel_path required)
+    command=list     → List files in live mod (mod_name required, path_prefix/pattern optional)
+    """
+    from pathlib import Path as P
+    
+    if command == "get":
+        return _file_get(path, include_ast, max_bytes, no_lens, db, trace, lens)
+    
+    elif command == "read":
+        if path:
+            return _file_read_raw(path, justification or "file read", start_line, end_line, trace)
+        elif mod_name and rel_path:
+            return _file_read_live(mod_name, rel_path, max_bytes, session, trace)
+        else:
+            return {"error": "Either 'path' or 'mod_name'+'rel_path' required for read"}
+    
+    elif command == "write":
+        if not all([mod_name, rel_path, content is not None]):
+            return {"error": "mod_name, rel_path, and content required for write"}
+        return _file_write(mod_name, rel_path, content, validate_syntax, session, trace)
+    
+    elif command == "edit":
+        if not all([mod_name, rel_path, old_content, new_content is not None]):
+            return {"error": "mod_name, rel_path, old_content, new_content required for edit"}
+        return _file_edit(mod_name, rel_path, old_content, new_content, validate_syntax, session, trace)
+    
+    elif command == "delete":
+        if not all([mod_name, rel_path]):
+            return {"error": "mod_name and rel_path required for delete"}
+        return _file_delete(mod_name, rel_path, session, trace)
+    
+    elif command == "rename":
+        if not all([mod_name, rel_path, new_path]):
+            return {"error": "mod_name, rel_path, new_path required for rename"}
+        return _file_rename(mod_name, rel_path, new_path, session, trace)
+    
+    elif command == "refresh":
+        if not all([mod_name, rel_path]):
+            return {"error": "mod_name and rel_path required for refresh"}
+        return _file_refresh(mod_name, rel_path, session, trace)
+    
+    elif command == "list":
+        if not mod_name:
+            return {"error": "mod_name required for list"}
+        return _file_list(mod_name, path_prefix, pattern, session, trace)
+    
+    return {"error": f"Unknown command: {command}"}
+
+
+def _file_get(path, include_ast, max_bytes, no_lens, db, trace, lens):
+    """Get file from database."""
+    if not path:
+        return {"error": "path required for get command"}
+    
+    result = db.get_file(lens if not no_lens else None, relpath=path, include_ast=include_ast)
+    
+    if trace:
+        trace.log("ck3lens.file.get", {"path": path, "include_ast": include_ast}, 
+                  {"found": result is not None})
+    
+    if result:
+        result["lens"] = lens.playset_name if lens and not no_lens else "ALL CONTENT"
+        return result
+    return {"error": f"File not found: {path}"}
+
+
+def _file_read_raw(path, justification, start_line, end_line, trace):
+    """Read file from filesystem."""
+    from pathlib import Path as P
+    
+    file_path = P(path)
+    
+    if trace:
+        trace.log("ck3lens.file.read", {"path": str(file_path), "justification": justification}, {})
+    
+    if not file_path.exists():
+        return {"success": False, "error": f"File not found: {path}"}
+    
+    if not file_path.is_file():
+        return {"success": False, "error": f"Not a file: {path}"}
+    
+    try:
+        content = file_path.read_text(encoding='utf-8', errors='replace')
+        lines = content.splitlines(keepends=True)
+        
+        # Apply line range
+        start_idx = max(0, start_line - 1)
+        end_idx = end_line if end_line else len(lines)
+        selected = lines[start_idx:end_idx]
+        
+        return {
+            "success": True,
+            "content": "".join(selected),
+            "lines_read": len(selected),
+            "total_lines": len(lines),
+            "start_line": start_line,
+            "end_line": end_idx,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def _file_read_live(mod_name, rel_path, max_bytes, session, trace):
+    """Read file from live mod."""
+    from ck3lens import live_mods
+    
+    result = live_mods.read_live_file(session, mod_name, rel_path, max_bytes)
+    
+    if trace:
+        trace.log("ck3lens.file.read_live", {"mod_name": mod_name, "rel_path": rel_path},
+                  {"success": result.get("success", False)})
+    
+    return result
+
+
+def _file_write(mod_name, rel_path, content, validate_syntax, session, trace):
+    """Write file to live mod."""
+    from ck3lens import live_mods
+    from ck3lens.validate import parse_content
+    
+    # Optional syntax validation
+    if validate_syntax and rel_path.endswith(".txt"):
+        parse_result = parse_content(content, rel_path)
+        if not parse_result["success"]:
+            if trace:
+                trace.log("ck3lens.file.write", {"mod_name": mod_name, "rel_path": rel_path},
+                          {"success": False, "reason": "syntax_error"})
+            return {
+                "success": False,
+                "error": "Syntax validation failed",
+                "parse_errors": parse_result["errors"]
+            }
+    
+    result = live_mods.write_file(session, mod_name, rel_path, content)
+    
+    # Auto-refresh in database
+    if result.get("success"):
+        db_refresh = _refresh_file_in_db_internal(mod_name, rel_path, content=content)
+        result["db_refresh"] = db_refresh
+    
+    if trace:
+        trace.log("ck3lens.file.write", {"mod_name": mod_name, "rel_path": rel_path},
+                  {"success": result.get("success", False)})
+    
+    return result
+
+
+def _file_edit(mod_name, rel_path, old_content, new_content, validate_syntax, session, trace):
+    """Edit file in live mod."""
+    from ck3lens import live_mods
+    from ck3lens.validate import parse_content
+    
+    result = live_mods.edit_file(session, mod_name, rel_path, old_content, new_content)
+    
+    updated_content = None
+    if result.get("success") and validate_syntax and rel_path.endswith(".txt"):
+        read_result = live_mods.read_live_file(session, mod_name, rel_path)
+        if read_result.get("success"):
+            updated_content = read_result["content"]
+            parse_result = parse_content(updated_content, rel_path)
+            result["syntax_valid"] = parse_result["success"]
+            if not parse_result["success"]:
+                result["syntax_warnings"] = parse_result["errors"]
+    
+    if result.get("success"):
+        if updated_content is None:
+            read_result = live_mods.read_live_file(session, mod_name, rel_path)
+            if read_result.get("success"):
+                updated_content = read_result["content"]
+        
+        if updated_content:
+            db_refresh = _refresh_file_in_db_internal(mod_name, rel_path, content=updated_content)
+            result["db_refresh"] = db_refresh
+    
+    if trace:
+        trace.log("ck3lens.file.edit", {"mod_name": mod_name, "rel_path": rel_path},
+                  {"success": result.get("success", False)})
+    
+    return result
+
+
+def _file_delete(mod_name, rel_path, session, trace):
+    """Delete file from live mod."""
+    from ck3lens import live_mods
+    
+    result = live_mods.delete_file(session, mod_name, rel_path)
+    
+    if result.get("success"):
+        db_refresh = _refresh_file_in_db_internal(mod_name, rel_path, deleted=True)
+        result["db_refresh"] = db_refresh
+    
+    if trace:
+        trace.log("ck3lens.file.delete", {"mod_name": mod_name, "rel_path": rel_path},
+                  {"success": result.get("success", False)})
+    
+    return result
+
+
+def _file_rename(mod_name, old_path, new_path, session, trace):
+    """Rename file in live mod."""
+    from ck3lens import live_mods
+    
+    result = live_mods.rename_file(session, mod_name, old_path, new_path)
+    
+    if result.get("success"):
+        _refresh_file_in_db_internal(mod_name, old_path, deleted=True)
+        new_content = live_mods.read_live_file(session, mod_name, new_path)
+        if new_content.get("success"):
+            db_refresh = _refresh_file_in_db_internal(mod_name, new_path, content=new_content["content"])
+            result["db_refresh"] = db_refresh
+    
+    if trace:
+        trace.log("ck3lens.file.rename", {"mod_name": mod_name, "old_path": old_path, "new_path": new_path},
+                  {"success": result.get("success", False)})
+    
+    return result
+
+
+def _file_refresh(mod_name, rel_path, session, trace):
+    """Refresh file in database."""
+    from ck3lens import live_mods
+    
+    read_result = live_mods.read_live_file(session, mod_name, rel_path)
+    
+    if not read_result.get("success"):
+        if not read_result.get("exists", True):
+            result = _refresh_file_in_db_internal(mod_name, rel_path, deleted=True)
+        else:
+            result = {"success": False, "error": read_result.get("error", "Failed to read file")}
+    else:
+        result = _refresh_file_in_db_internal(mod_name, rel_path, content=read_result["content"])
+    
+    if trace:
+        trace.log("ck3lens.file.refresh", {"mod_name": mod_name, "rel_path": rel_path},
+                  {"success": result.get("success", False)})
+    
+    return result
+
+
+def _file_list(mod_name, path_prefix, pattern, session, trace):
+    """List files in live mod."""
+    from ck3lens import live_mods
+    
+    result = live_mods.list_live_files(session, mod_name, path_prefix, pattern)
+    
+    if trace:
+        trace.log("ck3lens.file.list", {"mod_name": mod_name, "path_prefix": path_prefix},
+                  {"files_count": len(result.get("files", []))})
+    
+    return result
+
+
+def _refresh_file_in_db_internal(mod_name, rel_path, content=None, deleted=False):
+    """Internal helper to refresh file in database."""
+    try:
+        import sys
+        from pathlib import Path as P
+        project_root = P(__file__).parent.parent.parent.parent
+        if str(project_root) not in sys.path:
+            sys.path.insert(0, str(project_root))
+        
+        from builder.incremental import refresh_single_file, mark_file_deleted
+        from ck3raven.db.schema import get_connection, DEFAULT_DB_PATH
+        
+        conn = get_connection(DEFAULT_DB_PATH)
+        
+        if deleted:
+            return mark_file_deleted(conn, mod_name, rel_path)
+        else:
+            return refresh_single_file(conn, mod_name, rel_path, content=content)
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ============================================================================
+# ck3_folder - Unified Folder Operations
+# ============================================================================
+
+FolderCommand = Literal["list", "contents", "top_level", "mod_folders"]
+
+
+def ck3_folder_impl(
+    command: FolderCommand = "list",
+    # For list/contents
+    path: str | None = None,
+    justification: str | None = None,
+    # For mod_folders
+    content_version_id: int | None = None,
+    # For contents
+    folder_pattern: str | None = None,
+    text_search: str | None = None,
+    symbol_search: str | None = None,
+    mod_filter: list[str] | None = None,
+    file_type_filter: list[str] | None = None,
+    # Dependencies
+    db=None,
+    playset_id: int | None = None,
+    trace=None,
+) -> dict:
+    """
+    Unified folder operations tool.
+    
+    Commands:
+    
+    command=list        → List directory contents from filesystem (path required)
+    command=contents    → Get folder contents from database (path required)
+    command=top_level   → Get top-level folders in active playset
+    command=mod_folders → Get folders in specific mod (content_version_id required)
+    """
+    
+    if command == "list":
+        if not path:
+            return {"error": "path required for list command"}
+        return _folder_list_raw(path, justification or "folder listing", trace)
+    
+    elif command == "contents":
+        if not path:
+            return {"error": "path required for contents command"}
+        return _folder_contents(path, content_version_id, folder_pattern, text_search,
+                                symbol_search, mod_filter, file_type_filter, db, playset_id, trace)
+    
+    elif command == "top_level":
+        return _folder_top_level(db, playset_id, trace)
+    
+    elif command == "mod_folders":
+        if not content_version_id:
+            return {"error": "content_version_id required for mod_folders command"}
+        return _folder_mod_folders(content_version_id, db, trace)
+    
+    return {"error": f"Unknown command: {command}"}
+
+
+def _folder_list_raw(path, justification, trace):
+    """List directory from filesystem."""
+    from pathlib import Path as P
+    
+    dir_path = P(path)
+    
+    if trace:
+        trace.log("ck3lens.folder.list", {"path": str(dir_path), "justification": justification}, {})
+    
+    if not dir_path.exists():
+        return {"success": False, "error": f"Directory not found: {path}"}
+    
+    if not dir_path.is_dir():
+        return {"success": False, "error": f"Not a directory: {path}"}
+    
+    try:
+        entries = []
+        for item in sorted(dir_path.iterdir()):
+            entries.append({
+                "name": item.name,
+                "type": "directory" if item.is_dir() else "file",
+                "size": item.stat().st_size if item.is_file() else None,
+            })
+        
+        return {
+            "success": True,
+            "path": str(dir_path),
+            "entries": entries,
+            "count": len(entries),
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def _folder_contents(path, content_version_id, folder_pattern, text_search,
+                     symbol_search, mod_filter, file_type_filter, db, playset_id, trace):
+    """Get folder contents from database."""
+    # Normalize path
+    path = path.replace("\\", "/").strip("/")
+    
+    # Build query
+    conditions = ["pm.playset_id = ?", "pm.enabled = 1", "f.deleted = 0"]
+    params = [playset_id]
+    
+    if content_version_id:
+        conditions.append("f.content_version_id = ?")
+        params.append(content_version_id)
+    
+    if path:
+        conditions.append("f.relpath LIKE ?")
+        params.append(f"{path}/%")
+    
+    query = f"""
+        SELECT DISTINCT
+            CASE 
+                WHEN INSTR(SUBSTR(f.relpath, LENGTH(?) + 2), '/') > 0
+                THEN SUBSTR(SUBSTR(f.relpath, LENGTH(?) + 2), 1, 
+                            INSTR(SUBSTR(f.relpath, LENGTH(?) + 2), '/') - 1)
+                ELSE SUBSTR(f.relpath, LENGTH(?) + 2)
+            END as item_name,
+            CASE 
+                WHEN INSTR(SUBSTR(f.relpath, LENGTH(?) + 2), '/') > 0 THEN 1
+                ELSE 0
+            END as is_folder,
+            COUNT(*) as file_count
+        FROM files f
+        JOIN playset_mods pm ON f.content_version_id = pm.content_version_id
+        WHERE {" AND ".join(conditions)}
+        GROUP BY item_name, is_folder
+        ORDER BY is_folder DESC, item_name
+    """
+    
+    prefix_params = [path] * 5
+    
+    try:
+        rows = db.conn.execute(query, prefix_params + params).fetchall()
+        
+        entries = []
+        for row in rows:
+            if row['item_name']:
+                entries.append({
+                    "name": row['item_name'],
+                    "type": "folder" if row['is_folder'] else "file",
+                    "file_count": row['file_count'],
+                })
+        
+        if trace:
+            trace.log("ck3lens.folder.contents", {"path": path}, {"entries": len(entries)})
+        
+        return {
+            "path": path,
+            "entries": entries,
+            "count": len(entries),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _folder_top_level(db, playset_id, trace):
+    """Get top-level folders."""
+    rows = db.conn.execute("""
+        SELECT 
+            SUBSTR(f.relpath, 1, INSTR(f.relpath || '/', '/') - 1) as folder,
+            COUNT(*) as file_count
+        FROM files f
+        JOIN playset_mods pm ON f.content_version_id = pm.content_version_id
+        WHERE pm.playset_id = ? AND pm.enabled = 1 AND f.deleted = 0
+        GROUP BY folder
+        ORDER BY folder
+    """, (playset_id,)).fetchall()
+    
+    folders = [{"name": row['folder'], "fileCount": row['file_count']} 
+               for row in rows if row['folder']]
+    
+    if trace:
+        trace.log("ck3lens.folder.top_level", {}, {"folders": len(folders)})
+    
+    return {"folders": folders}
+
+
+def _folder_mod_folders(content_version_id, db, trace):
+    """Get folders in specific mod."""
+    rows = db.conn.execute("""
+        SELECT 
+            SUBSTR(f.relpath, 1, INSTR(f.relpath || '/', '/') - 1) as folder,
+            COUNT(*) as file_count
+        FROM files f
+        WHERE f.content_version_id = ? AND f.deleted = 0
+        GROUP BY folder
+        ORDER BY folder
+    """, (content_version_id,)).fetchall()
+    
+    folders = [{"name": row['folder'], "fileCount": row['file_count']} 
+               for row in rows if row['folder']]
+    
+    if trace:
+        trace.log("ck3lens.folder.mod_folders", {"cv_id": content_version_id}, {"folders": len(folders)})
+    
+    return {"folders": folders}
+
+
+# ============================================================================
+# ck3_playset - Unified Playset Operations
+# ============================================================================
+
+PlaysetCommand = Literal["get", "list", "switch", "mods", "add_mod", "remove_mod", "reorder", "create", "import"]
+
+
+def ck3_playset_impl(
+    command: PlaysetCommand = "get",
+    # For switch/add_mod/remove_mod/reorder
+    playset_name: str | None = None,
+    mod_name: str | None = None,
+    # For reorder
+    new_position: int | None = None,
+    # For create
+    name: str | None = None,
+    description: str | None = None,
+    vanilla_version_id: int | None = None,
+    mod_ids: list[int] | None = None,
+    # For import
+    launcher_playset_name: str | None = None,
+    # Dependencies
+    db=None,
+    playset_id: int | None = None,
+    trace=None,
+) -> dict:
+    """
+    Unified playset operations tool.
+    
+    Commands:
+    
+    command=get        → Get active playset info
+    command=list       → List all playsets
+    command=switch     → Switch to different playset (playset_name required)
+    command=mods       → Get mods in active playset
+    command=add_mod    → Add mod to playset (mod_name required)
+    command=remove_mod → Remove mod from playset (mod_name required)
+    command=reorder    → Change mod load order (mod_name, new_position required)
+    command=create     → Create new playset (name required)
+    command=import     → Import playset from CK3 launcher
+    """
+    
+    if command == "get":
+        return _playset_get(db, playset_id, trace)
+    
+    elif command == "list":
+        return _playset_list(db, trace)
+    
+    elif command == "switch":
+        if not playset_name:
+            return {"error": "playset_name required for switch command"}
+        return _playset_switch(playset_name, db, trace)
+    
+    elif command == "mods":
+        return _playset_mods(db, playset_id, trace)
+    
+    elif command == "add_mod":
+        if not mod_name:
+            return {"error": "mod_name required for add_mod command"}
+        return _playset_add_mod(mod_name, db, playset_id, trace)
+    
+    elif command == "remove_mod":
+        if not mod_name:
+            return {"error": "mod_name required for remove_mod command"}
+        return _playset_remove_mod(mod_name, db, playset_id, trace)
+    
+    elif command == "reorder":
+        if not mod_name or new_position is None:
+            return {"error": "mod_name and new_position required for reorder command"}
+        return _playset_reorder(mod_name, new_position, db, playset_id, trace)
+    
+    elif command == "create":
+        if not name:
+            return {"error": "name required for create command"}
+        return _playset_create(name, description, vanilla_version_id, mod_ids, db, trace)
+    
+    elif command == "import":
+        return _playset_import(launcher_playset_name, db, trace)
+    
+    return {"error": f"Unknown command: {command}"}
+
+
+def _playset_get(db, playset_id, trace):
+    """Get active playset info."""
+    row = db.conn.execute("""
+        SELECT p.*, 
+               (SELECT COUNT(*) FROM playset_mods pm WHERE pm.playset_id = p.playset_id AND pm.enabled = 1) as mod_count
+        FROM playsets p
+        WHERE p.playset_id = ?
+    """, (playset_id,)).fetchone()
+    
+    if not row:
+        return {"error": "No active playset"}
+    
+    result = {
+        "playset_id": row['playset_id'],
+        "name": row['name'],
+        "description": row['description'],
+        "mod_count": row['mod_count'],
+        "is_active": bool(row['is_active']),
+        "created_at": row['created_at'],
+        "updated_at": row['updated_at'],
+    }
+    
+    if trace:
+        trace.log("ck3lens.playset.get", {}, {"playset_id": playset_id})
+    
+    return result
+
+
+def _playset_list(db, trace):
+    """List all playsets."""
+    rows = db.conn.execute("""
+        SELECT p.*, 
+               (SELECT COUNT(*) FROM playset_mods pm WHERE pm.playset_id = p.playset_id AND pm.enabled = 1) as mod_count
+        FROM playsets p
+        ORDER BY p.is_active DESC, p.name
+    """).fetchall()
+    
+    playsets = [{
+        "playset_id": row['playset_id'],
+        "name": row['name'],
+        "description": row['description'],
+        "mod_count": row['mod_count'],
+        "is_active": bool(row['is_active']),
+    } for row in rows]
+    
+    if trace:
+        trace.log("ck3lens.playset.list", {}, {"count": len(playsets)})
+    
+    return {"playsets": playsets}
+
+
+def _playset_switch(playset_name, db, trace):
+    """Switch to different playset."""
+    row = db.conn.execute(
+        "SELECT playset_id FROM playsets WHERE name = ?", (playset_name,)
+    ).fetchone()
+    
+    if not row:
+        return {"error": f"Playset not found: {playset_name}"}
+    
+    new_id = row['playset_id']
+    
+    # Deactivate all, activate target
+    db.conn.execute("UPDATE playsets SET is_active = 0")
+    db.conn.execute("UPDATE playsets SET is_active = 1 WHERE playset_id = ?", (new_id,))
+    db.conn.commit()
+    
+    if trace:
+        trace.log("ck3lens.playset.switch", {"name": playset_name}, {"new_id": new_id})
+    
+    return {"success": True, "playset_id": new_id, "name": playset_name}
+
+
+def _playset_mods(db, playset_id, trace):
+    """Get mods in playset."""
+    rows = db.conn.execute("""
+        SELECT cv.name, cv.content_version_id, pm.load_order_index, pm.enabled,
+               cv.kind, cv.source_path,
+               (SELECT COUNT(*) FROM files f WHERE f.content_version_id = cv.content_version_id AND f.deleted = 0) as file_count
+        FROM playset_mods pm
+        JOIN content_versions cv ON pm.content_version_id = cv.content_version_id
+        WHERE pm.playset_id = ?
+        ORDER BY pm.load_order_index
+    """, (playset_id,)).fetchall()
+    
+    mods = [{
+        "name": row['name'],
+        "content_version_id": row['content_version_id'],
+        "load_order": row['load_order_index'],
+        "enabled": bool(row['enabled']),
+        "kind": row['kind'],
+        "file_count": row['file_count'],
+        "source_path": row['source_path'],
+    } for row in rows]
+    
+    if trace:
+        trace.log("ck3lens.playset.mods", {}, {"count": len(mods)})
+    
+    return {"mods": mods, "playset_id": playset_id}
+
+
+def _playset_add_mod(mod_name, db, playset_id, trace):
+    """Add mod to playset."""
+    # Find mod
+    row = db.conn.execute(
+        "SELECT content_version_id FROM content_versions WHERE name = ?", (mod_name,)
+    ).fetchone()
+    
+    if not row:
+        return {"error": f"Mod not found in database: {mod_name}"}
+    
+    cv_id = row['content_version_id']
+    
+    # Check if already in playset
+    existing = db.conn.execute("""
+        SELECT 1 FROM playset_mods WHERE playset_id = ? AND content_version_id = ?
+    """, (playset_id, cv_id)).fetchone()
+    
+    if existing:
+        return {"error": f"Mod already in playset: {mod_name}"}
+    
+    # Get next load order
+    max_order = db.conn.execute("""
+        SELECT COALESCE(MAX(load_order_index), -1) + 1 as next_order
+        FROM playset_mods WHERE playset_id = ?
+    """, (playset_id,)).fetchone()['next_order']
+    
+    # Insert
+    db.conn.execute("""
+        INSERT INTO playset_mods (playset_id, content_version_id, load_order_index, enabled)
+        VALUES (?, ?, ?, 1)
+    """, (playset_id, cv_id, max_order))
+    db.conn.commit()
+    
+    if trace:
+        trace.log("ck3lens.playset.add_mod", {"mod": mod_name}, {"success": True})
+    
+    return {"success": True, "mod_name": mod_name, "load_order": max_order}
+
+
+def _playset_remove_mod(mod_name, db, playset_id, trace):
+    """Remove mod from playset."""
+    row = db.conn.execute(
+        "SELECT content_version_id FROM content_versions WHERE name = ?", (mod_name,)
+    ).fetchone()
+    
+    if not row:
+        return {"error": f"Mod not found: {mod_name}"}
+    
+    cv_id = row['content_version_id']
+    
+    result = db.conn.execute("""
+        DELETE FROM playset_mods WHERE playset_id = ? AND content_version_id = ?
+    """, (playset_id, cv_id))
+    db.conn.commit()
+    
+    if result.rowcount == 0:
+        return {"error": f"Mod not in playset: {mod_name}"}
+    
+    if trace:
+        trace.log("ck3lens.playset.remove_mod", {"mod": mod_name}, {"success": True})
+    
+    return {"success": True, "mod_name": mod_name}
+
+
+def _playset_reorder(mod_name, new_position, db, playset_id, trace):
+    """Reorder mod in playset."""
+    row = db.conn.execute("""
+        SELECT pm.load_order_index, cv.content_version_id
+        FROM playset_mods pm
+        JOIN content_versions cv ON pm.content_version_id = cv.content_version_id
+        WHERE pm.playset_id = ? AND cv.name = ?
+    """, (playset_id, mod_name)).fetchone()
+    
+    if not row:
+        return {"error": f"Mod not in playset: {mod_name}"}
+    
+    old_position = row['load_order_index']
+    cv_id = row['content_version_id']
+    
+    if old_position == new_position:
+        return {"success": True, "mod_name": mod_name, "position": new_position, "message": "No change needed"}
+    
+    # Shift other mods
+    if new_position < old_position:
+        db.conn.execute("""
+            UPDATE playset_mods
+            SET load_order_index = load_order_index + 1
+            WHERE playset_id = ? AND load_order_index >= ? AND load_order_index < ?
+        """, (playset_id, new_position, old_position))
+    else:
+        db.conn.execute("""
+            UPDATE playset_mods
+            SET load_order_index = load_order_index - 1
+            WHERE playset_id = ? AND load_order_index > ? AND load_order_index <= ?
+        """, (playset_id, old_position, new_position))
+    
+    # Set new position
+    db.conn.execute("""
+        UPDATE playset_mods SET load_order_index = ? 
+        WHERE playset_id = ? AND content_version_id = ?
+    """, (new_position, playset_id, cv_id))
+    db.conn.commit()
+    
+    if trace:
+        trace.log("ck3lens.playset.reorder", {"mod": mod_name, "old": old_position, "new": new_position},
+                  {"success": True})
+    
+    return {"success": True, "mod_name": mod_name, "old_position": old_position, "new_position": new_position}
+
+
+def _playset_create(name, description, vanilla_version_id, mod_ids, db, trace):
+    """Create new playset."""
+    from datetime import datetime
+    
+    # Check name doesn't exist
+    existing = db.conn.execute(
+        "SELECT 1 FROM playsets WHERE name = ?", (name,)
+    ).fetchone()
+    
+    if existing:
+        return {"error": f"Playset already exists: {name}"}
+    
+    now = datetime.now().isoformat()
+    
+    cursor = db.conn.execute("""
+        INSERT INTO playsets (name, description, vanilla_version_id, is_active, created_at, updated_at)
+        VALUES (?, ?, ?, 0, ?, ?)
+    """, (name, description or "", vanilla_version_id or 1, now, now))
+    
+    new_id = cursor.lastrowid
+    
+    # Add mods if provided
+    if mod_ids:
+        for i, cv_id in enumerate(mod_ids):
+            db.conn.execute("""
+                INSERT INTO playset_mods (playset_id, content_version_id, load_order_index, enabled)
+                VALUES (?, ?, ?, 1)
+            """, (new_id, cv_id, i))
+    
+    db.conn.commit()
+    
+    if trace:
+        trace.log("ck3lens.playset.create", {"name": name}, {"new_id": new_id})
+    
+    return {"success": True, "playset_id": new_id, "name": name}
+
+
+def _playset_import(launcher_playset_name, db, trace):
+    """Import playset from CK3 launcher."""
+    # This would need access to launcher database - placeholder
+    return {"error": "Import from launcher not yet implemented in unified tool"}
+
+
+# ============================================================================
+# ck3_git - Unified Git Operations
+# ============================================================================
+
+GitCommand = Literal["status", "diff", "add", "commit", "push", "pull", "log"]
+
+
+def ck3_git_impl(
+    command: GitCommand,
+    mod_name: str,
+    # For diff
+    file_path: str | None = None,
+    # For add
+    files: list[str] | None = None,
+    all_files: bool = False,
+    # For commit
+    message: str | None = None,
+    # For log
+    limit: int = 10,
+    # Dependencies
+    session=None,
+    trace=None,
+) -> dict:
+    """
+    Unified git operations for live mods.
+    
+    Commands:
+    
+    command=status → Get git status (mod_name required)
+    command=diff   → Get git diff (mod_name required, file_path optional)
+    command=add    → Stage files (mod_name required, files or all_files)
+    command=commit → Commit staged changes (mod_name, message required)
+    command=push   → Push to remote (mod_name required)
+    command=pull   → Pull from remote (mod_name required)
+    command=log    → Get commit log (mod_name required, limit optional)
+    """
+    from ck3lens import git_ops
+    
+    # Validate mod access
+    live_mod = session.get_live_mod(mod_name) if session else None
+    if not live_mod:
+        return {"error": f"Not a live mod: {mod_name}"}
+    
+    mod_path = str(live_mod.path)
+    
+    if command == "status":
+        result = git_ops.git_status(mod_path)
+    
+    elif command == "diff":
+        result = git_ops.git_diff(mod_path, file_path)
+    
+    elif command == "add":
+        if all_files:
+            result = git_ops.git_add(mod_path, ["."])
+        elif files:
+            result = git_ops.git_add(mod_path, files)
+        else:
+            return {"error": "Either 'files' or 'all_files=true' required for add"}
+    
+    elif command == "commit":
+        if not message:
+            return {"error": "message required for commit"}
+        result = git_ops.git_commit(mod_path, message)
+    
+    elif command == "push":
+        result = git_ops.git_push(mod_path)
+    
+    elif command == "pull":
+        result = git_ops.git_pull(mod_path)
+    
+    elif command == "log":
+        result = git_ops.git_log(mod_path, limit)
+    
+    else:
+        return {"error": f"Unknown command: {command}"}
+    
+    if trace:
+        trace.log(f"ck3lens.git.{command}", {"mod": mod_name}, 
+                  {"success": result.get("success", "error" not in result)})
+    
+    return result
+
+
+# ============================================================================
+# ck3_validate - Unified Validation Operations
+# ============================================================================
+
+ValidateTarget = Literal["syntax", "python", "references", "bundle", "policy"]
+
+
+def ck3_validate_impl(
+    target: ValidateTarget,
+    # For syntax/python
+    content: str | None = None,
+    file_path: str | None = None,
+    # For references
+    symbol_name: str | None = None,
+    symbol_type: str | None = None,
+    # For bundle
+    artifact_bundle: dict | None = None,
+    # For policy
+    mode: str | None = None,
+    trace_path: str | None = None,
+    # Dependencies
+    db=None,
+    trace=None,
+) -> dict:
+    """
+    Unified validation tool.
+    
+    Targets:
+    
+    target=syntax     → Validate CK3 script syntax (content required)
+    target=python     → Check Python syntax (content or file_path required)
+    target=references → Validate symbol references (symbol_name required)
+    target=bundle     → Validate artifact bundle (artifact_bundle required)
+    target=policy     → Validate against policy rules (mode required)
+    """
+    
+    if target == "syntax":
+        if not content:
+            return {"error": "content required for syntax validation"}
+        return _validate_syntax(content, file_path or "inline.txt", trace)
+    
+    elif target == "python":
+        return _validate_python(content, file_path, trace)
+    
+    elif target == "references":
+        if not symbol_name:
+            return {"error": "symbol_name required for references validation"}
+        return _validate_references(symbol_name, symbol_type, db, trace)
+    
+    elif target == "bundle":
+        if not artifact_bundle:
+            return {"error": "artifact_bundle required for bundle validation"}
+        return _validate_bundle(artifact_bundle, trace)
+    
+    elif target == "policy":
+        if not mode:
+            return {"error": "mode required for policy validation"}
+        return _validate_policy(mode, trace_path, trace)
+    
+    return {"error": f"Unknown target: {target}"}
+
+
+def _validate_syntax(content, filename, trace):
+    """Validate CK3 script syntax."""
+    from ck3lens.validate import parse_content
+    
+    result = parse_content(content, filename)
+    
+    if trace:
+        trace.log("ck3lens.validate.syntax", {"filename": filename},
+                  {"valid": result.get("success", False)})
+    
+    return {
+        "valid": result.get("success", False),
+        "errors": result.get("errors", []),
+        "node_count": result.get("node_count", 0),
+    }
+
+
+def _validate_python(content, file_path, trace):
+    """Validate Python syntax."""
+    import ast
+    from pathlib import Path as P
+    
+    if content:
+        source = content
+        filename = file_path or "<string>"
+    elif file_path:
+        path = P(file_path)
+        if not path.exists():
+            return {"valid": False, "error": f"File not found: {file_path}"}
+        source = path.read_text(encoding='utf-8')
+        filename = file_path
+    else:
+        return {"error": "Either content or file_path required"}
+    
+    try:
+        ast.parse(source, filename)
+        
+        if trace:
+            trace.log("ck3lens.validate.python", {"filename": filename}, {"valid": True})
+        
+        return {"valid": True}
+    except SyntaxError as e:
+        if trace:
+            trace.log("ck3lens.validate.python", {"filename": filename}, {"valid": False})
+        
+        return {
+            "valid": False,
+            "error": str(e),
+            "line": e.lineno,
+            "column": e.offset,
+        }
+
+
+def _validate_references(symbol_name, symbol_type, db, trace):
+    """Validate symbol references."""
+    # Look up symbol
+    conditions = ["s.name = ?"]
+    params = [symbol_name]
+    
+    if symbol_type:
+        conditions.append("s.symbol_type = ?")
+        params.append(symbol_type)
+    
+    rows = db.conn.execute(f"""
+        SELECT s.*, f.relpath
+        FROM symbols s
+        JOIN files f ON s.file_id = f.file_id
+        WHERE {" AND ".join(conditions)}
+    """, params).fetchall()
+    
+    if trace:
+        trace.log("ck3lens.validate.references", {"symbol": symbol_name},
+                  {"found": len(rows) > 0})
+    
+    if not rows:
+        return {"valid": False, "error": f"Symbol not found: {symbol_name}"}
+    
+    return {
+        "valid": True,
+        "symbol_name": symbol_name,
+        "definitions": [{
+            "file": row['relpath'],
+            "line": row['line_number'],
+            "type": row['symbol_type'],
+        } for row in rows],
+    }
+
+
+def _validate_bundle(artifact_bundle, trace):
+    """Validate artifact bundle."""
+    from ck3lens.validate import validate_artifact_bundle
+    from ck3lens.contracts import ArtifactBundle
+    
+    try:
+        bundle = ArtifactBundle.from_dict(artifact_bundle)
+        result = validate_artifact_bundle(bundle)
+        
+        if trace:
+            trace.log("ck3lens.validate.bundle", {}, {"valid": not result.get("errors")})
+        
+        return result
+    except Exception as e:
+        return {"valid": False, "error": str(e)}
+
+
+def _validate_policy(mode, trace_path, trace_obj):
+    """Validate against policy rules."""
+    from ck3lens.policy import validate_for_mode
+    from pathlib import Path as P
+    
+    if trace_path:
+        path = P(trace_path)
+        if not path.exists():
+            return {"error": f"Trace file not found: {trace_path}"}
+        trace_data = path.read_text()
+    else:
+        trace_data = ""
+    
+    result = validate_for_mode(mode, trace_data)
+    
+    if trace_obj:
+        trace_obj.log("ck3lens.validate.policy", {"mode": mode},
+                      {"valid": result.get("valid", False)})
+    
+    return result
