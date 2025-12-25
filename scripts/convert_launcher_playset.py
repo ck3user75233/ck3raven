@@ -21,7 +21,7 @@ LOCAL_MODS = [
     ("Lowborn Rise Expanded", "Lowborn Rise Expanded"),
     ("More Raid and Prisoners", "More Raid and Prisoners"),
     ("Mini Super Compatch", "Mini Super Compatch"),
-    ("MSCRE", "MSCRE"),
+    ("MSC Religion Expanded", "MSCRE"),
     ("VanillaPatch", "VanillaPatch"),
 ]
 

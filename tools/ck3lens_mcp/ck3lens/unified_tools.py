@@ -1912,3 +1912,136 @@ def _validate_policy(mode, trace_path, trace_obj):
                       {"valid": result.get("valid", False)})
     
     return result
+
+
+# =============================================================================
+# ck3_vscode - VS Code IPC operations
+# =============================================================================
+
+VSCodeCommand = Literal[
+    "ping",
+    "diagnostics",
+    "all_diagnostics",
+    "errors_summary",
+    "validate_file",
+    "open_files",
+    "active_file",
+    "status"
+]
+
+
+def ck3_vscode_impl(
+    command: VSCodeCommand = "status",
+    # For diagnostics/validate_file
+    path: str | None = None,
+    # For all_diagnostics
+    severity: str | None = None,
+    source: str | None = None,
+    limit: int = 50,
+    # Dependencies
+    trace=None,
+) -> dict:
+    """
+    Unified VS Code IPC operations tool.
+    
+    Connects to VS Code extension's diagnostics server to access IDE APIs.
+    Requires VS Code to be running with CK3 Lens extension active.
+    
+    Commands:
+    
+    command=ping           → Test connection to VS Code
+    command=diagnostics    → Get diagnostics for a file (path required)
+    command=all_diagnostics → Get diagnostics for all files
+    command=errors_summary → Get workspace error summary
+    command=validate_file  → Trigger validation for a file (path required)
+    command=open_files     → List currently open files
+    command=active_file    → Get active file info with diagnostics
+    command=status         → Check IPC server status
+    
+    Args:
+        command: Operation to perform
+        path: File path (for diagnostics/validate_file)
+        severity: Filter by severity ('error', 'warning', 'info', 'hint')
+        source: Filter by source (e.g., 'Pylance', 'CK3 Lens')
+        limit: Max files to return for all_diagnostics
+    
+    Returns:
+        Dict with results based on command
+    """
+    from ck3lens.ipc_client import VSCodeIPCClient, VSCodeIPCError, is_vscode_available
+    
+    if command == "status":
+        available = is_vscode_available()
+        return {
+            "available": available,
+            "message": "VS Code IPC server is running" if available else "VS Code IPC server not available"
+        }
+    
+    try:
+        with VSCodeIPCClient() as client:
+            if command == "ping":
+                result = client.ping()
+                if trace:
+                    trace.log("ck3lens.vscode.ping", {}, {"ok": True})
+                return result
+            
+            elif command == "diagnostics":
+                if not path:
+                    return {"error": "path required for diagnostics command"}
+                result = client.get_diagnostics(path)
+                if trace:
+                    trace.log("ck3lens.vscode.diagnostics", {"path": path},
+                              {"count": len(result.get("diagnostics", []))})
+                return result
+            
+            elif command == "all_diagnostics":
+                result = client.get_all_diagnostics(
+                    severity=severity,
+                    source=source,
+                    limit=limit
+                )
+                if trace:
+                    trace.log("ck3lens.vscode.all_diagnostics",
+                              {"severity": severity, "source": source},
+                              {"files": result.get("fileCount", 0)})
+                return result
+            
+            elif command == "errors_summary":
+                result = client.get_workspace_errors()
+                if trace:
+                    trace.log("ck3lens.vscode.errors_summary", {},
+                              {"errors": result.get("summary", {}).get("errors", 0)})
+                return result
+            
+            elif command == "validate_file":
+                if not path:
+                    return {"error": "path required for validate_file command"}
+                result = client.validate_file(path)
+                if trace:
+                    trace.log("ck3lens.vscode.validate_file", {"path": path},
+                              {"count": len(result.get("diagnostics", []))})
+                return result
+            
+            elif command == "open_files":
+                result = client.get_open_files()
+                if trace:
+                    trace.log("ck3lens.vscode.open_files", {},
+                              {"count": result.get("count", 0)})
+                return result
+            
+            elif command == "active_file":
+                result = client.get_active_file()
+                if trace:
+                    trace.log("ck3lens.vscode.active_file", {},
+                              {"active": result.get("active", False)})
+                return result
+            
+            return {"error": f"Unknown command: {command}"}
+            
+    except VSCodeIPCError as e:
+        return {
+            "error": True,
+            "message": str(e),
+            "suggestion": "Ensure VS Code is running with CK3 Lens extension active",
+            "help": "The VS Code IPC server starts automatically when CK3 Lens extension activates"
+        }

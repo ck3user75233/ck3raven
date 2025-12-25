@@ -70,18 +70,13 @@ DEFAULT_DB_PATH = Path.home() / ".ck3raven" / "ck3raven.db"
 # Whitelisted live mods (agent can write to these)
 DEFAULT_LIVE_MODS = [
     LiveMod(
-        mod_id="PVP2",
-        name="PVP2",
-        path=DEFAULT_CK3_MOD_DIR / "PVP2"
-    ),
-    LiveMod(
         mod_id="MSC",
         name="Mini Super Compatch",
         path=DEFAULT_CK3_MOD_DIR / "Mini Super Compatch"
     ),
     LiveMod(
         mod_id="MSCRE",
-        name="MSCRE",
+        name="MSC Religion Expanded",
         path=DEFAULT_CK3_MOD_DIR / "MSCRE"
     ),
     LiveMod(

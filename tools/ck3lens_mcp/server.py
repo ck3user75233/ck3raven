@@ -1531,6 +1531,62 @@ def ck3_validate(
 
 
 # ============================================================================
+# VS Code IPC Operations
+# ============================================================================
+
+@mcp.tool()
+def ck3_vscode(
+    command: Literal["ping", "diagnostics", "all_diagnostics", "errors_summary", 
+                     "validate_file", "open_files", "active_file", "status"] = "status",
+    # For diagnostics/validate_file
+    path: str | None = None,
+    # For all_diagnostics
+    severity: str | None = None,
+    source: str | None = None,
+    limit: int = 50,
+) -> dict:
+    """
+    Access VS Code IDE APIs via IPC connection.
+    
+    Connects to VS Code extension's diagnostics server to query IDE state,
+    get Pylance/language server diagnostics, and more.
+    
+    Commands:
+    
+    command=status         → Check if VS Code IPC server is available
+    command=ping           → Test connection to VS Code
+    command=diagnostics    → Get diagnostics for a file (path required)
+    command=all_diagnostics → Get diagnostics for all open files
+    command=errors_summary → Get workspace error summary
+    command=validate_file  → Trigger validation for a file (path required)
+    command=open_files     → List currently open files in VS Code
+    command=active_file    → Get active file info with diagnostics
+    
+    Args:
+        command: Operation to perform
+        path: Absolute file path (for diagnostics/validate_file)
+        severity: Filter by severity ('error', 'warning', 'info', 'hint')
+        source: Filter by source (e.g., 'Pylance', 'CK3 Lens')
+        limit: Max files to return for all_diagnostics
+    
+    Returns:
+        Dict with results based on command. Returns helpful error if VS Code not available.
+    """
+    from ck3lens.unified_tools import ck3_vscode_impl
+    
+    trace = _get_trace()
+    
+    return ck3_vscode_impl(
+        command=command,
+        path=path,
+        severity=severity,
+        source=source,
+        limit=limit,
+        trace=trace,
+    )
+
+
+# ============================================================================
 # Work Contract Management (CLW)
 # ============================================================================
 

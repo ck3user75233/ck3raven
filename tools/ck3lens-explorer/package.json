@@ -526,6 +526,11 @@
           "default": "info",
           "description": "Logging level for CK3 Lens"
         },
+        "ck3lens.ipcPort": {
+          "type": "number",
+          "default": 9847,
+          "description": "TCP port for diagnostics IPC server (for MCP tool access to IDE APIs)"
+        },
         "ck3lens.widget.enabled": {
           "type": "boolean",
           "default": true,

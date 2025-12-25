@@ -26,12 +26,14 @@ import { LensStatusBar } from './widget/statusBar';
 import { Logger } from './utils/logger';
 import { SetupWizard, showSetupStatus } from './setup/setupWizard';
 import { registerMcpServerProvider, CK3LensMcpServerProvider } from './mcp/mcpServerProvider';
+import { DiagnosticsServer } from './ipc/diagnosticsServer';
 
 // Global extension state
 let session: CK3LensSession | undefined;
 let pythonBridge: PythonBridge | undefined;
 let statusBar: LensStatusBar | undefined;
 let mcpServerProvider: CK3LensMcpServerProvider | undefined;
+let diagnosticsServer: DiagnosticsServer | undefined;
 let logger: Logger;
 let outputChannel: vscode.OutputChannel;
 let diagnosticCollection: vscode.DiagnosticCollection;
@@ -148,6 +150,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (vscode.workspace.getConfiguration('ck3lens').get('enableRealTimeLinting', true)) {
         registerFileWatchers(context, lintingProvider);
     }
+
+    // Start the IPC diagnostics server for MCP tool access
+    diagnosticsServer = new DiagnosticsServer(logger);
+    context.subscriptions.push(diagnosticsServer);
+    diagnosticsServer.start().then(() => {
+        logger.info(`IPC diagnostics server started on port ${diagnosticsServer?.getPort()}`);
+    }).catch(err => {
+        logger.error('Failed to start IPC diagnostics server', err);
+    });
 
     logger.info('CK3 Lens Explorer activated successfully');
 
