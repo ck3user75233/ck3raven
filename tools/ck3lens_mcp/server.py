@@ -4652,6 +4652,142 @@ def ck3_read_log(
         return {"error": str(e)}
 
 
+@mcp.tool()
+def ck3_get_game_log_errors(
+    category: str | None = None,
+    limit: int = 100,
+) -> dict:
+    """
+    Parse and get errors from game.log with categorization.
+    
+    game.log contains runtime errors during game startup and play,
+    including casus belli errors, decision errors, culture/religion
+    issues, building gfx errors, etc.
+    
+    Args:
+        category: Filter by category (e.g., "culture_error", "building_error")
+        limit: Maximum results
+    
+    Returns:
+        Parsed and categorized errors from game.log
+    """
+    from ck3raven.analyzers.log_parser import CK3LogParser, LogType
+    
+    parser = CK3LogParser()
+    
+    try:
+        count = parser.parse_game_log()
+    except FileNotFoundError:
+        return {"error": "game.log not found"}
+    
+    entries = parser.entries[LogType.GAME]
+    
+    if category:
+        entries = [e for e in entries if e.category == category]
+    
+    return {
+        "total_parsed": count,
+        "filtered_count": len(entries[:limit]),
+        "summary": parser.get_game_log_summary(),
+        "errors": [e.to_dict() for e in entries[:limit]],
+    }
+
+
+@mcp.tool()
+def ck3_get_debug_info() -> dict:
+    """
+    Extract system and mod information from debug.log.
+    
+    Returns:
+        - System info (GPU, architecture, worker threads)
+        - DLCs enabled
+        - Mods enabled/disabled
+    """
+    from ck3raven.analyzers.log_parser import CK3LogParser
+    
+    parser = CK3LogParser()
+    
+    try:
+        parser.parse_debug_log(extract_system_info=True)
+    except FileNotFoundError:
+        return {"error": "debug.log not found"}
+    
+    return parser.get_debug_info_summary()
+
+
+@mcp.tool()
+def ck3_search_game_log(
+    query: str,
+    limit: int = 50,
+) -> dict:
+    """
+    Search game.log errors by message or file path.
+    
+    Args:
+        query: Search query (case-insensitive)
+        limit: Maximum results
+    
+    Returns:
+        Matching errors from game.log
+    """
+    from ck3raven.analyzers.log_parser import CK3LogParser, LogType
+    
+    parser = CK3LogParser()
+    
+    try:
+        parser.parse_game_log()
+    except FileNotFoundError:
+        return {"error": "game.log not found"}
+    
+    entries = parser.search_entries(query, log_type=LogType.GAME, limit=limit)
+    
+    return {
+        "query": query,
+        "count": len(entries),
+        "errors": [e.to_dict() for e in entries],
+    }
+
+
+@mcp.tool()
+def ck3_get_game_log_categories() -> dict:
+    """
+    Get all error categories found in game.log with counts.
+    
+    Useful for understanding what types of errors exist and
+    deciding which to focus on fixing.
+    
+    Returns:
+        Category breakdown with counts and descriptions
+    """
+    from ck3raven.analyzers.log_parser import CK3LogParser, LogType, GAME_LOG_CATEGORIES
+    
+    parser = CK3LogParser()
+    
+    try:
+        parser.parse_game_log()
+    except FileNotFoundError:
+        return {"error": "game.log not found"}
+    
+    stats = parser.stats.get(LogType.GAME, {})
+    by_category = dict(stats.get('by_category', {}).most_common())
+    
+    # Add descriptions
+    category_info = {name: desc for name, _, _, desc in GAME_LOG_CATEGORIES}
+    
+    categories = []
+    for cat, count in by_category.items():
+        categories.append({
+            "category": cat,
+            "count": count,
+            "description": category_info.get(cat, "Other/uncategorized errors"),
+        })
+    
+    return {
+        "total_errors": stats.get('total', 0),
+        "categories": categories,
+    }
+
+
 # ============================================================================
 # Explorer Tools (for UI navigation)
 # ============================================================================

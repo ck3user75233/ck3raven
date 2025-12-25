@@ -299,8 +299,8 @@ agents:
           - Streaming extraction that reads only needed fields
           - Purpose-built mini-parsers for specific lookup formats
           
-          Example: Dynasty files (id = { name = "x" }) can be parsed with
-          simple regex or line scanning, not full AST construction.
+          "Example: Dynasty files (id = { name = x }) can be parsed with
+          simple regex or line scanning, not full AST construction."
         enforcement_stage: code_review
         severity: error
         forbidden_patterns:
