@@ -1199,6 +1199,8 @@ def ck3_file(
     new_path: str | None = None,
     # For write/edit
     validate_syntax: bool = True,
+    # For policy-gated raw writes
+    token_id: str | None = None,
     # For list
     path_prefix: str | None = None,
     pattern: str | None = None,
@@ -1210,12 +1212,16 @@ def ck3_file(
     
     command=get      → Get file content from database (path required)
     command=read     → Read file from filesystem (path or mod_name+rel_path)
-    command=write    → Write file to live mod (mod_name, rel_path, content required)
+    command=write    → Write file (path for raw write, or mod_name+rel_path for mod)
     command=edit     → Search-replace in live mod file (mod_name, rel_path, old_content, new_content)
     command=delete   → Delete file from live mod (mod_name, rel_path required)
     command=rename   → Rename/move file in live mod (mod_name, rel_path, new_path required)
     command=refresh  → Re-sync file to database (mod_name, rel_path required)
     command=list     → List files in live mod (mod_name required, path_prefix/pattern optional)
+    
+    For write command with raw path:
+    - ck3lens mode: DENIED (must use mod_name+rel_path)
+    - ck3raven-dev mode: Allowed with active contract or token
     
     Args:
         command: Operation to perform
@@ -1262,6 +1268,7 @@ def ck3_file(
         new_content=new_content,
         new_path=new_path,
         validate_syntax=validate_syntax,
+        token_id=token_id,
         path_prefix=path_prefix,
         pattern=pattern,
         session=session,
@@ -1917,14 +1924,41 @@ def ck3_exec(
     
     # Actually execute
     try:
-        proc = subprocess.run(
-            command,
-            shell=True,
-            cwd=working_dir,
-            capture_output=True,
-            text=True,
-            timeout=300,  # 5 minute timeout
-        )
+        import platform
+        
+        # Environment variables to prevent git from hanging
+        exec_env = os.environ.copy()
+        exec_env["GIT_TERMINAL_PROMPT"] = "0"  # Disable credential prompts
+        exec_env["GIT_PAGER"] = "cat"  # Disable pager for git commands
+        exec_env["PAGER"] = "cat"  # Disable pager generally
+        exec_env["GCM_INTERACTIVE"] = "never"  # Disable Git Credential Manager GUI
+        exec_env["GIT_ASKPASS"] = ""  # Disable askpass
+        exec_env["SSH_ASKPASS"] = ""  # Disable SSH askpass
+        exec_env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"  # SSH non-interactive
+        
+        # On Windows, use PowerShell to support & and other PS syntax
+        if platform.system() == "Windows":
+            ps_command = ["powershell", "-NoProfile", "-NonInteractive", "-Command", command]
+            proc = subprocess.run(
+                ps_command,
+                shell=False,
+                cwd=working_dir,
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minute timeout
+                env=exec_env,
+                stdin=subprocess.DEVNULL,  # Prevent any stdin reads
+            )
+        else:
+            proc = subprocess.run(
+                command,
+                shell=True,
+                cwd=working_dir,
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minute timeout
+                env=exec_env,
+            )
         
         return {
             "allowed": True,

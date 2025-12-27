@@ -813,6 +813,8 @@ def ck3_file_impl(
     new_path: str | None = None,
     # For write/edit
     validate_syntax: bool = True,
+    # For policy-gated raw writes
+    token_id: str | None = None,
     # For list
     path_prefix: str | None = None,
     pattern: str | None = None,
@@ -850,9 +852,18 @@ def ck3_file_impl(
             return {"error": "Either 'path' or 'mod_name'+'rel_path' required for read"}
     
     elif command == "write":
-        if not all([mod_name, rel_path, content is not None]):
-            return {"error": "mod_name, rel_path, and content required for write"}
-        return _file_write(mod_name, rel_path, content, validate_syntax, session, trace)
+        if path:
+            # Raw filesystem write - policy-gated
+            if content is None:
+                return {"error": "content required for write"}
+            return _file_write_raw(path, content, validate_syntax, token_id, trace)
+        elif mod_name and rel_path:
+            # Sandboxed mod write
+            if content is None:
+                return {"error": "content required for write"}
+            return _file_write(mod_name, rel_path, content, validate_syntax, session, trace)
+        else:
+            return {"error": "Either 'path' or 'mod_name'+'rel_path' required for write"}
     
     elif command == "edit":
         if not all([mod_name, rel_path, old_content, new_content is not None]):
@@ -978,6 +989,93 @@ def _file_write(mod_name, rel_path, content, validate_syntax, session, trace):
                   {"success": result.get("success", False)})
     
     return result
+
+
+def _file_write_raw(path, content, validate_syntax, token_id, trace):
+    """Write file to raw filesystem path with policy enforcement."""
+    from pathlib import Path as P
+    from ck3lens.policy.file_policy import (
+        evaluate_file_operation, FileRequest, FileOperation
+    )
+    from ck3lens.policy.clw import Decision
+    from ck3lens.work_contracts import get_active_contract
+    from ck3lens.validate import parse_content
+    
+    file_path = P(path).resolve()
+    
+    # Get mode - default to restrictive, check trace for actual mode
+    mode = "ck3lens"
+    if trace:
+        mode_info = getattr(trace, 'get_last_mode', lambda: None)()
+        if mode_info:
+            mode = mode_info
+    
+    # Get ck3raven root (parent of tools/)
+    ck3raven_root = P(__file__).parent.parent.parent.parent
+    
+    # Get active contract
+    active_contract = get_active_contract()
+    contract_id = active_contract.contract_id if active_contract else None
+    
+    # Evaluate policy
+    request = FileRequest(
+        operation=FileOperation.WRITE,
+        path=file_path,
+        mode=mode,
+        ck3raven_root=ck3raven_root,
+        contract_id=contract_id,
+        token_id=token_id,
+    )
+    
+    result = evaluate_file_operation(request)
+    
+    if trace:
+        trace.log("ck3lens.file.write_raw", {
+            "path": str(file_path),
+            "mode": mode,
+            "token_id": token_id,
+        }, {"decision": result.decision.name})
+    
+    if result.decision == Decision.DENY:
+        return {
+            "success": False,
+            "error": result.reason,
+            "policy_decision": "DENY",
+        }
+    
+    if result.decision == Decision.REQUIRE_TOKEN:
+        return {
+            "success": False,
+            "error": result.reason,
+            "policy_decision": "REQUIRE_TOKEN",
+            "required_token_type": result.required_token_type,
+            "hint": f"Use ck3_token to request a {result.required_token_type} token",
+        }
+    
+    # Policy allowed - validate syntax if requested
+    if validate_syntax and path.endswith(".txt"):
+        parse_result = parse_content(content, path)
+        if not parse_result["success"]:
+            return {
+                "success": False,
+                "error": "Syntax validation failed",
+                "parse_errors": parse_result["errors"],
+            }
+    
+    # Write the file
+    try:
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(content, encoding="utf-8")
+        
+        return {
+            "success": True,
+            "path": str(file_path),
+            "bytes_written": len(content.encode("utf-8")),
+            "policy_decision": "ALLOW",
+            "policy_reason": result.reason,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 def _file_edit(mod_name, rel_path, old_content, new_content, validate_syntax, session, trace):
@@ -1680,40 +1778,49 @@ def ck3_git_impl(
     """
     from ck3lens import git_ops
     
+    # Validate session
+    if not session:
+        return {"error": "No session available - call ck3_init_session first"}
+    
     # Validate mod access
-    local_mod = session.get_local_mod(mod_name) if session else None
+    local_mod = session.get_local_mod(mod_name)
     if not local_mod:
-        return {"error": f"Not a live mod: {mod_name}"}
+        # List available mods for better error message
+        available = [m.mod_id for m in session.local_mods] if session.local_mods else []
+        return {
+            "error": f"Not a live mod: {mod_name}",
+            "available_mods": available,
+            "hint": "Use mod folder name, not display name"
+        }
     
-    mod_path = str(local_mod.path)
-    
+    # git_ops functions expect (session, mod_id) - pass correctly
     if command == "status":
-        result = git_ops.git_status(mod_path)
+        result = git_ops.git_status(session, mod_name)
     
     elif command == "diff":
-        result = git_ops.git_diff(mod_path, file_path)
+        result = git_ops.git_diff(session, mod_name, staged=(file_path == "staged"))
     
     elif command == "add":
         if all_files:
-            result = git_ops.git_add(mod_path, ["."])
+            result = git_ops.git_add(session, mod_name, all_files=True)
         elif files:
-            result = git_ops.git_add(mod_path, files)
+            result = git_ops.git_add(session, mod_name, files=files)
         else:
             return {"error": "Either 'files' or 'all_files=true' required for add"}
     
     elif command == "commit":
         if not message:
             return {"error": "message required for commit"}
-        result = git_ops.git_commit(mod_path, message)
+        result = git_ops.git_commit(session, mod_name, message)
     
     elif command == "push":
-        result = git_ops.git_push(mod_path)
+        result = git_ops.git_push(session, mod_name)
     
     elif command == "pull":
-        result = git_ops.git_pull(mod_path)
+        result = git_ops.git_pull(session, mod_name)
     
     elif command == "log":
-        result = git_ops.git_log(mod_path, limit)
+        result = git_ops.git_log(session, mod_name, limit=limit, file_path=file_path)
     
     else:
         return {"error": f"Unknown command: {command}"}

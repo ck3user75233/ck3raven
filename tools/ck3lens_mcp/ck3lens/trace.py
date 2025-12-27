@@ -122,3 +122,31 @@ class ToolTrace:
                 if line.strip():
                     count += 1
         return count
+
+    def get_last_mode(self) -> str | None:
+        """
+        Get the most recently detected agent mode from trace log.
+        
+        Looks for mode_initialized or validate_policy events.
+        
+        Returns:
+            Mode string ("ck3lens" or "ck3raven-dev") or None if not found.
+        """
+        events = self.read_recent(max_events=100)
+        
+        for event in events:
+            tool = event.get("tool", "")
+            
+            # Direct mode initialization is the strongest signal
+            if tool == "ck3lens.mode_initialized":
+                mode = event.get("result", {}).get("mode") or event.get("args", {}).get("mode")
+                if mode:
+                    return mode
+            
+            # validate_policy calls also indicate mode
+            if tool == "ck3lens.validate_policy":
+                mode = event.get("args", {}).get("mode")
+                if mode:
+                    return mode
+        
+        return None

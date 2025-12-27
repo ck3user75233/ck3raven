@@ -257,7 +257,7 @@ Document why bypass was needed. Abuse will be caught in audit.
 For any new imports, verify they exist at runtime:
 ```python
 # Use terminal to test imports before committing code:
-& "C:\Users\Nathan\Documents\AI Workspace\.venv\Scripts\python.exe" -c "from module import Class; print('OK')"
+& ".venv\Scripts\python.exe" -c "from module import Class; print('OK')"
 ```
 
 Or use `mcp_pylance_mcp_s_pylanceRunCodeSnippet` to validate imports.
@@ -416,7 +416,8 @@ For AST access, use `ck3_parse_content` instead.
 
 ```bash
 # IMPORTANT: Always use the venv Python!
-VENV_PYTHON="C:\Users\Nathan\Documents\AI Workspace\.venv\Scripts\python.exe"
+# From the ck3raven directory:
+VENV_PYTHON=".venv\Scripts\python.exe"
 
 # Build database (detached daemon - runs in background)
 & $VENV_PYTHON builder/daemon.py start

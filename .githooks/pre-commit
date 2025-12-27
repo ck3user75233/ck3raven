@@ -31,11 +31,11 @@ if [ ! -f "$SCRIPT" ]; then
     exit 1
 fi
 
-# Find Python - prefer venv (venv is in AI Workspace, repo is ck3raven)
-if [ -f "$REPO_ROOT/../.venv/Scripts/python.exe" ]; then
-    PYTHON="$REPO_ROOT/../.venv/Scripts/python.exe"
-elif [ -f "$REPO_ROOT/../.venv/bin/python" ]; then
-    PYTHON="$REPO_ROOT/../.venv/bin/python"
+# Find Python - prefer venv inside ck3raven
+if [ -f "$REPO_ROOT/.venv/Scripts/python.exe" ]; then
+    PYTHON="$REPO_ROOT/.venv/Scripts/python.exe"
+elif [ -f "$REPO_ROOT/.venv/bin/python" ]; then
+    PYTHON="$REPO_ROOT/.venv/bin/python"
 elif command -v python3 >/dev/null 2>&1; then
     PYTHON="python3"
 elif command -v python >/dev/null 2>&1; then

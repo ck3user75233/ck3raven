@@ -285,7 +285,7 @@ def evaluate_policy(request: CommandRequest) -> PolicyResult:
                         command=cmd,
                     )
     
-    # GIT_MODIFY is allowed within contract
+    # GIT_MODIFY is allowed within contract OR with token
     if category == CommandCategory.GIT_MODIFY:
         if request.contract_id:
             return PolicyResult(
@@ -295,14 +295,29 @@ def evaluate_policy(request: CommandRequest) -> PolicyResult:
                 command=cmd,
                 contract_id=request.contract_id,
             )
-        else:
-            return PolicyResult(
-                decision=Decision.REQUIRE_TOKEN,
-                reason="Git modification requires active contract or token",
-                required_token_type="GIT_PUSH",
-                category=category,
+        # Check if a valid GIT_PUSH token was provided
+        if request.token_id:
+            valid, msg = validate_token(
+                request.token_id,
+                "GIT_PUSH",
                 command=cmd,
             )
+            if valid:
+                return PolicyResult(
+                    decision=Decision.ALLOW,
+                    reason=f"Git modification allowed with token: {msg}",
+                    category=category,
+                    command=cmd,
+                    token_id=request.token_id,
+                )
+        # No contract or valid token - require token
+        return PolicyResult(
+            decision=Decision.REQUIRE_TOKEN,
+            reason="Git modification requires active contract or token",
+            required_token_type="GIT_PUSH",
+            category=category,
+            command=cmd,
+        )
     
     # WRITE_OUT_OF_SCOPE needs contract or token
     if category == CommandCategory.WRITE_OUT_OF_SCOPE:

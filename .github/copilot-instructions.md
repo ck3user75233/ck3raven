@@ -13,8 +13,8 @@ This workspace contains the **CK3 Lens** ecosystem - a complete AI-powered toolk
 
 | Component | Path | Purpose |
 |-----------|------|---------|
-| **ck3raven** | `AI Workspace/ck3raven/` | Python parser, resolver, SQLite database |
-| **CK3 Lens MCP** | `ck3raven/tools/ck3lens_mcp/` | MCP server exposing 28+ tools to Copilot |
+| **ck3raven** | `/` (workspace root) | Python parser, resolver, SQLite database |
+| **CK3 Lens MCP** | `tools/ck3lens_mcp/` | MCP server exposing 28+ tools to Copilot |
 | **CK3 Lens Explorer** | `ck3raven/tools/ck3lens-explorer/` | VS Code extension for human UI |
 | **CK3 Parser** | `ck3raven/src/ck3raven/parser/` | Paradox script parser (integrated, 100% vanilla pass rate) |
 
@@ -107,10 +107,10 @@ This workspace contains the **CK3 Lens** ecosystem - a complete AI-powered toolk
 | **MRP** | More Raid and Prisoners | Raiding and prisoner mechanics |
 
 **Paths:**
-- MSC: `C:\Users\Nathan\Documents\Paradox Interactive\Crusader Kings III\mod\Mini Super Compatch`
-- MSCRE: `C:\Users\Nathan\Documents\Paradox Interactive\Crusader Kings III\mod\MSCRE`
-- LRE: `C:\Users\Nathan\Documents\Paradox Interactive\Crusader Kings III\mod\Lowborn Rise Expanded`
-- MRP: `C:\Users\Nathan\Documents\Paradox Interactive\Crusader Kings III\mod\More Raid and Prisoners`
+- MSC: `C:\Users\nateb\Documents\Paradox Interactive\Crusader Kings III\mod\Mini Super Compatch`
+- MSCRE: `C:\Users\nateb\Documents\Paradox Interactive\Crusader Kings III\mod\MSCRE`
+- LRE: `C:\Users\nateb\Documents\Paradox Interactive\Crusader Kings III\mod\Lowborn Rise Expanded`
+- MRP: `C:\Users\nateb\Documents\Paradox Interactive\Crusader Kings III\mod\More Raid and Prisoners`
 
 **Focus:** CK3 Lens is configured to search ONLY the active playset (vanilla + active mods) via the ck3raven database. This keeps the AI focused on MSC/MSCRE development without distractions from inactive mods.
 
@@ -501,32 +501,32 @@ When working with MSCRE religion content:
 
 | Purpose | Path |
 |---------|------|
-| Project Status | `AI Workspace/PROJECT_STATUS.md` |
-| Bug Reports | `AI Workspace/BUG_REPORTS_FOR_AUTHORS.md` |
-| Mod Paths | `AI Workspace/active_mod_paths.json` |
-| Error Parser | `AI Workspace/ck3_error_parser.py` |
-| MCP Server | `ck3raven/tools/ck3lens_mcp/server.py` |
-| Merge Rules | `ck3raven/docs/05_ACCURATE_MERGE_OVERRIDE_RULES.md` |
-| Content Types | `ck3raven/docs/06_CONTAINER_MERGE_OVERRIDE_TABLE.md` |
+| Project Status | `PROJECT_STATUS.md` |
+| Bug Reports | `BUG_REPORTS_FOR_AUTHORS.md` |
+| Mod Paths | `active_mod_paths.json` |
+| Error Parser | `scripts/ck3_error_parser.py` |
+| MCP Server | `tools/ck3lens_mcp/server.py` |
+| Merge Rules | `docs/05_ACCURATE_MERGE_OVERRIDE_RULES.md` |
+| Content Types | `docs/06_CONTAINER_MERGE_OVERRIDE_TABLE.md` |
 
 ---
 
 ## Auxiliary Tools (Python Scripts)
 
 ### CK3 Syntax Validator
-- **Path:** `AI Workspace/ck3_syntax_validator.py`
-- **Database:** `AI Workspace/ck3_syntax_db.json` (2541 triggers, 1127 effects)
+- **Path:** `scripts/ck3_syntax_validator.py`
+- **Database:** `data/ck3_syntax_db.json` (2541 triggers, 1127 effects)
 - **Purpose:** Validate triggers, effects, scopes against actual vanilla files
 
 ### CK3 Modding Mechanics Analyzer
-- **Path:** `AI Workspace/ck3_modding_mechanics_analyzer.py`
-- **Database:** `AI Workspace/ck3_modding_mechanics.json`
+- **Path:** `scripts/ck3_modding_mechanics_analyzer.py`
+- **Database:** `data/ck3_modding_mechanics.json`
 - **Purpose:** Learn modding patterns from workshop mods (merge vs override, naming conventions)
 
 ### CK3 Drafting Assistant
-- **Path:** `AI Workspace/ck3_drafting_assistant.py`
+- **Path:** `scripts/ck3_drafting_assistant.py`
 - **Purpose:** Template generation, batch fixes, real-time validation, smart search/replace
 
 ### Error Log Parser
-- **Path:** `AI Workspace/ck3_error_parser.py`
+- **Path:** `scripts/ck3_error_parser.py`
 - **Purpose:** Parse CK3's error.log into structured reports
