@@ -58,9 +58,11 @@ SAFE_COMMANDS = {
     "cat", "type", "more", "less", "head", "tail", "bat",
     # Directory listing
     "ls", "dir", "tree", "find", "fd", "rg", "grep",
-    # Git read-only
+    # Git safe operations (per policy doc Section 9)
     "git status", "git log", "git diff", "git show", "git branch -a",
     "git remote -v", "git stash list",
+    "git add", "git commit",  # Allowed without approval per policy
+    "git fetch", "git pull",  # Read-like remote operations
     # Python/tools
     "python -c", "python -m pytest", "python -m mypy",
     # Info commands
@@ -113,15 +115,14 @@ TOKEN_REQUIRED_PATTERNS: dict[str, list[str]] = {
     ],
 }
 
-# Git commands that modify local state
+# Git commands that modify local state (require contract or token)
+# NOTE: git add and git commit are in SAFE_COMMANDS per policy doc Section 9
 GIT_MODIFY_PATTERNS = [
-    r"git\s+add",
-    r"git\s+commit",
-    r"git\s+stash",
+    r"git\s+stash(?!\s+list)",  # stash list is safe, stash push/pop is modify
     r"git\s+checkout",
     r"git\s+switch",
     r"git\s+merge",
-    r"git\s+branch\s+(?!-a|-v)",  # Creating branches
+    r"git\s+branch\s+(?!-a|-v|-l|--list)",  # Creating/deleting branches (listing is safe)
 ]
 
 

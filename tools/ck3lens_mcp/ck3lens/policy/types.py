@@ -224,16 +224,22 @@ CK3RAVEN_DEV_TOKEN_TTLS = {
 # CK3RAVEN-DEV GIT COMMAND CLASSIFICATION
 # =============================================================================
 
-# Safe git commands (always allowed in ck3raven-dev)
+# Safe git commands (always allowed - per policy doc Section 9)
 GIT_COMMANDS_SAFE = frozenset({
-    "status", "diff", "log", "show", "branch", "remote",
-    "stash", "stash list", "stash show",
-    "fetch", "pull",  # Read-like operations
+    "status", "diff", "log", "show",  # Read-only inspection
+    "add", "commit",  # Local staging/committing (allowed without approval)
+    "fetch", "pull",  # Read-like remote operations
+    "branch -a", "branch -v", "branch --list",  # Branch listing
+    "remote", "remote -v",  # Remote listing
+    "stash list", "stash show",  # Stash inspection
 })
 
-# Risky git commands (require token or contract)
+# Risky git commands (require contract - local modifications)
 GIT_COMMANDS_RISKY = frozenset({
-    "add", "commit",  # Changes but doesn't push
+    "stash", "stash push", "stash pop", "stash drop",  # Stash modifications
+    "checkout", "switch",  # Branch switching
+    "merge",  # Merging
+    "branch",  # Creating/deleting branches (without -a/-v/-l flags)
 })
 
 # Dangerous git commands (require explicit token)
