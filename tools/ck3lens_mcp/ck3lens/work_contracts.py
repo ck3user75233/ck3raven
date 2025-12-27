@@ -16,6 +16,11 @@ Storage:
 - Active contracts: ~/.ck3raven/contracts/
 - Archived contracts: ~/.ck3raven/contracts/archive/
 - Session flush: Archive contracts from previous days at session start
+
+CK3Lens Mode Extensions:
+- Contracts must declare intent_type (COMPATCH, BUGPATCH, etc.)
+- Write contracts require targets, snippets, and DIFF_SANITY
+- Delete operations require explicit file list + approval token
 """
 from __future__ import annotations
 
@@ -24,9 +29,12 @@ import json
 import os
 import shutil
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Literal, Optional, Any
+
+# Import new policy types for CK3Lens
+from .policy.types import IntentType, AcceptanceTest, ScopeDomain
 
 
 # Contract storage paths
@@ -44,7 +52,7 @@ def _get_archive_dir() -> Path:
     return path
 
 
-# Valid canonical domains
+# Valid canonical domains for ck3raven-dev mode
 CANONICAL_DOMAINS = frozenset({
     "parser",      # src/ck3raven/parser/
     "routing",     # src/ck3raven/resolver/
@@ -53,6 +61,18 @@ CANONICAL_DOMAINS = frozenset({
     "query",       # src/ck3raven/db/ (search, playsets), tools/ck3lens_mcp/ck3lens/
     "cli",         # CLI glue, tools/, scripts/
 })
+
+# Valid domains for ck3lens mode (CK3 modding)
+CK3LENS_DOMAINS = frozenset({
+    "active_local_mods",   # Editable local mods
+    "active_workshop_mods",  # Read-only workshop mods
+    "vanilla",             # Read-only vanilla game
+    "wip_workspace",       # ~/.ck3raven/wip/ for scripts
+    "launcher",            # Launcher registry repair (via ck3_repair)
+})
+
+# Combined for validation
+ALL_DOMAINS = CANONICAL_DOMAINS | CK3LENS_DOMAINS
 
 # Capability tiers
 CAPABILITIES = frozenset({
@@ -105,6 +125,12 @@ class WorkContract:
     Work Contract Protocol (WCP) contract.
     
     Defines the scope and constraints for an agent task.
+    
+    For ck3lens mode, contracts require:
+    - intent_type: One of COMPATCH, BUGPATCH, RESEARCH_MOD_ISSUES, RESEARCH_BUGREPORT, SCRIPT_WIP
+    - targets: For write intents, list of {mod_id, rel_path} 
+    - snippets: For write intents, before/after code snippets
+    - acceptance_tests: For write intents, must include DIFF_SANITY
     """
     # Identity
     contract_id: str
@@ -130,16 +156,116 @@ class WorkContract:
     agent_mode: Optional[str] = None  # ck3lens or ck3raven-dev
     notes: Optional[str] = None
     
+    # ============================================
+    # CK3Lens-specific fields (Phase 2 additions)
+    # ============================================
+    
+    # Intent type (REQUIRED for ck3lens write operations)
+    intent_type: Optional[str] = None  # IntentType value
+    
+    # Targets for write contracts [{mod_id, rel_path, operation}]
+    targets: list[dict[str, str]] = field(default_factory=list)
+    
+    # Before/after snippets for change preview
+    before_after_snippets: list[dict[str, Any]] = field(default_factory=list)
+    
+    # Change summary (required if >3 files)
+    change_summary: Optional[str] = None
+    
+    # Rollback plan (required for write contracts)
+    rollback_plan: Optional[str] = None
+    
+    # Acceptance tests (must include DIFF_SANITY for writes)
+    acceptance_tests: list[str] = field(default_factory=list)
+    
+    # Script execution fields (for SCRIPT_WIP intent)
+    script_hash: Optional[str] = None
+    declared_reads: list[str] = field(default_factory=list)
+    declared_writes: list[str] = field(default_factory=list)
+    
+    # Research fields (for RESEARCH_* intents)
+    findings_evidence: Optional[str] = None
+    ck3raven_source_access: bool = False
+    
+    # Approval tokens bound to this contract
+    bound_tokens: list[str] = field(default_factory=list)
+    
     def __post_init__(self):
-        # Validate canonical domains
-        invalid_domains = set(self.canonical_domains) - CANONICAL_DOMAINS
-        if invalid_domains:
-            raise ValueError(f"Invalid canonical domains: {invalid_domains}")
+        # Validate domains based on mode
+        if self.agent_mode == "ck3lens":
+            # CK3Lens uses CK3LENS_DOMAINS
+            invalid_domains = set(self.canonical_domains) - CK3LENS_DOMAINS
+            if invalid_domains:
+                raise ValueError(f"Invalid ck3lens domains: {invalid_domains}. Valid: {CK3LENS_DOMAINS}")
+        elif self.agent_mode == "ck3raven-dev":
+            # ck3raven-dev uses CANONICAL_DOMAINS
+            invalid_domains = set(self.canonical_domains) - CANONICAL_DOMAINS
+            if invalid_domains:
+                raise ValueError(f"Invalid ck3raven-dev domains: {invalid_domains}")
+        else:
+            # Unknown or unset mode - allow all domains
+            invalid_domains = set(self.canonical_domains) - ALL_DOMAINS
+            if invalid_domains:
+                raise ValueError(f"Invalid domains: {invalid_domains}")
         
         # Validate capabilities
         invalid_caps = set(self.capabilities) - CAPABILITIES
         if invalid_caps:
             raise ValueError(f"Invalid capabilities: {invalid_caps}")
+    
+    def validate_ck3lens_requirements(self) -> tuple[bool, list[str]]:
+        """
+        Validate CK3Lens-specific contract requirements.
+        
+        Returns:
+            (valid: bool, errors: list[str])
+        """
+        errors = []
+        
+        if self.agent_mode != "ck3lens":
+            return True, []  # Not a ck3lens contract
+        
+        # Check intent_type is set
+        if not self.intent_type:
+            errors.append("ck3lens contract must specify intent_type")
+            return False, errors
+        
+        # Validate intent_type is known
+        try:
+            intent = IntentType(self.intent_type)
+        except ValueError:
+            errors.append(f"Unknown intent_type: {self.intent_type}")
+            return False, errors
+        
+        # Write intent requirements
+        if intent in {IntentType.COMPATCH, IntentType.BUGPATCH}:
+            if not self.targets:
+                errors.append("Write contract must have targets")
+            
+            if self.targets and not self.before_after_snippets:
+                errors.append("Write contract must include before_after_snippets")
+            
+            if len(self.targets) > 3 and not self.change_summary:
+                errors.append("Write contract with >3 files must include change_summary")
+            
+            if not self.rollback_plan:
+                errors.append("Write contract must include rollback_plan")
+            
+            if AcceptanceTest.DIFF_SANITY.value not in self.acceptance_tests:
+                errors.append("Write contract must include DIFF_SANITY acceptance test")
+        
+        # Research intent requirements
+        elif intent in {IntentType.RESEARCH_MOD_ISSUES, IntentType.RESEARCH_BUGREPORT}:
+            # Read-only - no special requirements beyond intent_type
+            if self.targets:
+                errors.append("Research contract cannot have write targets")
+        
+        # Script intent requirements
+        elif intent == IntentType.SCRIPT_WIP:
+            if not self.script_hash:
+                errors.append("Script contract must include script_hash")
+        
+        return len(errors) == 0, errors
     
     @classmethod
     def generate_id(cls) -> str:
@@ -202,6 +328,18 @@ def open_contract(
     expires_hours: float = 8.0,
     agent_mode: Optional[str] = None,
     notes: Optional[str] = None,
+    # CK3Lens-specific parameters
+    intent_type: Optional[str] = None,
+    targets: Optional[list[dict[str, str]]] = None,
+    before_after_snippets: Optional[list[dict[str, Any]]] = None,
+    change_summary: Optional[str] = None,
+    rollback_plan: Optional[str] = None,
+    acceptance_tests: Optional[list[str]] = None,
+    script_hash: Optional[str] = None,
+    declared_reads: Optional[list[str]] = None,
+    declared_writes: Optional[list[str]] = None,
+    findings_evidence: Optional[str] = None,
+    ck3raven_source_access: bool = False,
 ) -> WorkContract:
     """
     Open a new work contract.
@@ -214,29 +352,60 @@ def open_contract(
         expires_hours: Hours until contract expires (default 8)
         agent_mode: ck3lens or ck3raven-dev
         notes: Optional notes
+        
+        # CK3Lens-specific (required when agent_mode="ck3lens" and writing)
+        intent_type: One of COMPATCH, BUGPATCH, RESEARCH_MOD_ISSUES, RESEARCH_BUGREPORT, SCRIPT_WIP
+        targets: List of {mod_id, rel_path, operation} for write contracts
+        before_after_snippets: List of {file, before, after} for change preview
+        change_summary: Summary of changes (required if >3 files)
+        rollback_plan: How to undo the changes
+        acceptance_tests: List including DIFF_SANITY for writes
+        script_hash: SHA256 of script (for SCRIPT_WIP)
+        declared_reads: Files script will read
+        declared_writes: Files script will write
+        findings_evidence: Evidence for research intents
+        ck3raven_source_access: Whether to allow reading ck3raven source
     
     Returns:
         The opened contract
+    
+    Raises:
+        ValueError: If CK3Lens contract requirements not met
     """
     # Default capabilities
     if capabilities is None:
         capabilities = list(TIER_STANDARD)
     
-    # Default paths based on domains
+    # Default paths based on domains and mode
     if allowed_paths is None:
         allowed_paths = []
-        domain_paths = {
-            "parser": ["src/ck3raven/parser/**"],
-            "routing": ["src/ck3raven/resolver/**"],
-            "builder": ["builder/**"],
-            "extraction": ["src/ck3raven/db/**"],
-            "query": ["src/ck3raven/db/**", "tools/ck3lens_mcp/**"],
-            "cli": ["tools/**", "scripts/**"],
-        }
-        for domain in canonical_domains:
-            allowed_paths.extend(domain_paths.get(domain, []))
-        # Always allow tests
-        allowed_paths.append("tests/**")
+        
+        if agent_mode == "ck3lens":
+            # CK3Lens paths are based on mod roots - handled at runtime
+            # Just add WIP workspace for script intents
+            if intent_type == IntentType.SCRIPT_WIP.value:
+                allowed_paths.append("~/.ck3raven/wip/**")
+        else:
+            # ck3raven-dev domain paths
+            domain_paths = {
+                "parser": ["src/ck3raven/parser/**"],
+                "routing": ["src/ck3raven/resolver/**"],
+                "builder": ["builder/**"],
+                "extraction": ["src/ck3raven/db/**"],
+                "query": ["src/ck3raven/db/**", "tools/ck3lens_mcp/**"],
+                "cli": ["tools/**", "scripts/**"],
+            }
+            for domain in canonical_domains:
+                allowed_paths.extend(domain_paths.get(domain, []))
+            # Always allow tests
+            allowed_paths.append("tests/**")
+    
+    # For CK3Lens write intents, default acceptance tests
+    if agent_mode == "ck3lens" and intent_type in {IntentType.COMPATCH.value, IntentType.BUGPATCH.value}:
+        if acceptance_tests is None:
+            acceptance_tests = [AcceptanceTest.DIFF_SANITY.value, AcceptanceTest.VALIDATION.value]
+        elif AcceptanceTest.DIFF_SANITY.value not in acceptance_tests:
+            acceptance_tests = list(acceptance_tests) + [AcceptanceTest.DIFF_SANITY.value]
     
     contract = WorkContract(
         contract_id=WorkContract.generate_id(),
@@ -245,10 +414,28 @@ def open_contract(
         allowed_paths=allowed_paths,
         capabilities=capabilities,
         expires_at=(datetime.now().replace(microsecond=0) + 
-                   __import__("datetime").timedelta(hours=expires_hours)).isoformat(),
+                   timedelta(hours=expires_hours)).isoformat(),
         agent_mode=agent_mode,
         notes=notes,
+        # CK3Lens fields
+        intent_type=intent_type,
+        targets=targets or [],
+        before_after_snippets=before_after_snippets or [],
+        change_summary=change_summary,
+        rollback_plan=rollback_plan,
+        acceptance_tests=acceptance_tests or [],
+        script_hash=script_hash,
+        declared_reads=declared_reads or [],
+        declared_writes=declared_writes or [],
+        findings_evidence=findings_evidence,
+        ck3raven_source_access=ck3raven_source_access,
     )
+    
+    # Validate CK3Lens requirements before saving
+    if agent_mode == "ck3lens":
+        valid, errors = contract.validate_ck3lens_requirements()
+        if not valid:
+            raise ValueError(f"CK3Lens contract validation failed: {errors}")
     
     contract.save()
     return contract
@@ -448,3 +635,283 @@ def validate_capability(
         True if capability is granted
     """
     return capability in contract.capabilities
+
+
+# =============================================================================
+# CK3LENS CONTRACT HELPERS
+# =============================================================================
+
+def open_ck3lens_write_contract(
+    intent: str,
+    intent_type: str,
+    targets: list[dict[str, str]],
+    before_after_snippets: list[dict[str, Any]],
+    rollback_plan: str,
+    change_summary: Optional[str] = None,
+    expires_hours: float = 4.0,
+    notes: Optional[str] = None,
+) -> WorkContract:
+    """
+    Open a CK3Lens write contract (COMPATCH or BUGPATCH).
+    
+    This is a convenience wrapper that sets all required fields for write contracts.
+    
+    Args:
+        intent: Human-readable description of the work
+        intent_type: "compatch" or "bugpatch"
+        targets: List of {mod_id, rel_path, operation} for files to modify
+        before_after_snippets: List of {file, before, after} showing changes
+        rollback_plan: How to undo the changes
+        change_summary: Summary of changes (required if >3 files)
+        expires_hours: Hours until contract expires (default 4)
+        notes: Optional notes
+    
+    Returns:
+        The opened contract
+    
+    Raises:
+        ValueError: If intent_type is not a write type
+    """
+    if intent_type not in {IntentType.COMPATCH.value, IntentType.BUGPATCH.value}:
+        raise ValueError(f"intent_type must be 'compatch' or 'bugpatch', got: {intent_type}")
+    
+    # Determine domains from targets
+    domains = ["active_local_mods"]  # Write contracts always touch local mods
+    
+    return open_contract(
+        intent=intent,
+        canonical_domains=domains,
+        agent_mode="ck3lens",
+        intent_type=intent_type,
+        targets=targets,
+        before_after_snippets=before_after_snippets,
+        change_summary=change_summary,
+        rollback_plan=rollback_plan,
+        acceptance_tests=[AcceptanceTest.DIFF_SANITY.value, AcceptanceTest.VALIDATION.value],
+        expires_hours=expires_hours,
+        notes=notes,
+    )
+
+
+def open_ck3lens_research_contract(
+    intent: str,
+    intent_type: str = "research_mod_issues",
+    findings_evidence: str = "",
+    ck3raven_source_access: bool = False,
+    expires_hours: float = 2.0,
+    notes: Optional[str] = None,
+) -> WorkContract:
+    """
+    Open a CK3Lens research contract (read-only).
+    
+    Args:
+        intent: Human-readable description of the research
+        intent_type: "research_mod_issues" or "research_bugreport"
+        findings_evidence: Initial evidence or description
+        ck3raven_source_access: Whether to allow reading ck3raven source
+        expires_hours: Hours until contract expires (default 2)
+        notes: Optional notes
+    
+    Returns:
+        The opened contract
+    """
+    if intent_type not in {IntentType.RESEARCH_MOD_ISSUES.value, IntentType.RESEARCH_BUGREPORT.value}:
+        raise ValueError(f"intent_type must be 'research_mod_issues' or 'research_bugreport', got: {intent_type}")
+    
+    domains = ["active_local_mods", "active_workshop_mods", "vanilla"]
+    if ck3raven_source_access:
+        # Note: ck3raven_source is read-only but we track it
+        pass  # Handled via ck3raven_source_access flag
+    
+    return open_contract(
+        intent=intent,
+        canonical_domains=domains,
+        agent_mode="ck3lens",
+        intent_type=intent_type,
+        findings_evidence=findings_evidence,
+        ck3raven_source_access=ck3raven_source_access,
+        expires_hours=expires_hours,
+        notes=notes,
+    )
+
+
+def open_ck3lens_script_contract(
+    intent: str,
+    script_hash: str,
+    declared_reads: list[str],
+    declared_writes: list[str],
+    expires_hours: float = 1.0,
+    notes: Optional[str] = None,
+) -> WorkContract:
+    """
+    Open a CK3Lens script contract (SCRIPT_WIP).
+    
+    Args:
+        intent: Human-readable description of what the script does
+        script_hash: SHA256 hash of the script content
+        declared_reads: Files the script will read
+        declared_writes: Files the script will write (WIP or local mods)
+        expires_hours: Hours until contract expires (default 1)
+        notes: Optional notes
+    
+    Returns:
+        The opened contract
+    """
+    domains = ["wip_workspace"]
+    
+    # If writing to local mods, add that domain
+    for w in declared_writes:
+        if not w.startswith("wip:") and not w.startswith("~/.ck3raven/wip/"):
+            domains.append("active_local_mods")
+            break
+    
+    return open_contract(
+        intent=intent,
+        canonical_domains=list(set(domains)),
+        agent_mode="ck3lens",
+        intent_type=IntentType.SCRIPT_WIP.value,
+        script_hash=script_hash,
+        declared_reads=declared_reads,
+        declared_writes=declared_writes,
+        expires_hours=expires_hours,
+        notes=notes,
+    )
+
+
+def bind_token_to_contract(contract_id: str, token_id: str) -> WorkContract:
+    """
+    Bind an approval token to a contract.
+    
+    Tokens bound to contracts are validated together.
+    
+    Args:
+        contract_id: Contract to bind to
+        token_id: Token to bind
+    
+    Returns:
+        Updated contract
+    """
+    contract = WorkContract.load(contract_id)
+    if contract is None:
+        raise ValueError(f"Contract not found: {contract_id}")
+    
+    if not contract.is_active():
+        raise ValueError(f"Contract is not active: {contract.status}")
+    
+    if token_id not in contract.bound_tokens:
+        contract.bound_tokens.append(token_id)
+        contract.save()
+    
+    return contract
+
+
+def update_contract_targets(
+    contract_id: str,
+    targets: list[dict[str, str]],
+    before_after_snippets: Optional[list[dict[str, Any]]] = None,
+) -> WorkContract:
+    """
+    Update the targets of an active contract.
+    
+    Use this to add/modify targets as work progresses.
+    
+    Args:
+        contract_id: Contract to update
+        targets: New list of targets
+        before_after_snippets: Optional new snippets
+    
+    Returns:
+        Updated contract
+    """
+    contract = WorkContract.load(contract_id)
+    if contract is None:
+        raise ValueError(f"Contract not found: {contract_id}")
+    
+    if not contract.is_active():
+        raise ValueError(f"Contract is not active: {contract.status}")
+    
+    contract.targets = targets
+    if before_after_snippets is not None:
+        contract.before_after_snippets = before_after_snippets
+    
+    # Re-validate if CK3Lens
+    if contract.agent_mode == "ck3lens":
+        valid, errors = contract.validate_ck3lens_requirements()
+        if not valid:
+            raise ValueError(f"Updated contract validation failed: {errors}")
+    
+    contract.save()
+    return contract
+
+
+def record_findings(contract_id: str, findings: str) -> WorkContract:
+    """
+    Record research findings for a research contract.
+    
+    Args:
+        contract_id: Contract to update
+        findings: Findings evidence to record
+    
+    Returns:
+        Updated contract
+    """
+    contract = WorkContract.load(contract_id)
+    if contract is None:
+        raise ValueError(f"Contract not found: {contract_id}")
+    
+    if not contract.is_active():
+        raise ValueError(f"Contract is not active: {contract.status}")
+    
+    if contract.intent_type not in {IntentType.RESEARCH_MOD_ISSUES.value, IntentType.RESEARCH_BUGREPORT.value}:
+        raise ValueError(f"record_findings only for research contracts, not {contract.intent_type}")
+    
+    contract.findings_evidence = findings
+    contract.save()
+    return contract
+
+
+def get_active_ck3lens_contract() -> Optional[WorkContract]:
+    """
+    Get the currently active CK3Lens contract.
+    
+    Returns:
+        Active ck3lens contract or None
+    """
+    contract = get_active_contract()
+    if contract and contract.agent_mode == "ck3lens":
+        return contract
+    return None
+
+
+def validate_target_in_contract(
+    mod_id: str,
+    rel_path: str,
+    contract: WorkContract,
+) -> tuple[bool, str]:
+    """
+    Check if a target is allowed by the CK3Lens contract.
+    
+    Args:
+        mod_id: Mod identifier
+        rel_path: Relative path within mod
+        contract: Active contract
+    
+    Returns:
+        (allowed: bool, reason: str)
+    """
+    if not contract.is_active():
+        return False, "Contract is not active"
+    
+    if contract.agent_mode != "ck3lens":
+        return True, "Not a ck3lens contract"
+    
+    # Check if this target is in the declared targets
+    for target in contract.targets:
+        if target.get("mod_id") == mod_id and target.get("rel_path") == rel_path:
+            return True, "Target is declared in contract"
+    
+    # For research contracts, no targets needed
+    if contract.intent_type in {IntentType.RESEARCH_MOD_ISSUES.value, IntentType.RESEARCH_BUGREPORT.value}:
+        return True, "Research contract - read only"
+    
+    return False, f"Target {mod_id}/{rel_path} not declared in contract"

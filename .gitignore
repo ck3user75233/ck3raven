@@ -114,5 +114,8 @@ local_config.py
 *.tmp
 .ruff_cache/
 
+# WIP workspace for ck3raven-dev mode (analysis/staging only)
+.wip/
+
 # Runtime databases
 *.sqlite

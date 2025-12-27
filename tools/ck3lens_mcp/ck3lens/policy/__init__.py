@@ -1,24 +1,65 @@
 """
 Policy module for agent validation and CLI wrapping.
 
-- types.py: Core types for policy validation
+- types.py: Core types for policy validation (includes ScopeDomain, IntentType, etc.)
 - loader.py: Policy file loading
 - validator.py: Policy validation logic
 - tokens.py: HMAC-signed approval tokens for risky operations
 - clw.py: Command Line Wrapper policy engine
+- ck3lens_rules.py: CK3Lens-specific validation rules
+- hard_gates.py: Pure functions for hard gate checks
+- wip_workspace.py: WIP workspace lifecycle management
+- contract_schema.py: Contract schema validation
 """
-from .types import Severity, AgentMode, Violation, ToolCall, ValidationContext, PolicyOutcome
+from .types import (
+    Severity,
+    AgentMode,
+    Violation,
+    ToolCall,
+    ValidationContext,
+    PolicyOutcome,
+    # CK3LENS types (from CK3LENS_POLICY_ARCHITECTURE)
+    ScopeDomain,
+    IntentType,
+    AcceptanceTest,
+    CK3LensTokenType,
+    CK3LENS_TOKEN_TTLS,
+    WipWorkspaceInfo,
+    get_wip_workspace_path,
+    get_ck3lens_wip_path,
+    get_ck3raven_dev_wip_path,
+    # CK3RAVEN-DEV types (from CK3RAVEN_DEV_POLICY_ARCHITECTURE)
+    Ck3RavenDevScopeDomain,
+    Ck3RavenDevIntentType,
+    Ck3RavenDevWipIntent,
+    Ck3RavenDevTokenType,
+    CK3RAVEN_DEV_TOKEN_TIER_A,
+    CK3RAVEN_DEV_TOKEN_TIER_B,
+    CK3RAVEN_DEV_TOKEN_TTLS,
+    GIT_COMMANDS_SAFE,
+    GIT_COMMANDS_RISKY,
+    GIT_COMMANDS_DANGEROUS,
+)
 from .loader import load_policy, get_policy
 from .validator import validate_policy, validate_for_mode, server_delivery_gate
 from .tokens import (
     ApprovalToken,
     TOKEN_TYPES,
+    CK3LENS_TOKEN_TYPES,
     issue_token,
     validate_token,
     consume_token,
     revoke_token,
     list_tokens,
     cleanup_expired_tokens,
+    # CK3Lens-specific token helpers
+    issue_delete_token,
+    issue_inactive_mod_token,
+    issue_script_execute_token,
+    issue_git_push_mod_token,
+    validate_script_token,
+    check_user_prompt_required,
+    check_script_hash_required,
 )
 from .clw import (
     Decision,
@@ -30,9 +71,76 @@ from .clw import (
     can_execute,
     check_path_in_scope,
 )
+from .hard_gates import (
+    GateResult,
+    # CK3Lens gates
+    gate_intent_type_required,
+    gate_write_active_local_mods_only,
+    gate_no_workshop_vanilla_writes,
+    gate_python_wip_only,
+    gate_inactive_mod_requires_user_prompt,
+    gate_script_syntax_validated,
+    gate_script_declarations_match,
+    gate_script_has_execution_token,
+    gate_write_contract_has_targets,
+    gate_write_contract_has_snippets,
+    gate_write_contract_has_diff_sanity,
+    gate_delete_explicit_file_list,
+    gate_delete_has_token,
+    run_all_gates,
+    # CK3Raven-dev gates
+    gate_ck3raven_dev_mod_write_prohibition,
+    gate_ck3raven_dev_run_in_terminal_prohibition,
+    gate_ck3raven_dev_git_command_classification,
+    gate_ck3raven_dev_db_destructive_requires_migration,
+    gate_ck3raven_dev_wip_intent_valid,
+    gate_ck3raven_dev_wip_not_workaround,
+    gate_ck3raven_dev_wip_path_valid,
+    run_ck3raven_dev_gates,
+)
+from .wip_workspace import (
+    WipWorkspaceState,
+    get_workspace_state,
+    initialize_workspace,
+    cleanup_stale_files,
+    is_wip_path,
+    is_any_wip_path,
+    resolve_wip_path,
+    write_wip_file,
+    read_wip_file,
+    delete_wip_file,
+    ScriptValidation,
+    compute_script_hash,
+    validate_script_syntax,
+    ScriptDeclaration,
+    validate_script_declarations,
+)
+from .contract_schema import (
+    ContractTarget,
+    BeforeAfterSnippet,
+    WriteContract,
+    ResearchContract,
+    ScriptContract,
+    create_contract,
+    validate_contract,
+)
+from .ck3lens_rules import (
+    validate_ck3lens_rules,
+    classify_path_domain,
+    CK3_ALLOWED_EXTENSIONS,
+    CK3LENS_FORBIDDEN_PATHS,
+    CK3LENS_FORBIDDEN_EXTENSIONS,
+    WIP_ONLY_EXTENSIONS,
+)
+from .script_sandbox import (
+    ScriptExecutionRequest,
+    ScriptExecutionResult,
+    execute_wip_script,
+    prepare_script_for_execution,
+)
 
 __all__ = [
-    # Policy validation
+    # Policy validation types
     "Severity",
     "AgentMode", 
     "Violation",
@@ -44,15 +152,45 @@ __all__ = [
     "validate_policy",
     "validate_for_mode",
     "server_delivery_gate",
+    # CK3Lens scope and intent types
+    "ScopeDomain",
+    "IntentType",
+    "AcceptanceTest",
+    "CK3LensTokenType",
+    "CK3LENS_TOKEN_TTLS",
+    "WipWorkspaceInfo",
+    "get_wip_workspace_path",
+    "get_ck3lens_wip_path",
+    "get_ck3raven_dev_wip_path",
+    # CK3Raven-dev scope and intent types
+    "Ck3RavenDevScopeDomain",
+    "Ck3RavenDevIntentType",
+    "Ck3RavenDevWipIntent",
+    "Ck3RavenDevTokenType",
+    "CK3RAVEN_DEV_TOKEN_TIER_A",
+    "CK3RAVEN_DEV_TOKEN_TIER_B",
+    "CK3RAVEN_DEV_TOKEN_TTLS",
+    "GIT_COMMANDS_SAFE",
+    "GIT_COMMANDS_RISKY",
+    "GIT_COMMANDS_DANGEROUS",
     # Approval tokens
     "ApprovalToken",
     "TOKEN_TYPES",
+    "CK3LENS_TOKEN_TYPES",
     "issue_token",
     "validate_token",
     "consume_token",
     "revoke_token",
     "list_tokens",
     "cleanup_expired_tokens",
+    # CK3Lens token helpers
+    "issue_delete_token",
+    "issue_inactive_mod_token",
+    "issue_script_execute_token",
+    "issue_git_push_mod_token",
+    "validate_script_token",
+    "check_user_prompt_required",
+    "check_script_hash_required",
     # CLW Policy Engine
     "Decision",
     "CommandCategory",
@@ -62,4 +200,65 @@ __all__ = [
     "evaluate_policy",
     "can_execute",
     "check_path_in_scope",
+    # Hard Gates - CK3Lens
+    "GateResult",
+    "gate_intent_type_required",
+    "gate_write_active_local_mods_only",
+    "gate_no_workshop_vanilla_writes",
+    "gate_python_wip_only",
+    "gate_inactive_mod_requires_user_prompt",
+    "gate_script_syntax_validated",
+    "gate_script_declarations_match",
+    "gate_script_has_execution_token",
+    "gate_write_contract_has_targets",
+    "gate_write_contract_has_snippets",
+    "gate_write_contract_has_diff_sanity",
+    "gate_delete_explicit_file_list",
+    "gate_delete_has_token",
+    "run_all_gates",
+    # Hard Gates - CK3Raven-dev
+    "gate_ck3raven_dev_mod_write_prohibition",
+    "gate_ck3raven_dev_run_in_terminal_prohibition",
+    "gate_ck3raven_dev_git_command_classification",
+    "gate_ck3raven_dev_db_destructive_requires_migration",
+    "gate_ck3raven_dev_wip_intent_valid",
+    "gate_ck3raven_dev_wip_not_workaround",
+    "gate_ck3raven_dev_wip_path_valid",
+    "run_ck3raven_dev_gates",
+    # WIP Workspace
+    "WipWorkspaceState",
+    "get_workspace_state",
+    "initialize_workspace",
+    "cleanup_stale_files",
+    "is_wip_path",
+    "is_any_wip_path",
+    "resolve_wip_path",
+    "write_wip_file",
+    "read_wip_file",
+    "delete_wip_file",
+    "ScriptValidation",
+    "compute_script_hash",
+    "validate_script_syntax",
+    "ScriptDeclaration",
+    "validate_script_declarations",
+    # Contract Schema
+    "ContractTarget",
+    "BeforeAfterSnippet",
+    "WriteContract",
+    "ResearchContract",
+    "ScriptContract",
+    "create_contract",
+    "validate_contract",
+    # CK3Lens Rules
+    "validate_ck3lens_rules",
+    "classify_path_domain",
+    "CK3_ALLOWED_EXTENSIONS",
+    "CK3LENS_FORBIDDEN_PATHS",
+    "CK3LENS_FORBIDDEN_EXTENSIONS",
+    "WIP_ONLY_EXTENSIONS",
+    # Script Sandbox
+    "ScriptExecutionRequest",
+    "ScriptExecutionResult",
+    "execute_wip_script",
+    "prepare_script_for_execution",
 ]

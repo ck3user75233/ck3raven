@@ -1,8 +1,9 @@
 # CK3 Raven Development Mode - AI Agent Instructions
 
 > **Mode:** `ck3raven-dev`  
-> **Purpose:** Core infrastructure development for the CK3 game state emulator  
-> **Last Updated:** December 18, 2025
+> **Purpose:** Core infrastructure development for the CK3 Lens toolkit  
+> **Policy Document:** `docs/CK3RAVEN_DEV_POLICY_ARCHITECTURE.md`  
+> **Last Updated:** December 19, 2025
 
 ---
 
@@ -14,6 +15,55 @@
 - ✅ You're building the emulator, MCP tools, or CLI
 - ✅ You're fixing infrastructure bugs
 - ❌ If you're editing CK3 mod files (.txt, .yml) → Switch to `ck3lens` mode
+
+---
+
+## POLICY: HARD RULES (MUST READ)
+
+### Absolute Prohibitions
+1. **CANNOT write to ANY mod files** (local, workshop, or vanilla) - Absolute prohibition
+2. **CANNOT use `run_in_terminal`** - Use `ck3_exec` for all command execution
+3. **CANNOT use ck3_repair** - Launcher/registry repair is ck3lens mode only
+
+### Git Operations
+- **Safe (always allowed):** `status`, `diff`, `log`, `show`, `branch`, `remote`, `fetch`, `pull`, `stash`
+- **Risky (allowed with contract):** `add`, `commit`
+- **Dangerous (require token):** `push` → GIT_PUSH, `push --force` → GIT_FORCE_PUSH, `rebase/reset/amend` → GIT_HISTORY_REWRITE
+
+### Database Operations
+- **Destructive ops require:** Migration context + rollback plan + DB_MIGRATION_DESTRUCTIVE token
+- **Destructive ops include:** DROP, DELETE, TRUNCATE, ALTER (column drop)
+
+### WIP Workspace (`<repo>/.wip/`)
+- Git-ignored, strictly constrained to analysis/staging
+- **CANNOT substitute for proper code fixes**
+- **WIP Intents:**
+  - `ANALYSIS_ONLY`: Read-only analysis, no writes
+  - `REFACTOR_ASSIST`: Generate patches (requires `core_change_plan`)
+  - `MIGRATION_HELPER`: Generate migrations (requires `core_change_plan`)
+- **Workaround Detection:** Running same script 3+ times without core changes → AUTO_DENY
+
+### Intent Types
+Declare ONE per contract:
+- `BUGFIX`: Fix a bug in infrastructure
+- `REFACTOR`: Reorganize code structure  
+- `FEATURE`: Implement new feature
+- `MIGRATION`: Database or config migration
+- `TEST_ONLY`: Add/modify tests only
+- `DOCS_ONLY`: Documentation changes only
+
+### Token Tiers
+**Tier A (Auto-Grant with Logging):**
+- `TEST_EXECUTE` (5 min) - Run pytest
+- `SCRIPT_RUN_WIP` (15 min) - Execute WIP analysis script
+- `READ_SAFE` (60 min) - Read non-sensitive paths
+
+**Tier B (Approval Required):**
+- `DELETE_SOURCE` (15 min) - Delete source files
+- `GIT_PUSH` (15 min) - git push
+- `GIT_FORCE_PUSH` (5 min) - git push --force
+- `GIT_HISTORY_REWRITE` (15 min) - rebase, amend
+- `DB_MIGRATION_DESTRUCTIVE` (30 min) - Schema destructive ops
 
 ---
 

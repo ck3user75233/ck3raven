@@ -2,15 +2,44 @@
 CK3 Lens Rules
 
 Policy validation rules specific to the ck3lens agent mode.
-These rules enforce CK3 modding constraints and best practices.
+Implements the CK3LENS_POLICY_ARCHITECTURE.md specification.
+
+Core Invariants:
+1. Mods must be ingested into the database to be visible
+2. Only mods in the active playset are visible by default
+3. Only active local mods are mutable
+4. Vanilla and workshop mods are always immutable
+5. Filesystem access never expands mod discovery
+6. ck3lens cannot write Python except to the WIP workspace
+7. ck3raven source is read-only (no writes even with contract)
 
 CRITICAL: ck3lens agents can ONLY edit CK3 mod files in configured local_mods.
-They CANNOT edit Python code, core ck3raven code, or any infrastructure files.
+They CANNOT edit Python code, core ck3raven code, or any infrastructure files
+(except Python in the WIP workspace for temporary scripts).
 """
 from __future__ import annotations
+from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
-from .types import Severity, Violation, ValidationContext
+from .types import (
+    Severity, Violation, ValidationContext,
+    ScopeDomain, IntentType, AcceptanceTest,
+)
+from .hard_gates import (
+    GateResult,
+    gate_intent_type_required,
+    gate_write_active_local_mods_only,
+    gate_no_workshop_vanilla_writes,
+    gate_python_wip_only,
+    gate_inactive_mod_requires_user_prompt,
+    gate_write_contract_has_targets,
+    gate_write_contract_has_snippets,
+    gate_write_contract_has_diff_sanity,
+    gate_delete_explicit_file_list,
+    gate_delete_has_token,
+    run_all_gates,
+)
+from .wip_workspace import is_wip_path, get_wip_workspace_path
 from .trace_helpers import (
     trace_has_call,
     trace_calls,
@@ -30,7 +59,7 @@ if TYPE_CHECKING:
 # FILE PATH RESTRICTIONS FOR CK3LENS
 # =============================================================================
 
-# Extensions that ck3lens is ALLOWED to edit (CK3 mod files only)
+# Extensions that ck3lens is ALLOWED to edit in MOD directories (CK3 mod files only)
 CK3_ALLOWED_EXTENSIONS = frozenset({
     ".txt",      # CK3 script files
     ".yml",      # Localization
@@ -46,6 +75,7 @@ CK3_ALLOWED_EXTENSIONS = frozenset({
 })
 
 # Paths that ck3lens is FORBIDDEN from editing (infrastructure/Python)
+# EXCEPTION: WIP workspace (~/.ck3raven/wip/) allows Python
 CK3LENS_FORBIDDEN_PATHS = (
     "src/",           # Core ck3raven code
     "builder/",       # Database builder
@@ -58,9 +88,10 @@ CK3LENS_FORBIDDEN_PATHS = (
     "docs/",          # Documentation
 )
 
-# File extensions ck3lens is FORBIDDEN from editing
+# File extensions ck3lens is FORBIDDEN from editing in MOD directories
+# NOTE: .py IS allowed in WIP workspace only
 CK3LENS_FORBIDDEN_EXTENSIONS = frozenset({
-    ".py",            # Python code
+    ".py",            # Python code (EXCEPT in WIP workspace)
     ".pyc",           # Compiled Python
     ".json",          # Config files
     ".yaml",          # Config files
@@ -72,6 +103,68 @@ CK3LENS_FORBIDDEN_EXTENSIONS = frozenset({
     ".bat",           # Batch scripts
     ".cmd",           # Command scripts
 })
+
+# Extensions allowed ONLY in WIP workspace (nowhere else)
+WIP_ONLY_EXTENSIONS = frozenset({
+    ".py",            # Python scripts for batch transformations
+})
+
+
+# =============================================================================
+# HELPER: CLASSIFY PATH DOMAIN
+# =============================================================================
+
+def classify_path_domain(
+    path: str | Path,
+    *,
+    local_mod_roots: set[str] | None = None,
+    workshop_roots: set[str] | None = None,
+    vanilla_root: str | None = None,
+    ck3raven_root: Path | None = None,
+) -> ScopeDomain:
+    """
+    Classify a path into its scope domain.
+    
+    Returns the ScopeDomain for the path to determine access permissions.
+    """
+    if isinstance(path, str):
+        path = Path(path)
+    
+    path_resolved = path.resolve()
+    path_str = str(path_resolved).replace("\\", "/").lower()
+    
+    # WIP workspace
+    if is_wip_path(path):
+        return ScopeDomain.WIP_WORKSPACE
+    
+    # CK3Raven source
+    if ck3raven_root:
+        ck3raven_str = str(ck3raven_root.resolve()).replace("\\", "/").lower()
+        if path_str.startswith(ck3raven_str):
+            return ScopeDomain.CK3RAVEN_SOURCE
+    
+    # Vanilla game
+    if vanilla_root:
+        vanilla_str = vanilla_root.replace("\\", "/").lower()
+        if path_str.startswith(vanilla_str):
+            return ScopeDomain.VANILLA_GAME
+    
+    # Workshop mods
+    if workshop_roots:
+        for workshop_root in workshop_roots:
+            workshop_str = workshop_root.replace("\\", "/").lower()
+            if path_str.startswith(workshop_str):
+                return ScopeDomain.ACTIVE_WORKSHOP_MODS
+    
+    # Local mods
+    if local_mod_roots:
+        for mod_root in local_mod_roots:
+            mod_str = mod_root.replace("\\", "/").lower()
+            if path_str.startswith(mod_str):
+                return ScopeDomain.ACTIVE_LOCAL_MODS
+    
+    # Unknown - treat as potentially inactive
+    return ScopeDomain.INACTIVE_LOCAL_MODS
 
 
 # =============================================================================
@@ -85,16 +178,17 @@ def enforce_ck3lens_file_restrictions(
     summary: dict[str, Any],
 ) -> None:
     """
-    Enforce: ck3lens agents can ONLY edit CK3 mod files.
+    Enforce: ck3lens agents can ONLY edit CK3 mod files (plus Python in WIP).
     
-    Rule: no_python_editing, local_mods_only
+    Rule: no_python_editing (except WIP), local_mods_only
     Severity: ERROR (HARD GATE)
     
     ck3lens is for CK3 modding ONLY. It cannot:
-    - Edit Python files (.py)
+    - Edit Python files (.py) EXCEPT in WIP workspace
     - Edit infrastructure code (src/, builder/, tools/, etc.)
     - Edit configuration files (.json, .yaml, .toml)
     - Edit documentation (.md, .rst)
+    - Write to ck3raven source (NEVER, even with contract)
     
     This prevents ck3lens agents from modifying the ck3raven codebase itself.
     Infrastructure changes require ck3raven-dev mode.
@@ -102,13 +196,21 @@ def enforce_ck3lens_file_restrictions(
     forbidden_files = []
     forbidden_extensions = []
     forbidden_paths = []
+    wip_python_files = []  # Python files in WIP (allowed)
+    ck3raven_writes = []   # Attempted writes to ck3raven source (NEVER allowed)
+    
+    # Get roots for classification
+    local_mod_roots = set()
+    if ctx.local_mods and ctx.active_roots:
+        local_mod_roots = ctx.active_roots
     
     for artifact in bundle.artifacts:
         path = getattr(artifact, "path", "")
         if not path:
             continue
         
-        path_normalized = path.replace("\\", "/").lower()
+        path_obj = Path(path)
+        path_normalized = str(path_obj).replace("\\", "/").lower()
         filename = path_normalized.split("/")[-1]
         
         # Get extension
@@ -117,15 +219,41 @@ def enforce_ck3lens_file_restrictions(
         else:
             ext = ""
         
-        # Check forbidden extensions
+        # Classify the domain
+        domain = classify_path_domain(
+            path,
+            local_mod_roots=local_mod_roots,
+            workshop_roots=ctx.active_roots - local_mod_roots if ctx.active_roots else None,
+            vanilla_root=ctx.vanilla_root,
+            ck3raven_root=ctx.ck3raven_root,
+        )
+        
+        # HARD GATE: ck3raven source is NEVER writable
+        if domain == ScopeDomain.CK3RAVEN_SOURCE:
+            ck3raven_writes.append({
+                "path": path,
+                "reason": "ck3lens cannot write to ck3raven source - NEVER allowed"
+            })
+            continue
+        
+        # WIP workspace special handling
+        if domain == ScopeDomain.WIP_WORKSPACE:
+            if ext in WIP_ONLY_EXTENSIONS:
+                wip_python_files.append(path)
+                continue  # Python in WIP is allowed
+            # Other files in WIP are also allowed
+            continue
+        
+        # For non-WIP paths, check forbidden extensions
         if ext in CK3LENS_FORBIDDEN_EXTENSIONS:
             forbidden_extensions.append({
                 "path": path,
                 "extension": ext,
-                "reason": f"ck3lens cannot edit {ext} files - use ck3raven-dev mode"
+                "reason": f"ck3lens cannot edit {ext} files outside WIP workspace - use ck3raven-dev mode"
             })
+            continue
         
-        # Check forbidden paths
+        # Check forbidden paths (ck3raven infrastructure)
         for forbidden in CK3LENS_FORBIDDEN_PATHS:
             if path_normalized.startswith(forbidden) or f"/{forbidden}" in path_normalized:
                 forbidden_paths.append({
@@ -146,17 +274,32 @@ def enforce_ck3lens_file_restrictions(
                 })
     
     # Collect all violations
-    all_forbidden = forbidden_extensions + forbidden_paths + forbidden_files
+    all_forbidden = forbidden_extensions + forbidden_paths + forbidden_files + ck3raven_writes
     summary["ck3lens_forbidden_files"] = all_forbidden
+    summary["ck3lens_wip_python_files"] = wip_python_files
+    
+    # ck3raven writes are the most critical - always DENY
+    if ck3raven_writes:
+        violations.append(Violation(
+            severity=Severity.ERROR,
+            code="CK3LENS_CK3RAVEN_WRITE_FORBIDDEN",
+            message="ck3lens CANNOT write to ck3raven source code - NEVER allowed.",
+            details={
+                "files": ck3raven_writes,
+                "suggestion": "Use ck3raven-dev mode for infrastructure changes",
+                "hard_gate": True,
+            },
+        ))
     
     if forbidden_extensions:
         violations.append(Violation(
             severity=Severity.ERROR,
             code="CK3LENS_FORBIDDEN_EXTENSION",
-            message="ck3lens agents CANNOT edit Python or infrastructure files.",
+            message="ck3lens agents CANNOT edit Python or infrastructure files outside WIP workspace.",
             details={
                 "files": forbidden_extensions,
-                "suggestion": "Use ck3raven-dev mode for Python/infrastructure changes",
+                "suggestion": "Use ck3raven-dev mode for Python/infrastructure changes, or write Python to ~/.ck3raven/wip/",
+                "wip_workspace": str(get_wip_workspace_path()),
             },
         ))
     
@@ -550,6 +693,190 @@ def enforce_conflict_alignment(
     summary["resolved_units_count"] = len(resolved_unit_keys)
 
 
+# =============================================================================
+# NEW: INTENT TYPE AND CONTRACT ENFORCEMENT
+# =============================================================================
+
+def enforce_intent_type_required(
+    ctx: ValidationContext,
+    bundle: "ArtifactBundle",
+    violations: list[Violation],
+    summary: dict[str, Any],
+) -> None:
+    """
+    Enforce: Write contracts must have valid intent_type.
+    
+    Rule: intent_type_required
+    Severity: ERROR (HARD GATE)
+    
+    Missing intent_type → AUTO_DENY
+    """
+    # Check if bundle has any write operations
+    has_writes = len(bundle.artifacts) > 0
+    
+    if not has_writes:
+        summary["intent_type_enforcement"] = "no_writes"
+        return
+    
+    # Check intent_type from context
+    intent_type = ctx.intent_type
+    
+    if intent_type is None:
+        violations.append(Violation(
+            severity=Severity.ERROR,
+            code="INTENT_TYPE_MISSING",
+            message="Write contract must specify intent_type.",
+            details={
+                "hard_gate": True,
+                "valid_types": [t.value for t in IntentType],
+                "suggestion": "Declare intent_type: COMPATCH, BUGPATCH, RESEARCH_MOD_ISSUES, RESEARCH_BUGREPORT, or SCRIPT_WIP",
+            },
+        ))
+        return
+    
+    # Check if intent_type allows writes
+    write_intents = {IntentType.COMPATCH, IntentType.BUGPATCH}
+    
+    if intent_type not in write_intents:
+        violations.append(Violation(
+            severity=Severity.ERROR,
+            code="INTENT_TYPE_FORBIDS_WRITES",
+            message=f"Intent type {intent_type.value} does not allow write operations.",
+            details={
+                "hard_gate": True,
+                "intent_type": intent_type.value,
+                "allowed_for_writes": [i.value for i in write_intents],
+            },
+        ))
+        return
+    
+    summary["intent_type"] = intent_type.value
+    summary["intent_type_enforcement"] = "passed"
+
+
+def enforce_contract_completeness(
+    ctx: ValidationContext,
+    bundle: "ArtifactBundle",
+    violations: list[Violation],
+    summary: dict[str, Any],
+) -> None:
+    """
+    Enforce: Write contracts must have targets, snippets, and DIFF_SANITY.
+    
+    Rules:
+    - Write contract without targets → AUTO_DENY
+    - Write contract without snippets (if >0 files) → AUTO_DENY
+    - Write contract without DIFF_SANITY acceptance test → AUTO_DENY
+    
+    Severity: ERROR (HARD GATE)
+    """
+    # Only applies to write intents
+    if ctx.intent_type not in {IntentType.COMPATCH, IntentType.BUGPATCH}:
+        return
+    
+    # Check targets
+    targets = getattr(bundle, "targets", None)
+    if not targets and len(bundle.artifacts) > 0:
+        violations.append(Violation(
+            severity=Severity.ERROR,
+            code="CONTRACT_MISSING_TARGETS",
+            message="Write contract must specify targets [{mod_id, rel_path}].",
+            details={
+                "hard_gate": True,
+                "artifact_count": len(bundle.artifacts),
+            },
+        ))
+    
+    # Check snippets
+    snippets = getattr(bundle, "before_after_snippets", None) or getattr(bundle, "snippets", None)
+    if not snippets and len(bundle.artifacts) > 0:
+        violations.append(Violation(
+            severity=Severity.ERROR,
+            code="CONTRACT_MISSING_SNIPPETS",
+            message="Write contract must include before/after snippets.",
+            details={
+                "hard_gate": True,
+                "artifact_count": len(bundle.artifacts),
+                "hint": "Provide up to 3 before_after_snippets blocks showing changes",
+            },
+        ))
+    
+    # Check acceptance tests
+    acceptance_tests = getattr(bundle, "acceptance_tests", None)
+    tests_set = set(acceptance_tests or [])
+    
+    if AcceptanceTest.DIFF_SANITY.value not in tests_set and "DIFF_SANITY" not in tests_set:
+        violations.append(Violation(
+            severity=Severity.ERROR,
+            code="CONTRACT_MISSING_DIFF_SANITY",
+            message="Write contract must include DIFF_SANITY acceptance test.",
+            details={
+                "hard_gate": True,
+                "declared_tests": list(tests_set),
+                "required": AcceptanceTest.DIFF_SANITY.value,
+            },
+        ))
+    
+    summary["contract_targets_count"] = len(targets) if targets else 0
+    summary["contract_snippets_count"] = len(snippets) if snippets else 0
+    summary["contract_acceptance_tests"] = list(tests_set)
+
+
+def enforce_delete_requirements(
+    ctx: ValidationContext,
+    bundle: "ArtifactBundle",
+    violations: list[Violation],
+    summary: dict[str, Any],
+) -> None:
+    """
+    Enforce: Delete operations require explicit file list and approval token.
+    
+    Rules:
+    - Delete without explicit file list → AUTO_DENY
+    - Delete with glob patterns → AUTO_DENY
+    - Delete without Tier B approval token → AUTO_DENY
+    
+    Severity: ERROR (HARD GATE)
+    """
+    # Check if any artifacts are marked for deletion
+    delete_artifacts = [a for a in bundle.artifacts if getattr(a, "operation", None) == "delete"]
+    
+    if not delete_artifacts:
+        summary["delete_operations"] = 0
+        return
+    
+    summary["delete_operations"] = len(delete_artifacts)
+    
+    # Check for glob patterns
+    for artifact in delete_artifacts:
+        path = getattr(artifact, "path", "") or getattr(artifact, "rel_path", "")
+        if "*" in path or "?" in path:
+            violations.append(Violation(
+                severity=Severity.ERROR,
+                code="DELETE_GLOB_FORBIDDEN",
+                message="Delete operations cannot use glob patterns.",
+                details={
+                    "hard_gate": True,
+                    "path": path,
+                    "hint": "List each file to delete explicitly",
+                },
+            ))
+    
+    # Check for delete token
+    delete_token = getattr(bundle, "delete_token", None)
+    if not delete_token:
+        violations.append(Violation(
+            severity=Severity.ERROR,
+            code="DELETE_TOKEN_REQUIRED",
+            message="Delete operations require DELETE_LOCALMOD approval token.",
+            details={
+                "hard_gate": True,
+                "files_to_delete": len(delete_artifacts),
+                "required_token": "DELETE_LOCALMOD",
+            },
+        ))
+
+
 def validate_ck3lens_rules(
     ctx: ValidationContext,
     bundle: "ArtifactBundle | None" = None,
@@ -573,6 +900,11 @@ def validate_ck3lens_rules(
     if summary is None:
         summary = {}
     
+    # Record validation metadata
+    summary["mode"] = ctx.mode.value
+    summary["intent_type"] = ctx.intent_type.value if ctx.intent_type else None
+    summary["contract_id"] = ctx.contract_id
+    
     # Scope enforcement (always)
     enforce_active_playset_scope(ctx, violations, summary)
     
@@ -581,9 +913,19 @@ def validate_ck3lens_rules(
     
     # ArtifactBundle-specific rules
     if bundle is not None:
-        # CRITICAL: ck3lens cannot edit Python/infrastructure files
+        # HARD GATE: Intent type required for writes
+        enforce_intent_type_required(ctx, bundle, violations, summary)
+        
+        # HARD GATE: Contract completeness (targets, snippets, DIFF_SANITY)
+        enforce_contract_completeness(ctx, bundle, violations, summary)
+        
+        # HARD GATE: Delete requirements (explicit list, token)
+        enforce_delete_requirements(ctx, bundle, violations, summary)
+        
+        # HARD GATE: ck3lens cannot edit Python/infrastructure files (except WIP)
         enforce_ck3lens_file_restrictions(ctx, bundle, violations, summary)
         
+        # Standard validation rules
         enforce_ck3_file_model_required(ctx, bundle, violations, summary)
         enforce_ck3_validation_called(ctx, bundle, violations, summary)
         enforce_symbol_manifest(ctx, bundle, violations, summary)
@@ -591,5 +933,18 @@ def validate_ck3lens_rules(
     
     # Negative claims (always, but currently advisory)
     enforce_negative_claims(ctx, violations, summary)
+    
+    # Compute summary statistics
+    error_count = sum(1 for v in violations if v.severity == Severity.ERROR)
+    warning_count = sum(1 for v in violations if v.severity == Severity.WARNING)
+    hard_gate_failures = sum(
+        1 for v in violations 
+        if v.severity == Severity.ERROR and v.details.get("hard_gate")
+    )
+    
+    summary["error_count"] = error_count
+    summary["warning_count"] = warning_count
+    summary["hard_gate_failures"] = hard_gate_failures
+    summary["deliverable"] = error_count == 0
     
     return violations, summary

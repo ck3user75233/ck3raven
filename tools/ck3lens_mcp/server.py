@@ -1594,6 +1594,286 @@ def ck3_vscode(
 
 
 # ============================================================================
+# CK3 Repair Tool (Launcher Registry, Cache)
+# ============================================================================
+
+@mcp.tool()
+def ck3_repair(
+    command: Literal["query", "diagnose_launcher", "repair_registry", "delete_cache", "backup_launcher"] = "query",
+    # For query - get status of repair targets
+    target: Literal["all", "launcher", "cache", "dlc_load"] | None = None,
+    # For repair_registry / delete_cache
+    dry_run: bool = True,
+    # For backup
+    backup_name: str | None = None,
+) -> dict:
+    """
+    Repair CK3 launcher registry and cache issues.
+    
+    SCOPE: Launcher domain operations only.
+    - ~/.ck3raven/ directory management
+    - CK3 launcher registry analysis (read-only by default)
+    - Cache cleanup
+    
+    Commands:
+    
+    command=query             → Get status of repair targets (launcher registry, cache, etc.)
+    command=diagnose_launcher → Analyze launcher database for issues
+    command=repair_registry   → Fix launcher registry entries (requires dry_run=False)
+    command=delete_cache      → Clear ck3raven cache files (requires dry_run=False)
+    command=backup_launcher   → Create backup of launcher database before repair
+    
+    Args:
+        command: Action to perform
+        target: What to query ("all", "launcher", "cache", "dlc_load")
+        dry_run: If True (default), only show what would be done
+        backup_name: Optional name for backup file
+    
+    Returns:
+        Dict with repair status/results
+    
+    WARNINGS:
+    - repair_registry can modify the CK3 launcher database
+    - Always run diagnose_launcher first to understand issues
+    - backup_launcher before any repair operations
+    - Cache deletion is reversible (ck3raven will rebuild)
+    """
+    import shutil
+    from pathlib import Path
+    from datetime import datetime
+    
+    trace = _get_trace()
+    session = _get_session()
+    
+    ck3raven_dir = Path.home() / ".ck3raven"
+    
+    # Launcher database location (CK3 stores this in Paradox settings)
+    launcher_db_candidates = [
+        Path.home() / "AppData" / "Roaming" / "Paradox Interactive" / "launcher-v2_state" / "launcher-v2.sqlite",
+        Path.home() / ".local" / "share" / "Paradox Interactive" / "launcher-v2_state" / "launcher-v2.sqlite",  # Linux
+        Path.home() / "Library" / "Application Support" / "Paradox Interactive" / "launcher-v2_state" / "launcher-v2.sqlite",  # macOS
+    ]
+    
+    launcher_db = None
+    for candidate in launcher_db_candidates:
+        if candidate.exists():
+            launcher_db = candidate
+            break
+    
+    if command == "query":
+        # Return status of repair targets
+        cache_files = list(ck3raven_dir.glob("*.cache")) if ck3raven_dir.exists() else []
+        wip_files = list((ck3raven_dir / "wip").glob("**/*")) if (ck3raven_dir / "wip").exists() else []
+        
+        status = {
+            "ck3raven_dir": str(ck3raven_dir),
+            "ck3raven_exists": ck3raven_dir.exists(),
+            "db_path": str(session.db_path) if session.db_path else None,
+            "db_exists": session.db_path.exists() if session.db_path else False,
+            "launcher_db": str(launcher_db) if launcher_db else None,
+            "launcher_db_exists": launcher_db is not None,
+            "cache_files": len(cache_files),
+            "wip_files": len(wip_files),
+            "repair_targets": {
+                "cache": {
+                    "files": len(cache_files),
+                    "path": str(ck3raven_dir),
+                    "can_delete": True,
+                },
+                "wip": {
+                    "files": len(wip_files),
+                    "path": str(ck3raven_dir / "wip"),
+                    "can_delete": True,
+                },
+                "launcher": {
+                    "path": str(launcher_db) if launcher_db else None,
+                    "can_repair": launcher_db is not None,
+                    "requires_backup": True,
+                },
+            },
+        }
+        
+        if target == "launcher" or target == "all":
+            if launcher_db:
+                status["launcher_details"] = _diagnose_launcher_db(launcher_db)
+        
+        trace.log("ck3lens.repair", {"command": "query", "target": target}, {"success": True})
+        return status
+    
+    elif command == "diagnose_launcher":
+        # Analyze launcher database for issues
+        if not launcher_db:
+            return {"error": "CK3 launcher database not found", "checked_paths": [str(p) for p in launcher_db_candidates]}
+        
+        diagnosis = _diagnose_launcher_db(launcher_db)
+        
+        trace.log("ck3lens.repair", {"command": "diagnose_launcher"}, {"issues_found": diagnosis.get("issues_count", 0)})
+        return diagnosis
+    
+    elif command == "backup_launcher":
+        # Create backup of launcher database
+        if not launcher_db:
+            return {"error": "CK3 launcher database not found"}
+        
+        backups_dir = ck3raven_dir / "launcher_backups"
+        backups_dir.mkdir(parents=True, exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        name = backup_name or f"launcher-v2_{timestamp}"
+        backup_path = backups_dir / f"{name}.sqlite"
+        
+        shutil.copy2(launcher_db, backup_path)
+        
+        trace.log("ck3lens.repair", {"command": "backup_launcher"}, {"backup_path": str(backup_path)})
+        return {
+            "success": True,
+            "backup_path": str(backup_path),
+            "original_path": str(launcher_db),
+            "backup_size": backup_path.stat().st_size,
+        }
+    
+    elif command == "repair_registry":
+        # Repair launcher registry (requires token in strict mode)
+        if not launcher_db:
+            return {"error": "CK3 launcher database not found"}
+        
+        if dry_run:
+            return {
+                "dry_run": True,
+                "message": "Would repair launcher registry. Set dry_run=False to proceed.",
+                "recommendation": "Run backup_launcher first, then diagnose_launcher to see issues.",
+            }
+        
+        # For now, return a placeholder - actual repair logic requires careful implementation
+        return {
+            "error": "Launcher repair not yet implemented",
+            "reason": "Launcher database modifications require careful testing to avoid data loss",
+            "workaround": "Use the CK3 launcher UI to reset settings, or delete ~/.ck3raven/ck3raven.db to force rebuild",
+        }
+    
+    elif command == "delete_cache":
+        # Delete ck3raven cache files
+        cache_dir = ck3raven_dir
+        wip_dir = ck3raven_dir / "wip"
+        
+        if dry_run:
+            cache_files = list(cache_dir.glob("*.cache")) if cache_dir.exists() else []
+            wip_files = list(wip_dir.rglob("*")) if wip_dir.exists() else []
+            
+            return {
+                "dry_run": True,
+                "would_delete": {
+                    "cache_files": [str(f) for f in cache_files[:10]],  # First 10
+                    "cache_count": len(cache_files),
+                    "wip_files": [str(f) for f in wip_files[:10]],
+                    "wip_count": len(wip_files),
+                },
+                "message": "Set dry_run=False to delete these files",
+            }
+        
+        deleted = {"cache": 0, "wip": 0}
+        
+        # Delete cache files
+        for cache_file in cache_dir.glob("*.cache"):
+            try:
+                cache_file.unlink()
+                deleted["cache"] += 1
+            except Exception as e:
+                pass
+        
+        # Delete WIP directory contents (but keep directory)
+        if wip_dir.exists():
+            for item in wip_dir.rglob("*"):
+                if item.is_file():
+                    try:
+                        item.unlink()
+                        deleted["wip"] += 1
+                    except Exception:
+                        pass
+        
+        trace.log("ck3lens.repair", {"command": "delete_cache", "dry_run": False}, deleted)
+        return {
+            "success": True,
+            "deleted": deleted,
+            "message": "Cache cleared. ck3raven will rebuild as needed.",
+        }
+    
+    return {"error": f"Unknown command: {command}"}
+
+
+def _diagnose_launcher_db(launcher_db: Path) -> dict:
+    """
+    Analyze CK3 launcher database for issues.
+    
+    Returns diagnosis report with issues found.
+    """
+    import sqlite3
+    
+    try:
+        conn = sqlite3.connect(launcher_db)
+        conn.row_factory = sqlite3.Row
+        
+        result = {
+            "path": str(launcher_db),
+            "size_bytes": launcher_db.stat().st_size,
+            "tables": [],
+            "mods_registered": 0,
+            "playsets": 0,
+            "issues": [],
+            "issues_count": 0,
+        }
+        
+        # Get tables
+        tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        result["tables"] = [t[0] for t in tables]
+        
+        # Count mods
+        try:
+            mods = conn.execute("SELECT COUNT(*) FROM mods").fetchone()
+            result["mods_registered"] = mods[0] if mods else 0
+        except:
+            result["issues"].append("Cannot read mods table")
+        
+        # Count playsets
+        try:
+            playsets = conn.execute("SELECT COUNT(*) FROM playsets").fetchone()
+            result["playsets"] = playsets[0] if playsets else 0
+        except:
+            result["issues"].append("Cannot read playsets table")
+        
+        # Check for orphaned mod references
+        try:
+            orphans = conn.execute("""
+                SELECT pm.mod_id FROM playsets_mods pm 
+                LEFT JOIN mods m ON pm.mod_id = m.id 
+                WHERE m.id IS NULL
+            """).fetchall()
+            if orphans:
+                result["issues"].append(f"Found {len(orphans)} orphaned mod references in playsets")
+        except:
+            pass
+        
+        # Check for mods with missing paths
+        try:
+            missing_paths = conn.execute("""
+                SELECT display_name, steam_id FROM mods 
+                WHERE path IS NULL OR path = ''
+            """).fetchall()
+            if missing_paths:
+                result["issues"].append(f"Found {len(missing_paths)} mods with missing paths")
+        except:
+            pass
+        
+        result["issues_count"] = len(result["issues"])
+        conn.close()
+        
+        return result
+        
+    except Exception as e:
+        return {"error": f"Failed to analyze launcher database: {e}"}
+
+
+# ============================================================================
 # Work Contract Management (CLW)
 # ============================================================================
 
@@ -6453,7 +6733,11 @@ def ck3_get_mode_instructions(
     """
     Get the instruction content for a specific agent mode.
     
-    Use this to understand what a mode does or to switch modes.
+    CRITICAL: This is the MODE INITIALIZATION function. It:
+    1. Loads mode-specific instructions
+    2. Initializes WIP workspace (mode-specific location)
+    3. Returns policy boundaries for the mode
+    4. Logs mode activation to trace
     
     Args:
         mode: The mode to get instructions for:
@@ -6461,9 +6745,13 @@ def ck3_get_mode_instructions(
             - "ck3raven-dev": Full development mode for infrastructure
     
     Returns:
-        Mode instructions and configuration
+        Mode instructions, policy boundaries, and session context
     """
     from pathlib import Path
+    from ck3lens.policy import (
+        ScopeDomain, IntentType, CK3LensTokenType, AgentMode,
+        get_wip_workspace_path, initialize_workspace,
+    )
     
     # Map modes to instruction files
     mode_files = {
@@ -6490,27 +6778,183 @@ def ck3_get_mode_instructions(
     try:
         content = instructions_path.read_text(encoding="utf-8")
         
-        # Add mode-specific notes
-        mode_notes = {
-            "ck3lens": "CK3 modding: Database search + live mod file editing.",
-            "ck3raven-dev": "Development mode: All tools available for infrastructure work.",
-        }
+        # Initialize WIP workspace (mode-specific location and behavior)
+        wip_info = None
+        agent_mode = AgentMode.CK3LENS if mode == "ck3lens" else AgentMode.CK3RAVEN_DEV
+        
+        try:
+            wip_info = initialize_workspace(
+                mode=agent_mode,
+                repo_root=ck3raven_root if mode == "ck3raven-dev" else None,
+                wipe=True  # Auto-wipe on session start
+            )
+        except Exception as e:
+            wip_info = {"error": f"WIP init failed: {e}"}
+        
+        # Build policy context for the mode
+        policy_context = _get_mode_policy_context(mode)
         
         # Log mode initialization to trace
         trace = _get_trace()
+        wip_path = get_wip_workspace_path(
+            agent_mode,
+            ck3raven_root if mode == "ck3raven-dev" else None
+        )
         trace.log("ck3lens.mode_initialized", {"mode": mode}, {
             "mode": mode,
             "source_file": str(instructions_path),
+            "wip_workspace": str(wip_path),
         })
         
         return {
             "mode": mode,
-            "note": mode_notes.get(mode, ""),
             "instructions": content,
             "source_file": str(instructions_path),
+            "policy": policy_context,
+            "wip_workspace": wip_info,
+            "session_note": _get_mode_session_note(mode),
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+def _get_mode_policy_context(mode: str) -> dict:
+    """
+    Build policy context for a mode showing boundaries and capabilities.
+    """
+    from ck3lens.policy import (
+        ScopeDomain, IntentType, CK3LensTokenType,
+        Ck3RavenDevScopeDomain, Ck3RavenDevIntentType, Ck3RavenDevWipIntent,
+        Ck3RavenDevTokenType, CK3RAVEN_DEV_TOKEN_TIER_A, CK3RAVEN_DEV_TOKEN_TIER_B,
+    )
+    
+    if mode == "ck3lens":
+        return {
+            "mode": "ck3lens",
+            "description": "CK3 modding: Database search + live mod file editing",
+            "scope_domains": {
+                "read_allowed": [
+                    ScopeDomain.ACTIVE_PLAYSET_DB.value,
+                    ScopeDomain.ACTIVE_LOCAL_MODS.value,
+                    ScopeDomain.ACTIVE_WORKSHOP_MODS.value,
+                    ScopeDomain.VANILLA_GAME.value,
+                    ScopeDomain.CK3_UTILITY_FILES.value,
+                    ScopeDomain.CK3RAVEN_SOURCE.value,  # Read OK for error context
+                    ScopeDomain.WIP_WORKSPACE.value,
+                ],
+                "write_allowed": [
+                    ScopeDomain.ACTIVE_LOCAL_MODS.value,
+                    ScopeDomain.WIP_WORKSPACE.value,
+                ],
+                "delete_requires_token": [
+                    ScopeDomain.ACTIVE_LOCAL_MODS.value,
+                ],
+                "hidden_require_token": [
+                    ScopeDomain.INACTIVE_WORKSHOP_MODS.value,
+                    ScopeDomain.INACTIVE_LOCAL_MODS.value,
+                ],
+                "always_denied": [
+                    "write to WORKSHOP_MODS",
+                    "write to VANILLA_GAME",
+                    "write to CK3RAVEN_SOURCE",
+                    "delete from WORKSHOP_MODS",
+                ],
+            },
+            "intent_types": [it.value for it in IntentType],
+            "available_tokens": [tt.value for tt in CK3LensTokenType],
+            "hard_rules": [
+                "Intent type required for all operations",
+                "Write only to active local mods (MSC, MSCRE, LRE, MRP)",
+                "Python files only allowed in WIP workspace",
+                "Delete requires explicit token with user prompt evidence",
+                "Inactive mod access requires user prompt + token",
+            ],
+        }
+    elif mode == "ck3raven-dev":
+        return {
+            "mode": "ck3raven-dev",
+            "description": "Development mode: CK3 Lens infrastructure development",
+            "scope_domains": {
+                "read_allowed": [
+                    Ck3RavenDevScopeDomain.CK3RAVEN_SOURCE.value,
+                    Ck3RavenDevScopeDomain.CK3LENS_MCP_SOURCE.value,
+                    Ck3RavenDevScopeDomain.CK3LENS_EXPLORER_SOURCE.value,
+                    Ck3RavenDevScopeDomain.MOD_FILESYSTEM.value,  # Read-only for parser testing
+                    Ck3RavenDevScopeDomain.VANILLA_FILESYSTEM.value,  # Read-only for parser testing
+                    Ck3RavenDevScopeDomain.CK3RAVEN_DATABASE.value,
+                    Ck3RavenDevScopeDomain.WIP_WORKSPACE.value,
+                    Ck3RavenDevScopeDomain.CK3_UTILITY_FILES.value,
+                ],
+                "write_allowed": [
+                    Ck3RavenDevScopeDomain.CK3RAVEN_SOURCE.value,
+                    Ck3RavenDevScopeDomain.CK3LENS_MCP_SOURCE.value,
+                    Ck3RavenDevScopeDomain.CK3LENS_EXPLORER_SOURCE.value,
+                    Ck3RavenDevScopeDomain.CK3RAVEN_DATABASE.value,  # With migration context
+                    Ck3RavenDevScopeDomain.WIP_WORKSPACE.value,  # <repo>/.wip/ only
+                ],
+                "delete_requires_token": [
+                    Ck3RavenDevScopeDomain.CK3RAVEN_SOURCE.value,
+                    Ck3RavenDevScopeDomain.CK3LENS_MCP_SOURCE.value,
+                    Ck3RavenDevScopeDomain.CK3LENS_EXPLORER_SOURCE.value,
+                ],
+                "always_denied": [
+                    "write to MOD_FILESYSTEM (absolute prohibition)",
+                    "write to VANILLA_FILESYSTEM (absolute prohibition)",
+                    "launcher/registry repair (ck3lens mode only)",
+                    "run_in_terminal (use ck3_exec instead)",
+                ],
+            },
+            "intent_types": [it.value for it in Ck3RavenDevIntentType],
+            "wip_intents": [wi.value for wi in Ck3RavenDevWipIntent],
+            "available_tokens": {
+                "tier_a_auto_grant": [tt.value for tt in CK3RAVEN_DEV_TOKEN_TIER_A],
+                "tier_b_approval_required": [tt.value for tt in CK3RAVEN_DEV_TOKEN_TIER_B],
+            },
+            "hard_rules": [
+                "ABSOLUTE PROHIBITION: Cannot write to ANY mod files (local, workshop, vanilla)",
+                "PROHIBITION: Cannot use run_in_terminal (use ck3_exec)",
+                "Git push/force push requires explicit token",
+                "Git history rewrite (rebase, amend) requires explicit token",
+                "DB destructive ops require migration context + rollback plan + token",
+                "WIP scripts cannot substitute for proper code fixes",
+                "Repeated script execution without core changes = AUTO_DENY",
+            ],
+            "wip_workspace": {
+                "location": "<repo>/.wip/",
+                "note": "Git-ignored, strictly constrained to analysis/staging only",
+                "constraints": [
+                    "ANALYSIS_ONLY: Read-only analysis, no writes",
+                    "REFACTOR_ASSIST: Generate patches, requires core_change_plan",
+                    "MIGRATION_HELPER: Generate migrations, requires core_change_plan",
+                ],
+            },
+        }
+    else:
+        return {"error": f"Unknown mode: {mode}"}
+
+
+def _get_mode_session_note(mode: str) -> str:
+    """Get a brief session note for the mode."""
+    if mode == "ck3lens":
+        return (
+            "CK3 Lens mode active. You can:\n"
+            "• Search symbols, files, content via database\n"
+            "• Write/edit files in active local mods (MSC, MSCRE, LRE, MRP)\n"
+            "• Draft Python scripts in WIP workspace (~/.ck3raven/wip/)\n"
+            "• Use ck3_repair for launcher/cache issues\n\n"
+            "You CANNOT write to workshop mods, vanilla, or ck3raven source."
+        )
+    elif mode == "ck3raven-dev":
+        return (
+            "CK3 Raven Dev mode active. You can:\n"
+            "• Read all source code and mods (for parser/ingestion testing)\n"
+            "• Write/edit ck3raven infrastructure code\n"
+            "• Execute commands via ck3_exec (NOT run_in_terminal)\n"
+            "• Write analysis scripts to <repo>/.wip/\n\n"
+            "ABSOLUTE PROHIBITION: You CANNOT write to ANY mod files.\n"
+            "Git push/rebase/amend requires explicit approval token."
+        )
+    return ""
 
 
 @mcp.tool()

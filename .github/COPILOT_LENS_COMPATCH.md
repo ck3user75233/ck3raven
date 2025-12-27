@@ -420,3 +420,65 @@ mod/
 6. **Commit changes** with meaningful messages
 7. **Check error.log** after testing in-game
 
+---
+
+## Work Contracts & Access Control
+
+### Intent Types (REQUIRED for all work)
+
+Every session must declare an **intent type**:
+
+| Intent | Purpose | Access Level |
+|--------|---------|--------------|
+| `compatch` | Modify active local mods for compatibility | Full write access to MSC/MSCRE/LRE/MRP |
+| `bugpatch` | Patch a bug via local override | Write access to live mods |
+| `research_mod_issues` | Research mod conflicts/errors | Read-only (no writes) |
+| `research_bugreport` | Research to file a bug report | Read-only (no writes) |
+| `script_wip` | Draft/run scripts in WIP workspace | WIP workspace only |
+
+### Access Domains
+
+| Domain | Visibility | Access |
+|--------|-----------|--------|
+| **Active Playset (DB)** | Always visible | Read via MCP tools |
+| **Active Local Mods** | Always visible | Read + Write (contract) + Delete (token) |
+| **Active Workshop Mods** | Always visible | Read only |
+| **Vanilla Game** | Always visible | Read only |
+| **Inactive Mods** | Hidden by default | Requires user prompt + token |
+| **WIP Workspace** | Session-local | Full access (Python scripts) |
+| **Launcher Registry** | Special | Via `ck3_repair` tool only |
+
+### Hard Gates (AUTO_DENY if violated)
+
+These rules **cannot be bypassed** - they're architectural:
+
+1. **Intent Type Required** - Missing intent_type → AUTO_DENY
+2. **Write Only Active Local Mods** - Cannot write to workshop mods or vanilla
+3. **Python Only in WIP** - .py files only allowed in ~/.ck3raven/wip/
+4. **Delete Requires Token** - File deletion requires explicit approval token
+5. **Inactive Mods Require User Prompt** - Must quote user's explicit request
+
+### Tokens (For Risky Operations)
+
+| Token Type | Required For | TTL |
+|------------|--------------|-----|
+| `DELETE_MOD_FILE` | Deleting files from live mods | 30 min |
+| `INACTIVE_MOD_ACCESS` | Reading inactive mods | 60 min |
+| `SCRIPT_EXECUTE` | Running scripts in WIP | 15 min |
+| `GIT_PUSH_MOD` | Pushing to mod git remotes | 60 min |
+
+**User Prompt Required:** These tokens require evidence that the user explicitly requested the action. Quote the user's message in the token request.
+
+---
+
+## Repair Tool
+
+For launcher/cache issues, use `ck3_repair`:
+
+```
+ck3_repair(command="query")           # Get status
+ck3_repair(command="diagnose_launcher")  # Analyze launcher DB
+ck3_repair(command="backup_launcher")    # Backup before repair
+ck3_repair(command="delete_cache", dry_run=False)  # Clear ck3raven cache
+```
+

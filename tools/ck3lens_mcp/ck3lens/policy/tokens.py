@@ -92,6 +92,29 @@ TOKEN_TYPES = {
 
 
 # ============================================================================
+# CK3Lens Token Types
+# ============================================================================
+
+# CK3Lens-specific tokens (from types.py CK3LensTokenType enum)
+CK3LENS_TOKEN_TYPES = {
+    # Delete operations require explicit user approval
+    "DELETE_MOD_FILE": {"risk": "high", "ttl_minutes": 30, "requires_user_prompt": True},
+    
+    # Access to inactive mods (not in current playset)
+    "INACTIVE_MOD_ACCESS": {"risk": "medium", "ttl_minutes": 60, "requires_user_prompt": True},
+    
+    # Script execution in WIP workspace
+    "SCRIPT_EXECUTE": {"risk": "high", "ttl_minutes": 15, "requires_script_hash": True},
+    
+    # Git push for live mods
+    "GIT_PUSH_MOD": {"risk": "medium", "ttl_minutes": 60, "requires_user_prompt": True},
+}
+
+# Merge into main TOKEN_TYPES for unified lookup
+TOKEN_TYPES.update(CK3LENS_TOKEN_TYPES)
+
+
+# ============================================================================
 # Data Structures
 # ============================================================================
 
@@ -110,6 +133,11 @@ class ApprovalToken:
     # Scope constraints
     path_patterns: list[str] = field(default_factory=list)  # Allowed paths
     command_patterns: list[str] = field(default_factory=list)  # Allowed commands
+    
+    # CK3Lens-specific constraints
+    script_hash: Optional[str] = None  # SHA256 hash of approved script content
+    mod_name: Optional[str] = None  # Target mod name
+    user_prompt_evidence: Optional[str] = None  # Evidence user explicitly requested this
     
     # Lifecycle
     issued_at: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -440,3 +468,229 @@ def revoke_token(token_id: str) -> bool:
         return True
     
     return False
+
+
+# ============================================================================
+# CK3Lens Token Helpers
+# ============================================================================
+
+def issue_delete_token(
+    mod_name: str,
+    file_path: str,
+    user_prompt_evidence: str,
+    reason: str,
+    contract_id: Optional[str] = None,
+) -> ApprovalToken:
+    """
+    Issue a token for deleting a mod file.
+    
+    Requires user prompt evidence showing explicit request to delete.
+    
+    Args:
+        mod_name: Target mod name
+        file_path: Relative path of file to delete
+        user_prompt_evidence: Quote from user message requesting deletion
+        reason: Why this deletion is happening
+        contract_id: Associated work contract
+    
+    Returns:
+        Signed token
+    """
+    if not user_prompt_evidence:
+        raise ValueError("DELETE_MOD_FILE tokens require user_prompt_evidence")
+    
+    token = ApprovalToken(
+        token_id=ApprovalToken.generate_id(),
+        token_type="DELETE_MOD_FILE",
+        capability=f"delete:{mod_name}:{file_path}",
+        path_patterns=[file_path],
+        mod_name=mod_name,
+        user_prompt_evidence=user_prompt_evidence,
+        reason=reason,
+        contract_id=contract_id,
+    )
+    
+    token.signature = sign_token(token)
+    token.save()
+    
+    return token
+
+
+def issue_inactive_mod_token(
+    mod_name: str,
+    user_prompt_evidence: str,
+    reason: str,
+    path_patterns: Optional[list[str]] = None,
+) -> ApprovalToken:
+    """
+    Issue a token for accessing an inactive mod (not in playset).
+    
+    Requires user prompt evidence showing explicit request to access.
+    
+    Args:
+        mod_name: Name of the inactive mod
+        user_prompt_evidence: Quote from user message requesting access
+        reason: Why this access is needed
+        path_patterns: Optional path restrictions within the mod
+    
+    Returns:
+        Signed token
+    """
+    if not user_prompt_evidence:
+        raise ValueError("INACTIVE_MOD_ACCESS tokens require user_prompt_evidence")
+    
+    token = ApprovalToken(
+        token_id=ApprovalToken.generate_id(),
+        token_type="INACTIVE_MOD_ACCESS",
+        capability=f"read:{mod_name}",
+        path_patterns=path_patterns or [],
+        mod_name=mod_name,
+        user_prompt_evidence=user_prompt_evidence,
+        reason=reason,
+    )
+    
+    token.signature = sign_token(token)
+    token.save()
+    
+    return token
+
+
+def issue_script_execute_token(
+    script_hash: str,
+    script_path: str,
+    reason: str,
+    contract_id: Optional[str] = None,
+) -> ApprovalToken:
+    """
+    Issue a token for executing a script in the WIP workspace.
+    
+    Token is bound to specific script hash - content changes invalidate it.
+    
+    Args:
+        script_hash: SHA256 hash of script content
+        script_path: Path to script in WIP workspace
+        reason: Why this script is being executed
+        contract_id: Associated work contract
+    
+    Returns:
+        Signed token
+    """
+    if not script_hash:
+        raise ValueError("SCRIPT_EXECUTE tokens require script_hash")
+    
+    token = ApprovalToken(
+        token_id=ApprovalToken.generate_id(),
+        token_type="SCRIPT_EXECUTE",
+        capability=f"execute:{script_path}",
+        path_patterns=[script_path],
+        script_hash=script_hash,
+        reason=reason,
+        contract_id=contract_id,
+    )
+    
+    token.signature = sign_token(token)
+    token.save()
+    
+    return token
+
+
+def validate_script_token(
+    token_id: str,
+    current_hash: str,
+) -> tuple[bool, str]:
+    """
+    Validate a script execution token against current script content.
+    
+    Args:
+        token_id: Token to validate
+        current_hash: Current SHA256 hash of script content
+    
+    Returns:
+        (is_valid, reason) tuple
+    """
+    token = ApprovalToken.load(token_id)
+    
+    if not token:
+        return False, "Token not found"
+    
+    if token.token_type != "SCRIPT_EXECUTE":
+        return False, f"Token type is {token.token_type}, not SCRIPT_EXECUTE"
+    
+    if token.is_expired():
+        return False, "Token has expired"
+    
+    if token.consumed:
+        return False, "Token has already been consumed"
+    
+    if not verify_signature(token):
+        return False, "Token signature is invalid"
+    
+    if not token.script_hash:
+        return False, "Token has no script_hash bound"
+    
+    if token.script_hash != current_hash:
+        return False, "Script content has changed since token was issued"
+    
+    return True, "Token valid"
+
+
+def issue_git_push_mod_token(
+    mod_name: str,
+    user_prompt_evidence: str,
+    reason: str,
+) -> ApprovalToken:
+    """
+    Issue a token for pushing changes to a mod's git remote.
+    
+    Args:
+        mod_name: Target mod name
+        user_prompt_evidence: Quote from user message requesting push
+        reason: Why this push is happening
+    
+    Returns:
+        Signed token
+    """
+    if not user_prompt_evidence:
+        raise ValueError("GIT_PUSH_MOD tokens require user_prompt_evidence")
+    
+    token = ApprovalToken(
+        token_id=ApprovalToken.generate_id(),
+        token_type="GIT_PUSH_MOD",
+        capability=f"git_push:{mod_name}",
+        mod_name=mod_name,
+        user_prompt_evidence=user_prompt_evidence,
+        reason=reason,
+    )
+    
+    token.signature = sign_token(token)
+    token.save()
+    
+    return token
+
+
+def check_user_prompt_required(token_type: str) -> bool:
+    """
+    Check if a token type requires user prompt evidence.
+    
+    Args:
+        token_type: Token type to check
+    
+    Returns:
+        True if user prompt evidence is required
+    """
+    type_info = TOKEN_TYPES.get(token_type, {})
+    return type_info.get("requires_user_prompt", False)
+
+
+def check_script_hash_required(token_type: str) -> bool:
+    """
+    Check if a token type requires script hash binding.
+    
+    Args:
+        token_type: Token type to check
+    
+    Returns:
+        True if script hash is required
+    """
+    type_info = TOKEN_TYPES.get(token_type, {})
+    return type_info.get("requires_script_hash", False)

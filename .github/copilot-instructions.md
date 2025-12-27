@@ -508,6 +508,107 @@ When working with MSCRE religion content:
 | MCP Server | `tools/ck3lens_mcp/server.py` |
 | Merge Rules | `docs/05_ACCURATE_MERGE_OVERRIDE_RULES.md` |
 | Content Types | `docs/06_CONTAINER_MERGE_OVERRIDE_TABLE.md` |
+| CK3Lens Policy | `docs/CK3LENS_POLICY_ARCHITECTURE.md` |
+| CK3Raven-Dev Policy | `docs/CK3RAVEN_DEV_POLICY_ARCHITECTURE.md` |
+
+---
+
+## Policy Architecture (ck3lens Mode)
+
+### Access Control Domains
+
+| Domain | Visibility | Access |
+|--------|-----------|--------|
+| Active Playset (DB) | Always visible | Read only (DB view) |
+| Active Local Mods | Always visible | Read + Write (contract) + Delete (token) |
+| Active Workshop Mods | Always visible | Read only |
+| Vanilla Game | Always visible | Read only |
+| Inactive Mods | Hidden | User prompt + token required |
+| WIP Workspace | Session-local | Full access (Python scripts) |
+| Launcher Registry | Special | Via ck3_repair only |
+
+### Intent Types
+
+| Intent | Purpose | Access Level |
+|--------|---------|--------------|
+| `compatch` | Multi-mod compatibility patches | Full write to live mods |
+| `bugpatch` | Bug patches via local override | Write to live mods |
+| `research_mod_issues` | Research conflicts/errors | Read-only |
+| `research_bugreport` | Research for bug reports | Read-only |
+| `script_wip` | Draft/run Python in WIP | WIP workspace only |
+
+### Hard Gates (AUTO_DENY)
+
+These rules are architectural - they cannot be bypassed:
+
+1. **Intent Type Required** - Every operation must have declared intent
+2. **Write Only Active Local Mods** - Cannot write to workshop/vanilla
+3. **Python Only in WIP** - .py files restricted to ~/.ck3raven/wip/
+4. **Delete Requires Token** - File deletion needs explicit approval
+5. **Inactive Mod Access Requires User Prompt** - Must quote user's request
+
+### Token Types
+
+| Token | Purpose | TTL | Requires |
+|-------|---------|-----|----------|
+| DELETE_MOD_FILE | Delete files from live mods | 30 min | User prompt evidence |
+| INACTIVE_MOD_ACCESS | Read inactive mods | 60 min | User prompt evidence |
+| SCRIPT_EXECUTE | Run scripts in WIP | 15 min | Script hash binding |
+| GIT_PUSH_MOD | Push to mod git remote | 60 min | User prompt evidence |
+
+### Repair Tool
+
+For launcher/cache issues:
+
+```python
+ck3_repair(command="query")              # Get system status
+ck3_repair(command="diagnose_launcher")  # Analyze launcher DB
+ck3_repair(command="backup_launcher")    # Backup before changes
+ck3_repair(command="delete_cache", dry_run=False)  # Clear cache
+```
+
+---
+
+## Policy Architecture (ck3raven-dev Mode)
+
+See full specification: `docs/CK3RAVEN_DEV_POLICY_ARCHITECTURE.md`
+
+### Key Differences from ck3lens
+
+| Aspect | ck3lens | ck3raven-dev |
+|--------|---------|--------------|
+| **Mod writes** | Allowed to active local mods | **ABSOLUTE PROHIBITION** |
+| **ck3raven source** | Read-only | Full write access |
+| **WIP location** | `~/.ck3raven/wip/` | `<repo>/.wip/` |
+| **run_in_terminal** | Not available | **PROHIBITED** (use ck3_exec) |
+| **ck3_repair** | Available | **Not available** |
+
+### Hard Gates (ck3raven-dev)
+
+1. **Mod Write Prohibition** - Cannot write to ANY mod files (absolute)
+2. **run_in_terminal Prohibition** - Must use ck3_exec
+3. **Git History Protection** - rebase/amend requires token
+4. **DB Destructive Protection** - DROP/DELETE require migration context + token
+5. **WIP Workaround Detection** - Repeated script execution without core changes = AUTO_DENY
+
+### Intent Types (ck3raven-dev)
+
+| Intent | Purpose |
+|--------|---------|
+| `BUGFIX` | Fix infrastructure bug |
+| `REFACTOR` | Code reorganization |
+| `FEATURE` | New feature implementation |
+| `MIGRATION` | Database/config migration |
+| `TEST_ONLY` | Tests only |
+| `DOCS_ONLY` | Documentation only |
+
+### WIP Intents (ck3raven-dev)
+
+| Intent | Constraints |
+|--------|-------------|
+| `ANALYSIS_ONLY` | Read-only analysis, no writes |
+| `REFACTOR_ASSIST` | Generate patches, requires `core_change_plan` |
+| `MIGRATION_HELPER` | Generate migrations, requires `core_change_plan` |
 
 ---
 
