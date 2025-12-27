@@ -256,8 +256,8 @@ def export_to_markdown(root: Path, output_path: Path) -> None:
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     
-    print(f"✅ Exported {len(files)} files to: {output_path}")
-    print(f"   File size: {output_path.stat().st_size / 1024:.1f} KB")
+    print(f"[OK] Exported {len(files)} files to: {output_path}")
+    print(f"     File size: {output_path.stat().st_size / 1024:.1f} KB")
 
 
 def main():
@@ -286,7 +286,7 @@ def main():
         root = script_dir.parent  # scripts/ -> ck3raven/
     
     if not root.exists():
-        print(f"❌ Root directory not found: {root}")
+        print(f"[ERROR] Root directory not found: {root}")
         return 1
     
     # Determine output path
