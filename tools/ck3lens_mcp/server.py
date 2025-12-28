@@ -258,9 +258,12 @@ def _get_world():
         _cached_world_adapter = adapter
         _cached_world_mode = mode
         return adapter
-    except RuntimeError as e:
-        # If mode not initialized, return None instead of raising
-        # This allows tools to work in degraded mode
+    except Exception as e:
+        # If any error occurs (mode not initialized, DB issues, etc.),
+        # return None to allow tools to work in degraded mode.
+        # This is intentional - we want graceful degradation.
+        import logging
+        logging.getLogger('ck3lens.world').debug(f'WorldAdapter unavailable: {e}')
         return None
 
 
@@ -1617,6 +1620,7 @@ def ck3_folder(
     db = _get_db()
     playset_id = _get_playset_id()
     trace = _get_trace()
+    world = _get_world()  # WorldAdapter for visibility enforcement
     
     return ck3_folder_impl(
         command=command,
@@ -1631,6 +1635,7 @@ def ck3_folder(
         db=db,
         playset_id=playset_id,
         trace=trace,
+        world=world,
     )
 
 
@@ -2848,17 +2853,54 @@ def ck3_exec(
     
     trace = _get_trace()
     
+    # WorldAdapter visibility check for working_dir and target_paths
+    world = _get_world()
+    if world is not None:
+        # Check working directory visibility
+        if working_dir:
+            resolution = world.resolve(working_dir)
+            if not resolution.found:
+                return {
+                    "allowed": False,
+                    "executed": False,
+                    "output": None,
+                    "exit_code": None,
+                    "policy": {"decision": "DENY", "reason": f"Working directory not visible in {world.mode} mode"},
+                    "error": resolution.error_message or f"Path not visible: {working_dir}",
+                    "hint": "This path is outside the visibility scope for the current agent mode",
+                }
+        
+        # Check target paths visibility
+        if target_paths:
+            for target in target_paths:
+                resolution = world.resolve(target)
+                if not resolution.found:
+                    return {
+                        "allowed": False,
+                        "executed": False,
+                        "output": None,
+                        "exit_code": None,
+                        "policy": {"decision": "DENY", "reason": f"Target path not visible in {world.mode} mode"},
+                        "error": resolution.error_message or f"Path not visible: {target}",
+                        "hint": "This path is outside the visibility scope for the current agent mode",
+                    }
+    
     # Get active contract
     active_contract = get_active_contract()
     contract_id = active_contract.contract_id if active_contract else None
     
-    # Evaluate policy
+    # Get agent mode for mode-aware policy
+    from ck3lens.agent_mode import get_agent_mode
+    mode = get_agent_mode()
+    
+    # Evaluate policy (with mode-awareness)
     request = CommandRequest(
         command=command,
         working_dir=working_dir or str(Path(__file__).parent.parent.parent),
         target_paths=target_paths or [],
         contract_id=contract_id,
         token_id=token_id,
+        mode=mode,  # Pass mode for mode-specific restrictions
     )
     
     result = evaluate_policy(request)
@@ -4167,18 +4209,32 @@ def ck3_grep_raw(
     trace = _get_trace()
     search_path = Path(path)
     
-    # Lens enforcement for ck3lens mode
-    mode = get_agent_mode()
-    if mode == "ck3lens":
-        playset_scope = _get_playset_scope()
-        if playset_scope and not playset_scope.is_path_in_scope(search_path):
-            location_type, _ = playset_scope.get_path_location(search_path)
+    # WorldAdapter visibility enforcement (preferred path)
+    world = _get_world()
+    if world is not None:
+        resolution = world.resolve(str(search_path))
+        if not resolution.found:
             return {
                 "success": False,
-                "error": f"Path outside active playset scope: {path}",
-                "location_type": location_type,
-                "hint": "ck3lens mode restricts filesystem access to paths within the active playset (vanilla + active mods)",
+                "error": resolution.error_message or f"Path not visible in {world.mode} mode: {path}",
+                "mode": world.mode,
+                "hint": "This path is outside the visibility scope for the current agent mode",
             }
+        # Use resolved absolute path
+        search_path = resolution.absolute_path
+    else:
+        # Fallback: Legacy lens enforcement for ck3lens mode
+        mode = get_agent_mode()
+        if mode == "ck3lens":
+            playset_scope = _get_playset_scope()
+            if playset_scope and not playset_scope.is_path_in_scope(search_path):
+                location_type, _ = playset_scope.get_path_location(search_path)
+                return {
+                    "success": False,
+                    "error": f"Path outside active playset scope: {path}",
+                    "location_type": location_type,
+                    "hint": "ck3lens mode restricts filesystem access to paths within the active playset (vanilla + active mods)",
+                }
     
     # Log the attempt
     trace.log("ck3lens.grep_raw", {
@@ -7528,6 +7584,9 @@ def ck3_get_mode_instructions(
     
     # PERSIST the mode to file - this is the single source of truth
     set_agent_mode(mode)
+    
+    # Reset cached world adapter - mode change invalidates the cache
+    _reset_world_cache()
     
     # Map modes to instruction files
     mode_files = {

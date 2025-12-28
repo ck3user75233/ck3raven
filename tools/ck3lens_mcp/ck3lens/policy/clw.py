@@ -142,6 +142,7 @@ class CommandRequest:
     # Context
     contract_id: Optional[str] = None
     token_id: Optional[str] = None
+    mode: Optional[str] = None  # "ck3lens" or "ck3raven-dev" for mode-aware policy
     
     def __post_init__(self):
         self.command = self.command.strip()
@@ -166,6 +167,71 @@ class PolicyResult:
 # ============================================================================
 # Policy Engine
 # ============================================================================
+
+def _evaluate_mode_restrictions(request: CommandRequest, category: CommandCategory) -> Optional[PolicyResult]:
+    """
+    Evaluate mode-specific restrictions.
+    
+    Mode Hard Gates:
+    - ck3lens: Cannot write to ck3raven source code
+    - ck3raven-dev: Cannot write to mod files (ABSOLUTE PROHIBITION)
+    
+    Args:
+        request: CommandRequest with mode set
+        category: Already-classified command category
+    
+    Returns:
+        PolicyResult if mode restriction applies, None otherwise
+    """
+    mode = request.mode
+    cmd = request.command.lower()
+    
+    if mode == "ck3lens":
+        # ck3lens mode: Writes to ck3raven source are blocked
+        # (visibility checks should have already happened via WorldAdapter)
+        # This is a backup policy check
+        if category in (CommandCategory.WRITE_IN_SCOPE, CommandCategory.WRITE_OUT_OF_SCOPE, 
+                        CommandCategory.DESTRUCTIVE):
+            for path in request.target_paths:
+                if "ck3raven" in path.lower() and "mod" not in path.lower():
+                    return PolicyResult(
+                        decision=Decision.DENY,
+                        reason="ck3lens mode: Cannot modify ck3raven source code",
+                        category=category,
+                        command=request.command,
+                    )
+    
+    elif mode == "ck3raven-dev":
+        # ck3raven-dev mode: Writes to mod files are ABSOLUTELY PROHIBITED
+        # This is the hard gate from CK3RAVEN_DEV_POLICY_ARCHITECTURE.md
+        if category in (CommandCategory.WRITE_IN_SCOPE, CommandCategory.WRITE_OUT_OF_SCOPE,
+                        CommandCategory.DESTRUCTIVE, CommandCategory.GIT_MODIFY, 
+                        CommandCategory.GIT_DANGEROUS):
+            # Check target paths for mod directories
+            mod_indicators = ["\\mod\\", "/mod/", "paradox interactive", "workshop"]
+            for path in request.target_paths:
+                path_lower = path.lower()
+                if any(indicator in path_lower for indicator in mod_indicators):
+                    return PolicyResult(
+                        decision=Decision.DENY,
+                        reason="ck3raven-dev mode: ABSOLUTE PROHIBITION on mod file writes",
+                        category=category,
+                        command=request.command,
+                    )
+            
+            # Check working_dir for mod directories
+            if request.working_dir:
+                working_dir_lower = request.working_dir.lower()
+                if any(indicator in working_dir_lower for indicator in mod_indicators):
+                    return PolicyResult(
+                        decision=Decision.DENY,
+                        reason="ck3raven-dev mode: ABSOLUTE PROHIBITION on mod file operations",
+                        category=category,
+                        command=request.command,
+                    )
+    
+    return None  # No mode restriction applies
+
 
 def classify_command(command: str) -> CommandCategory:
     """
@@ -220,6 +286,10 @@ def evaluate_policy(request: CommandRequest) -> PolicyResult:
     """
     Evaluate a command request against the policy.
     
+    Mode-aware behavior:
+    - ck3lens mode: Additional restrictions on ck3raven source modification
+    - ck3raven-dev mode: Additional restrictions on mod file modification
+    
     Args:
         request: CommandRequest to evaluate
     
@@ -237,6 +307,12 @@ def evaluate_policy(request: CommandRequest) -> PolicyResult:
             category=category,
             command=cmd,
         )
+    
+    # Mode-specific restrictions (before other checks)
+    if request.mode:
+        mode_result = _evaluate_mode_restrictions(request, category)
+        if mode_result is not None:
+            return mode_result
     
     # READ_ONLY and GIT_SAFE are always allowed
     if category in (CommandCategory.READ_ONLY, CommandCategory.GIT_SAFE):

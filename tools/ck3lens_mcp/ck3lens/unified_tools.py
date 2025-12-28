@@ -1444,6 +1444,7 @@ def ck3_folder_impl(
     db=None,
     playset_id: int | None = None,
     trace=None,
+    world=None,  # WorldAdapter for visibility enforcement
 ) -> dict:
     """
     Unified folder operations tool.
@@ -1454,12 +1455,15 @@ def ck3_folder_impl(
     command=contents    → Get folder contents from database (path required)
     command=top_level   → Get top-level folders in active playset
     command=mod_folders → Get folders in specific mod (content_version_id required)
+    
+    The world parameter provides WorldAdapter for visibility enforcement on
+    filesystem operations (command=list).
     """
     
     if command == "list":
         if not path:
             return {"error": "path required for list command"}
-        return _folder_list_raw(path, justification or "folder listing", trace)
+        return _folder_list_raw(path, justification or "folder listing", trace, world)
     
     elif command == "contents":
         if not path:
@@ -1478,11 +1482,24 @@ def ck3_folder_impl(
     return {"error": f"Unknown command: {command}"}
 
 
-def _folder_list_raw(path, justification, trace):
-    """List directory from filesystem."""
+def _folder_list_raw(path, justification, trace, world=None):
+    """List directory from filesystem with WorldAdapter visibility enforcement."""
     from pathlib import Path as P
     
-    dir_path = P(path)
+    dir_path = P(path).resolve()
+    
+    # WorldAdapter visibility check (preferred path)
+    if world is not None:
+        resolution = world.resolve(str(dir_path))
+        if not resolution.found:
+            return {
+                "success": False,
+                "error": resolution.error_message or f"Path not visible in {world.mode} mode: {path}",
+                "mode": world.mode,
+                "hint": "This path is outside the visibility scope for the current agent mode",
+            }
+        # Use resolved absolute path
+        dir_path = resolution.absolute_path
     
     if trace:
         trace.log("ck3lens.folder.list", {"path": str(dir_path), "justification": justification}, {})
