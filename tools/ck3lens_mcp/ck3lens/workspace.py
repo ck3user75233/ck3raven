@@ -73,8 +73,12 @@ DEFAULT_CK3_MOD_DIR = Path.home() / "Documents" / "Paradox Interactive" / "Crusa
 # Default ck3raven database
 DEFAULT_DB_PATH = Path.home() / ".ck3raven" / "ck3raven.db"
 
-# Default playsets directory
-DEFAULT_PLAYSETS_DIR = Path.home() / ".ck3raven" / "playsets"
+# Playsets directory - in ck3raven repo, not ~/.ck3raven/
+# This is the design of record - same location as MCP tools use
+REPO_PLAYSETS_DIR = Path(__file__).parent.parent.parent.parent / "playsets"
+
+# Legacy location (deprecated)
+LEGACY_PLAYSETS_DIR = Path.home() / ".ck3raven" / "playsets"
 
 # Default config file location
 DEFAULT_CONFIG_PATH = Path.home() / "Documents" / "AI Workspace" / "ck3lens_config.yaml"
@@ -90,7 +94,7 @@ def load_config(config_path: Optional[Path] = None) -> Session:
     Load configuration from playset or config file.
     
     Searches for config in this order:
-    1. Active playset (from ~/.ck3raven/playsets/)
+    1. Active playset (from ck3raven/playsets/playset_manifest.json)
     2. Explicit config_path if provided
     3. ck3lens_config.yaml in AI Workspace
     4. Empty defaults (read-only mode)
@@ -145,15 +149,24 @@ def load_config(config_path: Optional[Path] = None) -> Session:
 
 
 def _load_active_playset() -> Optional[dict]:
-    """Load the active playset configuration if one exists."""
-    # Check for active playset marker
-    active_file = DEFAULT_PLAYSETS_DIR / "active.txt"
-    if not active_file.exists():
+    """Load the active playset configuration if one exists.
+    
+    Uses the playset_manifest.json in ck3raven/playsets/ directory
+    (same source as MCP tools like ck3_playset).
+    """
+    manifest_file = REPO_PLAYSETS_DIR / "playset_manifest.json"
+    
+    if not manifest_file.exists():
         return None
     
     try:
-        active_name = active_file.read_text(encoding="utf-8").strip()
-        playset_file = DEFAULT_PLAYSETS_DIR / f"{active_name}.json"
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+        active_filename = manifest.get("active")
+        
+        if not active_filename:
+            return None
+        
+        playset_file = REPO_PLAYSETS_DIR / active_filename
         
         if playset_file.exists():
             return json.loads(playset_file.read_text(encoding="utf-8"))
