@@ -851,7 +851,8 @@ def ck3_file_impl(
     
     elif command == "read":
         if path:
-            return _file_read_raw(path, justification or "file read", start_line, end_line, trace)
+            # Use WorldAdapter for visibility check if available
+            return _file_read_raw(path, justification or "file read", start_line, end_line, trace, world)
         elif mod_name and rel_path:
             return _file_read_live(mod_name, rel_path, max_bytes, session, trace)
         else:
@@ -859,10 +860,10 @@ def ck3_file_impl(
     
     elif command == "write":
         if path:
-            # Raw filesystem write - policy-gated
+            # Raw filesystem write - policy-gated with WorldAdapter
             if content is None:
                 return {"error": "content required for write"}
-            return _file_write_raw(path, content, validate_syntax, token_id, trace)
+            return _file_write_raw(path, content, validate_syntax, token_id, trace, world)
         elif mod_name and rel_path:
             # Sandboxed mod write
             if content is None:
@@ -873,10 +874,10 @@ def ck3_file_impl(
     
     elif command == "edit":
         if path:
-            # Raw filesystem edit - policy-gated
+            # Raw filesystem edit - policy-gated with WorldAdapter
             if old_content is None or new_content is None:
                 return {"error": "old_content and new_content required for edit"}
-            return _file_edit_raw(path, old_content, new_content, validate_syntax, token_id, trace)
+            return _file_edit_raw(path, old_content, new_content, validate_syntax, token_id, trace, world)
         elif mod_name and rel_path:
             # Sandboxed mod edit
             if old_content is None or new_content is None:
@@ -925,39 +926,52 @@ def _file_get(path, include_ast, max_bytes, no_lens, db, trace, lens):
     return {"error": f"File not found: {path}"}
 
 
-def _file_read_raw(path, justification, start_line, end_line, trace):
-    """Read file from filesystem with lens enforcement for ck3lens mode."""
+def _file_read_raw(path, justification, start_line, end_line, trace, world=None):
+    """Read file from filesystem with WorldAdapter visibility enforcement."""
     from pathlib import Path as P
     from ck3lens.agent_mode import get_agent_mode
     
     file_path = P(path)
     
-    # Lens enforcement for ck3lens mode
-    mode = get_agent_mode()
-    if mode == "ck3lens":
-        # Import here to avoid circular import
-        from ck3lens.playset_scope import PlaysetScope
-        try:
-            # Try to get scope from server module
-            import sys
-            server_module = sys.modules.get('__main__')
-            if server_module and hasattr(server_module, '_get_playset_scope'):
-                playset_scope = server_module._get_playset_scope()
-            else:
-                # Fallback: try to import from server
-                from tools.ck3lens_mcp.server import _get_playset_scope
-                playset_scope = _get_playset_scope()
-            
-            if playset_scope and not playset_scope.is_path_in_scope(file_path):
-                location_type, _ = playset_scope.get_path_location(file_path)
-                return {
-                    "success": False,
-                    "error": f"Path outside active playset scope: {path}",
-                    "location_type": location_type,
-                    "hint": "ck3lens mode restricts filesystem access to paths within the active playset",
-                }
-        except Exception:
-            pass  # If scope check fails, allow read (fail open for reads)
+    # WorldAdapter visibility check (preferred)
+    if world is not None:
+        resolution = world.resolve(str(file_path))
+        if not resolution.found:
+            return {
+                "success": False,
+                "error": resolution.error_message or f"Path not visible in {world.mode} mode: {path}",
+                "mode": world.mode,
+                "hint": "This path is outside the visibility scope for the current agent mode",
+            }
+        # Use resolved absolute path
+        file_path = resolution.absolute_path
+    else:
+        # Fallback: Lens enforcement for ck3lens mode (legacy path)
+        mode = get_agent_mode()
+        if mode == "ck3lens":
+            # Import here to avoid circular import
+            from ck3lens.playset_scope import PlaysetScope
+            try:
+                # Try to get scope from server module
+                import sys
+                server_module = sys.modules.get('__main__')
+                if server_module and hasattr(server_module, '_get_playset_scope'):
+                    playset_scope = server_module._get_playset_scope()
+                else:
+                    # Fallback: try to import from server
+                    from tools.ck3lens_mcp.server import _get_playset_scope
+                    playset_scope = _get_playset_scope()
+                
+                if playset_scope and not playset_scope.is_path_in_scope(file_path):
+                    location_type, _ = playset_scope.get_path_location(file_path)
+                    return {
+                        "success": False,
+                        "error": f"Path outside active playset scope: {path}",
+                        "location_type": location_type,
+                        "hint": "ck3lens mode restricts filesystem access to paths within the active playset",
+                    }
+            except Exception:
+                pass  # If scope check fails, allow read (fail open for reads)
     
     if trace:
         trace.log("ck3lens.file.read", {"path": str(file_path), "justification": justification}, {})
@@ -1034,8 +1048,8 @@ def _file_write(mod_name, rel_path, content, validate_syntax, session, trace):
     return result
 
 
-def _file_write_raw(path, content, validate_syntax, token_id, trace):
-    """Write file to raw filesystem path with policy enforcement."""
+def _file_write_raw(path, content, validate_syntax, token_id, trace, world=None):
+    """Write file to raw filesystem path with WorldAdapter visibility and policy enforcement."""
     from pathlib import Path as P
     from ck3lens.policy.file_policy import (
         evaluate_file_operation, FileRequest, FileOperation
@@ -1056,6 +1070,28 @@ def _file_write_raw(path, content, validate_syntax, token_id, trace):
             "guidance": "Call ck3_get_mode_instructions() first to set mode",
         }
     
+    # WorldAdapter visibility and writability check (preferred path)
+    if world is not None:
+        resolution = world.resolve(str(file_path))
+        if not resolution.found:
+            return {
+                "success": False,
+                "error": resolution.error_message or f"Path not visible in {world.mode} mode: {path}",
+                "mode": world.mode,
+                "policy_decision": "DENY",
+                "hint": "This path is outside the visibility scope for the current agent mode",
+            }
+        if not resolution.is_writable:
+            return {
+                "success": False,
+                "error": f"Path is not writable in {world.mode} mode: {path}",
+                "mode": world.mode,
+                "policy_decision": "DENY",
+                "hint": "This path is visible but not writable. Only live mods are writable in ck3lens mode.",
+            }
+        # Use resolved absolute path
+        file_path = resolution.absolute_path
+    
     # Get ck3raven root (parent of tools/)
     ck3raven_root = P(__file__).parent.parent.parent.parent
     
@@ -1063,7 +1099,7 @@ def _file_write_raw(path, content, validate_syntax, token_id, trace):
     active_contract = get_active_contract()
     contract_id = active_contract.contract_id if active_contract else None
     
-    # Evaluate policy
+    # Evaluate policy (for additional contract/token checks)
     request = FileRequest(
         operation=FileOperation.WRITE,
         path=file_path,
@@ -1080,6 +1116,7 @@ def _file_write_raw(path, content, validate_syntax, token_id, trace):
             "path": str(file_path),
             "mode": mode,
             "token_id": token_id,
+            "world_mode": world.mode if world else None,
         }, {"decision": result.decision.name})
     
     if result.decision == Decision.DENY:
@@ -1124,8 +1161,8 @@ def _file_write_raw(path, content, validate_syntax, token_id, trace):
         return {"success": False, "error": str(e)}
 
 
-def _file_edit_raw(path, old_content, new_content, validate_syntax, token_id, trace):
-    """Edit file at raw filesystem path with policy enforcement."""
+def _file_edit_raw(path, old_content, new_content, validate_syntax, token_id, trace, world=None):
+    """Edit file at raw filesystem path with WorldAdapter visibility and policy enforcement."""
     from pathlib import Path as P
     from ck3lens.policy.file_policy import (
         evaluate_file_operation, FileRequest, FileOperation
@@ -1146,6 +1183,28 @@ def _file_edit_raw(path, old_content, new_content, validate_syntax, token_id, tr
             "guidance": "Call ck3_get_mode_instructions() first to set mode",
         }
     
+    # WorldAdapter visibility and writability check (preferred path)
+    if world is not None:
+        resolution = world.resolve(str(file_path))
+        if not resolution.found:
+            return {
+                "success": False,
+                "error": resolution.error_message or f"Path not visible in {world.mode} mode: {path}",
+                "mode": world.mode,
+                "policy_decision": "DENY",
+                "hint": "This path is outside the visibility scope for the current agent mode",
+            }
+        if not resolution.is_writable:
+            return {
+                "success": False,
+                "error": f"Path is not writable in {world.mode} mode: {path}",
+                "mode": world.mode,
+                "policy_decision": "DENY",
+                "hint": "This path is visible but not writable. Only live mods are writable in ck3lens mode.",
+            }
+        # Use resolved absolute path
+        file_path = resolution.absolute_path
+    
     # Get ck3raven root (parent of tools/)
     ck3raven_root = P(__file__).parent.parent.parent.parent
     
@@ -1153,7 +1212,7 @@ def _file_edit_raw(path, old_content, new_content, validate_syntax, token_id, tr
     active_contract = get_active_contract()
     contract_id = active_contract.contract_id if active_contract else None
     
-    # Evaluate policy
+    # Evaluate policy (for additional contract/token checks)
     request = FileRequest(
         operation=FileOperation.WRITE,
         path=file_path,
@@ -1170,6 +1229,7 @@ def _file_edit_raw(path, old_content, new_content, validate_syntax, token_id, tr
             "path": str(file_path),
             "mode": mode,
             "token_id": token_id,
+            "world_mode": world.mode if world else None,
         }, {"decision": result.decision.name})
     
     if result.decision == Decision.DENY:
