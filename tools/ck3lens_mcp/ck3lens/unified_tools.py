@@ -851,13 +851,57 @@ def ck3_file_impl(
     )
     from ck3lens.work_contracts import get_active_contract
     
-    # ==========================================================================
-    # CENTRALIZED ENFORCEMENT GATE (Phase 2)
-    # All write operations go through enforce_and_log FIRST
-    # ==========================================================================
-    
     mode = get_agent_mode()
     write_commands = {"write", "edit", "delete", "rename"}
+    
+    # ==========================================================================
+    # STEP 1: WORLDADAPTER VISIBILITY CHECK (FIRST)
+    # If the path is not visible in this agent's world, return NOT_FOUND.
+    # Policy enforcement is ONLY consulted for visible paths.
+    # ==========================================================================
+    
+    if command in write_commands and world is not None:
+        # Determine the target path for visibility check
+        target_path_for_visibility = path
+        if not target_path_for_visibility and mod_name and rel_path:
+            # For mod operations, resolve to absolute path first
+            if session:
+                live_mod = session.get_live_mod(mod_name)
+                if live_mod:
+                    target_path_for_visibility = str(live_mod.root / rel_path)
+                else:
+                    return {
+                        "success": False,
+                        "error": f"Mod '{mod_name}' not found in live mods",
+                        "visibility": "NOT_FOUND",
+                    }
+        
+        # Check visibility via WorldAdapter
+        if target_path_for_visibility:
+            visibility_result = world.resolve(target_path_for_visibility)
+            
+            if not visibility_result.found:
+                # Path doesn't exist in this world - NOT_FOUND (not DENY)
+                return {
+                    "success": False,
+                    "error": visibility_result.error_message or f"Path not visible: {target_path_for_visibility}",
+                    "visibility": "NOT_FOUND",
+                    "guidance": "This path is outside your current lens/scope",
+                }
+            
+            # For write/edit, check if writable
+            if command in {"write", "edit"} and not visibility_result.is_writable:
+                return {
+                    "success": False,
+                    "error": f"Path is read-only in {mode} mode: {target_path_for_visibility}",
+                    "visibility": "FOUND_READ_ONLY",
+                    "guidance": "This path is visible but not writable in your current mode",
+                }
+    
+    # ==========================================================================
+    # STEP 2: CENTRALIZED ENFORCEMENT GATE (AFTER visibility)
+    # Only reached if the path is visible. Now check policy.
+    # ==========================================================================
     
     if command in write_commands and mode:
         # Map command to operation type
