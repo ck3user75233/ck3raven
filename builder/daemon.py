@@ -713,69 +713,74 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
         ))
         db_wrapper.checkpoint()
         
-        # Phase 4: Symbol extraction from stored ASTs
-        build_tracker.start_step("symbol_extraction")
-        status.update(
-            phase="symbol_extraction", 
-            phase_number=4,
-            message="Extracting symbols..."
-        )
-        write_heartbeat()
-        build_tracker.update_lock_heartbeat()
+        # Phases 4-7 write to protected tables (symbols, refs, lookups, localization)
+        # These require an active builder session
+        from ck3raven.db.schema import BuilderSession
         
-        symbol_stats = extract_symbols_from_stored_asts(conn, logger, status)
-        symbol_count = symbol_stats.get('extracted', 0) if isinstance(symbol_stats, dict) else 0
-        build_counts['symbols'] = symbol_count
-        build_tracker.end_step("symbol_extraction", StepStats(rows_out=symbol_count))
-        db_wrapper.checkpoint()
-        
-        # Phase 5: Ref extraction from stored ASTs
-        build_tracker.start_step("ref_extraction")
-        status.update(
-            phase="ref_extraction",
-            phase_number=5, 
-            message="Extracting references..."
-        )
-        write_heartbeat()
-        build_tracker.update_lock_heartbeat()
-        
-        ref_stats = extract_refs_from_stored_asts(conn, logger, status)
-        ref_count = ref_stats.get('extracted', 0) if isinstance(ref_stats, dict) else 0
-        build_counts['refs'] = ref_count
-        build_tracker.end_step("ref_extraction", StepStats(rows_out=ref_count))
-        db_wrapper.checkpoint()
-        
-        # Phase 6: Localization parsing
-        build_tracker.start_step("localization_parsing")
-        status.update(
-            phase="localization_parsing",
-            phase_number=6,
-            message="Parsing localization files..."
-        )
-        write_heartbeat()
-        build_tracker.update_lock_heartbeat()
-        
-        loc_stats = parse_localization_files(conn, logger, status, force=force)
-        loc_count = loc_stats.get('entries', 0) if isinstance(loc_stats, dict) else 0
-        build_counts['localization'] = loc_count
-        build_tracker.end_step("localization_parsing", StepStats(rows_out=loc_count))
-        db_wrapper.checkpoint()
-        
-        # Phase 7: Lookup table extraction (TBC - provisional)
-        build_tracker.start_step("lookup_extraction")
-        status.update(
-            phase="lookup_extraction",
-            phase_number=7,
-            message="Extracting lookup tables..."
-        )
-        write_heartbeat()
-        build_tracker.update_lock_heartbeat()
-        
-        lookup_stats = extract_lookup_tables(conn, logger, status)
-        lookup_count = lookup_stats.get('total', 0) if isinstance(lookup_stats, dict) else 0
-        build_counts['lookups'] = lookup_count
-        build_tracker.end_step("lookup_extraction", StepStats(rows_out=lookup_count))
-        db_wrapper.checkpoint()
+        with BuilderSession(conn, purpose="daemon rebuild phases 4-7", ttl_minutes=120):
+            # Phase 4: Symbol extraction from stored ASTs
+            build_tracker.start_step("symbol_extraction")
+            status.update(
+                phase="symbol_extraction", 
+                phase_number=4,
+                message="Extracting symbols..."
+            )
+            write_heartbeat()
+            build_tracker.update_lock_heartbeat()
+            
+            symbol_stats = extract_symbols_from_stored_asts(conn, logger, status)
+            symbol_count = symbol_stats.get('extracted', 0) if isinstance(symbol_stats, dict) else 0
+            build_counts['symbols'] = symbol_count
+            build_tracker.end_step("symbol_extraction", StepStats(rows_out=symbol_count))
+            db_wrapper.checkpoint()
+            
+            # Phase 5: Ref extraction from stored ASTs
+            build_tracker.start_step("ref_extraction")
+            status.update(
+                phase="ref_extraction",
+                phase_number=5, 
+                message="Extracting references..."
+            )
+            write_heartbeat()
+            build_tracker.update_lock_heartbeat()
+            
+            ref_stats = extract_refs_from_stored_asts(conn, logger, status)
+            ref_count = ref_stats.get('extracted', 0) if isinstance(ref_stats, dict) else 0
+            build_counts['refs'] = ref_count
+            build_tracker.end_step("ref_extraction", StepStats(rows_out=ref_count))
+            db_wrapper.checkpoint()
+            
+            # Phase 6: Localization parsing
+            build_tracker.start_step("localization_parsing")
+            status.update(
+                phase="localization_parsing",
+                phase_number=6,
+                message="Parsing localization files..."
+            )
+            write_heartbeat()
+            build_tracker.update_lock_heartbeat()
+            
+            loc_stats = parse_localization_files(conn, logger, status, force=force)
+            loc_count = loc_stats.get('entries', 0) if isinstance(loc_stats, dict) else 0
+            build_counts['localization'] = loc_count
+            build_tracker.end_step("localization_parsing", StepStats(rows_out=loc_count))
+            db_wrapper.checkpoint()
+            
+            # Phase 7: Lookup table extraction (TBC - provisional)
+            build_tracker.start_step("lookup_extraction")
+            status.update(
+                phase="lookup_extraction",
+                phase_number=7,
+                message="Extracting lookup tables..."
+            )
+            write_heartbeat()
+            build_tracker.update_lock_heartbeat()
+            
+            lookup_stats = extract_lookup_tables(conn, logger, status)
+            lookup_count = lookup_stats.get('total', 0) if isinstance(lookup_stats, dict) else 0
+            build_counts['lookups'] = lookup_count
+            build_tracker.end_step("lookup_extraction", StepStats(rows_out=lookup_count))
+            db_wrapper.checkpoint()
         
         # Done - record build completion
         build_tracker.complete(build_counts)
