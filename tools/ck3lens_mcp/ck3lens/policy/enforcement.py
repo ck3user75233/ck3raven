@@ -156,7 +156,6 @@ def is_protected_branch(branch_name: str) -> bool:
             return True
     return False
 
-
 def is_agent_branch(branch_name: str, contract_id: Optional[str] = None) -> bool:
     """Check if branch is a valid agent branch for the contract."""
     if branch_name.startswith("agent/"):
@@ -167,6 +166,40 @@ def is_agent_branch(branch_name: str, contract_id: Optional[str] = None) -> bool
     if branch_name.startswith("wip/") or branch_name.startswith("dev/"):
         return True
     return False
+
+
+# =============================================================================
+# PATH NORMALIZATION (CRITICAL - Applied once for all tools)
+# =============================================================================
+
+def _get_repo_root() -> Path:
+    """Get the ck3raven repository root."""
+    return Path(__file__).parent.parent.parent.parent.parent
+
+
+def _normalize_path_to_relative(path_str: str) -> str:
+    """Convert absolute path to repo-relative path."""
+    if not path_str:
+        return path_str
+    path = Path(path_str)
+    if not path.is_absolute():
+        return str(path).replace("\\", "/")
+    repo_root = _get_repo_root()
+    try:
+        rel_path = path.resolve().relative_to(repo_root.resolve())
+        return str(rel_path).replace("\\", "/")
+    except ValueError:
+        return str(path).replace("\\", "/")
+
+
+def _normalize_request_paths(request: EnforcementRequest) -> None:
+    """Normalize all paths in EnforcementRequest in-place."""
+    if request.target_path:
+        request.target_path = _normalize_path_to_relative(request.target_path)
+    if request.target_paths:
+        request.target_paths = [_normalize_path_to_relative(p) for p in request.target_paths]
+    if request.staged_files:
+        request.staged_files = [_normalize_path_to_relative(p) for p in request.staged_files]
 
 
 # =============================================================================
@@ -191,6 +224,8 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
         validate_path_in_repo_domains, REPO_DOMAINS
     )
     
+        # STEP 0: Normalize all paths ONCE at entry point
+    _normalize_request_paths(request)
     mode = request.mode
     op = request.operation
     
