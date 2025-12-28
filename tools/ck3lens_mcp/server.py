@@ -3759,16 +3759,21 @@ def ck3_file_search(
     trace = _get_trace()
     scope = _get_session_scope()
     
-    # Default to vanilla path if available
+    # Get agent mode first for path defaults
+    mode = get_agent_mode()
+    
+    # Default path depends on mode
     if base_path:
         search_base = Path(base_path)
+    elif mode == "ck3raven-dev":
+        # In ck3raven-dev mode, default to repo root for infrastructure work
+        search_base = Path(__file__).parent.parent.parent
     elif scope.get("vanilla_root"):
         search_base = Path(scope["vanilla_root"])
     else:
         search_base = Path("C:/Program Files (x86)/Steam/steamapps/common/Crusader Kings III/game")
     
     # Lens enforcement for ck3lens mode
-    mode = get_agent_mode()
     if mode == "ck3lens":
         playset_scope = _get_playset_scope()
         if playset_scope and not playset_scope.is_path_in_scope(search_base):

@@ -866,9 +866,18 @@ def ck3_file_impl(
             return {"error": "Either 'path' or 'mod_name'+'rel_path' required for write"}
     
     elif command == "edit":
-        if not all([mod_name, rel_path, old_content, new_content is not None]):
-            return {"error": "mod_name, rel_path, old_content, new_content required for edit"}
-        return _file_edit(mod_name, rel_path, old_content, new_content, validate_syntax, session, trace)
+        if path:
+            # Raw filesystem edit - policy-gated
+            if old_content is None or new_content is None:
+                return {"error": "old_content and new_content required for edit"}
+            return _file_edit_raw(path, old_content, new_content, validate_syntax, token_id, trace)
+        elif mod_name and rel_path:
+            # Sandboxed mod edit
+            if old_content is None or new_content is None:
+                return {"error": "old_content and new_content required for edit"}
+            return _file_edit(mod_name, rel_path, old_content, new_content, validate_syntax, session, trace)
+        else:
+            return {"error": "Either 'path' or 'mod_name'+'rel_path' required for edit"}
     
     elif command == "delete":
         if not all([mod_name, rel_path]):
@@ -1102,6 +1111,115 @@ def _file_write_raw(path, content, validate_syntax, token_id, trace):
             "success": True,
             "path": str(file_path),
             "bytes_written": len(content.encode("utf-8")),
+            "policy_decision": "ALLOW",
+            "policy_reason": result.reason,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def _file_edit_raw(path, old_content, new_content, validate_syntax, token_id, trace):
+    """Edit file at raw filesystem path with policy enforcement."""
+    from pathlib import Path as P
+    from ck3lens.policy.file_policy import (
+        evaluate_file_operation, FileRequest, FileOperation
+    )
+    from ck3lens.policy.clw import Decision
+    from ck3lens.work_contracts import get_active_contract
+    from ck3lens.validate import parse_content
+    from ck3lens.agent_mode import get_agent_mode
+    
+    file_path = P(path).resolve()
+    
+    # Get mode from persistent file (single source of truth)
+    mode = get_agent_mode()
+    if mode is None:
+        return {
+            "success": False,
+            "error": "Agent mode not initialized",
+            "guidance": "Call ck3_get_mode_instructions() first to set mode",
+        }
+    
+    # Get ck3raven root (parent of tools/)
+    ck3raven_root = P(__file__).parent.parent.parent.parent
+    
+    # Get active contract
+    active_contract = get_active_contract()
+    contract_id = active_contract.contract_id if active_contract else None
+    
+    # Evaluate policy
+    request = FileRequest(
+        operation=FileOperation.WRITE,
+        path=file_path,
+        mode=mode,
+        ck3raven_root=ck3raven_root,
+        contract_id=contract_id,
+        token_id=token_id,
+    )
+    
+    result = evaluate_file_operation(request)
+    
+    if trace:
+        trace.log("ck3lens.file.edit_raw", {
+            "path": str(file_path),
+            "mode": mode,
+            "token_id": token_id,
+        }, {"decision": result.decision.name})
+    
+    if result.decision == Decision.DENY:
+        return {
+            "success": False,
+            "error": result.reason,
+            "policy_decision": "DENY",
+        }
+    
+    if result.decision == Decision.REQUIRE_TOKEN:
+        return {
+            "success": False,
+            "error": result.reason,
+            "policy_decision": "REQUIRE_TOKEN",
+            "required_token_type": result.required_token_type,
+            "hint": f"Use ck3_token to request a {result.required_token_type} token",
+        }
+    
+    # Policy allowed - read file, apply edit, validate, write
+    if not file_path.exists():
+        return {"success": False, "error": f"File not found: {path}"}
+    
+    try:
+        current_content = file_path.read_text(encoding="utf-8")
+    except Exception as e:
+        return {"success": False, "error": f"Cannot read file: {e}"}
+    
+    # Check old_content exists
+    if old_content not in current_content:
+        return {
+            "success": False,
+            "error": "old_content not found in file",
+            "hint": "Ensure old_content matches exactly (including whitespace)",
+        }
+    
+    # Apply edit
+    updated_content = current_content.replace(old_content, new_content, 1)
+    
+    # Validate syntax if requested
+    if validate_syntax and path.endswith(".txt"):
+        parse_result = parse_content(updated_content, path)
+        if not parse_result["success"]:
+            return {
+                "success": False,
+                "error": "Syntax validation failed after edit",
+                "parse_errors": parse_result["errors"],
+            }
+    
+    # Write the file
+    try:
+        file_path.write_text(updated_content, encoding="utf-8")
+        
+        return {
+            "success": True,
+            "path": str(file_path),
+            "bytes_written": len(updated_content.encode("utf-8")),
             "policy_decision": "ALLOW",
             "policy_reason": result.reason,
         }
@@ -1778,6 +1896,182 @@ def _playset_import(launcher_playset_name, db, trace):
 GitCommand = Literal["status", "diff", "add", "commit", "push", "pull", "log"]
 
 
+def _run_git_in_path(repo_path, *args: str) -> tuple[bool, str, str]:
+    """Run git command in specified directory."""
+    import subprocess
+    from pathlib import Path as P
+    try:
+        result = subprocess.run(
+            ["git"] + list(args),
+            cwd=P(repo_path),
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        return result.returncode == 0, result.stdout, result.stderr
+    except subprocess.TimeoutExpired:
+        return False, "", "Command timed out"
+    except FileNotFoundError:
+        return False, "", "Git not found in PATH"
+    except Exception as e:
+        return False, "", str(e)
+
+
+def _git_ops_for_path(command, repo_path, file_path, files, all_files, message, limit):
+    """Git operations for any git repo path (used in ck3raven-dev mode)."""
+    from pathlib import Path as P
+    
+    repo_path = P(repo_path)
+    repo_name = repo_path.name
+    
+    if not (repo_path / ".git").exists():
+        return {"error": f"{repo_path} is not a git repository"}
+    
+    if command == "status":
+        # Get branch
+        ok, branch, err = _run_git_in_path(repo_path, "rev-parse", "--abbrev-ref", "HEAD")
+        if not ok:
+            return {"error": f"Failed to get branch: {err}"}
+        branch = branch.strip()
+        
+        # Get status
+        ok, status, err = _run_git_in_path(repo_path, "status", "--porcelain")
+        if not ok:
+            return {"error": f"Failed to get status: {err}"}
+        
+        staged = []
+        unstaged = []
+        untracked = []
+        
+        for line in status.strip().split("\n"):
+            if not line:
+                continue
+            index = line[0]
+            worktree = line[1]
+            filename = line[3:]
+            
+            if index == "?":
+                untracked.append(filename)
+            elif index != " ":
+                staged.append({"status": index, "file": filename})
+            if worktree not in (" ", "?"):
+                unstaged.append({"status": worktree, "file": filename})
+        
+        return {
+            "repo": repo_name,
+            "path": str(repo_path),
+            "branch": branch,
+            "staged": staged,
+            "unstaged": unstaged,
+            "untracked": untracked,
+            "clean": len(staged) == 0 and len(unstaged) == 0 and len(untracked) == 0
+        }
+    
+    elif command == "diff":
+        args = ["diff"]
+        if file_path == "staged":
+            args.append("--cached")
+        elif file_path:
+            args.extend(["--", file_path])
+        
+        ok, diff, err = _run_git_in_path(repo_path, *args)
+        if not ok:
+            return {"error": err}
+        
+        return {
+            "repo": repo_name,
+            "staged": file_path == "staged",
+            "diff": diff
+        }
+    
+    elif command == "add":
+        if all_files:
+            args = ["add", "-A"]
+        elif files:
+            args = ["add"] + files
+        else:
+            return {"error": "Must specify files or all_files=True"}
+        
+        ok, out, err = _run_git_in_path(repo_path, *args)
+        if not ok:
+            return {"success": False, "error": err}
+        
+        return {"success": True, "repo": repo_name}
+    
+    elif command == "commit":
+        if not message:
+            return {"error": "message required for commit"}
+        
+        ok, out, err = _run_git_in_path(repo_path, "commit", "-m", message)
+        if not ok:
+            if "nothing to commit" in err or "nothing to commit" in out:
+                return {"success": False, "error": "Nothing to commit"}
+            return {"success": False, "error": err}
+        
+        # Get commit hash
+        ok2, hash_out, _ = _run_git_in_path(repo_path, "rev-parse", "HEAD")
+        commit_hash = hash_out.strip() if ok2 else "unknown"
+        
+        return {
+            "success": True,
+            "repo": repo_name,
+            "commit_hash": commit_hash,
+            "message": message
+        }
+    
+    elif command == "push":
+        ok, out, err = _run_git_in_path(repo_path, "push", "origin")
+        if not ok:
+            return {"success": False, "error": err}
+        
+        return {
+            "success": True,
+            "repo": repo_name,
+            "output": out + err
+        }
+    
+    elif command == "pull":
+        ok, out, err = _run_git_in_path(repo_path, "pull", "origin")
+        if not ok:
+            return {"success": False, "error": err}
+        
+        return {
+            "success": True,
+            "repo": repo_name,
+            "output": out + err
+        }
+    
+    elif command == "log":
+        args = ["log", f"-{limit}", "--pretty=format:%H|%an|%ai|%s"]
+        if file_path and file_path != "staged":
+            args.append("--")
+            args.append(file_path)
+        
+        ok, out, err = _run_git_in_path(repo_path, *args)
+        if not ok:
+            return {"error": err}
+        
+        commits = []
+        for line in out.strip().split("\n"):
+            if not line:
+                continue
+            parts = line.split("|", 3)
+            if len(parts) == 4:
+                commits.append({
+                    "hash": parts[0],
+                    "author": parts[1],
+                    "date": parts[2],
+                    "message": parts[3]
+                })
+        
+        return {
+            "repo": repo_name,
+            "commits": commits
+        }
+    
+    return {"error": f"Unknown command: {command}"}
+
+
 def ck3_git_impl(
     command: GitCommand,
     mod_name: str,
@@ -1795,7 +2089,7 @@ def ck3_git_impl(
     trace=None,
 ) -> dict:
     """
-    Unified git operations for live mods.
+    Unified git operations for live mods and ck3raven repo.
     
     Commands:
     
@@ -1806,22 +2100,42 @@ def ck3_git_impl(
     command=push   → Push to remote (mod_name required)
     command=pull   → Pull from remote (mod_name required)
     command=log    → Get commit log (mod_name required, limit optional)
+    
+    In ck3raven-dev mode, mod_name="ck3raven" targets the repo itself.
     """
     from ck3lens import git_ops
+    from ck3lens.agent_mode import get_agent_mode
+    from pathlib import Path as P
     
     # Validate session
     if not session:
         return {"error": "No session available - call ck3_init_session first"}
     
-    # Validate mod access
+    # Check for ck3raven-dev mode special handling
+    mode = get_agent_mode()
+    ck3raven_root = P(__file__).parent.parent.parent.parent
+    
+    # In ck3raven-dev mode, allow git ops on ck3raven repo itself
+    if mode == "ck3raven-dev" and mod_name.lower() in ("ck3raven", "repo", "."):
+        result = _git_ops_for_path(command, ck3raven_root, file_path, files, all_files, message, limit)
+        if trace:
+            trace.log(f"ck3lens.git.{command}", {"repo": "ck3raven"}, 
+                      {"success": result.get("success", "error" not in result)})
+        return result
+    
+    # Standard live mod git ops
     local_mod = session.get_local_mod(mod_name)
     if not local_mod:
         # List available mods for better error message
         available = [m.mod_id for m in session.local_mods] if session.local_mods else []
+        hint = "Use mod folder name, not display name"
+        if mode == "ck3raven-dev":
+            hint = "Use mod folder name, or 'ck3raven' for the repo itself"
         return {
             "error": f"Not a live mod: {mod_name}",
             "available_mods": available,
-            "hint": "Use mod folder name, not display name"
+            "mode": mode,
+            "hint": hint
         }
     
     # git_ops functions expect (session, mod_id) - pass correctly
