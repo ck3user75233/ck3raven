@@ -96,6 +96,8 @@ from .hard_gates import (
     gate_ck3raven_dev_wip_intent_valid,
     gate_ck3raven_dev_wip_not_workaround,
     gate_ck3raven_dev_wip_path_valid,
+    gate_ck3raven_dev_launcher_repair_prohibition,
+    gate_ck3raven_dev_create_override_patch_prohibition,
     run_ck3raven_dev_gates,
 )
 from .wip_workspace import (
@@ -217,6 +219,8 @@ __all__ = [
     "gate_delete_has_token",
     "run_all_gates",
     # Hard Gates - CK3Raven-dev
+    "gate_ck3raven_dev_launcher_repair_prohibition",
+    "gate_ck3raven_dev_create_override_patch_prohibition",
     "gate_ck3raven_dev_mod_write_prohibition",
     "gate_ck3raven_dev_run_in_terminal_prohibition",
     "gate_ck3raven_dev_git_command_classification",

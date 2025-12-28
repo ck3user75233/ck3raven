@@ -546,6 +546,10 @@ def ck3_init_session(
     """
     Initialize the CK3 Lens session.
     
+    Works in both modes:
+    - ck3lens mode: Initializes with playset context for mod work
+    - ck3raven-dev mode: Initializes with repo context for infrastructure work
+    
     Args:
         db_path: Path to ck3raven SQLite database (optional, uses default)
         local_mods: Override list of whitelisted local mod folder names (optional)
@@ -732,6 +736,10 @@ def ck3_db_delete(
 ) -> dict:
     """
     Flexible database cleanup tool for surgical deletion of indexed data.
+    
+    Mode-aware behavior:
+    - ck3lens mode: Can delete playset/mod data for re-ingestion
+    - ck3raven-dev mode: Full access for schema changes and debugging
     
     Use this to clear cached/derived data when:
     - Mods have been updated from Steam and need re-ingestion
@@ -1422,6 +1430,10 @@ def ck3_folder(
     """
     Unified folder operations tool.
     
+    Mode-aware behavior:
+    - ck3lens mode: command=list restricted to active playset paths
+    - ck3raven-dev mode: command=list has broader access for infrastructure testing
+    
     Commands:
     
     command=list        → List directory contents from filesystem (path required)
@@ -1487,6 +1499,10 @@ def ck3_playset(
 ) -> dict:
     """
     Unified playset operations tool.
+    
+    Works in both modes:
+    - ck3lens mode: Full playset management for mod compatibility work
+    - ck3raven-dev mode: Playset context available for parser/ingestion testing
     
     Commands:
     
@@ -1856,6 +1872,8 @@ def ck3_repair(
 ) -> dict:
     """
     Repair CK3 launcher registry and cache issues.
+    
+    ⚠️ MODE: ck3lens only. Not available in ck3raven-dev mode.
     
     SCOPE: Launcher domain operations only.
     - ~/.ck3raven/ directory management
@@ -2356,6 +2374,10 @@ def ck3_exec(
     """
     Execute a shell command with CLW policy enforcement.
     
+    Mode-aware behavior:
+    - ck3lens mode: Limited to CK3/mod-related commands within playset scope
+    - ck3raven-dev mode: Broader access for infrastructure work (USE THIS instead of run_in_terminal)
+    
     This is the ONLY safe way for agents to run shell commands.
     All commands are evaluated against the policy engine:
     
@@ -2545,6 +2567,10 @@ def ck3_token(
 ) -> dict:
     """
     Manage approval tokens for risky operations.
+    
+    Mode-aware token types:
+    - ck3lens mode: Tokens for mod file deletion, inactive mod access, git push
+    - ck3raven-dev mode: Additional tokens for git rewrite, DB schema changes, force push
     
     Tokens are HMAC-signed, time-limited approvals for specific operations.
     Required for commands that would otherwise be blocked.
@@ -3049,6 +3075,10 @@ def ck3_list_local_mods() -> dict:
     """
     List local mods that can be modified.
     
+    Mode-aware behavior:
+    - ck3lens mode: These mods are writable (MSC, MSCRE, LRE, MRP)
+    - ck3raven-dev mode: These mods are READ-ONLY (mod writes absolutely prohibited)
+    
     Returns:
         List of mod names and paths that are available for writing
     """
@@ -3374,6 +3404,8 @@ def ck3_create_override_patch(
 ) -> dict:
     """
     Create an override patch file in a live mod.
+    
+    ⚠️ MODE: ck3lens only. Cannot write to mod files in ck3raven-dev mode.
     
     Use this when you need to patch a file from vanilla or a non-editable mod.
     Automatically creates the correct directory structure and follows naming conventions.

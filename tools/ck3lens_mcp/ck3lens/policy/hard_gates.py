@@ -680,6 +680,69 @@ def run_all_gates(
 # CK3RAVEN-DEV HARD GATES
 # =============================================================================
 
+def gate_ck3raven_dev_launcher_repair_prohibition(
+    tool_name: str,
+    mode: str,
+) -> GateResult:
+    """
+    HARD GATE (ck3raven-dev): Launcher repair is ck3lens mode only.
+    
+    The ck3_repair tool is specifically for CK3 modding workflows and
+    should not be accessible in infrastructure development mode.
+    """
+    if tool_name != "ck3_repair":
+        return allow(
+            "CK3RAVEN_DEV_LAUNCHER_REPAIR",
+            f"Not ck3_repair tool"
+        )
+    
+    if mode != "ck3raven-dev":
+        return allow(
+            "CK3RAVEN_DEV_LAUNCHER_REPAIR",
+            "Not in ck3raven-dev mode"
+        )
+    
+    return deny(
+        "CK3RAVEN_DEV_LAUNCHER_REPAIR",
+        "ck3_repair is not available in ck3raven-dev mode. "
+        "This tool is for CK3 modding workflows only.",
+        tool=tool_name,
+        mode=mode,
+    )
+
+
+
+def gate_ck3raven_dev_create_override_patch_prohibition(
+    tool_name: str,
+    mode: str,
+) -> GateResult:
+    """
+    HARD GATE (ck3raven-dev): Create override patch is ck3lens mode only.
+    
+    The ck3_create_override_patch tool writes to mod files, which is
+    prohibited in ck3raven-dev mode (absolute mod write prohibition).
+    """
+    if tool_name != "ck3_create_override_patch":
+        return allow(
+            "CK3RAVEN_DEV_CREATE_OVERRIDE_PATCH",
+            f"Not ck3_create_override_patch tool"
+        )
+    
+    if mode != "ck3raven-dev":
+        return allow(
+            "CK3RAVEN_DEV_CREATE_OVERRIDE_PATCH",
+            "Not in ck3raven-dev mode"
+        )
+    
+    return deny(
+        "CK3RAVEN_DEV_CREATE_OVERRIDE_PATCH",
+        "ck3_create_override_patch is not available in ck3raven-dev mode. "
+        "This tool writes to mod files, which is prohibited in infrastructure mode.",
+        tool=tool_name,
+        mode=mode,
+    )
+
+
 def gate_ck3raven_dev_mod_write_prohibition(
     target_path: str | Path,
     mod_roots: set[str],
