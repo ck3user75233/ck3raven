@@ -727,6 +727,163 @@ def ck3_get_db_status() -> dict:
 
 
 @mcp.tool()
+def ck3_close_db() -> dict:
+    """
+    Close database connection to release file lock.
+    
+    Use this before operations that require exclusive file access:
+    - Deleting the database file
+    - Moving/renaming the database
+    - Running external tools that need exclusive access
+    
+    The connection will be automatically re-established on the next
+    database operation.
+    
+    Returns:
+        {"success": bool, "message": str}
+    """
+    global _db, _playset_id, _session_scope
+    
+    trace = _get_trace()
+    
+    try:
+        if _db is not None:
+            # Close the connection
+            try:
+                _db.conn.close()
+            except Exception:
+                pass
+            _db = None
+        
+        # Also clear cached state that depends on DB
+        _playset_id = None
+        _session_scope = None
+        
+        # Clear thread-local connections from schema module
+        try:
+            from ck3raven.db.schema import close_all_connections
+            close_all_connections()
+        except Exception:
+            pass
+        
+        trace.log("ck3lens.close_db", {}, {"success": True})
+        
+        return {
+            "success": True,
+            "message": "Database connection closed. File lock released."
+        }
+    except Exception as e:
+        trace.log("ck3lens.close_db", {}, {"success": False, "error": str(e)})
+        return {
+            "success": False,
+            "message": f"Failed to close connection: {e}"
+        }
+
+
+@mcp.tool()
+def ck3_get_playset_build_status(playset_name: str | None = None) -> dict:
+    """
+    Check build status of mods in a playset.
+    
+    Works in both modes:
+    - ck3lens mode: Check active playset or specified playset
+    - ck3raven-dev mode: Check any playset for testing
+    
+    This determines which mods are fully processed and ready for use,
+    and which need to be built before the playset can be used effectively.
+    
+    Build phases per mod:
+    - ingested: Files indexed into database
+    - symbols_extracted: Symbols (traits, events, etc.) extracted from ASTs
+    - ready: Fully processed and ready for searching/conflict detection
+    
+    Args:
+        playset_name: Name of playset to check (default: active playset)
+    
+    Returns:
+        {
+            "playset_name": str,
+            "playset_valid": bool,      # True if at least one mod exists on disk
+            "total_mods": int,
+            "ready_mods": int,          # Fully processed
+            "pending_mods": int,        # Need processing
+            "missing_mods": int,        # Not on disk
+            "needs_build": bool,        # True if any mods need processing
+            "missing_mod_names": list,  # Names of mods not on disk
+            "mods": [
+                {
+                    "name": str,
+                    "status": "ready" | "pending_symbols" | "pending_ingest" | "not_indexed" | "missing",
+                    "exists_on_disk": bool,
+                }
+            ],
+            "build_command": str,       # Command to run if build needed
+            "guidance": str,            # Human-readable guidance
+        }
+    """
+    from builder.incremental import check_playset_build_status
+    from pathlib import Path
+    
+    db = _get_db()
+    trace = _get_trace()
+    
+    # Get playset data
+    if playset_name:
+        # Find specified playset
+        playset_folder = Path.home() / ".ck3raven" / "playsets"
+        playset_data = None
+        
+        for f in playset_folder.glob("*.json"):
+            if f.name.endswith(".schema.json") or f.name == "playset_manifest.json":
+                continue
+            data = _load_playset_from_json(f)
+            if data and (data.get("playset_name") == playset_name or f.stem == playset_name):
+                playset_data = data
+                break
+        
+        if not playset_data:
+            return {"error": f"Playset not found: {playset_name}"}
+    else:
+        # Use active playset
+        scope = _get_session_scope()
+        if scope.get("source") == "none":
+            return {"error": "No active playset configured"}
+        playset_data = scope.get("playset_data", {})
+        playset_name = playset_data.get("playset_name", "Unknown")
+    
+    # Check build status
+    result = check_playset_build_status(db.conn, playset_data)
+    result["playset_name"] = playset_name
+    
+    # Add guidance
+    if not result["playset_valid"]:
+        result["guidance"] = "⛔ Invalid playset: All mods are missing from disk. Cannot activate."
+        result["build_command"] = None
+    elif result["needs_build"]:
+        pending = result["pending_mods"]
+        result["guidance"] = f"⚠️ {pending} mod(s) need processing before full functionality."
+        result["build_command"] = "python builder/daemon.py start --symbols-only"
+    else:
+        result["guidance"] = "✅ All mods are fully processed and ready."
+        result["build_command"] = None
+    
+    if result["missing_mods"] > 0:
+        names = ", ".join(result["missing_mod_names"][:5])
+        if result["missing_mods"] > 5:
+            names += f" and {result['missing_mods'] - 5} more"
+        result["guidance"] += f"\n⚠️ Missing mods (not on disk): {names}"
+    
+    trace.log("ck3lens.get_playset_build_status", {"playset_name": playset_name}, {
+        "valid": result["playset_valid"],
+        "ready": result["ready_mods"],
+        "pending": result["pending_mods"],
+        "missing": result["missing_mods"],
+    })
+    
+    return result
+
+
+@mcp.tool()
 def ck3_db_delete(
     target: Literal["asts", "symbols", "refs", "files", "content_versions", "lookups", "playsets", "build_tracking"],
     scope: Literal["all", "mods_only", "by_ids", "by_content_version"],
@@ -1693,6 +1850,12 @@ def ck3_git(
 ) -> dict:
     """
     Unified git operations for live mods.
+    
+    ⚠️ KNOWN ISSUE: This tool may hang due to GitLens extension conflicts.
+    WORKAROUND: Use ck3_exec with git commands instead:
+        ck3_exec("git status", working_dir=mod_path)
+        ck3_exec("git add .", working_dir=mod_path)
+        ck3_exec("git commit -m 'message'", working_dir=mod_path)
     
     Mode-aware behavior:
     - ck3raven-dev mode: Operates on ck3raven repo (mod_name ignored)
