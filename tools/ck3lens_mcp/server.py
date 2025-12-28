@@ -3005,7 +3005,7 @@ def ck3_exec(
     
     # Map CLW category to operation type for consistency
     op_type_name = "SHELL_SAFE"
-    if result.category == CommandCategory.WRITE:
+    if result.category in (CommandCategory.WRITE_IN_SCOPE, CommandCategory.WRITE_OUT_OF_SCOPE):
         op_type_name = "SHELL_WRITE"
     elif result.category == CommandCategory.DESTRUCTIVE:
         op_type_name = "SHELL_DESTRUCTIVE"

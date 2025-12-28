@@ -186,7 +186,7 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
     Returns:
         EnforcementResult with decision and requirements
     """
-    from .work_contracts import (
+    from ..work_contracts import (
         WorkContract, get_active_contract, 
         validate_path_in_repo_domains, REPO_DOMAINS
     )
@@ -474,7 +474,7 @@ def _enforce_git_push(
     5. All staged files are within contract scope
     6. Optional: commit message includes [CONTRACT:<id>]
     """
-    from .work_contracts import validate_path_in_repo_domains, REPO_DOMAINS
+    from ..work_contracts import validate_path_in_repo_domains, REPO_DOMAINS
     
     if contract is None:
         return EnforcementResult(
