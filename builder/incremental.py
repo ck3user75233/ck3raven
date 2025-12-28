@@ -472,3 +472,157 @@ def refresh_files_batch(
         "errors": errors,
         "results": results
     }
+
+
+# =============================================================================
+# Playset Build Status Check
+# =============================================================================
+
+def check_playset_build_status(
+    conn: sqlite3.Connection,
+    playset_data: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Check the build status of mods in a playset.
+    
+    This is called when switching to a new playset to determine which mods
+    need to be built before the playset can be used effectively.
+    
+    Build phases per mod:
+    1. ingested_at - Files indexed into database
+    2. symbols_extracted_at - Symbols (traits, events, etc.) extracted from ASTs
+    3. contributions_extracted_at - Contribution units extracted for conflict detection
+    
+    Args:
+        conn: Database connection
+        playset_data: Playset definition with:
+            - vanilla_version_id: int
+            - mods: list of {content_version_id, name, path, ...}
+    
+    Returns:
+        {
+            "playset_valid": bool,      # True if at least one mod exists on disk
+            "total_mods": int,
+            "ready_mods": int,          # Fully processed (symbols extracted)
+            "pending_mods": int,        # Need processing
+            "missing_mods": int,        # Not on disk
+            "mods": [
+                {
+                    "name": str,
+                    "content_version_id": int,
+                    "status": "ready" | "pending_symbols" | "pending_ingest" | "not_indexed" | "missing",
+                    "ingested_at": str | None,
+                    "symbols_extracted_at": str | None,
+                    "exists_on_disk": bool,
+                    "path": str | None
+                }
+            ],
+            "needs_build": bool,        # True if any mods need processing
+            "missing_mod_names": list,  # Names of mods not on disk
+        }
+    """
+    result = {
+        "playset_valid": False,
+        "total_mods": 0,
+        "ready_mods": 0,
+        "pending_mods": 0,
+        "missing_mods": 0,
+        "mods": [],
+        "needs_build": False,
+        "missing_mod_names": [],
+    }
+    
+    # Check vanilla first
+    vanilla_version_id = playset_data.get("vanilla_version_id")
+    if vanilla_version_id:
+        row = conn.execute("""
+            SELECT cv.content_version_id, cv.ingested_at, cv.symbols_extracted_at,
+                   vv.ck3_version
+            FROM content_versions cv
+            JOIN vanilla_versions vv ON cv.vanilla_version_id = vv.vanilla_version_id
+            WHERE cv.vanilla_version_id = ? AND cv.kind = 'vanilla'
+        """, (vanilla_version_id,)).fetchone()
+        
+        if row:
+            # Vanilla is assumed to exist if it's in the database
+            # The path is external knowledge (from workspace config)
+            if row["symbols_extracted_at"]:
+                status = "ready"
+                result["ready_mods"] += 1
+            elif row["ingested_at"]:
+                status = "pending_symbols"
+                result["pending_mods"] += 1
+                result["needs_build"] = True
+            else:
+                status = "pending_ingest"
+                result["pending_mods"] += 1
+                result["needs_build"] = True
+            
+            result["mods"].append({
+                "name": f"Vanilla {row['ck3_version']}",
+                "content_version_id": row["content_version_id"],
+                "status": status,
+                "ingested_at": row["ingested_at"],
+                "symbols_extracted_at": row["symbols_extracted_at"],
+                "exists_on_disk": True,  # Assumed - vanilla must exist to be indexed
+                "path": None,  # Path is external to DB
+                "is_vanilla": True,
+            })
+            result["total_mods"] += 1
+            result["playset_valid"] = True  # Vanilla exists = playset is valid
+    
+    # Check each mod
+    mods = playset_data.get("mods", [])
+    for mod in mods:
+        content_version_id = mod.get("content_version_id")
+        mod_name = mod.get("name", "Unknown")
+        mod_path = mod.get("path")
+        
+        if content_version_id:
+            row = conn.execute("""
+                SELECT ingested_at, symbols_extracted_at
+                FROM content_versions
+                WHERE content_version_id = ?
+            """, (content_version_id,)).fetchone()
+        else:
+            row = None
+        
+        # Check if mod exists on disk
+        exists_on_disk = mod_path and Path(mod_path).exists() if mod_path else False
+        
+        if not exists_on_disk:
+            status = "missing"
+            result["missing_mods"] += 1
+            result["missing_mod_names"].append(mod_name)
+        elif row is None:
+            status = "not_indexed"
+            result["pending_mods"] += 1
+            result["needs_build"] = True
+        elif row["symbols_extracted_at"]:
+            status = "ready"
+            result["ready_mods"] += 1
+        elif row["ingested_at"]:
+            status = "pending_symbols"
+            result["pending_mods"] += 1
+            result["needs_build"] = True
+        else:
+            status = "pending_ingest"
+            result["pending_mods"] += 1
+            result["needs_build"] = True
+        
+        result["mods"].append({
+            "name": mod_name,
+            "content_version_id": content_version_id,
+            "status": status,
+            "ingested_at": row["ingested_at"] if row else None,
+            "symbols_extracted_at": row["symbols_extracted_at"] if row else None,
+            "exists_on_disk": exists_on_disk,
+            "path": mod_path,
+            "is_vanilla": False,
+        })
+        result["total_mods"] += 1
+        
+        if exists_on_disk:
+            result["playset_valid"] = True
+    
+    return result
