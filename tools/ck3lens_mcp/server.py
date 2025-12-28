@@ -215,6 +215,62 @@ def _get_playset_scope():
     return _cached_playset_scope
 
 
+# Cached WorldAdapter for the current mode
+_cached_world_adapter = None
+_cached_world_mode = None
+
+
+def _get_world():
+    """
+    Get the WorldAdapter for the current agent mode.
+    
+    The WorldAdapter provides unified path resolution and visibility control:
+    - In ck3lens mode: paths are resolved within the active playset
+    - In ck3raven-dev mode: paths are resolved with ck3raven source priority
+    
+    All MCP tools should use this to resolve paths before policy checks.
+    
+    Returns:
+        WorldAdapter appropriate for the current mode
+        
+    Raises:
+        RuntimeError: If mode is not initialized
+    """
+    global _cached_world_adapter, _cached_world_mode
+    
+    from ck3lens.world_router import get_world
+    from ck3lens.agent_mode import get_agent_mode
+    
+    mode = get_agent_mode()
+    
+    # Check cache
+    if _cached_world_adapter is not None and _cached_world_mode == mode:
+        return _cached_world_adapter
+    
+    # Get dependencies
+    db = _get_db()
+    lens = _get_lens(no_lens=False)
+    scope = _get_playset_scope()
+    
+    # Build adapter via router
+    try:
+        adapter = get_world(db=db, lens=lens, scope=scope)
+        _cached_world_adapter = adapter
+        _cached_world_mode = mode
+        return adapter
+    except RuntimeError as e:
+        # If mode not initialized, return None instead of raising
+        # This allows tools to work in degraded mode
+        return None
+
+
+def _reset_world_cache():
+    """Reset the cached world adapter (for mode changes)."""
+    global _cached_world_adapter, _cached_world_mode
+    _cached_world_adapter = None
+    _cached_world_mode = None
+
+
 # Cached session scope data
 _session_scope: Optional[dict] = None
 
@@ -1315,6 +1371,7 @@ def ck3_file(
     db = _get_db()
     trace = _get_trace()
     lens = _get_lens(no_lens=no_lens)
+    world = _get_world()  # WorldAdapter for unified path resolution
     
     return ck3_file_impl(
         command=command,
@@ -1339,6 +1396,7 @@ def ck3_file(
         db=db,
         trace=trace,
         lens=lens,
+        world=world,
     )
 
 

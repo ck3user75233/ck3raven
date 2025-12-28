@@ -823,6 +823,7 @@ def ck3_file_impl(
     db=None,
     trace=None,
     lens=None,
+    world=None,  # WorldAdapter for unified path resolution
 ) -> dict:
     """
     Unified file operations tool.
@@ -837,6 +838,11 @@ def ck3_file_impl(
     command=rename   → Rename/move file in live mod (mod_name, rel_path, new_path required)
     command=refresh  → Re-sync file to database (mod_name, rel_path required)
     command=list     → List files in live mod (mod_name required, path_prefix/pattern optional)
+    
+    The world parameter provides WorldAdapter for unified path resolution:
+    - Resolves raw paths to canonical addresses
+    - Validates visibility based on agent mode
+    - Provides is_writable hints for policy
     """
     from pathlib import Path as P
     
