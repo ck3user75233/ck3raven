@@ -24,6 +24,7 @@ from typing import Optional
 
 from .clw import Decision, PolicyResult
 from .tokens import validate_token
+from ..work_contracts import WorkContract, validate_path_against_contract
 
 
 class FileOperation(Enum):
@@ -119,9 +120,41 @@ def evaluate_file_operation(request: FileRequest) -> PolicyResult:
         if ck3raven_root and _is_within_ck3raven(path, ck3raven_root):
             # Within ck3raven project
             if request.contract_id:
+                # Load and validate contract scope
+                contract = WorkContract.load(request.contract_id)
+                if contract is None:
+                    return PolicyResult(
+                        decision=Decision.DENY,
+                        reason=f"Contract not found: {request.contract_id}",
+                        command=f"file:{op.name}:{path}",
+                    )
+                
+                if not contract.is_active():
+                    return PolicyResult(
+                        decision=Decision.REQUIRE_TOKEN,
+                        reason=f"Contract is not active (status: {contract.status})",
+                        required_token_type="FS_WRITE_OUTSIDE_CONTRACT",
+                        command=f"file:{op.name}:{path}",
+                    )
+                
+                # Validate path is within contract's allowed_paths
+                try:
+                    rel_path = str(path.relative_to(ck3raven_root))
+                except ValueError:
+                    rel_path = str(path)
+                
+                if contract.allowed_paths and not validate_path_against_contract(rel_path, contract):
+                    return PolicyResult(
+                        decision=Decision.DENY,
+                        reason=f"Path '{rel_path}' not in contract allowed_paths: {contract.allowed_paths}",
+                        command=f"file:{op.name}:{path}",
+                        contract_id=request.contract_id,
+                    )
+                
+                # Contract is valid and path is in scope
                 return PolicyResult(
                     decision=Decision.ALLOW,
-                    reason="Within ck3raven with active contract",
+                    reason=f"Within ck3raven with valid contract scope",
                     command=f"file:{op.name}:{path}",
                     contract_id=request.contract_id,
                 )

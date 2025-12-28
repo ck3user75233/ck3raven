@@ -484,15 +484,33 @@ def _get_session_scope(force_refresh: bool = False) -> dict:
     return _session_scope
 
 
+def _get_trace_path() -> Path:
+    """
+    Get the trace log path based on agent mode.
+    
+    - ck3raven-dev mode: {repo}/.wip/traces/ck3lens_trace.jsonl
+    - ck3lens mode: ~/.ck3raven/traces/ck3lens_trace.jsonl
+    """
+    from ck3lens.agent_mode import get_agent_mode
+    
+    mode = get_agent_mode()
+    
+    if mode == "ck3raven-dev":
+        # Trace goes in repo's .wip folder
+        ck3raven_root = Path(__file__).parent.parent
+        trace_dir = ck3raven_root / ".wip" / "traces"
+    else:
+        # Trace goes in ~/.ck3raven/traces/
+        trace_dir = Path.home() / ".ck3raven" / "traces"
+    
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    return trace_dir / "ck3lens_trace.jsonl"
+
+
 def _get_trace() -> ToolTrace:
     global _trace
     if _trace is None:
-        from ck3lens.workspace import DEFAULT_CK3_MOD_DIR
-        session = _get_session()
-        mod_root = DEFAULT_CK3_MOD_DIR
-        if session.local_mods:
-            mod_root = session.local_mods[0].path.parent
-        _trace = ToolTrace(mod_root / "ck3lens_trace.jsonl")
+        _trace = ToolTrace(_get_trace_path())
     return _trace
 
 
@@ -585,14 +603,11 @@ def ck3_init_session(
     
     _db = DBQueries(db_path=_session.db_path)
     
-    # Get mod root from first local mod or default
-    mod_root = DEFAULT_CK3_MOD_DIR
-    if _session.local_mods:
-        mod_root = _session.local_mods[0].path.parent
-    _trace = ToolTrace(mod_root / "ck3lens_trace.jsonl")
+    # Initialize trace with proper path based on mode
+    _trace = ToolTrace(_get_trace_path())
     
     _trace.log("ck3lens.init_session", {"db_path": db_path, "local_mods": local_mods}, {
-        "mod_root": str(mod_root),
+        "trace_path": str(_get_trace_path()),
         "local_mods_count": len(_session.local_mods)
     })
     

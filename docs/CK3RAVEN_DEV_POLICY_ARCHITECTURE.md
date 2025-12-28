@@ -212,7 +212,6 @@ These are auto-granted because they don't expand scope:
 | Token Type | Purpose | TTL |
 |------------|---------|-----|
 | `DELETE_SOURCE` | Delete ck3raven source files | 15 min |
-| `GIT_PUSH` | Push to remote | 60 min |
 | `GIT_FORCE_PUSH` | Force push to remote | 10 min |
 | `GIT_REWRITE_HISTORY` | Rebase, reset --hard, commit --amend | 15 min |
 | `DB_MIGRATION_DESTRUCTIVE` | Destructive database migration | 15 min |
@@ -315,12 +314,13 @@ This is enforced as a hard gate:
 - `git log`
 - `git add`
 - `git commit` (normal, no --amend)
+- `git push` (non-force push)
+- `git pull`
 
 ### Requires Approval Token
 
 | Operation | Token Required |
 |-----------|----------------|
-| `git push` | `GIT_PUSH` |
 | `git push --force` | `GIT_FORCE_PUSH` |
 | `git reset --hard` | `GIT_REWRITE_HISTORY` |
 | `git rebase` | `GIT_REWRITE_HISTORY` |
@@ -332,6 +332,8 @@ This is enforced as a hard gate:
 - Git command classifier in `ck3_exec` categorizes commands
 - Unclassified git commands → blocked by default
 - All git operations logged with justification
+- History-rewriting operations require explicit approval (amend, rebase, force push)
+- Non-destructive operations (commit, push) are allowed with active contract
 
 ---
 
