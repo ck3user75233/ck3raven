@@ -52,15 +52,38 @@ def _get_archive_dir() -> Path:
     return path
 
 
-# Valid canonical domains for ck3raven-dev mode
-CANONICAL_DOMAINS = frozenset({
-    "parser",      # src/ck3raven/parser/
-    "routing",     # src/ck3raven/resolver/
-    "builder",     # builder/
+# =============================================================================
+# DOMAIN MODEL
+# =============================================================================
+# Domains are split into PRODUCT domains (what the code does) and REPO domains
+# (where changes go). Both are valid for contracts. This separation prevents
+# the category error where documentation work couldn't be classified.
+
+# PRODUCT DOMAINS - what functional subsystem the work relates to
+PRODUCT_DOMAINS = frozenset({
+    "parser",      # src/ck3raven/parser/ - CK3 script parsing, AST generation
+    "routing",     # src/ck3raven/resolver/ - request routing, resolution
+    "builder",     # builder/ - database build/ingestion pipeline
     "extraction",  # src/ck3raven/db/ (ingest, symbols, refs)
     "query",       # src/ck3raven/db/ (search, playsets), tools/ck3lens_mcp/ck3lens/
-    "cli",         # CLI glue, tools/, scripts/
+    "cli",         # CLI entry points
 })
+
+# REPO DOMAINS - what parts of the repository tree are in scope
+REPO_DOMAINS = frozenset({
+    "docs",        # docs/**, README.md, *.md - documentation
+    "tools",       # tools/** - MCP tools, wrappers, utilities
+    "tests",       # tests/**, **/test_*.py - unit tests, fixtures
+    "policy",      # ck3lens/ policy engine, contracts, gates, tokens
+    "config",      # config files, *.yaml, *.toml, pyproject.toml
+    "wip",         # .wip/** - WIP scripts and scratch artifacts
+    "ci",          # .github/workflows/** - CI workflows
+    "scripts",     # scripts/** - utility scripts
+    "src",         # src/ck3raven/** - main source code
+})
+
+# Combined - both product and repo domains are valid for ck3raven-dev contracts
+CANONICAL_DOMAINS = PRODUCT_DOMAINS | REPO_DOMAINS
 
 # Valid domains for ck3lens mode (CK3 modding)
 CK3LENS_DOMAINS = frozenset({
@@ -71,7 +94,7 @@ CK3LENS_DOMAINS = frozenset({
     "launcher",            # Launcher registry repair (via ck3_repair)
 })
 
-# Combined for validation
+# Combined for validation (all possible domains)
 ALL_DOMAINS = CANONICAL_DOMAINS | CK3LENS_DOMAINS
 
 # Capability tiers

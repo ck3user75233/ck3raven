@@ -911,10 +911,38 @@ def _file_get(path, include_ast, max_bytes, no_lens, db, trace, lens):
 
 
 def _file_read_raw(path, justification, start_line, end_line, trace):
-    """Read file from filesystem."""
+    """Read file from filesystem with lens enforcement for ck3lens mode."""
     from pathlib import Path as P
+    from ck3lens.agent_mode import get_agent_mode
     
     file_path = P(path)
+    
+    # Lens enforcement for ck3lens mode
+    mode = get_agent_mode()
+    if mode == "ck3lens":
+        # Import here to avoid circular import
+        from ck3lens.playset_scope import PlaysetScope
+        try:
+            # Try to get scope from server module
+            import sys
+            server_module = sys.modules.get('__main__')
+            if server_module and hasattr(server_module, '_get_playset_scope'):
+                playset_scope = server_module._get_playset_scope()
+            else:
+                # Fallback: try to import from server
+                from tools.ck3lens_mcp.server import _get_playset_scope
+                playset_scope = _get_playset_scope()
+            
+            if playset_scope and not playset_scope.is_path_in_scope(file_path):
+                location_type, _ = playset_scope.get_path_location(file_path)
+                return {
+                    "success": False,
+                    "error": f"Path outside active playset scope: {path}",
+                    "location_type": location_type,
+                    "hint": "ck3lens mode restricts filesystem access to paths within the active playset",
+                }
+        except Exception:
+            pass  # If scope check fails, allow read (fail open for reads)
     
     if trace:
         trace.log("ck3lens.file.read", {"path": str(file_path), "justification": justification}, {})
@@ -1000,15 +1028,18 @@ def _file_write_raw(path, content, validate_syntax, token_id, trace):
     from ck3lens.policy.clw import Decision
     from ck3lens.work_contracts import get_active_contract
     from ck3lens.validate import parse_content
+    from ck3lens.agent_mode import get_agent_mode
     
     file_path = P(path).resolve()
     
-    # Get mode - default to restrictive, check trace for actual mode
-    mode = "ck3lens"
-    if trace:
-        mode_info = getattr(trace, 'get_last_mode', lambda: None)()
-        if mode_info:
-            mode = mode_info
+    # Get mode from persistent file (single source of truth)
+    mode = get_agent_mode()
+    if mode is None:
+        return {
+            "success": False,
+            "error": "Agent mode not initialized",
+            "guidance": "Call ck3_get_mode_instructions() first to set mode",
+        }
     
     # Get ck3raven root (parent of tools/)
     ck3raven_root = P(__file__).parent.parent.parent.parent

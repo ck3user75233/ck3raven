@@ -6,6 +6,9 @@
  */
 
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 import { CK3LensSession } from './session';
 import { ExplorerViewProvider } from './views/explorerView';
 import { ConflictsViewProvider } from './views/conflictsView';
@@ -13,7 +16,8 @@ import { LiveModsViewProvider } from './views/liveModsView';
 import { PlaysetViewProvider } from './views/playsetView';
 import { IssuesViewProvider } from './views/issuesView';
 import { AgentViewProvider } from './views/agentView';
-import { RulesViewProvider } from './views/rulesView';
+// DEPRECATED: RulesView is disabled - mode is now set via MCP ck3_get_mode_instructions()
+// import { RulesViewProvider } from './views/rulesView';
 import { AstViewerPanel } from './views/astViewerPanel';
 import { StudioPanel } from './views/studioPanel';
 import { LintingProvider } from './linting/lintingProvider';
@@ -47,6 +51,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger = new Logger(outputChannel);
     logger.info('CK3 Lens Explorer activating...');
 
+    // CRITICAL: Blank agent mode on extension startup
+    // This ensures each VS Code session starts fresh and the agent must explicitly
+    // initialize its mode via ck3_get_mode_instructions() before any policy-gated operations
+    const modeFile = path.join(os.homedir(), '.ck3raven', 'agent_mode.json');
+    try {
+        fs.mkdirSync(path.dirname(modeFile), { recursive: true });
+        fs.writeFileSync(modeFile, JSON.stringify({ mode: null, cleared_at: new Date().toISOString() }, null, 2));
+        logger.info('Blanked agent mode on startup - agent must call ck3_get_mode_instructions()');
+    } catch (err) {
+        logger.error('Failed to blank agent mode', err as Error);
+    }
+
     // Initialize diagnostic collection for linting
     diagnosticCollection = vscode.languages.createDiagnosticCollection('ck3lens');
     context.subscriptions.push(diagnosticCollection);
@@ -73,7 +89,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const playsetProvider = new PlaysetViewProvider(session, logger);
     const issuesProvider = new IssuesViewProvider(session, logger);
     const agentProvider = new AgentViewProvider(context, logger);
-    const rulesProvider = new RulesViewProvider(logger);
+    // DEPRECATED: RulesView disabled - mode now controlled via MCP ck3_get_mode_instructions()
+    // const rulesProvider = new RulesViewProvider(logger);
 
     // Create playset tree view with drag-and-drop support
     const playsetTreeView = vscode.window.createTreeView('ck3lens.playsetView', {
@@ -82,12 +99,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         canSelectMany: false
     });
 
-    // Create rules tree view with checkbox support
-    const rulesTreeView = vscode.window.createTreeView('ck3lens.rulesView', {
-        treeDataProvider: rulesProvider,
-        manageCheckboxStateManually: true
-    });
-    rulesProvider.registerTreeView(rulesTreeView);
+    // DEPRECATED: RulesView disabled - mode now controlled via MCP
+    // const rulesTreeView = vscode.window.createTreeView('ck3lens.rulesView', {
+    //     treeDataProvider: rulesProvider,
+    //     manageCheckboxStateManually: true
+    // });
+    // rulesProvider.registerTreeView(rulesTreeView);
 
     context.subscriptions.push(
         vscode.window.registerTreeDataProvider('ck3lens.agentView', agentProvider),
@@ -96,7 +113,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.window.registerTreeDataProvider('ck3lens.liveModsView', liveModsProvider),
         playsetTreeView,
         vscode.window.registerTreeDataProvider('ck3lens.issuesView', issuesProvider),
-        rulesTreeView
+        // rulesTreeView  // DEPRECATED
     );
 
     // Initialize the Status Bar
@@ -144,7 +161,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     // Register commands
-    registerCommands(context, agentProvider, explorerProvider, conflictsProvider, liveModsProvider, playsetProvider, issuesProvider, lintingProvider, rulesProvider);
+    // NOTE: rulesProvider removed - mode now controlled via MCP ck3_get_mode_instructions()
+    registerCommands(context, agentProvider, explorerProvider, conflictsProvider, liveModsProvider, playsetProvider, issuesProvider, lintingProvider);
 
     // Register file watchers for real-time linting
     if (vscode.workspace.getConfiguration('ck3lens').get('enableRealTimeLinting', true)) {
@@ -188,8 +206,8 @@ function registerCommands(
     liveModsProvider: LiveModsViewProvider,
     playsetProvider: PlaysetViewProvider,
     issuesProvider: IssuesViewProvider,
-    lintingProvider: LintingProvider,
-    rulesProvider: RulesViewProvider
+    lintingProvider: LintingProvider
+    // rulesProvider removed - mode now controlled via MCP
 ): void {
     // Initialize session
     context.subscriptions.push(
@@ -389,9 +407,12 @@ function registerCommands(
     );
 
     // ------------------------------------------
-    // Validation Rules Commands
+    // Validation Rules Commands - DEPRECATED
+    // Mode is now controlled via MCP ck3_get_mode_instructions()
+    // These commands are preserved as stubs for backwards compatibility
     // ------------------------------------------
     
+    /*
     // Toggle a validation rule on/off
     context.subscriptions.push(
         vscode.commands.registerCommand('ck3lens.rules.toggle', async (item?: { ruleId?: string }) => {
@@ -450,6 +471,7 @@ function registerCommands(
             rulesProvider.disableAllRules();
         })
     );
+    */
 
     // Open AST Viewer
     context.subscriptions.push(

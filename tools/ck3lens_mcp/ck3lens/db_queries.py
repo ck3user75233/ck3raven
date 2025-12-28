@@ -203,7 +203,12 @@ class DBQueries:
         return lens
     
     def get_active_lens(self) -> Optional[PlaysetLens]:
-        """Get the lens for the currently active playset."""
+        """
+        Get the lens for the currently active playset.
+        
+        DEPRECATED: This method queries the database which is empty.
+        Use build_lens_from_scope() instead with file-based playset data.
+        """
         row = self.conn.execute("""
             SELECT playset_id FROM playsets WHERE is_active = 1 LIMIT 1
         """).fetchone()
@@ -211,6 +216,114 @@ class DBQueries:
         if row:
             return self.get_lens(row["playset_id"])
         return None
+    
+    def build_lens_from_scope(
+        self,
+        playset_name: str,
+        mod_steam_ids: list[str],
+        mod_paths: list[str],
+        load_order: Optional[list[str]] = None
+    ) -> Optional[PlaysetLens]:
+        """
+        Build a PlaysetLens from file-based playset data.
+        
+        This is the PRIMARY method for creating a lens from JSON playset files.
+        It resolves mod identifiers (steam IDs or paths) to content_version_ids.
+        
+        Args:
+            playset_name: Human-readable name for the playset
+            mod_steam_ids: List of Steam Workshop IDs for mods in playset
+            mod_paths: List of filesystem paths for mods in playset
+            load_order: Optional list of mod names/IDs defining load order
+                        (if None, uses database ingestion order)
+        
+        Returns:
+            PlaysetLens with vanilla and mod content_version_ids,
+            or None if vanilla not found in database.
+        """
+        # 1. Get vanilla content_version_id (most recent)
+        vanilla_row = self.conn.execute("""
+            SELECT content_version_id 
+            FROM content_versions 
+            WHERE kind = 'vanilla' 
+            ORDER BY ingested_at DESC 
+            LIMIT 1
+        """).fetchone()
+        
+        if not vanilla_row:
+            return None
+        
+        vanilla_cv_id = vanilla_row["content_version_id"]
+        
+        # 2. Find mod content_version_ids by steam ID or path
+        mod_cv_ids = []
+        found_mods = set()
+        
+        # Build lookup: steam_id -> content_version_id
+        # We need the LATEST content_version for each mod
+        steam_id_to_cv = {}
+        if mod_steam_ids:
+            placeholders = ",".join("?" * len(mod_steam_ids))
+            rows = self.conn.execute(f"""
+                SELECT mp.workshop_id, cv.content_version_id, cv.ingested_at
+                FROM mod_packages mp
+                JOIN content_versions cv ON cv.mod_package_id = mp.mod_package_id
+                WHERE mp.workshop_id IN ({placeholders})
+                ORDER BY cv.ingested_at DESC
+            """, mod_steam_ids).fetchall()
+            
+            for row in rows:
+                wid = row["workshop_id"]
+                if wid not in steam_id_to_cv:  # Keep only latest
+                    steam_id_to_cv[wid] = row["content_version_id"]
+        
+        # Build lookup: normalized_path -> content_version_id
+        path_to_cv = {}
+        if mod_paths:
+            # Normalize paths for comparison
+            def normalize_path(p: str) -> str:
+                from pathlib import Path
+                return str(Path(p).resolve()).lower().replace("\\", "/")
+            
+            # Query all mod packages with paths
+            rows = self.conn.execute("""
+                SELECT mp.source_path, cv.content_version_id, cv.ingested_at
+                FROM mod_packages mp
+                JOIN content_versions cv ON cv.mod_package_id = mp.mod_package_id
+                WHERE mp.source_path IS NOT NULL
+                ORDER BY cv.ingested_at DESC
+            """).fetchall()
+            
+            for row in rows:
+                if row["source_path"]:
+                    norm = normalize_path(row["source_path"])
+                    if norm not in path_to_cv:  # Keep only latest
+                        path_to_cv[norm] = row["content_version_id"]
+            
+            # Match requested paths
+            for mod_path in mod_paths:
+                norm = normalize_path(mod_path)
+                if norm in path_to_cv:
+                    cv_id = path_to_cv[norm]
+                    if cv_id not in found_mods:
+                        mod_cv_ids.append(cv_id)
+                        found_mods.add(cv_id)
+        
+        # Now add steam ID matches (if not already added via path)
+        for steam_id in mod_steam_ids:
+            if steam_id in steam_id_to_cv:
+                cv_id = steam_id_to_cv[steam_id]
+                if cv_id not in found_mods:
+                    mod_cv_ids.append(cv_id)
+                    found_mods.add(cv_id)
+        
+        # 3. Build the lens
+        return PlaysetLens(
+            playset_id=-1,  # No database ID for file-based playsets
+            playset_name=playset_name,
+            vanilla_cv_id=vanilla_cv_id,
+            mod_cv_ids=mod_cv_ids
+        )
     
     def invalidate_lens_cache(self, playset_id: Optional[int] = None):
         """Clear cached lens (call after playset changes)."""

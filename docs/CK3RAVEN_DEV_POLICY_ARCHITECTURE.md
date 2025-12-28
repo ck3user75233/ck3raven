@@ -117,6 +117,31 @@ Every contract must declare exactly one `Ck3RavenDevIntentType`. Missing → AUT
 | **TEST_ONLY** | Adding, modifying, or fixing tests only | `tests/` directory |
 | **DOCS_ONLY** | Documentation changes only | `.md` files, docstrings |
 
+### Domain Model
+
+Contracts must also declare `canonical_domains` which identify what areas are in scope. Domains come in two categories:
+
+**Product Domains** (what the code does):
+- `parser` - CK3 script parsing, AST generation
+- `routing` - Request routing, resolution
+- `builder` - Database build/ingestion pipeline
+- `extraction` - Symbol extraction, reference linking
+- `query` - DB query layer, search APIs
+- `cli` - CLI entry points
+
+**Repo Domains** (where changes go):
+- `docs` - Documentation files (`docs/**`, `*.md`)
+- `tools` - MCP tools, wrappers, utilities (`tools/**`)
+- `tests` - Unit tests, fixtures (`tests/**`)
+- `policy` - Policy engine, contracts, gates (`ck3lens/`)
+- `config` - Config files (`*.yaml`, `*.toml`, `pyproject.toml`)
+- `wip` - WIP scripts and scratch artifacts (`.wip/**`)
+- `ci` - CI workflows (`.github/workflows/**`)
+- `scripts` - Utility scripts (`scripts/**`)
+- `src` - Main source code (`src/ck3raven/**`)
+
+Both product and repo domains are valid for contracts. Use product domains when work is conceptually about a subsystem, use repo domains when work is about a repository surface (like documentation).
+
 ### Rules
 
 - Intents are **mutually exclusive** per contract

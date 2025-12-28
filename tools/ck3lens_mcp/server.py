@@ -184,6 +184,37 @@ def _get_lens(no_lens: bool = False):
     return None
 
 
+# Cached playset scope for path validation
+_cached_playset_scope = None
+
+
+def _get_playset_scope():
+    """
+    Get the PlaysetScope for filesystem path validation.
+    
+    This restricts filesystem operations (reads, greps) to paths within
+    the active playset (vanilla + active mods).
+    
+    Returns:
+        PlaysetScope or None if no playset configured
+    """
+    global _cached_playset_scope
+    
+    if _cached_playset_scope is not None:
+        return _cached_playset_scope
+    
+    from ck3lens.playset_scope import PlaysetScope, build_scope_from_session
+    
+    scope = _get_session_scope()
+    session = _get_session()
+    
+    if scope.get("source") == "none":
+        return None
+    
+    _cached_playset_scope = build_scope_from_session(scope, session.local_mods)
+    return _cached_playset_scope
+
+
 # Cached session scope data
 _session_scope: Optional[dict] = None
 
@@ -2067,7 +2098,9 @@ def ck3_contract(
     Args:
         command: Action to perform
         intent: Description of work to be done (for open)
-        canonical_domains: Domains this work touches: parser, routing, builder, extraction, query, cli
+        canonical_domains: Domains this work touches. Product domains: parser, routing,
+            builder, extraction, query, cli. Repo domains: docs, tools, tests, policy,
+            config, wip, ci, scripts, src
         allowed_paths: Glob patterns for allowed file paths
         capabilities: Requested capabilities (defaults to standard tier)
         expires_hours: Hours until expiry (default 8)
@@ -2086,9 +2119,22 @@ def ck3_contract(
         get_active_contract, list_contracts, flush_old_contracts,
         CANONICAL_DOMAINS, CAPABILITIES,
     )
+    from ck3lens.agent_mode import get_agent_mode
     
     trace = _get_trace()
-    agent_mode = os.environ.get("CK3LENS_MODE", "ck3lens")
+    agent_mode = get_agent_mode()
+    
+    # Null mode check - agent must initialize mode first
+    if agent_mode is None and command == "open":
+        return {
+            "error": "Agent mode not initialized",
+            "guidance": "Ask the user which mode to use, then call ck3_get_mode_instructions() with their choice.",
+            "modes": {
+                "ck3lens": "CK3 modding - search database, edit live mods, resolve conflicts",
+                "ck3raven-dev": "Infrastructure development - modify ck3raven source code",
+            },
+            "example_prompt": "Which mode should I operate in? 'ck3lens' for CK3 modding or 'ck3raven-dev' for infrastructure work?",
+        }
     
     if command == "open":
         if not intent:
@@ -3584,6 +3630,9 @@ def ck3_grep_raw(
     USE THIS instead of VS Code's grep_search when you need to search files
     outside the ck3raven database. Every search is logged for policy validation.
     
+    In ck3lens mode: Only paths within the active playset (vanilla + mods) are searchable.
+    In ck3raven-dev mode: Broader access for infrastructure testing.
+    
     Args:
         path: Absolute path to search in (file or directory)
         query: Text or regex pattern to search for
@@ -3595,8 +3644,23 @@ def ck3_grep_raw(
         {"success": bool, "matches": [{"file": str, "line": int, "content": str}]}
     """
     import re
+    from ck3lens.agent_mode import get_agent_mode
+    
     trace = _get_trace()
     search_path = Path(path)
+    
+    # Lens enforcement for ck3lens mode
+    mode = get_agent_mode()
+    if mode == "ck3lens":
+        playset_scope = _get_playset_scope()
+        if playset_scope and not playset_scope.is_path_in_scope(search_path):
+            location_type, _ = playset_scope.get_path_location(search_path)
+            return {
+                "success": False,
+                "error": f"Path outside active playset scope: {path}",
+                "location_type": location_type,
+                "hint": "ck3lens mode restricts filesystem access to paths within the active playset (vanilla + active mods)",
+            }
     
     # Log the attempt
     trace.log("ck3lens.grep_raw", {
@@ -3679,6 +3743,9 @@ def ck3_file_search(
     USE THIS instead of VS Code's file_search when you need to find files
     outside the ck3raven database. Every search is logged for policy validation.
     
+    In ck3lens mode: Only paths within the active playset (vanilla + mods) are searchable.
+    In ck3raven-dev mode: Broader access for infrastructure testing.
+    
     Args:
         pattern: Glob pattern to match (e.g., "**/*.txt", "common/traits/*.txt")
         justification: Why this search is needed (for audit trail)
@@ -3687,6 +3754,8 @@ def ck3_file_search(
     Returns:
         {"success": bool, "files": [str], "count": int}
     """
+    from ck3lens.agent_mode import get_agent_mode
+    
     trace = _get_trace()
     scope = _get_session_scope()
     
@@ -3697,6 +3766,19 @@ def ck3_file_search(
         search_base = Path(scope["vanilla_root"])
     else:
         search_base = Path("C:/Program Files (x86)/Steam/steamapps/common/Crusader Kings III/game")
+    
+    # Lens enforcement for ck3lens mode
+    mode = get_agent_mode()
+    if mode == "ck3lens":
+        playset_scope = _get_playset_scope()
+        if playset_scope and not playset_scope.is_path_in_scope(search_base):
+            location_type, _ = playset_scope.get_path_location(search_base)
+            return {
+                "success": False,
+                "error": f"Base path outside active playset scope: {base_path}",
+                "location_type": location_type,
+                "hint": "ck3lens mode restricts filesystem access to paths within the active playset (vanilla + active mods)",
+            }
     
     # Log the attempt
     trace.log("ck3lens.file_search", {
@@ -6912,6 +6994,17 @@ def ck3_get_mode_instructions(
         ScopeDomain, IntentType, CK3LensTokenType, AgentMode,
         get_wip_workspace_path, initialize_workspace,
     )
+    from ck3lens.agent_mode import set_agent_mode, VALID_MODES
+    
+    # Validate mode before proceeding
+    if mode not in VALID_MODES:
+        return {
+            "error": f"Invalid mode: {mode}",
+            "valid_modes": list(VALID_MODES),
+        }
+    
+    # PERSIST the mode to file - this is the single source of truth
+    set_agent_mode(mode)
     
     # Map modes to instruction files
     mode_files = {

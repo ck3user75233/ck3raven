@@ -1,0 +1,313 @@
+"""
+World Router - Single Canonical Injection Point for World Access
+
+This module provides the WorldRouter, the ONLY entry point for obtaining
+a WorldAdapter. All MCP tools must use WorldRouter to get the appropriate
+adapter for the current agent mode.
+
+Architecture Mandate (B.5):
+All MCP tools must:
+1. Call the single agent-mode detection function (via WorldRouter)
+2. Request the appropriate WorldAdapter from WorldRouter
+3. Resolve references through the adapter
+4. Apply policy only after reference resolution
+
+Forbidden patterns:
+- Tool-local agent mode checks
+- Tool-local visibility logic
+- Policy checks on unresolved paths
+
+Usage:
+    from ck3lens.world_router import get_world
+    
+    # In any MCP tool:
+    world = get_world()
+    result = world.resolve(path_or_address)
+    
+    if not result.found:
+        return {"error": result.error_message}  # NOT_FOUND, not DENY
+    
+    # Now apply policy for mutation operations
+    if wants_to_write and not result.is_writable:
+        return {"error": "Policy violation: target is not writable"}
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Optional, TYPE_CHECKING
+
+from .agent_mode import get_agent_mode
+from .world_adapter import WorldAdapter, LensWorldAdapter, DevWorldAdapter
+
+if TYPE_CHECKING:
+    from .db_queries import DBQueries, PlaysetLens
+    from .playset_scope import PlaysetScope
+
+
+class WorldRouter:
+    """
+    Central router for obtaining WorldAdapters.
+    
+    The router is responsible for:
+    1. Detecting the current agent mode
+    2. Building the appropriate WorldAdapter with proper configuration
+    3. Caching adapters for performance (per-session)
+    
+    This is the ONLY place where mode detection and adapter construction happen.
+    """
+    
+    _instance: Optional["WorldRouter"] = None
+    
+    def __init__(self):
+        self._cached_adapter: Optional[WorldAdapter] = None
+        self._cached_mode: Optional[str] = None
+    
+    @classmethod
+    def get_instance(cls) -> "WorldRouter":
+        """Get the singleton router instance."""
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+    
+    @classmethod
+    def reset(cls) -> None:
+        """Reset the router (for testing or mode changes)."""
+        cls._instance = None
+    
+    def get_adapter(
+        self,
+        db: Optional["DBQueries"] = None,
+        lens: Optional["PlaysetLens"] = None,
+        scope: Optional["PlaysetScope"] = None,
+        force_mode: Optional[str] = None,
+    ) -> WorldAdapter:
+        """
+        Get the WorldAdapter for the current (or specified) mode.
+        
+        Args:
+            db: Database queries instance (required for full functionality)
+            lens: PlaysetLens for DB filtering (required for ck3lens)
+            scope: PlaysetScope for filesystem filtering (required for ck3lens)
+            force_mode: Override detected mode (for testing)
+        
+        Returns:
+            WorldAdapter appropriate for the current mode
+        
+        Raises:
+            RuntimeError: If mode is not initialized
+        """
+        mode = force_mode or get_agent_mode()
+        
+        if mode is None:
+            raise RuntimeError(
+                "Agent mode not initialized. "
+                "Call ck3_get_mode_instructions() first to set mode."
+            )
+        
+        # Check cache
+        if (
+            self._cached_adapter is not None
+            and self._cached_mode == mode
+        ):
+            return self._cached_adapter
+        
+        # Build new adapter
+        if mode == "ck3lens":
+            adapter = self._build_lens_adapter(db, lens, scope)
+        elif mode == "ck3raven-dev":
+            adapter = self._build_dev_adapter(db)
+        else:
+            raise RuntimeError(f"Unknown agent mode: {mode}")
+        
+        self._cached_adapter = adapter
+        self._cached_mode = mode
+        return adapter
+    
+    def _build_lens_adapter(
+        self,
+        db: Optional["DBQueries"],
+        lens: Optional["PlaysetLens"],
+        scope: Optional["PlaysetScope"],
+    ) -> LensWorldAdapter:
+        """Build a LensWorldAdapter for ck3lens mode."""
+        if lens is None or scope is None:
+            raise RuntimeError(
+                "LensWorldAdapter requires PlaysetLens and PlaysetScope. "
+                "Ensure a playset is active."
+            )
+        
+        if db is None:
+            raise RuntimeError("DBQueries required for LensWorldAdapter")
+        
+        # Get path configurations
+        vanilla_root = scope.vanilla_root
+        
+        # WIP workspace for ck3lens is ~/.ck3raven/wip/
+        wip_root = Path.home() / ".ck3raven" / "wip"
+        
+        # ck3raven source root (for bug report context)
+        # Detect from current file location
+        ck3raven_root = self._detect_ck3raven_root()
+        
+        # Utility roots (logs, saves, etc.)
+        utility_roots = self._get_utility_roots()
+        
+        return LensWorldAdapter(
+            lens=lens,
+            scope=scope,
+            db=db,
+            vanilla_root=vanilla_root,
+            ck3raven_root=ck3raven_root,
+            wip_root=wip_root,
+            utility_roots=utility_roots,
+        )
+    
+    def _build_dev_adapter(
+        self,
+        db: Optional["DBQueries"],
+    ) -> DevWorldAdapter:
+        """Build a DevWorldAdapter for ck3raven-dev mode."""
+        if db is None:
+            raise RuntimeError("DBQueries required for DevWorldAdapter")
+        
+        # ck3raven source root
+        ck3raven_root = self._detect_ck3raven_root()
+        if ck3raven_root is None:
+            raise RuntimeError("Could not detect ck3raven root directory")
+        
+        # WIP workspace for dev mode is <repo>/.wip/
+        wip_root = ck3raven_root / ".wip"
+        
+        # Get vanilla and mod roots for read access
+        vanilla_root = self._get_vanilla_root()
+        mod_roots = self._get_mod_roots()
+        
+        return DevWorldAdapter(
+            db=db,
+            ck3raven_root=ck3raven_root,
+            wip_root=wip_root,
+            vanilla_root=vanilla_root,
+            mod_roots=mod_roots,
+        )
+    
+    def _detect_ck3raven_root(self) -> Optional[Path]:
+        """Detect the ck3raven repository root."""
+        # Start from this file's location and walk up
+        current = Path(__file__).resolve()
+        
+        # Walk up looking for markers
+        for parent in current.parents:
+            # Check for pyproject.toml with ck3raven
+            pyproject = parent / "pyproject.toml"
+            if pyproject.exists():
+                try:
+                    content = pyproject.read_text()
+                    if "ck3raven" in content:
+                        return parent
+                except:
+                    pass
+            
+            # Check for .git and tools/ck3lens_mcp
+            if (parent / ".git").exists() and (parent / "tools" / "ck3lens_mcp").exists():
+                return parent
+        
+        return None
+    
+    def _get_vanilla_root(self) -> Optional[Path]:
+        """Get the vanilla CK3 game root."""
+        # Try common Steam paths
+        common_paths = [
+            Path("C:/Program Files (x86)/Steam/steamapps/common/Crusader Kings III/game"),
+            Path("C:/Program Files/Steam/steamapps/common/Crusader Kings III/game"),
+            Path.home() / ".steam/steam/steamapps/common/Crusader Kings III/game",
+        ]
+        
+        for p in common_paths:
+            if p.exists():
+                return p
+        
+        return None
+    
+    def _get_mod_roots(self) -> set[Path]:
+        """Get all mod root directories for read access."""
+        mod_roots = set()
+        
+        # CK3 mod directory
+        ck3_mods = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
+        if ck3_mods.exists():
+            for item in ck3_mods.iterdir():
+                if item.is_dir():
+                    mod_roots.add(item)
+        
+        # Steam workshop mods
+        workshop = Path("C:/Program Files (x86)/Steam/steamapps/workshop/content/1158310")
+        if workshop.exists():
+            for item in workshop.iterdir():
+                if item.is_dir():
+                    mod_roots.add(item)
+        
+        return mod_roots
+    
+    def _get_utility_roots(self) -> dict[str, Path]:
+        """Get utility file roots (logs, saves, etc.)."""
+        roots = {}
+        
+        ck3_user = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III"
+        
+        # Logs
+        logs_dir = ck3_user / "logs"
+        if logs_dir.exists():
+            roots["logs"] = logs_dir
+        
+        # Save games
+        saves_dir = ck3_user / "save games"
+        if saves_dir.exists():
+            roots["saves"] = saves_dir
+        
+        # Crash dumps
+        crashes_dir = ck3_user / "crashes"
+        if crashes_dir.exists():
+            roots["crashes"] = crashes_dir
+        
+        return roots
+
+
+# =============================================================================
+# MODULE-LEVEL CONVENIENCE FUNCTIONS
+# =============================================================================
+
+def get_world(
+    db: Optional["DBQueries"] = None,
+    lens: Optional["PlaysetLens"] = None,
+    scope: Optional["PlaysetScope"] = None,
+    force_mode: Optional[str] = None,
+) -> WorldAdapter:
+    """
+    Get the WorldAdapter for the current mode.
+    
+    This is the canonical entry point for all MCP tools.
+    
+    Example:
+        world = get_world(db=db, lens=lens, scope=scope)
+        result = world.resolve("mod:MSC/common/traits/test.txt")
+        
+        if not result.found:
+            return {"error": result.error_message}
+    """
+    router = WorldRouter.get_instance()
+    return router.get_adapter(
+        db=db,
+        lens=lens,
+        scope=scope,
+        force_mode=force_mode,
+    )
+
+
+def get_current_mode() -> Optional[str]:
+    """Get the current agent mode without building an adapter."""
+    return get_agent_mode()
+
+
+def reset_world() -> None:
+    """Reset the world router (for testing or session changes)."""
+    WorldRouter.reset()

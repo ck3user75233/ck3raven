@@ -1,8 +1,25 @@
 # CK3LENS Policy Architecture
 
-> **Status:** APPROVED - Ready for Implementation  
+> **Status:** CANONICAL  
 > **Scope:** ck3lens agent mode ONLY  
-> **Last Updated:** December 27, 2025
+> **Last Updated:** December 28, 2025  
+> **Related:** [LENSWORLD.md](LENSWORLD.md) - Visibility layer architecture
+
+---
+
+## 0. Relationship to LensWorld
+
+**This document defines POLICY.** For visibility (what exists), see [LENSWORLD.md](LENSWORLD.md).
+
+| Layer | Question | This Document |
+|-------|----------|---------------|
+| **LensWorld** | What exists and can be referenced? | ❌ See LENSWORLD.md |
+| **Policy** | What actions are permitted on references? | ✅ This document |
+
+**Key principle:** LensWorld and Policy are orthogonal:
+- LensWorld never returns ALLOW or DENY - only FOUND or NOT_FOUND
+- Policy only evaluates actions on references that LensWorld resolved successfully
+- Out-of-lens references result in NOT_FOUND (policy never runs)
 
 ---
 
@@ -44,22 +61,21 @@ Filesystem access is exceptional, explicit, and approval-gated.
 
 | Scope Domain | Visibility | Read/Search | Write/Edit | Delete | Notes |
 |--------------|------------|-------------|------------|--------|-------|
-| **ACTIVE PLAYSET (DB VIEW)** | Always | ✅ | ❌ | ❌ | Normal universe |
-| **ACTIVE LOCAL MODS** | Always | ✅ | ✅ (contract) | 🔶 (approval) | Only mutable scope |
-| **ACTIVE WORKSHOP MODS** | Always | ✅ | ❌ | ❌ | Immutable |
-| **VANILLA GAME** | Always | ✅ | ❌ | ❌ | Immutable |
-| **INACTIVE WORKSHOP MODS** | Invisible | 🔶 User-prompt required | ❌ | ❌ | Requires explicit user request |
-| **INACTIVE LOCAL MODS** | Invisible | 🔶 User-prompt required | ❌ | ❌ | Requires explicit user request |
-| **CK3 UTILITY FILES** | Diagnostic | ✅ | ❌ | ❌ | Logs, saves, debug files |
-| **CK3RAVEN SOURCE** | Invisible | ✅ (logged) | ❌ (always) | ❌ (always) | Read-only, for bug context |
-| **CK3LENS WIP WORKSPACE** | Session-local | ✅ | ✅ | ✅ | Disposable Python scripts |
-| **LAUNCHER / REGISTRY / CACHES** | Invisible | ✅ (diagnostic) | 🔶 (repair tool) | 🔶 (repair tool) | Via ck3_repair only |
+| **ACTIVE PLAYSET (DB VIEW)** | LensWorld | ✅ | ❌ | ❌ | Normal universe |
+| **ACTIVE LOCAL MODS** | LensWorld | ✅ | ✅ (contract) | 🔶 (approval) | Only mutable scope |
+| **ACTIVE WORKSHOP MODS** | LensWorld | ✅ | ❌ | ❌ | Immutable |
+| **VANILLA GAME** | LensWorld | ✅ | ❌ | ❌ | Immutable |
+| **INACTIVE MODS** | Outside Lens | 🔶 User-prompt | ❌ | ❌ | NOT_FOUND by default |
+| **CK3 UTILITY FILES** | LensWorld | ✅ | ❌ | ❌ | Logs, saves, debug files |
+| **CK3RAVEN SOURCE** | LensWorld | ✅ (logged) | ❌ (always) | ❌ (always) | Read-only, for bug context |
+| **CK3LENS WIP WORKSPACE** | LensWorld | ✅ | ✅ | ✅ | Disposable Python scripts |
+| **LAUNCHER / REGISTRY** | LensWorld | ✅ (diagnostic) | 🔶 (repair tool) | 🔶 (repair tool) | Via ck3_repair only |
 
 ### Key Clarifications
 
-- **Inactive mods (both workshop AND local)**: Require explicit user prompt before agent can even request access. Without user saying "read mod X at path Y", the request cannot be made.
-- **CK3RAVEN SOURCE**: Reads are allowed and logged (for error context), but writes are NEVER allowed, even with contract.
-- **Python files**: ck3lens can ONLY write Python to the WIP workspace. Python is forbidden in all other directories.
+- **Inactive mods**: Outside the lens - result in NOT_FOUND, not DENY. User prompt required to expand lens.
+- **CK3RAVEN SOURCE**: In lens (for bug reports), but policy prohibits writes unconditionally.
+- **Python files**: Policy restricts Python writes to WIP workspace only.
 
 ---
 
@@ -74,6 +90,7 @@ Filesystem access is exceptional, explicit, and approval-gated.
 ```
 ~/.ck3raven/wip/
 ```
+Address: `wip:/<relative_path>`
 
 ### Properties
 - Added to `.gitignore` if inside repo
@@ -207,7 +224,7 @@ Every contract must declare exactly one `intent_type`. Missing → AUTO_DENY.
 
 ## 10. User-Prompted Exception Flow
 
-For accessing **inactive mods** (workshop or local):
+For accessing **inactive mods** (outside lens):
 
 ### Requirement
 The agent must be able to demonstrate that the user explicitly requested access to a specific inactive mod.
@@ -222,6 +239,7 @@ Policy engine checks for evidence of user prompt:
 2. Agent cites the user's request in token request
 3. Policy validates user prompt exists
 4. Token granted (Tier B, with user confirmation)
+5. **Lens is temporarily expanded** to include the requested mod
 
 ---
 
@@ -230,12 +248,12 @@ Policy engine checks for evidence of user prompt:
 | Condition | Result |
 |-----------|--------|
 | Missing `intent_type` | AUTO_DENY |
-| Write outside active local mods | AUTO_DENY |
-| Write to workshop/vanilla | AUTO_DENY |
-| Write to ck3raven source (any mode) | AUTO_DENY |
-| Read inactive mod without user prompt evidence | AUTO_DENY |
-| Utility file write | AUTO_DENY |
-| Python write outside WIP workspace | AUTO_DENY |
+| Write outside active local mods | POLICY_VIOLATION |
+| Write to workshop/vanilla | POLICY_VIOLATION |
+| Write to ck3raven source (any mode) | POLICY_VIOLATION |
+| Access inactive mod without lens expansion | NOT_FOUND |
+| Utility file write | POLICY_VIOLATION |
+| Python write outside WIP workspace | POLICY_VIOLATION |
 | Script execution without syntax validation | AUTO_DENY |
 | Script execution with declared/actual mismatch | AUTO_DENY |
 | Write contract without targets | AUTO_DENY |
@@ -243,7 +261,6 @@ Policy engine checks for evidence of user prompt:
 | Write contract without DIFF_SANITY acceptance test | AUTO_DENY |
 | Delete without explicit file list | AUTO_DENY |
 | Delete without Tier B approval token | AUTO_DENY |
-| Contract attempting to expand visibility beyond mode allows | AUTO_DENY |
 
 ---
 
@@ -268,6 +285,7 @@ Only available in ck3lens mode. Requires LAUNCHER domain in contract for repair 
 ## 13. Implementation Checklist
 
 ### Phase 1: Core Policy Infrastructure
+- [x] Create WorldAdapter and WorldRouter (see LENSWORLD.md)
 - [ ] Create `ck3lens_policy.py` with scope domain enum
 - [ ] Implement hard gates as pure functions
 - [ ] Add `intent_type` enum and validation
@@ -298,6 +316,7 @@ Only available in ck3lens mode. Requires LAUNCHER domain in contract for repair 
 - [ ] Implement cache deletion logic
 
 ### Phase 6: Documentation
+- [x] Create LENSWORLD.md
 - [ ] Update agent instructions with new rules
 - [ ] Add examples to COPILOT_CK3LENS.md
 - [ ] Document user-prompt patterns for inactive mods
@@ -306,21 +325,21 @@ Only available in ck3lens mode. Requires LAUNCHER domain in contract for repair 
 
 ## Appendix A: Quick Reference - What Can ck3lens Do?
 
-| Action | Allowed? | Requirements |
-|--------|----------|--------------|
-| Search active playset via database | ✅ | None |
-| Read active local mods | ✅ | None |
-| Read active workshop mods | ✅ | None |
-| Read vanilla game files | ✅ | None |
-| Read ck3raven source | ✅ | Logged |
-| Read inactive mods | 🔶 | User prompt + token |
-| Write active local mods | 🔶 | Contract |
-| Delete active local mod files | 🔶 | Contract + explicit list + token |
-| Write Python scripts | 🔶 | WIP workspace only |
-| Execute scripts | 🔶 | Syntax valid + hash bound + approved |
-| Write to ck3raven source | ❌ | Never |
-| Write to workshop/vanilla | ❌ | Never |
-| Enumerate filesystem directories | ❌ | Never |
+| Action | LensWorld | Policy | Result |
+|--------|-----------|--------|--------|
+| Search active playset via database | Found | Allowed | ✅ |
+| Read active local mods | Found | Allowed | ✅ |
+| Read active workshop mods | Found | Allowed | ✅ |
+| Read vanilla game files | Found | Allowed | ✅ |
+| Read ck3raven source | Found | Allowed (logged) | ✅ |
+| Read inactive mods | NOT_FOUND | N/A | ❌ (expand lens first) |
+| Write active local mods | Found | Requires contract | 🔶 |
+| Delete active local mod files | Found | Requires contract + token | 🔶 |
+| Write Python scripts | Found (WIP only) | Allowed | 🔶 |
+| Execute scripts | Found (WIP) | Requires approval | 🔶 |
+| Write to ck3raven source | Found | NEVER | ❌ |
+| Write to workshop/vanilla | Found | NEVER | ❌ |
+| Enumerate arbitrary filesystem | NOT_FOUND | N/A | ❌ |
 
 ---
 
