@@ -127,11 +127,19 @@ def _get_playset_id() -> int:
     return _playset_id
 
 
+# Cached file-based lens
+_cached_file_lens = None
+_cached_file_lens_source = None
+
+
 def _get_lens(no_lens: bool = False):
     """
     Get the active playset lens for filtering queries.
     
     The lens is like putting on glasses - you only see content from the active playset.
+    
+    The ONLY source for playset data is file-based JSON configuration.
+    Database-based playsets are DEPRECATED and NOT used.
     
     Args:
         no_lens: If True, return None to search ALL content (take glasses off)
@@ -139,21 +147,53 @@ def _get_lens(no_lens: bool = False):
     Returns:
         PlaysetLens object or None if no_lens=True or no playset configured
     """
+    global _cached_file_lens, _cached_file_lens_source
+    
     if no_lens:
         return None
     
     db = _get_db()
-    return db.get_active_lens()
+    
+    # File-based playset is the ONLY source (database is DEPRECATED)
+    scope = _get_session_scope()
+    
+    if scope.get("source") in ("json", "legacy_file"):
+        # Check if we have a cached lens for this source
+        source_key = scope.get("file_path")
+        if _cached_file_lens is not None and _cached_file_lens_source == source_key:
+            return _cached_file_lens
+        
+        # Build lens from file-based scope
+        mod_steam_ids = list(scope.get("active_mod_ids", set()))
+        mod_paths = list(scope.get("active_roots", set()))
+        playset_name = scope.get("playset_name", "File Playset")
+        
+        lens = db.build_lens_from_scope(
+            playset_name=playset_name,
+            mod_steam_ids=mod_steam_ids,
+            mod_paths=mod_paths
+        )
+        
+        if lens:
+            _cached_file_lens = lens
+            _cached_file_lens_source = source_key
+            return lens
+    
+    # No playset configured - return None (searches ALL content)
+    # NOTE: Database-based playsets are DEPRECATED and NOT used
+    return None
 
 
 # Cached session scope data
 _session_scope: Optional[dict] = None
 
 # Playset folder - JSON files here define available playsets
-PLAYSETS_DIR = Path(__file__).parent.parent / "playsets"
+# Located at ck3raven/playsets/ (repository root, not tools/)
+PLAYSETS_DIR = Path(__file__).parent.parent.parent / "playsets"
 
-# Active playset file - pointer to which playset is currently active
-ACTIVE_PLAYSET_FILE = Path.home() / "Documents" / "AI Workspace" / "ck3raven" / "active_playset.json"
+# Manifest file - points to which playset is currently active
+# Lives in the playsets folder alongside the playset files
+PLAYSET_MANIFEST_FILE = PLAYSETS_DIR / "playset_manifest.json"
 
 # Legacy fallback
 LEGACY_PLAYSET_FILE = Path.home() / "Documents" / "AI Workspace" / "active_mod_paths.json"
@@ -297,7 +337,7 @@ def _get_session_scope(force_refresh: bool = False) -> dict:
     Get all session scope data from a single source of truth.
     
     Priority:
-    1. JSON playset file (playsets/*.json) - NEW primary source
+    1. Manifest file (playsets/playset_manifest.json) -> points to active playset
     2. Legacy active_mod_paths.json - backward compat
     3. Empty scope (no playset)
     
@@ -318,29 +358,22 @@ def _get_session_scope(force_refresh: bool = False) -> dict:
     if _session_scope is not None and not force_refresh:
         return _session_scope
     
-    # Try new JSON playset format first
-    # Check if there's an active_playset.json pointer
-    if ACTIVE_PLAYSET_FILE.exists():
+    # Try manifest file first - this points to the active playset
+    if PLAYSET_MANIFEST_FILE.exists():
         try:
-            pointer = json.loads(ACTIVE_PLAYSET_FILE.read_text(encoding='utf-8'))
-            active_file = Path(pointer.get("active_playset", ""))
-            if active_file.exists():
-                scope = _load_playset_from_json(active_file)
-                if scope:
-                    _session_scope = scope
-                    return _session_scope
-        except Exception:
-            pass
-    
-    # Check for any playset in playsets folder
-    if PLAYSETS_DIR.exists():
-        for f in PLAYSETS_DIR.glob("*.json"):
-            if f.name.endswith(".schema.json"):
-                continue
-            scope = _load_playset_from_json(f)
-            if scope:
-                _session_scope = scope
-                return _session_scope
+            manifest = json.loads(PLAYSET_MANIFEST_FILE.read_text(encoding='utf-8'))
+            active_filename = manifest.get("active", "")
+            if active_filename:
+                active_file = PLAYSETS_DIR / active_filename
+                if active_file.exists():
+                    scope = _load_playset_from_json(active_file)
+                    if scope:
+                        _session_scope = scope
+                        return _session_scope
+                else:
+                    print(f"Warning: Manifest points to {active_filename} but file not found")
+        except Exception as e:
+            print(f"Warning: Failed to read playset manifest: {e}")
     
     # Fall back to legacy file
     legacy_scope = _load_legacy_playset(LEGACY_PLAYSET_FILE)
@@ -1392,26 +1425,147 @@ def ck3_playset(
     Returns:
         Dict with playset info or operation result
     """
-    from ck3lens.unified_tools import ck3_playset_impl
+    global _session_scope, _cached_file_lens, _cached_file_lens_source
     
-    db = _get_db()
-    playset_id = _get_playset_id()
     trace = _get_trace()
     
-    return ck3_playset_impl(
-        command=command,
-        playset_name=playset_name,
-        mod_name=mod_name,
-        new_position=new_position,
-        name=name,
-        description=description,
-        vanilla_version_id=vanilla_version_id,
-        mod_ids=mod_ids,
-        launcher_playset_name=launcher_playset_name,
-        db=db,
-        playset_id=playset_id,
-        trace=trace,
-    )
+    # FILE-BASED IMPLEMENTATION (database is DEPRECATED)
+    
+    if command == "list":
+        # List all available playsets
+        playsets = []
+        manifest_active = None
+        
+        # Read manifest to see which is active
+        if PLAYSET_MANIFEST_FILE.exists():
+            try:
+                manifest = json.loads(PLAYSET_MANIFEST_FILE.read_text(encoding='utf-8'))
+                manifest_active = manifest.get("active", "")
+            except Exception:
+                pass
+        
+        for f in PLAYSETS_DIR.glob("*.json"):
+            if f.name.endswith(".schema.json") or f.name == "playset_manifest.json" or f.name == "sub_agent_templates.json":
+                continue
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                enabled_mods = [m for m in data.get("mods", []) if m.get("enabled", True)]
+                playsets.append({
+                    "filename": f.name,
+                    "name": data.get("playset_name", f.stem),
+                    "description": data.get("description", ""),
+                    "mod_count": len(enabled_mods),
+                    "is_active": f.name == manifest_active,
+                })
+            except Exception as e:
+                playsets.append({
+                    "filename": f.name,
+                    "name": f.stem,
+                    "error": str(e),
+                    "is_active": f.name == manifest_active,
+                })
+        
+        return {
+            "success": True,
+            "playsets": playsets,
+            "active": manifest_active,
+            "manifest_path": str(PLAYSET_MANIFEST_FILE),
+        }
+    
+    elif command == "switch":
+        # Switch to a different playset by updating manifest
+        if not playset_name:
+            return {"success": False, "error": "playset_name required for switch"}
+        
+        # Find the playset file
+        target_file = None
+        for f in PLAYSETS_DIR.glob("*.json"):
+            if f.name.endswith(".schema.json") or f.name == "playset_manifest.json":
+                continue
+            # Match by filename or playset_name in content
+            if f.name == playset_name or f.stem == playset_name:
+                target_file = f
+                break
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                if data.get("playset_name") == playset_name:
+                    target_file = f
+                    break
+            except Exception:
+                pass
+        
+        if not target_file:
+            return {"success": False, "error": f"Playset '{playset_name}' not found"}
+        
+        # Update manifest
+        manifest = {
+            "active": target_file.name,
+            "last_switched": datetime.now().isoformat(),
+            "notes": "Updated by ck3_playset switch command"
+        }
+        PLAYSET_MANIFEST_FILE.write_text(json.dumps(manifest, indent=2), encoding='utf-8')
+        
+        # Clear cached scope/lens to force reload
+        _session_scope = None
+        _cached_file_lens = None
+        _cached_file_lens_source = None
+        
+        # Reload and return new scope
+        new_scope = _get_session_scope(force_refresh=True)
+        
+        return {
+            "success": True,
+            "message": f"Switched to playset: {target_file.name}",
+            "active_playset": target_file.name,
+            "playset_name": new_scope.get("playset_name"),
+            "mod_count": len(new_scope.get("active_mod_ids", set())),
+        }
+    
+    elif command == "get":
+        # Get current active playset info
+        scope = _get_session_scope()
+        manifest_active = None
+        if PLAYSET_MANIFEST_FILE.exists():
+            try:
+                manifest = json.loads(PLAYSET_MANIFEST_FILE.read_text(encoding='utf-8'))
+                manifest_active = manifest.get("active")
+            except Exception:
+                pass
+        
+        return {
+            "success": True,
+            "active_file": manifest_active,
+            "playset_name": scope.get("playset_name"),
+            "source": scope.get("source"),
+            "mod_count": len(scope.get("active_mod_ids", set())),
+            "has_agent_briefing": bool(scope.get("agent_briefing")),
+            "vanilla_root": scope.get("vanilla_root"),
+        }
+    
+    elif command == "mods":
+        # Get mods in active playset
+        scope = _get_session_scope()
+        mod_list = scope.get("mod_list", [])
+        
+        enabled = [m for m in mod_list if m.get("enabled", True)]
+        disabled = [m for m in mod_list if not m.get("enabled", True)]
+        
+        return {
+            "success": True,
+            "playset_name": scope.get("playset_name"),
+            "enabled_count": len(enabled),
+            "disabled_count": len(disabled),
+            "mods": enabled[:50],  # Limit to first 50 for readability
+            "truncated": len(enabled) > 50,
+        }
+    
+    else:
+        # Other commands not yet implemented for file-based
+        return {
+            "success": False,
+            "error": f"Command '{command}' not yet implemented for file-based playsets",
+            "hint": "Use 'get', 'list', 'switch', or 'mods' commands"
+        }
 
 
 # ============================================================================
