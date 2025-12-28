@@ -2951,8 +2951,8 @@ def ck3_exec(
                     "executed": False,
                     "output": None,
                     "exit_code": None,
-                    "policy": {"decision": "DENY", "reason": f"Working directory not visible in {world.mode} mode"},
-                    "error": resolution.error_message or f"Path not visible: {working_dir}",
+                    "policy": {"decision": "NOT_FOUND", "reason": f"Working directory not visible in {world.mode} mode"},
+                    "error": resolution.error_message or f"Reference not found: {working_dir}",
                     "hint": "This path is outside the visibility scope for the current agent mode",
                 }
         
@@ -2966,8 +2966,8 @@ def ck3_exec(
                         "executed": False,
                         "output": None,
                         "exit_code": None,
-                        "policy": {"decision": "DENY", "reason": f"Target path not visible in {world.mode} mode"},
-                        "error": resolution.error_message or f"Path not visible: {target}",
+                        "policy": {"decision": "NOT_FOUND", "reason": f"Target path not visible in {world.mode} mode"},
+                        "error": resolution.error_message or f"Reference not found: {target}",
                         "hint": "This path is outside the visibility scope for the current agent mode",
                     }
     
