@@ -1,73 +1,41 @@
-# Next Session TODOs
+# Next Session TODO
 
-> **Date:** December 28, 2025
-> **Contract:** wcp-2025-12-28-70e797
-> **Branch:** agent/wcp-2025-12-28-70e797-enforcement-gate
+## Priority 1: WIP Script Execution Policy
 
----
+**Status:** NOT DONE
 
-## Priority Fixes
+Wire ck3_exec to enforcement.py for WIP script runs:
+- `SCRIPT_EXECUTE` token requirement for running Python in WIP
+- Script hash binding (token tied to specific script content)
+- WIP workaround detection (repeated script execution without core changes = AUTO_DENY)
+- Integration with `~/.ck3raven/wip/` (ck3lens) or `<repo>/.wip/` (ck3raven-dev)
 
-### 1. Fix Enforcement Order (WorldAdapter BEFORE Enforcement)
+Reference: `docs/CK3RAVEN_DEV_POLICY_ARCHITECTURE.md` section on WIP Intents
 
-**Problem:** Phase 2 wiring added enforcement at tool boundary in `ck3_file_impl`, but WorldAdapter check happens later in helper functions.
+## Priority 2: Test the 4 Commits
 
-**Correct order:**
-1. WorldAdapter.resolve() → NOT_FOUND if path not visible
-2. enforce_policy() → DENY/REQUIRE_TOKEN if policy violation
-3. Implementation → perform operation
+Verify the Phase 2 fixes work correctly:
+1. `5b20f90` - Import path + CommandCategory enum fixes
+2. `1153275` - Centralized path normalization
+3. `3603943` - WorldAdapter BEFORE enforcement order
+4. `8faaf79` - NOT_FOUND vs DENY semantic consistency
 
-**Files to update:**
-- `tools/ck3lens_mcp/ck3lens/unified_tools.py` - ck3_file_impl, ck3_git_impl
+Run through common workflows:
+- `ck3_file read/write/edit` on contract-allowed paths
+- `ck3_file read` on paths outside contract (should work for reads)
+- `ck3_exec` with various command types
+- Verify NOT_FOUND returns for paths outside lens scope
 
----
+## Priority 3: Push and Merge
 
-### 2. Wire ck3_exec to Use Centralized enforcement.py
+- Push branch `agent/wcp-2025-12-28-70e797-enforcement-gate`
+- Review and merge to main
+- Close contract `wcp-2025-12-28-70e797`
 
-**Problem:** ck3_exec currently uses CLW (`policy/clw.py`) for policy decisions. This is a separate policy engine from the new centralized `enforcement.py`.
+## Completed This Session (Dec 28-29, 2025)
 
-**Goal:** Route ck3_exec through `enforce_and_log()` like the other tools for consistency.
-
-**Current state:**
-- ck3_exec uses `evaluate_policy()` from clw.py
-- Has structured audit logging added (Phase 2)
-- CLW classifies commands as READ_ONLY, GIT_SAFE, GIT_MODIFY, GIT_DANGEROUS, etc.
-
-**Approach:**
-- Map CLW categories to enforcement.py OperationType
-- Call `enforce_and_log()` at top of ck3_exec
-- Keep CLW for command classification, use enforcement.py for decisions
-- Ensure SAFE PUSH auto-grant works for git push on agent branches
-
-**File to update:**
-- `tools/ck3lens_mcp/server.py` - ck3_exec function
-
----
-
-### 3. NOT_FOUND vs DENY Consistency
-
-**Problem:** Lens violations should return `Decision.NOT_FOUND` (path doesn't exist in your world) not `Decision.DENY` (path exists but forbidden).
-
-**Files to check:**
-- `tools/ck3lens_mcp/ck3lens/policy/enforcement.py`
-- `tools/ck3lens_mcp/ck3lens/world_adapter.py` (if exists)
-
----
-
-## Lower Priority
-
-### 4. Fix ck3_git Hanging Issue
-
-**Problem:** `ck3_git` tool hangs (noted in docstring as known issue with GitLens conflicts).
-
-**Workaround:** Using `ck3_exec` with git commands works fine.
-
-**Long-term:** Investigate root cause or formally deprecate in favor of ck3_exec.
-
----
-
-## Review Items
-
-- [docs/drafts/INITIALIZATION_PROPOSAL.md](docs/drafts/INITIALIZATION_PROPOSAL.md) - Canonical initialization instructions
-- [docs/drafts/WIP_SCRIPTING_PROPOSAL.md](docs/drafts/WIP_SCRIPTING_PROPOSAL.md) - Script sandboxing architecture
-
+- ✅ Fix CommandCategory.WRITE → WRITE_IN_SCOPE/WRITE_OUT_OF_SCOPE
+- ✅ Fix import path: `.work_contracts` → `..work_contracts`
+- ✅ Centralized path normalization in enforcement.py
+- ✅ WorldAdapter visibility check BEFORE enforcement gate
+- ✅ NOT_FOUND vs DENY semantic consistency
