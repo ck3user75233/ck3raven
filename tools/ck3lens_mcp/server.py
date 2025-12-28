@@ -3751,38 +3751,44 @@ def ck3_get_scope_info() -> dict:
             "mods": [{name, workshop_id}]
         }
     """
-    db = _get_db()
     lens = _get_lens(no_lens=False)
+    scope = _get_session_scope()
     
     if not lens:
         return {
             "lens_active": False,
             "playset_id": None,
-            "playset_name": None,
-            "mod_count": 0,
+            "playset_name": scope.get("playset_name"),
+            "source": scope.get("source", "none"),
+            "mod_count": len(scope.get("active_mod_ids", set())),
             "mods": [],
-            "hint": "No active playset. Use ck3_switch_playset to activate one."
+            "hint": "No active playset lens. Check playset_manifest.json or use ck3_playset(command='switch')."
         }
     
-    # Get mod details for this lens
-    if lens.mod_cv_ids:
-        placeholders = ",".join("?" * len(lens.mod_cv_ids))
-        mods = db.conn.execute(f"""
-            SELECT cv.name, cv.workshop_id, pm.load_order
-            FROM content_versions cv
-            JOIN playset_mods pm ON cv.content_version_id = pm.content_version_id
-            WHERE cv.content_version_id IN ({placeholders})
-            ORDER BY pm.load_order
-        """, lens.mod_cv_ids).fetchall()
-    else:
-        mods = []
+    # Get mod info from scope (file-based)
+    mod_list = scope.get("mod_list", [])
+    enabled_mods = [m for m in mod_list if m.get("enabled", True)]
+    
+    # Format mod info for output
+    mods_info = []
+    for i, m in enumerate(enabled_mods[:25]):  # Limit to first 25
+        mods_info.append({
+            "name": m.get("name", "Unknown"),
+            "steam_id": m.get("steam_id"),
+            "load_order": m.get("load_order", i),
+            "is_compatch": m.get("is_compatch", False),
+        })
     
     return {
         "lens_active": True,
         "playset_id": lens.playset_id,
         "playset_name": lens.playset_name,
-        "mod_count": len(lens.mod_cv_ids),
-        "mods": [{"name": m[0], "workshop_id": m[1], "load_order": m[2]} for m in mods]
+        "source": scope.get("source", "json"),
+        "vanilla_cv_id": lens.vanilla_cv_id,
+        "mod_cv_count": len(lens.mod_cv_ids),
+        "mod_count": len(enabled_mods),
+        "mods": mods_info,
+        "truncated": len(enabled_mods) > 25,
     }
 
 
