@@ -1736,22 +1736,29 @@ def ck3_playset(
     
     elif command == "switch":
         # Switch to a different playset by updating manifest
+        # ALSO checks build status and reports mods needing processing
         if not playset_name:
             return {"success": False, "error": "playset_name required for switch"}
         
         # Find the playset file
         target_file = None
+        playset_data = None
         for f in PLAYSETS_DIR.glob("*.json"):
             if f.name.endswith(".schema.json") or f.name == "playset_manifest.json":
                 continue
             # Match by filename or playset_name in content
             if f.name == playset_name or f.stem == playset_name:
                 target_file = f
+                try:
+                    playset_data = json.loads(f.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
                 break
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
                 if data.get("playset_name") == playset_name:
                     target_file = f
+                    playset_data = data
                     break
             except Exception:
                 pass
@@ -1775,13 +1782,66 @@ def ck3_playset(
         # Reload and return new scope
         new_scope = _get_session_scope(force_refresh=True)
         
-        return {
+        # Check build status for all mods in this playset
+        build_status = None
+        mods_needing_build = []
+        mods_missing_from_disk = []
+        try:
+            from builder.incremental import check_playset_build_status
+            db = _get_db()
+            if db and playset_data:
+                build_status = check_playset_build_status(db.conn, playset_data)
+                
+                # Collect mods needing build (on disk but not fully indexed)
+                for mod in build_status.get("mods", []):
+                    if mod["status"] in ("not_indexed", "pending_ingest", "pending_symbols"):
+                        mods_needing_build.append({
+                            "name": mod["name"],
+                            "status": mod["status"],
+                            "path": mod.get("path")
+                        })
+                    elif mod["status"] == "missing":
+                        mods_missing_from_disk.append(mod["name"])
+        except Exception as e:
+            # DB might not be available yet - that's fine, report it
+            build_status = {"error": str(e), "needs_build": True}
+        
+        result = {
             "success": True,
             "message": f"Switched to playset: {target_file.name}",
             "active_playset": target_file.name,
             "playset_name": new_scope.get("playset_name"),
             "mod_count": len(new_scope.get("active_mod_ids", set())),
         }
+        
+        # Add build status information
+        if build_status:
+            result["build_status"] = {
+                "playset_valid": build_status.get("playset_valid", False),
+                "ready_mods": build_status.get("ready_mods", 0),
+                "pending_mods": build_status.get("pending_mods", 0),
+                "missing_mods": build_status.get("missing_mods", 0),
+                "needs_build": build_status.get("needs_build", True),
+            }
+        
+        if mods_needing_build:
+            result["mods_needing_build"] = mods_needing_build
+            result["build_prompt"] = (
+                f"⚠️ {len(mods_needing_build)} mod(s) need processing before full functionality. "
+                f"Run: python builder/daemon.py start --playset-file \"{target_file}\""
+            )
+        
+        if mods_missing_from_disk:
+            result["mods_missing_from_disk"] = mods_missing_from_disk
+            result["missing_warning"] = (
+                f"❌ {len(mods_missing_from_disk)} mod(s) are in playset but not on disk. "
+                f"These mods will be skipped. The playset may be invalid until resolved: {mods_missing_from_disk}"
+            )
+        
+        if not mods_needing_build and not mods_missing_from_disk and build_status and not build_status.get("error"):
+            result["build_status_message"] = "✅ All mods are ready. No build needed."
+        
+        return result
     
     elif command == "get":
         # Get current active playset info
@@ -1820,6 +1880,150 @@ def ck3_playset(
             "mods": enabled[:50],  # Limit to first 50 for readability
             "truncated": len(enabled) > 50,
         }
+    
+    elif command == "add_mod":
+        # Add a local mod to the active playset's local_mods array
+        if not mod_name:
+            return {"success": False, "error": "mod_name required for add_mod"}
+        
+        # Get the active playset file
+        scope = _get_session_scope()
+        if scope.get("source") == "none":
+            return {"success": False, "error": "No active playset. Switch to one first."}
+        
+        # Find the active playset file
+        if not PLAYSET_MANIFEST_FILE.exists():
+            return {"success": False, "error": "No playset manifest found"}
+        
+        try:
+            manifest = json.loads(PLAYSET_MANIFEST_FILE.read_text(encoding="utf-8"))
+            active_file = manifest.get("active")
+            if not active_file:
+                return {"success": False, "error": "No active playset in manifest"}
+            
+            playset_path = PLAYSETS_DIR / active_file
+            if not playset_path.exists():
+                return {"success": False, "error": f"Active playset file not found: {active_file}"}
+            
+            playset_data = json.loads(playset_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            return {"success": False, "error": f"Failed to read playset: {e}"}
+        
+        # Check if mod_name is a path or a name
+        mod_path = None
+        if Path(mod_name).exists():
+            # It's a path
+            mod_path = str(Path(mod_name).resolve())
+            # Try to get the actual mod name from descriptor.mod
+            descriptor = Path(mod_name) / "descriptor.mod"
+            if descriptor.exists():
+                try:
+                    desc_content = descriptor.read_text(encoding="utf-8")
+                    for line in desc_content.split("\n"):
+                        if line.strip().startswith("name="):
+                            # Extract quoted string
+                            match = line.split("=", 1)[1].strip().strip('"')
+                            if match:
+                                mod_name = match
+                                break
+                except Exception:
+                    pass
+        else:
+            # It's a name - try to find the mod path
+            # Look in common mod locations
+            mod_dirs = [
+                Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod",
+            ]
+            for mod_dir in mod_dirs:
+                if not mod_dir.exists():
+                    continue
+                # Check each folder for a matching descriptor
+                for folder in mod_dir.iterdir():
+                    if not folder.is_dir():
+                        continue
+                    descriptor = folder / "descriptor.mod"
+                    if descriptor.exists():
+                        try:
+                            desc_content = descriptor.read_text(encoding="utf-8")
+                            for line in desc_content.split("\n"):
+                                if line.strip().startswith("name="):
+                                    name_in_desc = line.split("=", 1)[1].strip().strip('"')
+                                    if name_in_desc.lower() == mod_name.lower():
+                                        mod_path = str(folder.resolve())
+                                        mod_name = name_in_desc  # Use canonical name
+                                        break
+                        except Exception:
+                            pass
+                    if mod_path:
+                        break
+                if mod_path:
+                    break
+        
+        if not mod_path:
+            return {
+                "success": False, 
+                "error": f"Could not find mod '{mod_name}'. Provide full path or ensure mod is installed.",
+                "hint": "Use full path to mod folder, e.g., 'C:\\...\\mod\\MyModFolder'"
+            }
+        
+        # Check if already in local_mods
+        local_mods = playset_data.get("local_mods", [])
+        for existing in local_mods:
+            if existing.get("name", "").lower() == mod_name.lower() or existing.get("path") == mod_path:
+                return {
+                    "success": False,
+                    "error": f"Mod '{mod_name}' is already in local_mods",
+                    "existing_entry": existing
+                }
+        
+        # Add to local_mods
+        new_mod_entry = {
+            "name": mod_name,
+            "path": mod_path,
+            "is_compatch": False,
+            "notes": f"Added by ck3_playset add_mod on {datetime.now().isoformat()}"
+        }
+        local_mods.append(new_mod_entry)
+        playset_data["local_mods"] = local_mods
+        
+        # Write back
+        try:
+            playset_path.write_text(json.dumps(playset_data, indent=2), encoding="utf-8")
+        except Exception as e:
+            return {"success": False, "error": f"Failed to write playset: {e}"}
+        
+        # Clear cached scope
+        _session_scope = None
+        
+        # Check if mod needs building
+        build_needed = False
+        try:
+            from builder.incremental import check_playset_build_status
+            db = _get_db()
+            if db:
+                build_status = check_playset_build_status(db.conn, playset_data)
+                for mod in build_status.get("mods", []):
+                    if mod.get("path") == mod_path and mod["status"] != "ready":
+                        build_needed = True
+                        break
+        except Exception:
+            build_needed = True  # Assume needs build if we can't check
+        
+        result = {
+            "success": True,
+            "message": f"Added '{mod_name}' to local_mods",
+            "mod_entry": new_mod_entry,
+            "local_mods_count": len(local_mods),
+        }
+        
+        if build_needed:
+            result["build_needed"] = True
+            result["build_prompt"] = (
+                f"⚠️ Mod '{mod_name}' needs to be indexed. "
+                f"Run: python builder/daemon.py start --playset-file \"{playset_path}\""
+            )
+        
+        return result
     
     else:
         # Other commands not yet implemented for file-based
