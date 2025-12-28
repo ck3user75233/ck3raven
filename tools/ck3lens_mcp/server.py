@@ -1658,6 +1658,8 @@ def ck3_playset(
     mod_ids: list[int] | None = None,
     # For import
     launcher_playset_name: str | None = None,
+    # For mods command
+    limit: int | None = None,
 ) -> dict:
     """
     Unified playset operations tool.
@@ -1688,6 +1690,7 @@ def ck3_playset(
         vanilla_version_id: Vanilla content version (for create)
         mod_ids: List of content_version_ids (for create)
         launcher_playset_name: Launcher playset to import (for import)
+        limit: Max mods to return for 'mods' command (default: None = all mods)
     
     Returns:
         Dict with playset info or operation result
@@ -1939,8 +1942,8 @@ def ck3_playset(
             "playset_name": scope.get("playset_name"),
             "enabled_count": len(enabled),
             "disabled_count": len(disabled),
-            "mods": enabled[:50],  # Limit to first 50 for readability
-            "truncated": len(enabled) > 50,
+            "mods": enabled[:limit] if limit else enabled,
+            "truncated": limit is not None and len(enabled) > limit,
         }
     
     elif command == "add_mod":
