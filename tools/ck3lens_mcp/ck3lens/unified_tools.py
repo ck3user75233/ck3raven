@@ -2080,7 +2080,7 @@ def _git_ops_for_path(command, repo_path, file_path, files, all_files, message, 
 
 def ck3_git_impl(
     command: GitCommand,
-    mod_name: str,
+    mod_name: str | None = None,  # Optional - auto-detected in ck3raven-dev mode
     # For diff
     file_path: str | None = None,
     # For add
@@ -2095,19 +2095,21 @@ def ck3_git_impl(
     trace=None,
 ) -> dict:
     """
-    Unified git operations for live mods and ck3raven repo.
+    Unified git operations.
+    
+    Mode-aware behavior:
+    - ck3raven-dev mode: Operates on ck3raven repo by default (mod_name ignored)
+    - ck3lens mode: Operates on live mods (mod_name required)
     
     Commands:
     
-    command=status → Get git status (mod_name required)
-    command=diff   → Get git diff (mod_name required, file_path optional)
-    command=add    → Stage files (mod_name required, files or all_files)
-    command=commit → Commit staged changes (mod_name, message required)
-    command=push   → Push to remote (mod_name required)
-    command=pull   → Pull from remote (mod_name required)
-    command=log    → Get commit log (mod_name required, limit optional)
-    
-    In ck3raven-dev mode, mod_name="ck3raven" targets the repo itself.
+    command=status → Get git status
+    command=diff   → Get git diff (file_path optional)
+    command=add    → Stage files (files or all_files required)
+    command=commit → Commit staged changes (message required)
+    command=push   → Push to remote
+    command=pull   → Pull from remote
+    command=log    → Get commit log (limit optional)
     """
     from ck3lens import git_ops
     from ck3lens.agent_mode import get_agent_mode
@@ -2117,31 +2119,39 @@ def ck3_git_impl(
     if not session:
         return {"error": "No session available - call ck3_init_session first"}
     
-    # Check for ck3raven-dev mode special handling
+    # Mode detection
     mode = get_agent_mode()
     ck3raven_root = P(__file__).parent.parent.parent.parent
     
-    # In ck3raven-dev mode, allow git ops on ck3raven repo itself
-    if mode == "ck3raven-dev" and mod_name.lower() in ("ck3raven", "repo", "."):
+    # ck3raven-dev mode: always operate on repo, ignore mod_name
+    if mode == "ck3raven-dev":
+        if mod_name:
+            # Log that we're ignoring mod_name but don't error
+            pass  # Could trace.log a warning here
+        
         result = _git_ops_for_path(command, ck3raven_root, file_path, files, all_files, message, limit)
         if trace:
-            trace.log(f"ck3lens.git.{command}", {"repo": "ck3raven"}, 
+            trace.log(f"ck3lens.git.{command}", {"target": "ck3raven"}, 
                       {"success": result.get("success", "error" not in result)})
         return result
+    
+    # ck3lens mode: require mod_name for live mod operations
+    if not mod_name:
+        available = [m.mod_id for m in session.local_mods] if session.local_mods else []
+        return {
+            "error": "mod_name required for git operations in ck3lens mode",
+            "available_mods": available,
+            "hint": "Specify which live mod to operate on"
+        }
     
     # Standard live mod git ops
     local_mod = session.get_local_mod(mod_name)
     if not local_mod:
-        # List available mods for better error message
         available = [m.mod_id for m in session.local_mods] if session.local_mods else []
-        hint = "Use mod folder name, not display name"
-        if mode == "ck3raven-dev":
-            hint = "Use mod folder name, or 'ck3raven' for the repo itself"
         return {
             "error": f"Not a live mod: {mod_name}",
             "available_mods": available,
-            "mode": mode,
-            "hint": hint
+            "hint": "Use mod folder name, not display name"
         }
     
     # git_ops functions expect (session, mod_id) - pass correctly

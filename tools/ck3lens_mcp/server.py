@@ -1664,7 +1664,7 @@ def ck3_playset(
 @mcp.tool()
 def ck3_git(
     command: Literal["status", "diff", "add", "commit", "push", "pull", "log"],
-    mod_name: str,
+    mod_name: str | None = None,
     # For diff
     file_path: str | None = None,
     # For add
@@ -1678,19 +1678,23 @@ def ck3_git(
     """
     Unified git operations for live mods.
     
+    Mode-aware behavior:
+    - ck3raven-dev mode: Operates on ck3raven repo (mod_name ignored)
+    - ck3lens mode: Operates on live mods (mod_name required)
+    
     Commands:
     
-    command=status → Get git status (mod_name required)
-    command=diff   → Get git diff (mod_name required, file_path optional)
-    command=add    → Stage files (mod_name required, files or all_files)
-    command=commit → Commit staged changes (mod_name, message required)
-    command=push   → Push to remote (mod_name required)
-    command=pull   → Pull from remote (mod_name required)
-    command=log    → Get commit log (mod_name required, limit optional)
+    command=status → Get git status
+    command=diff   → Get git diff (file_path optional)
+    command=add    → Stage files (files or all_files required)
+    command=commit → Commit staged changes (message required)
+    command=push   → Push to remote
+    command=pull   → Pull from remote
+    command=log    → Get commit log (limit optional)
     
     Args:
         command: Git operation to perform
-        mod_name: Live mod name (folder name)
+        mod_name: Live mod name (required in ck3lens mode, ignored in ck3raven-dev mode)
         file_path: Specific file for diff
         files: List of files to stage
         all_files: Stage all changes
