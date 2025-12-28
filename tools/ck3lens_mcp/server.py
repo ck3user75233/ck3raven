@@ -969,8 +969,75 @@ def ck3_db_delete(
         # Delete ASTs for content_versions 5-10
         ck3_db_delete(target="asts", scope="by_content_version", content_version_ids=[5,6,7,8,9,10], confirm=True)
     """
+    from ck3lens.agent_mode import get_agent_mode
+    from ck3lens.policy.enforcement import (
+        OperationType, Decision, EnforcementRequest, enforce_and_log
+    )
+    from ck3lens.work_contracts import get_active_contract
+    
     db = _get_db()
     trace = _get_trace()
+    
+    # ==========================================================================
+    # CENTRALIZED ENFORCEMENT GATE (Phase 2)
+    # DB delete operations go through enforce_and_log FIRST
+    # ==========================================================================
+    
+    mode = get_agent_mode()
+    
+    if mode:
+        contract = get_active_contract()
+        
+        # Build enforcement request
+        request = EnforcementRequest(
+            operation=OperationType.DB_DELETE,
+            mode=mode,
+            tool_name="ck3_db_delete",
+            target_path=f"db:{target}",  # Use db: prefix for DB operations
+            contract_id=contract.contract_id if contract else None,
+            repo_domains=contract.canonical_domains if contract else [],
+        )
+        
+        # Enforce policy
+        result = enforce_and_log(request, trace)
+        
+        # Handle enforcement decision
+        if result.decision == Decision.DENY:
+            return {
+                "success": False,
+                "target": target,
+                "scope": scope,
+                "error": result.reason,
+                "policy_decision": "DENY",
+            }
+        
+        if result.decision == Decision.REQUIRE_CONTRACT:
+            return {
+                "success": False,
+                "target": target,
+                "scope": scope,
+                "error": result.reason,
+                "policy_decision": "REQUIRE_CONTRACT",
+                "guidance": "Use ck3_contract(command='open', ...) to open a work contract",
+            }
+        
+        if result.decision == Decision.REQUIRE_TOKEN:
+            return {
+                "success": False,
+                "target": target,
+                "scope": scope,
+                "error": result.reason,
+                "policy_decision": "REQUIRE_TOKEN",
+                "required_token_type": result.required_token_type,
+                "hint": f"Use ck3_token to request a {result.required_token_type} token",
+            }
+        
+        # Decision is ALLOW - continue to implementation
+    
+    # ==========================================================================
+    # IMPLEMENTATION
+    # ==========================================================================
+    
     cur = db.conn.cursor()
     
     result = {
@@ -2866,6 +2933,7 @@ def ck3_exec(
         can_execute, classify_command, evaluate_policy,
         CommandRequest, Decision, CommandCategory,
     )
+    from ck3lens.policy.audit import get_audit_logger
     from ck3lens.work_contracts import get_active_contract
     import subprocess
     
@@ -2930,7 +2998,34 @@ def ck3_exec(
         "category": result.category.name if result.category else None,
     }
     
-    # Log the attempt
+    # ==========================================================================
+    # STRUCTURED AUDIT LOGGING (Phase 2)
+    # Log to structured audit trail for analytics
+    # ==========================================================================
+    
+    # Map CLW category to operation type for consistency
+    op_type_name = "SHELL_SAFE"
+    if result.category == CommandCategory.WRITE:
+        op_type_name = "SHELL_WRITE"
+    elif result.category == CommandCategory.DESTRUCTIVE:
+        op_type_name = "SHELL_DESTRUCTIVE"
+    
+    # Use structured audit logger
+    audit = get_audit_logger(trace, session_id="mcp_server")
+    audit.log_enforcement(
+        operation_type=op_type_name,
+        mode=mode or "unknown",
+        tool_name="ck3_exec",
+        decision=result.decision.name,
+        reason=result.reason,
+        contract_id=contract_id,
+        token_id=token_id,
+        required_token_type=result.required_token_type,
+        command=command[:100] if command else None,  # Truncate for logging
+        target_paths=target_paths[:10] if target_paths else None,  # Limit paths
+    )
+    
+    # Legacy trace log for backwards compatibility
     trace.log("ck3lens.exec", {
         "command": command,
         "token_id": token_id,

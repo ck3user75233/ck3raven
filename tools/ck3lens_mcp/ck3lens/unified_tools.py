@@ -845,6 +845,90 @@ def ck3_file_impl(
     - Provides is_writable hints for policy
     """
     from pathlib import Path as P
+    from ck3lens.agent_mode import get_agent_mode
+    from ck3lens.policy.enforcement import (
+        OperationType, Decision, EnforcementRequest, enforce_and_log
+    )
+    from ck3lens.work_contracts import get_active_contract
+    
+    # ==========================================================================
+    # CENTRALIZED ENFORCEMENT GATE (Phase 2)
+    # All write operations go through enforce_and_log FIRST
+    # ==========================================================================
+    
+    mode = get_agent_mode()
+    write_commands = {"write", "edit", "delete", "rename"}
+    
+    if command in write_commands and mode:
+        # Map command to operation type
+        op_type_map = {
+            "write": OperationType.FILE_WRITE,
+            "edit": OperationType.FILE_WRITE,  # Edit is a form of write
+            "delete": OperationType.FILE_DELETE,
+            "rename": OperationType.FILE_RENAME,
+        }
+        
+        # Determine target path
+        target = path or (f"{mod_name}/{rel_path}" if mod_name and rel_path else None)
+        
+        # Get contract for scope validation
+        contract = get_active_contract()
+        
+        # Build enforcement request
+        request = EnforcementRequest(
+            operation=op_type_map[command],
+            mode=mode,
+            tool_name="ck3_file",
+            target_path=target,
+            mod_name=mod_name,
+            rel_path=rel_path,
+            contract_id=contract.contract_id if contract else None,
+            repo_domains=contract.canonical_domains if contract else [],
+            token_id=token_id,
+        )
+        
+        # Enforce policy
+        result = enforce_and_log(request, trace)
+        
+        # Handle enforcement decision
+        if result.decision == Decision.DENY:
+            return {
+                "success": False,
+                "error": result.reason,
+                "policy_decision": "DENY",
+            }
+        
+        if result.decision == Decision.REQUIRE_CONTRACT:
+            return {
+                "success": False,
+                "error": result.reason,
+                "policy_decision": "REQUIRE_CONTRACT",
+                "guidance": "Use ck3_contract(command='open', ...) to open a work contract",
+            }
+        
+        if result.decision == Decision.REQUIRE_TOKEN:
+            return {
+                "success": False,
+                "error": result.reason,
+                "policy_decision": "REQUIRE_TOKEN",
+                "required_token_type": result.required_token_type,
+                "hint": f"Use ck3_token to request a {result.required_token_type} token",
+            }
+        
+        if result.decision == Decision.REQUIRE_USER_APPROVAL:
+            return {
+                "success": False,
+                "error": result.reason,
+                "policy_decision": "REQUIRE_USER_APPROVAL",
+                "required_token_type": result.required_token_type,
+                "guidance": "This operation requires explicit user approval",
+            }
+        
+        # Decision is ALLOW - continue to implementation
+    
+    # ==========================================================================
+    # ROUTE TO IMPLEMENTATION
+    # ==========================================================================
     
     if command == "get":
         return _file_get(path, include_ast, max_bytes, no_lens, db, trace, lens)
@@ -2256,6 +2340,10 @@ def ck3_git_impl(
     """
     from ck3lens import git_ops
     from ck3lens.agent_mode import get_agent_mode
+    from ck3lens.policy.enforcement import (
+        OperationType, Decision, EnforcementRequest, enforce_and_log
+    )
+    from ck3lens.work_contracts import get_active_contract
     from pathlib import Path as P
     
     # Validate session
@@ -2265,6 +2353,124 @@ def ck3_git_impl(
     # Mode detection
     mode = get_agent_mode()
     ck3raven_root = P(__file__).parent.parent.parent.parent
+    
+    # ==========================================================================
+    # CENTRALIZED ENFORCEMENT GATE (Phase 2)
+    # Git write operations go through enforce_and_log FIRST
+    # ==========================================================================
+    
+    write_commands = {"add", "commit", "push", "pull"}
+    
+    if command in write_commands and mode:
+        # Map command to operation type
+        op_type_map = {
+            "add": OperationType.GIT_LOCAL_PACKAGE,
+            "commit": OperationType.GIT_LOCAL_PACKAGE,
+            "push": OperationType.GIT_PUBLISH,
+            "pull": OperationType.GIT_LOCAL_WORKFLOW,
+        }
+        
+        # Get current branch for push enforcement
+        branch_name = None
+        if command == "push":
+            try:
+                import subprocess
+                if mode == "ck3raven-dev":
+                    result_obj = subprocess.run(
+                        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                        cwd=str(ck3raven_root),
+                        capture_output=True,
+                        text=True,
+                    )
+                    if result_obj.returncode == 0:
+                        branch_name = result_obj.stdout.strip()
+            except Exception:
+                pass  # Branch detection failed, enforcement will handle
+        
+        # Get staged files for scope validation (for push)
+        staged_files = []
+        if command == "push":
+            try:
+                import subprocess
+                if mode == "ck3raven-dev":
+                    result_obj = subprocess.run(
+                        ["git", "diff", "--name-only", "--cached"],
+                        cwd=str(ck3raven_root),
+                        capture_output=True,
+                        text=True,
+                    )
+                    if result_obj.returncode == 0:
+                        staged_files = [f for f in result_obj.stdout.strip().split("\n") if f]
+            except Exception:
+                pass
+        
+        # Determine target for mod operations
+        target_mod = mod_name if mode == "ck3lens" else None
+        
+        # Get contract
+        contract = get_active_contract()
+        
+        # Build enforcement request
+        request = EnforcementRequest(
+            operation=op_type_map[command],
+            mode=mode,
+            tool_name="ck3_git",
+            mod_name=target_mod,
+            contract_id=contract.contract_id if contract else None,
+            repo_domains=contract.canonical_domains if contract else [],
+            branch_name=branch_name,
+            staged_files=staged_files,
+            is_force_push=False,  # Force push not supported via this tool
+        )
+        
+        # Enforce policy
+        result = enforce_and_log(request, trace)
+        
+        # Handle enforcement decision
+        if result.decision == Decision.DENY:
+            return {
+                "success": False,
+                "error": result.reason,
+                "policy_decision": "DENY",
+            }
+        
+        if result.decision == Decision.REQUIRE_CONTRACT:
+            return {
+                "success": False,
+                "error": result.reason,
+                "policy_decision": "REQUIRE_CONTRACT",
+                "guidance": "Use ck3_contract(command='open', ...) to open a work contract",
+            }
+        
+        if result.decision == Decision.REQUIRE_TOKEN:
+            return {
+                "success": False,
+                "error": result.reason,
+                "policy_decision": "REQUIRE_TOKEN",
+                "required_token_type": result.required_token_type,
+                "hint": f"Use ck3_token to request a {result.required_token_type} token",
+            }
+        
+        if result.decision == Decision.REQUIRE_USER_APPROVAL:
+            return {
+                "success": False,
+                "error": result.reason,
+                "policy_decision": "REQUIRE_USER_APPROVAL",
+                "required_token_type": result.required_token_type,
+                "guidance": "This operation requires explicit user approval",
+            }
+        
+        # Decision is ALLOW - continue to implementation
+        # Include safe_push_autogrant info if applicable
+        if result.safe_push_autogrant and trace:
+            trace.log("ck3lens.git.safe_push_autogrant", {
+                "branch": branch_name,
+                "staged_files_count": len(staged_files),
+            }, {})
+    
+    # ==========================================================================
+    # ROUTE TO IMPLEMENTATION
+    # ==========================================================================
     
     # ck3raven-dev mode: always operate on repo, ignore mod_name
     if mode == "ck3raven-dev":

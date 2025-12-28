@@ -21,13 +21,20 @@ CK3Lens Mode Extensions:
 - Contracts must declare intent_type (COMPATCH, BUGPATCH, etc.)
 - Write contracts require targets, snippets, and DIFF_SANITY
 - Delete operations require explicit file list + approval token
+
+Branch Management:
+- Per-contract branches: agent/<contract_id>-<slug>
+- Never push directly to main/master
+- SAFE PUSH auto-grant for valid agent branches
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+import re
 import shutil
+import subprocess
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, date, timedelta
 from pathlib import Path
@@ -70,6 +77,7 @@ PRODUCT_DOMAINS = frozenset({
 })
 
 # REPO DOMAINS - what parts of the repository tree are in scope
+# These map to actual directory paths for hard enforcement
 REPO_DOMAINS = frozenset({
     "docs",        # docs/**, README.md, *.md - documentation
     "tools",       # tools/** - MCP tools, wrappers, utilities
@@ -81,6 +89,111 @@ REPO_DOMAINS = frozenset({
     "scripts",     # scripts/** - utility scripts
     "src",         # src/ck3raven/** - main source code
 })
+
+# =============================================================================
+# REPO DOMAIN PATH MAPPINGS (ENFORCEABLE)
+# =============================================================================
+# These are the HARD GATES for enforcement. A file path must match at least
+# one pattern from the repo_domains declared in the contract.
+
+REPO_DOMAIN_PATHS: dict[str, list[str]] = {
+    "docs": [
+        "docs/**",
+        "README.md",
+        "*.md",  # Root-level markdown files
+    ],
+    "tools": [
+        "tools/**",
+    ],
+    "tests": [
+        "tests/**",
+        "**/test_*.py",  # Test files anywhere
+        "**/conftest.py",
+    ],
+    "policy": [
+        "tools/ck3lens_mcp/ck3lens/policy/**",
+        "tools/ck3lens_mcp/ck3lens/work_contracts.py",
+    ],
+    "config": [
+        "pyproject.toml",
+        "*.yaml",
+        "*.toml",
+        "*.json",  # Root config files
+        ".github/**",  # GitHub config
+    ],
+    "wip": [
+        ".wip/**",
+    ],
+    "ci": [
+        ".github/workflows/**",
+        ".github/actions/**",
+    ],
+    "scripts": [
+        "scripts/**",
+    ],
+    "src": [
+        "src/**",
+        "builder/**",
+    ],
+}
+
+
+def get_allowed_paths_for_domains(repo_domains: list[str]) -> list[str]:
+    """
+    Get all allowed path patterns for a set of repo domains.
+    
+    Args:
+        repo_domains: List of repo domain names
+        
+    Returns:
+        Combined list of path patterns allowed by these domains
+    """
+    patterns = []
+    for domain in repo_domains:
+        if domain in REPO_DOMAIN_PATHS:
+            patterns.extend(REPO_DOMAIN_PATHS[domain])
+    return patterns
+
+
+def validate_path_in_repo_domains(
+    rel_path: str, 
+    repo_domains: list[str],
+    allowed_paths: list[str] | None = None,
+) -> tuple[bool, str]:
+    """
+    Validate a path is within the declared repo_domains.
+    
+    This is a HARD GATE - the path must match at least one pattern
+    from the repo_domains OR from explicit allowed_paths.
+    
+    Args:
+        rel_path: Relative path from repo root
+        repo_domains: List of repo domain names from contract
+        allowed_paths: Optional explicit allowed patterns (override)
+        
+    Returns:
+        (allowed: bool, reason: str)
+    """
+    import fnmatch
+    
+    # Normalize path separators
+    rel_path = rel_path.replace("\\", "/")
+    
+    # Check explicit allowed_paths first (takes precedence)
+    if allowed_paths:
+        for pattern in allowed_paths:
+            pattern = pattern.replace("\\", "/")
+            if fnmatch.fnmatch(rel_path, pattern):
+                return True, f"Path matches allowed_paths pattern: {pattern}"
+    
+    # Check repo_domain patterns
+    domain_patterns = get_allowed_paths_for_domains(repo_domains)
+    for pattern in domain_patterns:
+        pattern = pattern.replace("\\", "/")
+        if fnmatch.fnmatch(rel_path, pattern):
+            return True, f"Path matches repo_domain pattern: {pattern}"
+    
+    return False, f"Path '{rel_path}' not in repo_domains {repo_domains} or allowed_paths"
 
 # Combined - both product and repo domains are valid for ck3raven-dev contracts
 CANONICAL_DOMAINS = PRODUCT_DOMAINS | REPO_DOMAINS
@@ -178,6 +291,9 @@ class WorkContract:
     # Metadata
     agent_mode: Optional[str] = None  # ck3lens or ck3raven-dev
     notes: Optional[str] = None
+    
+    # Branch management
+    branch_name: Optional[str] = None  # The agent branch for this contract
     
     # ============================================
     # CK3Lens-specific fields (Phase 2 additions)
@@ -290,6 +406,20 @@ class WorkContract:
         
         return len(errors) == 0, errors
     
+    def get_branch_name(self) -> str:
+        """
+        Get or generate the branch name for this contract.
+        
+        Branch format: agent/<contract_id>-<slug>
+        Where <slug> is a sanitized version of the first 30 chars of intent.
+        """
+        if self.branch_name:
+            return self.branch_name
+        
+        # Generate slug from intent
+        slug = _slugify_intent(self.intent)
+        return f"agent/{self.contract_id}-{slug}"
+    
     @classmethod
     def generate_id(cls) -> str:
         """Generate a unique contract ID."""
@@ -343,6 +473,203 @@ class WorkContract:
         return cls.from_dict(data)
 
 
+# =============================================================================
+# BRANCH MANAGEMENT
+# =============================================================================
+
+def _slugify_intent(intent: str, max_length: int = 30) -> str:
+    """
+    Convert intent text to a URL-safe slug for branch names.
+    
+    Args:
+        intent: The intent description
+        max_length: Maximum length of the slug
+        
+    Returns:
+        Slugified string suitable for git branch names
+    """
+    # Lowercase and take first part
+    slug = intent.lower()[:max_length]
+    
+    # Replace spaces and underscores with hyphens
+    slug = re.sub(r'[\s_]+', '-', slug)
+    
+    # Remove any characters that aren't alphanumeric or hyphens
+    slug = re.sub(r'[^a-z0-9-]', '', slug)
+    
+    # Remove leading/trailing hyphens
+    slug = slug.strip('-')
+    
+    # Collapse multiple hyphens
+    slug = re.sub(r'-+', '-', slug)
+    
+    return slug or "work"
+
+
+def create_contract_branch(
+    contract: WorkContract,
+    repo_path: Optional[Path] = None,
+    base_branch: str = "main",
+) -> tuple[bool, str, Optional[str]]:
+    """
+    Create a git branch for a contract.
+    
+    Branch format: agent/<contract_id>-<slug>
+    
+    Args:
+        contract: The contract to create a branch for
+        repo_path: Path to the git repository (default: detect from CWD)
+        base_branch: Branch to base off of (default: main)
+        
+    Returns:
+        (success: bool, message: str, branch_name: Optional[str])
+    """
+    if repo_path is None:
+        # Try to find repo root
+        repo_path = _find_repo_root()
+        if repo_path is None:
+            return False, "Could not find git repository", None
+    
+    branch_name = contract.get_branch_name()
+    
+    try:
+        # Check if branch already exists
+        result = subprocess.run(
+            ["git", "branch", "--list", branch_name],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and branch_name in result.stdout:
+            # Branch exists - switch to it
+            result = subprocess.run(
+                ["git", "switch", branch_name],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                # Update contract with branch name
+                contract.branch_name = branch_name
+                contract.save()
+                return True, f"Switched to existing branch: {branch_name}", branch_name
+            return False, f"Failed to switch to branch: {result.stderr}", None
+        
+        # Create new branch from base
+        result = subprocess.run(
+            ["git", "switch", "-c", branch_name, base_branch],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+        )
+        
+        if result.returncode != 0:
+            return False, f"Failed to create branch: {result.stderr}", None
+        
+        # Update contract with branch name
+        contract.branch_name = branch_name
+        contract.save()
+        
+        return True, f"Created and switched to branch: {branch_name}", branch_name
+        
+    except FileNotFoundError:
+        return False, "Git not found in PATH", None
+    except Exception as e:
+        return False, f"Error creating branch: {e}", None
+
+
+def get_current_branch(repo_path: Optional[Path] = None) -> Optional[str]:
+    """
+    Get the current git branch name.
+    
+    Args:
+        repo_path: Path to the git repository
+        
+    Returns:
+        Current branch name or None if not in a git repo
+    """
+    if repo_path is None:
+        repo_path = _find_repo_root()
+        if repo_path is None:
+            return None
+    
+    try:
+        result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    
+    return None
+
+
+def validate_branch_for_push(
+    branch_name: str,
+    contract_id: Optional[str] = None,
+) -> tuple[bool, str]:
+    """
+    Validate that a branch is safe to push to.
+    
+    SAFE PUSH rules:
+    1. Cannot push to protected branches (main, master, release/*, etc.)
+    2. For agent branches, must match contract_id if provided
+    3. wip/* and dev/* are allowed
+    
+    Args:
+        branch_name: Branch to validate
+        contract_id: Optional contract ID to validate against
+        
+    Returns:
+        (allowed: bool, reason: str)
+    """
+    from .policy.enforcement import is_protected_branch, is_agent_branch
+    
+    if is_protected_branch(branch_name):
+        return False, f"Cannot push to protected branch: {branch_name}"
+    
+    if is_agent_branch(branch_name, contract_id):
+        return True, "Valid agent branch for contract"
+    
+    if branch_name.startswith("wip/") or branch_name.startswith("dev/"):
+        return True, "Valid development branch"
+    
+    if contract_id:
+        return False, f"Branch {branch_name} is not a valid agent branch for contract {contract_id}"
+    
+    return True, "Branch is not protected"
+
+
+def _find_repo_root(start_path: Optional[Path] = None) -> Optional[Path]:
+    """
+    Find the git repository root.
+    
+    Args:
+        start_path: Path to start searching from
+        
+    Returns:
+        Repository root path or None
+    """
+    if start_path is None:
+        start_path = Path.cwd()
+    
+    current = start_path
+    while current != current.parent:
+        if (current / ".git").exists():
+            return current
+        current = current.parent
+    
+    return None
+
+
+# =============================================================================
+# CONTRACT LIFECYCLE FUNCTIONS
+# =============================================================================
+
 def open_contract(
     intent: str,
     canonical_domains: list[str],
@@ -351,6 +678,8 @@ def open_contract(
     expires_hours: float = 8.0,
     agent_mode: Optional[str] = None,
     notes: Optional[str] = None,
+    create_branch: bool = False,  # NEW: Auto-create branch
+    base_branch: str = "main",    # NEW: Base branch for new branch
     # CK3Lens-specific parameters
     intent_type: Optional[str] = None,
     targets: Optional[list[dict[str, str]]] = None,
@@ -375,6 +704,8 @@ def open_contract(
         expires_hours: Hours until contract expires (default 8)
         agent_mode: ck3lens or ck3raven-dev
         notes: Optional notes
+        create_branch: If True, create a git branch for this contract
+        base_branch: Branch to base off of (default: main)
         
         # CK3Lens-specific (required when agent_mode="ck3lens" and writing)
         intent_type: One of COMPATCH, BUGPATCH, RESEARCH_MOD_ISSUES, RESEARCH_BUGREPORT, SCRIPT_WIP
@@ -461,6 +792,15 @@ def open_contract(
             raise ValueError(f"CK3Lens contract validation failed: {errors}")
     
     contract.save()
+    
+    # Create branch if requested (ck3raven-dev mode only)
+    if create_branch and agent_mode == "ck3raven-dev":
+        success, message, branch = create_contract_branch(contract, base_branch=base_branch)
+        if not success:
+            # Log warning but don't fail contract creation
+            contract.notes = (contract.notes or "") + f"\n[WARN] Branch creation failed: {message}"
+            contract.save()
+    
     return contract
 
 

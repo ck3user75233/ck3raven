@@ -10,6 +10,8 @@ Policy module for agent validation and CLI wrapping.
 - hard_gates.py: Pure functions for hard gate checks
 - wip_workspace.py: WIP workspace lifecycle management
 - contract_schema.py: Contract schema validation
+- enforcement.py: Centralized policy enforcement gate (NEW)
+- audit.py: Structured audit logging (NEW)
 """
 from .types import (
     Severity,
@@ -141,6 +143,42 @@ from .script_sandbox import (
     prepare_script_for_execution,
 )
 
+# =============================================================================
+# NEW: Centralized Enforcement Gate (Phase 1)
+# =============================================================================
+from .enforcement import (
+    # Operation types
+    OperationType,
+    TokenTier,
+    Decision as EnforcementDecision,  # Aliased to avoid conflict with clw.Decision
+    # Request/Result
+    EnforcementRequest,
+    EnforcementResult,
+    # Branch protection
+    PROTECTED_BRANCHES,
+    is_protected_branch,
+    is_agent_branch,
+    # Main enforcement function
+    enforce_policy as enforce_policy_gate,  # Aliased to distinguish from validator.validate_policy
+    log_enforcement_decision,
+    enforce_and_log,
+)
+
+# =============================================================================
+# NEW: Structured Audit Logging (Phase 1)
+# =============================================================================
+from .audit import (
+    EventCategory,
+    EnforcementLogEntry,
+    AuditLogger,
+    get_audit_logger,
+    reset_audit_logger,
+    # Analytics helpers
+    count_decisions_by_type,
+    get_denied_operations,
+    get_safe_push_grants,
+)
+
 __all__ = [
     # Policy validation types
     "Severity",
@@ -265,4 +303,29 @@ __all__ = [
     "ScriptExecutionResult",
     "execute_wip_script",
     "prepare_script_for_execution",
+    # =============================================================================
+    # NEW: Centralized Enforcement (Phase 1)
+    # =============================================================================
+    "OperationType",
+    "TokenTier",
+    "EnforcementDecision",
+    "EnforcementRequest",
+    "EnforcementResult",
+    "PROTECTED_BRANCHES",
+    "is_protected_branch",
+    "is_agent_branch",
+    "enforce_policy_gate",
+    "log_enforcement_decision",
+    "enforce_and_log",
+    # =============================================================================
+    # NEW: Structured Audit Logging (Phase 1)
+    # =============================================================================
+    "EventCategory",
+    "EnforcementLogEntry",
+    "AuditLogger",
+    "get_audit_logger",
+    "reset_audit_logger",
+    "count_decisions_by_type",
+    "get_denied_operations",
+    "get_safe_push_grants",
 ]
