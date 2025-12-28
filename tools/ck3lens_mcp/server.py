@@ -3047,12 +3047,155 @@ def ck3_exec(
     mode = get_agent_mode()
     
     # ==========================================================================
-    # WIP SCRIPT DETECTION (ck3raven-dev only)
-    # If this is a Python script in .wip/, route through centralized enforcement
+    # WIP SCRIPT DETECTION AND SANDBOXED EXECUTION
+    # - ck3lens mode: Sandboxed execution with Token B (user approval)
+    # - ck3raven-dev mode: Enforcement gate (existing logic)
     # ==========================================================================
     wip_script_info = _detect_wip_script(command, working_dir or str(Path(__file__).parent.parent.parent))
     
-    if wip_script_info:
+    if wip_script_info and mode == "ck3lens":
+        # =======================================================================
+        # CK3LENS MODE: SANDBOXED WIP SCRIPT EXECUTION
+        # Per Canonical Initialization #9: Scripts must be sandboxed
+        # =======================================================================
+        from ck3lens.policy.tokens import validate_token
+        from ck3lens.policy.lensworld_sandbox import run_script_sandboxed
+        from ck3lens import local_mods
+        
+        script_path = Path(wip_script_info["script_path"])
+        
+        # Token B (user approval) required for script execution in ck3lens
+        if not token_id:
+            return {
+                "allowed": False,
+                "executed": False,
+                "output": None,
+                "exit_code": None,
+                "policy": {
+                    "decision": "REQUIRE_TOKEN",
+                    "reason": "WIP script execution in ck3lens mode requires SCRIPT_EXECUTE token (user approval)",
+                    "required_token_type": "SCRIPT_EXECUTE",
+                    "category": "WIP_SCRIPT_SANDBOXED",
+                },
+                "error": "Script execution requires user approval",
+                "hint": "Use ck3_token(command='request', token_type='SCRIPT_EXECUTE', reason='...') to request approval",
+            }
+        
+        # Validate token
+        token_valid, token_msg = validate_token(
+            token_id,
+            "SCRIPT_EXECUTE",
+            script_hash=wip_script_info.get("script_hash"),
+        )
+        
+        if not token_valid:
+            return {
+                "allowed": False,
+                "executed": False,
+                "output": None,
+                "exit_code": None,
+                "policy": {
+                    "decision": "DENY",
+                    "reason": f"Token invalid: {token_msg}",
+                    "required_token_type": "SCRIPT_EXECUTE",
+                    "category": "WIP_SCRIPT_SANDBOXED",
+                },
+                "error": f"Token validation failed: {token_msg}",
+            }
+        
+        # Get sandbox paths
+        from ck3lens.policy.wip_workspace import get_wip_workspace_path
+        from ck3lens.policy.types import AgentMode
+        
+        wip_path = get_wip_workspace_path(AgentMode.CK3LENS)
+        
+        # Get active local mod roots
+        local_mod_roots = set()
+        try:
+            for mod_name in local_mods.LOCAL_MODS:
+                mod_path = local_mods.get_mod_path(mod_name)
+                if mod_path:
+                    local_mod_roots.add(Path(mod_path))
+        except Exception:
+            pass
+        
+        # Utility paths (read-only) - logs, saves, etc.
+        utility_paths = set()
+        try:
+            from ck3lens.paths import get_ck3_user_path
+            ck3_user = get_ck3_user_path()
+            if ck3_user:
+                utility_paths.add(Path(ck3_user) / "logs")
+                utility_paths.add(Path(ck3_user) / "save games")
+        except Exception:
+            pass
+        
+        # Declared write paths from target_paths
+        declared_write_paths = set()
+        for p in (target_paths or []):
+            declared_write_paths.add(Path(p))
+        
+        # Dry run returns early
+        if dry_run:
+            return {
+                "allowed": True,
+                "executed": False,
+                "output": None,
+                "exit_code": None,
+                "policy": {
+                    "decision": "ALLOW",
+                    "reason": "Sandboxed script execution would be allowed",
+                    "category": "WIP_SCRIPT_SANDBOXED",
+                },
+                "message": "Dry run - script would be executed in LensWorld sandbox",
+                "sandbox_config": {
+                    "wip_path": str(wip_path),
+                    "local_mod_roots": [str(p) for p in local_mod_roots],
+                    "declared_write_paths": [str(p) for p in declared_write_paths],
+                },
+            }
+        
+        # Execute in sandbox
+        trace.log("ck3lens.exec.sandbox_start", {
+            "script_path": str(script_path),
+            "script_hash": wip_script_info.get("script_hash", "")[:16],
+            "token_id": token_id,
+        }, {})
+        
+        sandbox_result = run_script_sandboxed(
+            script_path=script_path,
+            wip_path=wip_path,
+            local_mod_roots=local_mod_roots,
+            utility_paths=utility_paths,
+            declared_write_paths=declared_write_paths,
+        )
+        
+        trace.log("ck3lens.exec.sandbox_complete", {
+            "success": sandbox_result["success"],
+            "blocked_count": sandbox_result["audit"].get("blocked_operations", 0),
+        }, {})
+        
+        return {
+            "allowed": True,
+            "executed": True,
+            "output": sandbox_result.get("output", ""),
+            "exit_code": 0 if sandbox_result["success"] else 1,
+            "policy": {
+                "decision": "ALLOW",
+                "reason": "Executed in LensWorld sandbox",
+                "category": "WIP_SCRIPT_SANDBOXED",
+            },
+            "sandbox": {
+                "success": sandbox_result["success"],
+                "error": sandbox_result.get("error"),
+                "audit": sandbox_result.get("audit", {}),
+            },
+        }
+    
+    elif wip_script_info and mode == "ck3raven-dev":
+        # =======================================================================
+        # CK3RAVEN-DEV MODE: Enforcement gate (existing logic)
+        # =======================================================================
         from ck3lens.policy.enforcement import (
             enforce_and_log, EnforcementRequest, OperationType as EnfOp, Decision as EnfDecision
         )
