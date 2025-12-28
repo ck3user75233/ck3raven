@@ -514,6 +514,73 @@ def _get_trace() -> ToolTrace:
     return _trace
 
 
+def _detect_wip_script(command: str, working_dir: str) -> dict | None:
+    """
+    Detect if a command is running a Python script in the .wip/ directory.
+    
+    Returns dict with script_path, script_hash, and (optional) wip_intent if detected,
+    otherwise None.
+    
+    WIP scripts are detected when:
+    - Command starts with 'python' and includes a .py file in .wip/
+    - Or working_dir is .wip/ and command runs a .py file
+    """
+    import hashlib
+    import re
+    
+    cmd_lower = command.lower()
+    
+    # Pattern 1: python .wip/script.py or python -c ... (not WIP)
+    # Pattern 2: python script.py when working_dir is .wip/
+    wip_patterns = [
+        r"python[3]?\s+(?:[\w\-\.]+\s+)*[\"']?([^\s\"']*\.wip[/\\][^\s\"']+\.py)[\"']?",  # python .wip/script.py
+        r"python[3]?\s+(?:[\w\-\.]+\s+)*[\"']?(\\.wip[/\\][^\s\"']+\.py)[\"']?",  # python \.wip\script.py
+    ]
+    
+    script_path = None
+    
+    # Check explicit .wip/ in command
+    for pattern in wip_patterns:
+        match = re.search(pattern, command, re.IGNORECASE)
+        if match:
+            script_path = match.group(1)
+            break
+    
+    # Check if working_dir is in .wip/ and command runs a .py file
+    if script_path is None:
+        working_dir_normalized = working_dir.replace("\\", "/").lower()
+        if ".wip/" in working_dir_normalized or working_dir_normalized.endswith(".wip"):
+            # Look for python script.py pattern
+            py_match = re.search(r"python[3]?\s+(?:[\w\-\.]+\s+)*[\"']?([^\s\"']+\.py)[\"']?", command, re.IGNORECASE)
+            if py_match:
+                # Combine working_dir with script name
+                script_name = py_match.group(1)
+                script_path = f"{working_dir}/{script_name}".replace("\\", "/")
+    
+    if script_path is None:
+        return None
+    
+    # Compute script hash if the file exists
+    script_hash = None
+    try:
+        from pathlib import Path
+        full_path = Path(script_path)
+        if not full_path.is_absolute():
+            full_path = Path(working_dir) / script_path
+        if full_path.exists():
+            content = full_path.read_text(encoding="utf-8")
+            script_hash = hashlib.sha256(content.encode()).hexdigest()
+    except Exception:
+        # File may not exist yet or other issue - hash will be None
+        script_hash = "UNKNOWN"
+    
+    return {
+        "script_path": script_path,
+        "script_hash": script_hash,
+        "wip_intent": None,  # Caller must provide via token or contract
+    }
+
+
 # ============================================================================
 # Session Management
 # ============================================================================
@@ -2979,7 +3046,81 @@ def ck3_exec(
     from ck3lens.agent_mode import get_agent_mode
     mode = get_agent_mode()
     
-    # Evaluate policy (with mode-awareness)
+    # ==========================================================================
+    # WIP SCRIPT DETECTION (ck3raven-dev only)
+    # If this is a Python script in .wip/, route through centralized enforcement
+    # ==========================================================================
+    wip_script_info = _detect_wip_script(command, working_dir or str(Path(__file__).parent.parent.parent))
+    
+    if wip_script_info:
+        from ck3lens.policy.enforcement import (
+            enforce_and_log, EnforcementRequest, OperationType as EnfOp, Decision as EnfDecision
+        )
+        
+        enforcement_request = EnforcementRequest(
+            operation=EnfOp.WIP_SCRIPT_RUN,
+            mode=mode or "unknown",
+            tool_name="ck3_exec",
+            command=command,
+            script_path=wip_script_info["script_path"],
+            script_hash=wip_script_info["script_hash"],
+            wip_intent=wip_script_info.get("wip_intent"),  # May be None - will fail enforcement
+            contract_id=contract_id,
+            token_id=token_id,
+        )
+        
+        enf_result = enforce_and_log(enforcement_request, trace, session_id="mcp_server")
+        
+        if enf_result.decision == EnfDecision.ALLOW:
+            # Proceed to execution (below)
+            pass
+        elif enf_result.decision == EnfDecision.REQUIRE_TOKEN:
+            return {
+                "allowed": False,
+                "executed": False,
+                "output": None,
+                "exit_code": None,
+                "policy": {
+                    "decision": "REQUIRE_TOKEN",
+                    "reason": enf_result.reason,
+                    "required_token_type": enf_result.required_token_type,
+                    "category": "WIP_SCRIPT",
+                },
+                "error": f"Token required: {enf_result.required_token_type}",
+                "hint": f"Use ck3_token to request a {enf_result.required_token_type} token",
+            }
+        elif enf_result.decision == EnfDecision.REQUIRE_CONTRACT:
+            return {
+                "allowed": False,
+                "executed": False,
+                "output": None,
+                "exit_code": None,
+                "policy": {
+                    "decision": "REQUIRE_CONTRACT",
+                    "reason": enf_result.reason,
+                    "required_token_type": None,
+                    "category": "WIP_SCRIPT",
+                },
+                "error": "Contract required for WIP script execution",
+                "hint": "Use ck3_contract to open a work contract first",
+            }
+        else:
+            # DENY or other
+            return {
+                "allowed": False,
+                "executed": False,
+                "output": None,
+                "exit_code": None,
+                "policy": {
+                    "decision": enf_result.decision.name,
+                    "reason": enf_result.reason,
+                    "required_token_type": enf_result.required_token_type,
+                    "category": "WIP_SCRIPT",
+                },
+                "error": enf_result.reason,
+            }
+    
+    # Evaluate policy (with mode-awareness) - for non-WIP commands
     request = CommandRequest(
         command=command,
         working_dir=working_dir or str(Path(__file__).parent.parent.parent),

@@ -474,3 +474,118 @@ def validate_script_declarations(
         "declared_reads_count": len(declarations.declared_reads),
         "declared_writes_count": len(declarations.declared_writes),
     }
+
+
+# =============================================================================
+# WORKAROUND DETECTION (ck3raven-dev only)
+# =============================================================================
+
+# In-memory tracking of script executions per contract
+# Key: contract_id, Value: dict of {script_hash: first_execution_timestamp}
+_script_execution_tracker: dict[str, dict[str, float]] = {}
+
+# Track when core source files were last modified (for change detection)
+_last_core_change_time: dict[str, float] = {}  # Key: contract_id
+
+
+def track_script_execution(
+    contract_id: str,
+    script_hash: str,
+) -> dict[str, Any]:
+    """
+    Track a WIP script execution for workaround detection.
+    
+    Per CK3RAVEN_DEV_POLICY_ARCHITECTURE.md Section 8.6:
+    - Same script hash executed twice without core changes = AUTO_DENY
+    
+    Args:
+        contract_id: Active contract ID
+        script_hash: SHA256 of script content
+    
+    Returns:
+        Dict with:
+        - allowed: bool (False if workaround detected)
+        - first_execution: bool (True if first time this script hash runs)
+        - reason: str explaining decision
+    """
+    if contract_id not in _script_execution_tracker:
+        _script_execution_tracker[contract_id] = {}
+    
+    tracker = _script_execution_tracker[contract_id]
+    
+    if script_hash not in tracker:
+        # First execution of this script hash
+        tracker[script_hash] = time.time()
+        return {
+            "allowed": True,
+            "first_execution": True,
+            "script_hash": script_hash[:16] + "...",
+            "reason": "First execution of this script version",
+        }
+    
+    # Script hash seen before - check for core changes
+    first_exec_time = tracker[script_hash]
+    last_core_change = _last_core_change_time.get(contract_id, 0)
+    
+    if last_core_change > first_exec_time:
+        # Core changes happened after first execution - reset and allow
+        tracker[script_hash] = time.time()
+        return {
+            "allowed": True,
+            "first_execution": False,
+            "script_hash": script_hash[:16] + "...",
+            "reason": "Core source changes detected since last execution - script re-allowed",
+        }
+    
+    # Workaround detected!
+    return {
+        "allowed": False,
+        "first_execution": False,
+        "script_hash": script_hash[:16] + "...",
+        "reason": "WORKAROUND DETECTED: Same script hash executed twice without core source changes",
+        "first_execution_time": first_exec_time,
+        "hint": "Make core source changes to address the underlying issue, then the script will be re-allowed",
+    }
+
+
+def record_core_source_change(contract_id: str) -> None:
+    """
+    Record that core source files have been changed.
+    
+    Called when ck3_file write/edit modifies files in src/, tools/, etc.
+    This resets the workaround detection for the next script execution.
+    """
+    _last_core_change_time[contract_id] = time.time()
+
+
+def clear_execution_tracker(contract_id: str) -> dict[str, Any]:
+    """
+    Clear execution tracking for a contract (e.g., on contract close).
+    
+    Returns:
+        Dict with count of cleared script hashes
+    """
+    cleared_count = 0
+    if contract_id in _script_execution_tracker:
+        cleared_count = len(_script_execution_tracker[contract_id])
+        del _script_execution_tracker[contract_id]
+    if contract_id in _last_core_change_time:
+        del _last_core_change_time[contract_id]
+    
+    return {
+        "contract_id": contract_id,
+        "cleared_script_hashes": cleared_count,
+    }
+
+
+def get_execution_tracker_state(contract_id: str) -> dict[str, Any]:
+    """Get current workaround detection state for debugging."""
+    tracker = _script_execution_tracker.get(contract_id, {})
+    last_change = _last_core_change_time.get(contract_id)
+    
+    return {
+        "contract_id": contract_id,
+        "tracked_script_count": len(tracker),
+        "script_hashes": [h[:16] + "..." for h in tracker.keys()],
+        "last_core_change": last_change,
+    }

@@ -57,6 +57,9 @@ class OperationType(Enum):
     SHELL_WRITE = auto()        # commands that write
     SHELL_DESTRUCTIVE = auto()  # rm, drop, etc.
     
+    # WIP script operations (ck3raven-dev only)
+    WIP_SCRIPT_RUN = auto()     # Execute Python script in WIP directory
+    
     # Specialized operations
     LAUNCHER_REPAIR = auto()
     CACHE_DELETE = auto()
@@ -109,6 +112,11 @@ class EnforcementRequest:
     branch_name: Optional[str] = None
     is_force_push: bool = False
     staged_files: List[str] = field(default_factory=list)
+    
+    # WIP script-specific (ck3raven-dev only)
+    script_path: Optional[str] = None      # Path to WIP script being executed
+    script_hash: Optional[str] = None      # SHA256 hash of script content
+    wip_intent: Optional[str] = None       # ANALYSIS_ONLY, REFACTOR_ASSIST, MIGRATION_HELPER
 
 
 @dataclass
@@ -454,6 +462,10 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
             token_id=request.token_id,
         )
     
+    # --- WIP script operations (ck3raven-dev only) ---
+    if op == OperationType.WIP_SCRIPT_RUN:
+        return _enforce_wip_script(request, contract)
+    
     # --- Launcher/cache operations ---
     if op == OperationType.LAUNCHER_REPAIR:
         if not request.token_id:
@@ -582,6 +594,138 @@ def _enforce_git_push(
             "repo_domains": repo_domains,
         },
     )
+
+
+# =============================================================================
+# WIP SCRIPT ENFORCEMENT (ck3raven-dev only)
+# =============================================================================
+
+# Valid WIP intents per CK3RAVEN_DEV_POLICY_ARCHITECTURE.md Section 8.3
+VALID_WIP_INTENTS = frozenset({
+    "ANALYSIS_ONLY",      # Read-only analysis
+    "REFACTOR_ASSIST",    # Generate patches for core changes
+    "MIGRATION_HELPER",   # One-time transformation
+})
+
+
+def _enforce_wip_script(
+    request: EnforcementRequest,
+    contract: Any,  # WorkContract
+) -> EnforcementResult:
+    """
+    Enforce WIP script execution policy.
+    
+    Per CK3RAVEN_DEV_POLICY_ARCHITECTURE.md Section 8:
+    - Only ck3raven-dev mode can run WIP scripts
+    - Requires active contract with valid wip_intent
+    - Script must be in .wip/ directory
+    - Script hash tracked for workaround detection
+    - Token required (SCRIPT_RUN_WIP - Tier A, auto-grantable)
+    
+    Workaround Detection (Section 8.6):
+    - Same script hash executed twice without core changes = AUTO_DENY
+    """
+    mode = request.mode
+    
+    # Hard gate: Only ck3raven-dev can run WIP scripts
+    if mode != "ck3raven-dev":
+        return EnforcementResult(
+            decision=Decision.DENY,
+            reason="WIP script execution only available in ck3raven-dev mode",
+        )
+    
+    # Contract required
+    if contract is None:
+        return EnforcementResult(
+            decision=Decision.REQUIRE_CONTRACT,
+            reason="WIP script execution requires active contract",
+            required_contract=True,
+        )
+    
+    # Script path must be in .wip/ directory
+    script_path = request.script_path
+    if not script_path:
+        return EnforcementResult(
+            decision=Decision.DENY,
+            reason="WIP script path not provided",
+            contract_id=contract.contract_id,
+        )
+    
+    # Normalize path for checking
+    normalized = script_path.replace("\\", "/").lower()
+    if ".wip/" not in normalized and not normalized.startswith(".wip/"):
+        return EnforcementResult(
+            decision=Decision.DENY,
+            reason=f"Script must be in .wip/ directory, not: {script_path}",
+            contract_id=contract.contract_id,
+        )
+    
+    # Must have valid WIP intent
+    wip_intent = request.wip_intent
+    if not wip_intent:
+        return EnforcementResult(
+            decision=Decision.DENY,
+            reason="WIP script execution requires wip_intent (ANALYSIS_ONLY, REFACTOR_ASSIST, MIGRATION_HELPER)",
+            contract_id=contract.contract_id,
+        )
+    
+    if wip_intent not in VALID_WIP_INTENTS:
+        return EnforcementResult(
+            decision=Decision.DENY,
+            reason=f"Invalid wip_intent '{wip_intent}'. Valid: {', '.join(sorted(VALID_WIP_INTENTS))}",
+            contract_id=contract.contract_id,
+        )
+    
+    # Script hash required for tracking
+    script_hash = request.script_hash
+    if not script_hash:
+        return EnforcementResult(
+            decision=Decision.DENY,
+            reason="WIP script hash required for execution tracking",
+            contract_id=contract.contract_id,
+        )
+    
+    # Token required (Tier A - auto-grantable, but must be requested explicitly)
+    if not request.token_id:
+        return EnforcementResult(
+            decision=Decision.REQUIRE_TOKEN,
+            reason="WIP script execution requires SCRIPT_RUN_WIP token (Tier A)",
+            required_token_tier=TokenTier.TIER_A,
+            required_token_type="SCRIPT_RUN_WIP",
+            contract_id=contract.contract_id,
+        )
+    
+    # Check for workaround detection (repeated execution without core changes)
+    from .wip_workspace import track_script_execution
+    
+    tracking_result = track_script_execution(contract.contract_id, script_hash)
+    
+    if not tracking_result["allowed"]:
+        return EnforcementResult(
+            decision=Decision.DENY,
+            reason=tracking_result["reason"],
+            contract_id=contract.contract_id,
+            scope_check_details={
+                "workaround_detected": True,
+                "script_hash": script_hash[:16] + "..." if script_hash else None,
+                "hint": tracking_result.get("hint", "Make core source changes first"),
+            },
+        )
+    
+    result = EnforcementResult(
+        decision=Decision.ALLOW,
+        reason=f"WIP script execution allowed with intent={wip_intent}",
+        contract_id=contract.contract_id,
+        token_id=request.token_id,
+        scope_check_details={
+            "wip_intent": wip_intent,
+            "script_path": script_path,
+            "script_hash": script_hash[:16] + "..." if script_hash else None,
+            "first_execution": tracking_result.get("first_execution", True),
+        },
+    )
+    
+    return result
 
 
 # =============================================================================

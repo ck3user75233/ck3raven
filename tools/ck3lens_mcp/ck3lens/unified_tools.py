@@ -1311,6 +1311,14 @@ def _file_write_raw(path, content, validate_syntax, token_id, trace, world=None)
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(content, encoding="utf-8")
         
+        # Track core source change for WIP workaround detection
+        if contract_id and mode == "ck3raven-dev":
+            from ck3lens.policy.wip_workspace import record_core_source_change
+            # Check if this is a core source file (not WIP)
+            path_str = str(file_path).replace("\\", "/").lower()
+            if ".wip/" not in path_str:
+                record_core_source_change(contract_id)
+        
         return {
             "success": True,
             "path": str(file_path),
@@ -1442,6 +1450,14 @@ def _file_edit_raw(path, old_content, new_content, validate_syntax, token_id, tr
     # Write the file
     try:
         file_path.write_text(updated_content, encoding="utf-8")
+        
+        # Track core source change for WIP workaround detection
+        if contract_id and mode == "ck3raven-dev":
+            from ck3lens.policy.wip_workspace import record_core_source_change
+            # Check if this is a core source file (not WIP)
+            path_str = str(file_path).replace("\\", "/").lower()
+            if ".wip/" not in path_str:
+                record_core_source_change(contract_id)
         
         return {
             "success": True,
