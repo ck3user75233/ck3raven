@@ -1017,9 +1017,42 @@ def _file_read_live(mod_name, rel_path, max_bytes, session, trace):
 
 
 def _file_write(mod_name, rel_path, content, validate_syntax, session, trace):
-    """Write file to live mod."""
+    """Write file to live mod with ck3lens contract enforcement."""
     from ck3lens import local_mods
     from ck3lens.validate import parse_content
+    from ck3lens.agent_mode import get_agent_mode
+    from ck3lens.work_contracts import (
+        get_active_contract, validate_target_in_contract
+    )
+    
+    mode = get_agent_mode()
+    
+    # CK3Lens mode requires contract validation for writes
+    if mode == "ck3lens":
+        contract = get_active_contract()
+        if contract is None:
+            if trace:
+                trace.log("ck3lens.file.write", {"mod_name": mod_name, "rel_path": rel_path},
+                          {"success": False, "reason": "no_contract"})
+            return {
+                "success": False,
+                "error": "ck3lens write requires active contract",
+                "guidance": "Use ck3_contract(command='open', ...) to open a write contract",
+            }
+        
+        # Validate target is declared in contract
+        allowed, reason = validate_target_in_contract(mod_name, rel_path, contract)
+        if not allowed:
+            if trace:
+                trace.log("ck3lens.file.write", {"mod_name": mod_name, "rel_path": rel_path},
+                          {"success": False, "reason": "target_not_in_contract"})
+            return {
+                "success": False,
+                "error": f"Target not in contract scope: {reason}",
+                "contract_id": contract.contract_id,
+                "declared_targets": contract.targets,
+                "guidance": "Add target to contract or update contract scope",
+            }
     
     # Optional syntax validation
     if validate_syntax and rel_path.endswith(".txt"):
@@ -1294,9 +1327,42 @@ def _file_edit_raw(path, old_content, new_content, validate_syntax, token_id, tr
 
 
 def _file_edit(mod_name, rel_path, old_content, new_content, validate_syntax, session, trace):
-    """Edit file in live mod."""
+    """Edit file in live mod with ck3lens contract enforcement."""
     from ck3lens import local_mods
     from ck3lens.validate import parse_content
+    from ck3lens.agent_mode import get_agent_mode
+    from ck3lens.work_contracts import (
+        get_active_contract, validate_target_in_contract
+    )
+    
+    mode = get_agent_mode()
+    
+    # CK3Lens mode requires contract validation for edits
+    if mode == "ck3lens":
+        contract = get_active_contract()
+        if contract is None:
+            if trace:
+                trace.log("ck3lens.file.edit", {"mod_name": mod_name, "rel_path": rel_path},
+                          {"success": False, "reason": "no_contract"})
+            return {
+                "success": False,
+                "error": "ck3lens edit requires active contract",
+                "guidance": "Use ck3_contract(command='open', ...) to open a write contract",
+            }
+        
+        # Validate target is declared in contract
+        allowed, reason = validate_target_in_contract(mod_name, rel_path, contract)
+        if not allowed:
+            if trace:
+                trace.log("ck3lens.file.edit", {"mod_name": mod_name, "rel_path": rel_path},
+                          {"success": False, "reason": "target_not_in_contract"})
+            return {
+                "success": False,
+                "error": f"Target not in contract scope: {reason}",
+                "contract_id": contract.contract_id,
+                "declared_targets": contract.targets,
+                "guidance": "Add target to contract or update contract scope",
+            }
     
     result = local_mods.edit_file(session, mod_name, rel_path, old_content, new_content)
     
