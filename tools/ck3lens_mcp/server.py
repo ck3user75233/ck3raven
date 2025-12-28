@@ -1736,7 +1736,7 @@ def ck3_playset(
     
     elif command == "switch":
         # Switch to a different playset by updating manifest
-        # ALSO checks build status and reports mods needing processing
+        # Automatically checks build status and starts builder if mods need processing
         if not playset_name:
             return {"success": False, "error": "playset_name required for switch"}
         
@@ -1786,10 +1786,12 @@ def ck3_playset(
         build_status = None
         mods_needing_build = []
         mods_missing_from_disk = []
+        db_available = False
         try:
             from builder.incremental import check_playset_build_status
             db = _get_db()
             if db and playset_data:
+                db_available = True
                 build_status = check_playset_build_status(db.conn, playset_data)
                 
                 # Collect mods needing build (on disk but not fully indexed)
@@ -1803,7 +1805,7 @@ def ck3_playset(
                     elif mod["status"] == "missing":
                         mods_missing_from_disk.append(mod["name"])
         except Exception as e:
-            # DB might not be available yet - that's fine, report it
+            # DB might not be available yet - need to build everything
             build_status = {"error": str(e), "needs_build": True}
         
         result = {
@@ -1814,31 +1816,86 @@ def ck3_playset(
             "mod_count": len(new_scope.get("active_mod_ids", set())),
         }
         
+        # Report missing-from-disk mods (these cannot be built)
+        if mods_missing_from_disk:
+            result["mods_missing_from_disk"] = mods_missing_from_disk
+            result["missing_warning"] = (
+                f"❌ {len(mods_missing_from_disk)} mod(s) are in playset but not on disk. "
+                f"These mods will be skipped: {mods_missing_from_disk}"
+            )
+        
+        # Automatically start builder if mods need processing
+        builder_started = False
+        if mods_needing_build or not db_available:
+            try:
+                import subprocess
+                import sys
+                
+                # Find the daemon script and venv python
+                repo_root = Path(__file__).parent.parent.parent
+                daemon_script = repo_root / "builder" / "daemon.py"
+                venv_python = repo_root / ".venv" / "Scripts" / "python.exe"
+                
+                if not venv_python.exists():
+                    venv_python = repo_root / ".venv" / "bin" / "python"  # Linux/Mac
+                
+                if daemon_script.exists() and venv_python.exists():
+                    # Start the builder daemon with the playset file
+                    cmd = [
+                        str(venv_python),
+                        str(daemon_script),
+                        "start",
+                        "--playset-file", str(target_file)
+                    ]
+                    
+                    # Run detached (daemon mode)
+                    if sys.platform == "win32":
+                        DETACHED_PROCESS = 0x00000008
+                        CREATE_NEW_PROCESS_GROUP = 0x00000200
+                        CREATE_NO_WINDOW = 0x08000000
+                        subprocess.Popen(
+                            cmd,
+                            creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
+                            close_fds=True,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                    else:
+                        subprocess.Popen(
+                            cmd,
+                            start_new_session=True,
+                            close_fds=True,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                    
+                    builder_started = True
+                    if mods_needing_build:
+                        result["builder_started"] = True
+                        result["builder_message"] = (
+                            f"🔨 Builder started for {len(mods_needing_build)} mod(s) needing processing. "
+                            f"Check status with: python builder/daemon.py status"
+                        )
+                    else:
+                        result["builder_started"] = True
+                        result["builder_message"] = (
+                            "🔨 Database not available or empty. Builder started to index all playset mods. "
+                            "Check status with: python builder/daemon.py status"
+                        )
+            except Exception as e:
+                result["builder_error"] = f"Failed to start builder: {e}"
+                result["build_command"] = f"python builder/daemon.py start --playset-file \"{target_file}\""
+        
         # Add build status information
-        if build_status:
+        if build_status and not build_status.get("error"):
             result["build_status"] = {
                 "playset_valid": build_status.get("playset_valid", False),
                 "ready_mods": build_status.get("ready_mods", 0),
                 "pending_mods": build_status.get("pending_mods", 0),
                 "missing_mods": build_status.get("missing_mods", 0),
-                "needs_build": build_status.get("needs_build", True),
             }
         
-        if mods_needing_build:
-            result["mods_needing_build"] = mods_needing_build
-            result["build_prompt"] = (
-                f"⚠️ {len(mods_needing_build)} mod(s) need processing before full functionality. "
-                f"Run: python builder/daemon.py start --playset-file \"{target_file}\""
-            )
-        
-        if mods_missing_from_disk:
-            result["mods_missing_from_disk"] = mods_missing_from_disk
-            result["missing_warning"] = (
-                f"❌ {len(mods_missing_from_disk)} mod(s) are in playset but not on disk. "
-                f"These mods will be skipped. The playset may be invalid until resolved: {mods_missing_from_disk}"
-            )
-        
-        if not mods_needing_build and not mods_missing_from_disk and build_status and not build_status.get("error"):
+        if not mods_needing_build and not mods_missing_from_disk and db_available and build_status and not build_status.get("error"):
             result["build_status_message"] = "✅ All mods are ready. No build needed."
         
         return result
