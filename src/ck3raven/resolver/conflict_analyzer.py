@@ -314,11 +314,10 @@ def extract_contributions_for_content_version(
             ))
             total_contributions += 1
     
-    # Mark as extracted
+    # Mark as extracted (is_stale deprecated - using contributions_extracted_at instead)
     conn.execute("""
         UPDATE content_versions 
-        SET contributions_extracted_at = datetime('now'),
-            is_stale = 0
+        SET contributions_extracted_at = datetime('now')
         WHERE content_version_id = ?
     """, (content_version_id,))
     

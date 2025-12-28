@@ -1,1088 +1,1121 @@
 {
-  "$schema": "./playset.schema.json",
-  "playset_name": "MSC Religion Expanded Dec20",
-  "description": "Imported from CK3 Launcher on 2025-12-28",
-  "created": "2025-12-28",
-  "last_modified": "2025-12-28",
-  "vanilla": {
-    "version": "unknown",
-    "path": "C:/Program Files (x86)/Steam/steamapps/common/Crusader Kings III/game",
-    "enabled": true
-  },
-  "mods": [
-    {
-      "name": "Unofficial Patch",
-      "load_order": 0,
-      "enabled": true,
-      "is_compatch": true,
-      "notes": "",
-      "steam_id": "2871648329",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2871648329"
-    },
-    {
-      "name": "Brighter Text Colors",
-      "load_order": 1,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2234245906",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2234245906"
-    },
-    {
-      "name": "Adrian von Ziegler Immersive Music Pack",
-      "load_order": 2,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2221177876",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2221177876"
-    },
-    {
-      "name": "Advanced Cheat Menu",
-      "load_order": 3,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2218867072",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2218867072"
-    },
-    {
-      "name": "Advanced Character Search",
-      "load_order": 4,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3084203091",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3084203091"
-    },
-    {
-      "name": "Nameplates",
-      "load_order": 5,
-      "enabled": false,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2220762808",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2220762808"
-    },
-    {
-      "name": "Rename Tribal Era to Late Antiquity",
-      "load_order": 6,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2629092890",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2629092890"
-    },
-    {
-      "name": "Rename Egalitarian to Cosmopolitan",
-      "load_order": 7,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2747792660",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2747792660"
-    },
-    {
-      "name": "Incompetent court positions notifications",
-      "load_order": 8,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3366606468",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3366606468"
-    },
-    {
-      "name": "ICPN submod : court position fix",
-      "load_order": 9,
-      "enabled": true,
-      "is_compatch": true,
-      "notes": "",
-      "steam_id": "3569626606",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3569626606"
-    },
-    {
-      "name": "Ambush Your Enemy",
-      "load_order": 10,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3437183665",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3437183665"
-    },
-    {
-      "name": "Search & Trade Artifacts",
-      "load_order": 11,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2962238514",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2962238514"
-    },
-    {
-      "name": "Artifact Manager",
-      "load_order": 12,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2886417277",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2886417277"
-    },
-    {
-      "name": "Generate Missing Parents",
-      "load_order": 13,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2919324922",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2919324922"
-    },
-    {
-      "name": "Quando Sumus - Decisions of CK3",
-      "load_order": 14,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2818339011",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2818339011"
-    },
-    {
-      "name": "Hotfix 1.18.1 - AI uses legends again",
-      "load_order": 15,
-      "enabled": true,
-      "is_compatch": true,
-      "notes": "",
-      "steam_id": "3598907429",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3598907429"
-    },
-    {
-      "name": "Invite Debutantes",
-      "load_order": 16,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2677152091",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2677152091"
-    },
-    {
-      "name": "Invite Nobles",
-      "load_order": 17,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2686352443",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2686352443"
-    },
-    {
-      "name": "Mass Demand Conversion",
-      "load_order": 18,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2753176859",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2753176859"
-    },
-    {
-      "name": "More Game Rules",
-      "load_order": 19,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2216850785",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2216850785"
-    },
-    {
-      "name": "House Career Manager",
-      "load_order": 20,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3597022985",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3597022985"
-    },
-    {
-      "name": "RBT: Send Gift Options",
-      "load_order": 21,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3049021578",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3049021578"
-    },
-    {
-      "name": "More Legends",
-      "load_order": 22,
-      "enabled": false,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3224336801",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3224336801"
-    },
-    {
-      "name": "[FSF] Browse the Bookstore",
-      "load_order": 23,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2751980550",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2751980550"
-    },
-    {
-      "name": "Immersive Chaste Trait",
-      "load_order": 24,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2662352702",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2662352702"
-    },
-    {
-      "name": "BCK - Lifestyles",
-      "load_order": 25,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2983150713",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2983150713"
-    },
-    {
-      "name": "BCK - Accolade Max Titles",
-      "load_order": 26,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3342573895",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3342573895"
-    },
-    {
-      "name": "BCK - Polyglot Lifestyle",
-      "load_order": 27,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3189120616",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3189120616"
-    },
-    {
-      "name": "Royal Court Event Pack",
-      "load_order": 28,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3360676953",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3360676953"
-    },
-    {
-      "name": "Pervasive Crown Authority",
-      "load_order": 29,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2692957667",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2692957667"
-    },
-    {
-      "name": "Adventurer's Beneficiary",
-      "load_order": 30,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3349316031",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3349316031"
-    },
-    {
-      "name": "Governments for the Independent",
-      "load_order": 31,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3601105533",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3601105533"
-    },
-    {
-      "name": "Artifact Claims Nerf - No House Claims Against Dynasty",
-      "load_order": 32,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2756340535",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2756340535"
-    },
-    {
-      "name": "Pacification Speeds Conversion",
-      "load_order": 33,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2229533163",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2229533163"
-    },
-    {
-      "name": "Hostile Struggles Re-Enable Holy Wars",
-      "load_order": 34,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2815474142",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2815474142"
-    },
-    {
-      "name": "Less Sinful Priest Scandals - No More Fervour Collapse",
-      "load_order": 35,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2229532691",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2229532691"
-    },
-    {
-      "name": "Fervour Midpoint Rebalance - Fervor Tends Towards 50%",
-      "load_order": 36,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2249720608",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2249720608"
-    },
-    {
-      "name": "Fervour Inversion - Winning Holy Wars Increases Fervor",
-      "load_order": 37,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2229532952",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2229532952"
-    },
-    {
-      "name": "Less Old Wives - AI Men Marry Younger Fertile Women",
-      "load_order": 38,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2265131712",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2265131712"
-    },
-    {
-      "name": "Morvens Mods 1.18 Compatch",
-      "load_order": 39,
-      "enabled": true,
-      "is_compatch": true,
-      "notes": "",
-      "steam_id": "3001489429",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3001489429"
-    },
-    {
-      "name": "More Interactive Vassals",
-      "load_order": 40,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2712590542",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2712590542"
-    },
-    {
-      "name": "More Regional Innovations",
-      "load_order": 41,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2252354244",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2252354244"
-    },
-    {
-      "name": "Rise of the Samurai - Japanese MAA expansion",
-      "load_order": 42,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3597329187",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3597329187"
-    },
-    {
-      "name": "More Regional Men-at-Arms",
-      "load_order": 43,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3567954900",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3567954900"
-    },
-    {
-      "name": "Imperial Guards",
-      "load_order": 44,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3595280210",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3595280210"
-    },
-    {
-      "name": "Pillage",
-      "load_order": 45,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3027931283",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3027931283"
-    },
-    {
-      "name": "Venetic Culture",
-      "load_order": 46,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2830456287",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2830456287"
-    },
-    {
-      "name": "Gallic Culture",
-      "load_order": 47,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3594781545",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3594781545"
-    },
-    {
-      "name": "More Traditions v2",
-      "load_order": 48,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2893793966",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2893793966"
-    },
-    {
-      "name": "More Lifestyles",
-      "load_order": 49,
-      "enabled": false,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3013259695",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3013259695"
-    },
-    {
-      "name": "More Lifestyles - Education Submod",
-      "load_order": 50,
-      "enabled": false,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3158566134",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3158566134"
-    },
-    {
-      "name": "Houses Traditions",
-      "load_order": 51,
-      "enabled": false,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2590650832",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2590650832"
-    },
-    {
-      "name": "New Personality Events for Children",
-      "load_order": 52,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2779836155",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2779836155"
-    },
-    {
-      "name": "More Navigable Rivers 2",
-      "load_order": 53,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2219623397",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2219623397"
-    },
-    {
-      "name": "Geographical Features of the World",
-      "load_order": 54,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3574710449",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3574710449"
-    },
-    {
-      "name": "Love Marriage Family",
-      "load_order": 55,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3037969445",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3037969445"
-    },
-    {
-      "name": "Social Relations Expanded (SRE) for 1.18.*",
-      "load_order": 56,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3618389379",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3618389379"
-    },
-    {
-      "name": "Better Inheritable Relations",
-      "load_order": 57,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3616501447",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3616501447"
-    },
-    {
-      "name": "Better Rescue and Vengeance",
-      "load_order": 58,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3616501008",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3616501008"
-    },
-    {
-      "name": "Succession Expanded",
-      "load_order": 59,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2650385452",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2650385452"
-    },
-    {
-      "name": "Travel the Distance",
-      "load_order": 60,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2743500919",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2743500919"
-    },
-    {
-      "name": "Love Marriage Family / Travel the Distance / Immersive Chaste Trait Compatch",
-      "load_order": 61,
-      "enabled": true,
-      "is_compatch": true,
-      "notes": "",
-      "steam_id": "3049846007",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3049846007"
-    },
-    {
-      "name": "Regency Rework",
-      "load_order": 62,
-      "enabled": false,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3582007365",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3582007365"
-    },
-    {
-      "name": "More Natural Disasters",
-      "load_order": 63,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3602600136",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3602600136"
-    },
-    {
-      "name": "Historicity",
-      "load_order": 64,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3107648868",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3107648868"
-    },
-    {
-      "name": "Historic Invasions",
-      "load_order": 65,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2837398670",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2837398670"
-    },
-    {
-      "name": "Historical Invasion Fix",
-      "load_order": 66,
-      "enabled": true,
-      "is_compatch": true,
-      "notes": "",
-      "steam_id": "3599748822",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3599748822"
-    },
-    {
-      "name": "Medieval Arts",
-      "load_order": 67,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2452585382",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2452585382"
-    },
-    {
-      "name": "VIET Events - A Flavor and Immersion Event Mod",
-      "load_order": 68,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2227658180",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2227658180"
-    },
-    {
-      "name": "Regional Immersion and Cultural Enrichment (RICE)",
-      "load_order": 69,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2273832430",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2273832430"
-    },
-    {
-      "name": "Martial Arts: Cultivation",
-      "load_order": 70,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3614644718",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3614644718"
-    },
-    {
-      "name": "Muslim Enhancements",
-      "load_order": 71,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2241658518",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2241658518"
-    },
-    {
-      "name": "Community Flavor Pack",
-      "load_order": 72,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2220098919",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2220098919"
-    },
-    {
-      "name": "Ethnicities & Portraits Expanded",
-      "load_order": 73,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2507209632",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2507209632"
-    },
-    {
-      "name": "RICE + EPE Compatibility Patch",
-      "load_order": 74,
-      "enabled": true,
-      "is_compatch": true,
-      "notes": "",
-      "steam_id": "2553043828",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2553043828"
-    },
-    {
-      "name": "ME - EPE Compatch",
-      "load_order": 75,
-      "enabled": true,
-      "is_compatch": true,
-      "notes": "",
-      "steam_id": "3546414558",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3546414558"
-    },
-    {
-      "name": "CFP + EPE Compatibility Patch",
-      "load_order": 76,
-      "enabled": true,
-      "is_compatch": true,
-      "notes": "",
-      "steam_id": "2996881191",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2996881191"
-    },
-    {
-      "name": "Culture Expanded",
-      "load_order": 77,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2829397295",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2829397295"
-    },
-    {
-      "name": "True Romans - Roman Overhaul",
-      "load_order": 78,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3607350423",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3607350423"
-    },
-    {
-      "name": "Communion & Denominations",
-      "load_order": 79,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2867279744",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2867279744"
-    },
-    {
-      "name": "The Catholic Trinity Beta: Version 1.18.2 “Crane\"",
-      "load_order": 80,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2730456007",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2730456007"
-    },
-    {
-      "name": "Western Steppe Expanded",
-      "load_order": 81,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3490396842",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3490396842"
-    },
-    {
-      "name": "Traditional Tenets",
-      "load_order": 82,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2461889586",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2461889586"
-    },
-    {
-      "name": "CoA and characters of Japan",
-      "load_order": 83,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3609670697",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3609670697"
-    },
-    {
-      "name": "Patrum Scuta",
-      "load_order": 84,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2877995588",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2877995588"
-    },
-    {
-      "name": "Patrum Scuta Expanded Hotfix",
-      "load_order": 85,
-      "enabled": true,
-      "is_compatch": true,
-      "notes": "",
-      "steam_id": "3604030805",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3604030805"
-    },
-    {
-      "name": "Better Barbershop",
-      "load_order": 86,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2220326926",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2220326926"
-    },
-    {
-      "name": "Travelers",
-      "load_order": 87,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3082182371",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3082182371"
-    },
-    {
-      "name": "Battleground Commanders",
-      "load_order": 88,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3276373926",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3276373926"
-    },
-    {
-      "name": "Better Ruler Designer",
-      "load_order": 89,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3275318194",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3275318194"
-    },
-    {
-      "name": "Unrestricted Legacies",
-      "load_order": 90,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3355882108",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3355882108"
-    },
-    {
-      "name": "fix nomads not becoming adventurer",
-      "load_order": 91,
-      "enabled": true,
-      "is_compatch": true,
-      "notes": "",
-      "steam_id": "3488298652",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3488298652"
-    },
-    {
-      "name": "Wandering XP from Wandering",
-      "load_order": 92,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3360461641",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3360461641"
-    },
-    {
-      "name": "Zeitgeist: Situation & Struggle",
-      "load_order": 93,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3571438676",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3571438676"
-    },
-    {
-      "name": "Realistic Army/Fleet Speed",
-      "load_order": 94,
-      "enabled": false,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3372471943",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3372471943"
-    },
-    {
-      "name": "Norse Emblems Expanded",
-      "load_order": 95,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3040342277",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3040342277"
-    },
-    {
-      "name": "Cat's Coat of Arms",
-      "load_order": 96,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3339393423",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3339393423"
-    },
-    {
-      "name": "Kalypso's Fun with Emblems (Update: Chequered emblems!)",
-      "load_order": 97,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3275899548",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3275899548"
-    },
-    {
-      "name": "Norse Coat of Arms",
-      "load_order": 98,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3503817265",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3503817265"
-    },
-    {
-      "name": "The Art of Heraldry",
-      "load_order": 99,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3313320820",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3313320820"
-    },
-    {
-      "name": "Basic Nessassities - Happy Heraldry",
-      "load_order": 100,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2243137897",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2243137897"
-    },
-    {
-      "name": "Celestial & Illusion Emblems Pack",
-      "load_order": 101,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2794092125",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2794092125"
-    },
-    {
-      "name": "Better Chinese Emblems",
-      "load_order": 102,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3614544116",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3614544116"
-    },
-    {
-      "name": "Elden Ring Emblems",
-      "load_order": 103,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3109190207",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3109190207"
-    },
-    {
-      "name": "Gradient Patterns",
-      "load_order": 104,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3354439570",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3354439570"
-    },
-    {
-      "name": "Japanese Kamon",
-      "load_order": 105,
-      "enabled": false,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2802875938",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2802875938"
-    },
-    {
-      "name": "Fully Colored in Tributaries",
-      "load_order": 106,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3478979057",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3478979057"
-    },
-    {
-      "name": "Yusseter's Better Map Graphics",
-      "load_order": 107,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3378722062",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3378722062"
-    },
-    {
-      "name": "Better Vanilla-Style Character View (SUI)",
-      "load_order": 108,
-      "enabled": false,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3455611426",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3455611426"
-    },
-    {
-      "name": "Immersive Domain Management",
-      "load_order": 109,
-      "enabled": false,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3604729196",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3604729196"
-    },
-    {
-      "name": "Immersive Realm Laws",
-      "load_order": 110,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3351630685",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3351630685"
-    },
-    {
-      "name": "Cities of Wonder 3",
-      "load_order": 111,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "2901477267",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2901477267"
-    },
-    {
-      "name": "Chat GPT Flavor Pack (Unbalance)",
-      "load_order": 112,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3598963862",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3598963862"
-    },
-    {
-      "name": "Kings of Magic",
-      "load_order": 113,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3606114370",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3606114370"
-    },
-    {
-      "name": "[Kei] Culture and Faith Granularity",
-      "load_order": 114,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3206891770",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3206891770"
-    },
-    {
-      "name": "[Kei] Enhanced County View",
-      "load_order": 115,
-      "enabled": true,
-      "is_compatch": false,
-      "notes": "",
-      "steam_id": "3336466278",
-      "path": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3336466278"
-    }
-  ],
-  "local_mods": [],
-  "agent_briefing": {
-    "context": "",
-    "error_analysis_notes": [
-      "Fill in notes about which errors to prioritize or ignore"
-    ],
-    "conflict_resolution_notes": [
-      "Fill in notes about expected conflicts (e.g., compatch mods)"
-    ],
-    "mod_relationships": [],
-    "priorities": [
-      "1. Crashes and game-breaking errors",
-      "2. Gameplay-affecting bugs during steady play",
-      "3. Minor visual/localization issues"
-    ],
-    "custom_instructions": ""
-  },
-  "sub_agent_config": {
-    "error_analysis": {
-      "enabled": true,
-      "auto_spawn_threshold": 50,
-      "output_format": "markdown",
-      "include_recommendations": true
-    },
-    "conflict_review": {
-      "enabled": false,
-      "min_risk_score": 70,
-      "require_approval": true
-    }
-  }
+    "$schema":  "./playset.schema.json",
+    "playset_name":  "MSC Religion Expanded Dec20",
+    "description":  "Imported from CK3 Launcher on 2025-12-28",
+    "created":  "2025-12-28",
+    "last_modified":  "2025-12-28",
+    "vanilla":  {
+                    "version":  "unknown",
+                    "path":  "C:/Program Files (x86)/Steam/steamapps/common/Crusader Kings III/game",
+                    "enabled":  true
+                },
+    "mods":  [
+                 {
+                     "name":  "Unofficial Patch",
+                     "load_order":  0,
+                     "enabled":  true,
+                     "is_compatch":  true,
+                     "notes":  "",
+                     "steam_id":  "2871648329",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2871648329"
+                 },
+                 {
+                     "name":  "Brighter Text Colors",
+                     "load_order":  1,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2234245906",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2234245906"
+                 },
+                 {
+                     "name":  "Adrian von Ziegler Immersive Music Pack",
+                     "load_order":  2,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2221177876",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2221177876"
+                 },
+                 {
+                     "name":  "Advanced Cheat Menu",
+                     "load_order":  3,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2218867072",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2218867072"
+                 },
+                 {
+                     "name":  "Advanced Character Search",
+                     "load_order":  4,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3084203091",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3084203091"
+                 },
+                 {
+                     "name":  "Nameplates",
+                     "load_order":  5,
+                     "enabled":  false,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2220762808",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2220762808"
+                 },
+                 {
+                     "name":  "Rename Tribal Era to Late Antiquity",
+                     "load_order":  6,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2629092890",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2629092890"
+                 },
+                 {
+                     "name":  "Rename Egalitarian to Cosmopolitan",
+                     "load_order":  7,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2747792660",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2747792660"
+                 },
+                 {
+                     "name":  "Incompetent court positions notifications",
+                     "load_order":  8,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3366606468",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3366606468"
+                 },
+                 {
+                     "name":  "ICPN submod : court position fix",
+                     "load_order":  9,
+                     "enabled":  true,
+                     "is_compatch":  true,
+                     "notes":  "",
+                     "steam_id":  "3569626606",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3569626606"
+                 },
+                 {
+                     "name":  "Ambush Your Enemy",
+                     "load_order":  10,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3437183665",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3437183665"
+                 },
+                 {
+                     "name":  "Search \u0026 Trade Artifacts",
+                     "load_order":  11,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2962238514",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2962238514"
+                 },
+                 {
+                     "name":  "Artifact Manager",
+                     "load_order":  12,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2886417277",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2886417277"
+                 },
+                 {
+                     "name":  "Generate Missing Parents",
+                     "load_order":  13,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2919324922",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2919324922"
+                 },
+                 {
+                     "name":  "Quando Sumus - Decisions of CK3",
+                     "load_order":  14,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2818339011",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2818339011"
+                 },
+                 {
+                     "name":  "Hotfix 1.18.1 - AI uses legends again",
+                     "load_order":  15,
+                     "enabled":  true,
+                     "is_compatch":  true,
+                     "notes":  "",
+                     "steam_id":  "3598907429",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3598907429"
+                 },
+                 {
+                     "name":  "Invite Debutantes",
+                     "load_order":  16,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2677152091",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2677152091"
+                 },
+                 {
+                     "name":  "Invite Nobles",
+                     "load_order":  17,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2686352443",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2686352443"
+                 },
+                 {
+                     "name":  "Mass Demand Conversion",
+                     "load_order":  18,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2753176859",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2753176859"
+                 },
+                 {
+                     "name":  "More Game Rules",
+                     "load_order":  19,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2216850785",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2216850785"
+                 },
+                 {
+                     "name":  "House Career Manager",
+                     "load_order":  20,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3597022985",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3597022985"
+                 },
+                 {
+                     "name":  "RBT: Send Gift Options",
+                     "load_order":  21,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3049021578",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3049021578"
+                 },
+                 {
+                     "name":  "More Legends",
+                     "load_order":  22,
+                     "enabled":  false,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3224336801",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3224336801"
+                 },
+                 {
+                     "name":  "[FSF] Browse the Bookstore",
+                     "load_order":  23,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2751980550",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2751980550"
+                 },
+                 {
+                     "name":  "Immersive Chaste Trait",
+                     "load_order":  24,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2662352702",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2662352702"
+                 },
+                 {
+                     "name":  "BCK - Lifestyles",
+                     "load_order":  25,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2983150713",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2983150713"
+                 },
+                 {
+                     "name":  "BCK - Accolade Max Titles",
+                     "load_order":  26,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3342573895",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3342573895"
+                 },
+                 {
+                     "name":  "BCK - Polyglot Lifestyle",
+                     "load_order":  27,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3189120616",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3189120616"
+                 },
+                 {
+                     "name":  "Royal Court Event Pack",
+                     "load_order":  28,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3360676953",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3360676953"
+                 },
+                 {
+                     "name":  "Pervasive Crown Authority",
+                     "load_order":  29,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2692957667",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2692957667"
+                 },
+                 {
+                     "name":  "Adventurer\u0027s Beneficiary",
+                     "load_order":  30,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3349316031",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3349316031"
+                 },
+                 {
+                     "name":  "Governments for the Independent",
+                     "load_order":  31,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3601105533",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3601105533"
+                 },
+                 {
+                     "name":  "Artifact Claims Nerf - No House Claims Against Dynasty",
+                     "load_order":  32,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2756340535",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2756340535"
+                 },
+                 {
+                     "name":  "Pacification Speeds Conversion",
+                     "load_order":  33,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2229533163",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2229533163"
+                 },
+                 {
+                     "name":  "Hostile Struggles Re-Enable Holy Wars",
+                     "load_order":  34,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2815474142",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2815474142"
+                 },
+                 {
+                     "name":  "Less Sinful Priest Scandals - No More Fervour Collapse",
+                     "load_order":  35,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2229532691",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2229532691"
+                 },
+                 {
+                     "name":  "Fervour Midpoint Rebalance - Fervor Tends Towards 50%",
+                     "load_order":  36,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2249720608",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2249720608"
+                 },
+                 {
+                     "name":  "Fervour Inversion - Winning Holy Wars Increases Fervor",
+                     "load_order":  37,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2229532952",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2229532952"
+                 },
+                 {
+                     "name":  "Less Old Wives - AI Men Marry Younger Fertile Women",
+                     "load_order":  38,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2265131712",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2265131712"
+                 },
+                 {
+                     "name":  "Morvens Mods 1.18 Compatch",
+                     "load_order":  39,
+                     "enabled":  true,
+                     "is_compatch":  true,
+                     "notes":  "",
+                     "steam_id":  "3001489429",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3001489429"
+                 },
+                 {
+                     "name":  "More Interactive Vassals",
+                     "load_order":  40,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2712590542",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2712590542"
+                 },
+                 {
+                     "name":  "More Regional Innovations",
+                     "load_order":  41,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2252354244",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2252354244"
+                 },
+                 {
+                     "name":  "Rise of the Samurai - Japanese MAA expansion",
+                     "load_order":  42,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3597329187",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3597329187"
+                 },
+                 {
+                     "name":  "More Regional Men-at-Arms",
+                     "load_order":  43,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3567954900",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3567954900"
+                 },
+                 {
+                     "name":  "Imperial Guards",
+                     "load_order":  44,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3595280210",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3595280210"
+                 },
+                 {
+                     "name":  "Pillage",
+                     "load_order":  45,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3027931283",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3027931283"
+                 },
+                 {
+                     "name":  "Venetic Culture",
+                     "load_order":  46,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2830456287",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2830456287"
+                 },
+                 {
+                     "name":  "Gallic Culture",
+                     "load_order":  47,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3594781545",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3594781545"
+                 },
+                 {
+                     "name":  "More Traditions v2",
+                     "load_order":  48,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2893793966",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2893793966"
+                 },
+                 {
+                     "name":  "More Lifestyles",
+                     "load_order":  49,
+                     "enabled":  false,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3013259695",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3013259695"
+                 },
+                 {
+                     "name":  "More Lifestyles - Education Submod",
+                     "load_order":  50,
+                     "enabled":  false,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3158566134",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3158566134"
+                 },
+                 {
+                     "name":  "Houses Traditions",
+                     "load_order":  51,
+                     "enabled":  false,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2590650832",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2590650832"
+                 },
+                 {
+                     "name":  "New Personality Events for Children",
+                     "load_order":  52,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2779836155",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2779836155"
+                 },
+                 {
+                     "name":  "More Navigable Rivers 2",
+                     "load_order":  53,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2219623397",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2219623397"
+                 },
+                 {
+                     "name":  "Geographical Features of the World",
+                     "load_order":  54,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3574710449",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3574710449"
+                 },
+                 {
+                     "name":  "Love Marriage Family",
+                     "load_order":  55,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3037969445",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3037969445"
+                 },
+                 {
+                     "name":  "Social Relations Expanded (SRE) for 1.18.*",
+                     "load_order":  56,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3618389379",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3618389379"
+                 },
+                 {
+                     "name":  "Better Inheritable Relations",
+                     "load_order":  57,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3616501447",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3616501447"
+                 },
+                 {
+                     "name":  "Better Rescue and Vengeance",
+                     "load_order":  58,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3616501008",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3616501008"
+                 },
+                 {
+                     "name":  "Succession Expanded",
+                     "load_order":  59,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2650385452",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2650385452"
+                 },
+                 {
+                     "name":  "Travel the Distance",
+                     "load_order":  60,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2743500919",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2743500919"
+                 },
+                 {
+                     "name":  "Love Marriage Family / Travel the Distance / Immersive Chaste Trait Compatch",
+                     "load_order":  61,
+                     "enabled":  true,
+                     "is_compatch":  true,
+                     "notes":  "",
+                     "steam_id":  "3049846007",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3049846007"
+                 },
+                 {
+                     "name":  "Regency Rework",
+                     "load_order":  62,
+                     "enabled":  false,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3582007365",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3582007365"
+                 },
+                 {
+                     "name":  "More Natural Disasters",
+                     "load_order":  63,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3602600136",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3602600136"
+                 },
+                 {
+                     "name":  "Historicity",
+                     "load_order":  64,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3107648868",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3107648868"
+                 },
+                 {
+                     "name":  "Historic Invasions",
+                     "load_order":  65,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2837398670",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2837398670"
+                 },
+                 {
+                     "name":  "Historical Invasion Fix",
+                     "load_order":  66,
+                     "enabled":  true,
+                     "is_compatch":  true,
+                     "notes":  "",
+                     "steam_id":  "3599748822",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3599748822"
+                 },
+                 {
+                     "name":  "Medieval Arts",
+                     "load_order":  67,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2452585382",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2452585382"
+                 },
+                 {
+                     "name":  "VIET Events - A Flavor and Immersion Event Mod",
+                     "load_order":  68,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2227658180",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2227658180"
+                 },
+                 {
+                     "name":  "Regional Immersion and Cultural Enrichment (RICE)",
+                     "load_order":  69,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2273832430",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2273832430"
+                 },
+                 {
+                     "name":  "Martial Arts: Cultivation",
+                     "load_order":  70,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3614644718",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3614644718"
+                 },
+                 {
+                     "name":  "Muslim Enhancements",
+                     "load_order":  71,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2241658518",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2241658518"
+                 },
+                 {
+                     "name":  "Community Flavor Pack",
+                     "load_order":  72,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2220098919",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2220098919"
+                 },
+                 {
+                     "name":  "Ethnicities \u0026 Portraits Expanded",
+                     "load_order":  73,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2507209632",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2507209632"
+                 },
+                 {
+                     "name":  "RICE + EPE Compatibility Patch",
+                     "load_order":  74,
+                     "enabled":  true,
+                     "is_compatch":  true,
+                     "notes":  "",
+                     "steam_id":  "2553043828",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2553043828"
+                 },
+                 {
+                     "name":  "ME - EPE Compatch",
+                     "load_order":  75,
+                     "enabled":  true,
+                     "is_compatch":  true,
+                     "notes":  "",
+                     "steam_id":  "3546414558",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3546414558"
+                 },
+                 {
+                     "name":  "CFP + EPE Compatibility Patch",
+                     "load_order":  76,
+                     "enabled":  true,
+                     "is_compatch":  true,
+                     "notes":  "",
+                     "steam_id":  "2996881191",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2996881191"
+                 },
+                 {
+                     "name":  "Culture Expanded",
+                     "load_order":  77,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2829397295",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2829397295"
+                 },
+                 {
+                     "name":  "True Romans - Roman Overhaul",
+                     "load_order":  78,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3607350423",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3607350423"
+                 },
+                 {
+                     "name":  "Communion \u0026 Denominations",
+                     "load_order":  79,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2867279744",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2867279744"
+                 },
+                 {
+                     "name":  "The Catholic Trinity Beta: Version 1.18.2 “Crane\"",
+                     "load_order":  80,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2730456007",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2730456007"
+                 },
+                 {
+                     "name":  "Western Steppe Expanded",
+                     "load_order":  81,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3490396842",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3490396842"
+                 },
+                 {
+                     "name":  "Traditional Tenets",
+                     "load_order":  82,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2461889586",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2461889586"
+                 },
+                 {
+                     "name":  "CoA and characters of Japan",
+                     "load_order":  83,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3609670697",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3609670697"
+                 },
+                 {
+                     "name":  "Patrum Scuta",
+                     "load_order":  84,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2877995588",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2877995588"
+                 },
+                 {
+                     "name":  "Patrum Scuta Expanded Hotfix",
+                     "load_order":  85,
+                     "enabled":  true,
+                     "is_compatch":  true,
+                     "notes":  "",
+                     "steam_id":  "3604030805",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3604030805"
+                 },
+                 {
+                     "name":  "Better Barbershop",
+                     "load_order":  86,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2220326926",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2220326926"
+                 },
+                 {
+                     "name":  "Travelers",
+                     "load_order":  87,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3082182371",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3082182371"
+                 },
+                 {
+                     "name":  "Battleground Commanders",
+                     "load_order":  88,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3276373926",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3276373926"
+                 },
+                 {
+                     "name":  "Better Ruler Designer",
+                     "load_order":  89,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3275318194",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3275318194"
+                 },
+                 {
+                     "name":  "Unrestricted Legacies",
+                     "load_order":  90,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3355882108",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3355882108"
+                 },
+                 {
+                     "name":  "fix nomads not becoming adventurer",
+                     "load_order":  91,
+                     "enabled":  true,
+                     "is_compatch":  true,
+                     "notes":  "",
+                     "steam_id":  "3488298652",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3488298652"
+                 },
+                 {
+                     "name":  "Wandering XP from Wandering",
+                     "load_order":  92,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3360461641",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3360461641"
+                 },
+                 {
+                     "name":  "Zeitgeist: Situation \u0026 Struggle",
+                     "load_order":  93,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3571438676",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3571438676"
+                 },
+                 {
+                     "name":  "Realistic Army/Fleet Speed",
+                     "load_order":  94,
+                     "enabled":  false,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3372471943",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3372471943"
+                 },
+                 {
+                     "name":  "Norse Emblems Expanded",
+                     "load_order":  95,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3040342277",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3040342277"
+                 },
+                 {
+                     "name":  "Cat\u0027s Coat of Arms",
+                     "load_order":  96,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3339393423",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3339393423"
+                 },
+                 {
+                     "name":  "Kalypso\u0027s Fun with Emblems (Update: Chequered emblems!)",
+                     "load_order":  97,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3275899548",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3275899548"
+                 },
+                 {
+                     "name":  "Norse Coat of Arms",
+                     "load_order":  98,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3503817265",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3503817265"
+                 },
+                 {
+                     "name":  "The Art of Heraldry",
+                     "load_order":  99,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3313320820",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3313320820"
+                 },
+                 {
+                     "name":  "Basic Nessassities - Happy Heraldry",
+                     "load_order":  100,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2243137897",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2243137897"
+                 },
+                 {
+                     "name":  "Celestial \u0026 Illusion Emblems Pack",
+                     "load_order":  101,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2794092125",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2794092125"
+                 },
+                 {
+                     "name":  "Better Chinese Emblems",
+                     "load_order":  102,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3614544116",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3614544116"
+                 },
+                 {
+                     "name":  "Elden Ring Emblems",
+                     "load_order":  103,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3109190207",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3109190207"
+                 },
+                 {
+                     "name":  "Gradient Patterns",
+                     "load_order":  104,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3354439570",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3354439570"
+                 },
+                 {
+                     "name":  "Japanese Kamon",
+                     "load_order":  105,
+                     "enabled":  false,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2802875938",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2802875938"
+                 },
+                 {
+                     "name":  "Fully Colored in Tributaries",
+                     "load_order":  106,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3478979057",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3478979057"
+                 },
+                 {
+                     "name":  "Yusseter\u0027s Better Map Graphics",
+                     "load_order":  107,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3378722062",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3378722062"
+                 },
+                 {
+                     "name":  "Better Vanilla-Style Character View (SUI)",
+                     "load_order":  108,
+                     "enabled":  false,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3455611426",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3455611426"
+                 },
+                 {
+                     "name":  "Immersive Domain Management",
+                     "load_order":  109,
+                     "enabled":  false,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3604729196",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3604729196"
+                 },
+                 {
+                     "name":  "Immersive Realm Laws",
+                     "load_order":  110,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3351630685",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3351630685"
+                 },
+                 {
+                     "name":  "Cities of Wonder 3",
+                     "load_order":  111,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "2901477267",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\2901477267"
+                 },
+                 {
+                     "name":  "Chat GPT Flavor Pack (Unbalance)",
+                     "load_order":  112,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3598963862",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3598963862"
+                 },
+                 {
+                     "name":  "Kings of Magic",
+                     "load_order":  113,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3606114370",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3606114370"
+                 },
+                 {
+                     "name":  "[Kei] Culture and Faith Granularity",
+                     "load_order":  114,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3206891770",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3206891770"
+                 },
+                 {
+                     "name":  "[Kei] Enhanced County View",
+                     "load_order":  115,
+                     "enabled":  true,
+                     "is_compatch":  false,
+                     "notes":  "",
+                     "steam_id":  "3336466278",
+                     "path":  "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3336466278"
+                 }
+             ],
+    "local_mods":  [
+                       {
+                           "path":  "C:\\Users\\nateb\\Documents\\Paradox Interactive\\Crusader Kings III\\mod\\LowbornRiseExpanded",
+                           "name":  "Lowborn Rise Expanded",
+                           "is_compatch":  false,
+                           "notes":  "Main LRE mod - lowborn character expansion"
+                       },
+                       {
+                           "path":  "C:\\Users\\nateb\\Documents\\Paradox Interactive\\Crusader Kings III\\mod\\More Raiding and Prisoners (1.18 Update)",
+                           "name":  "More Raiding and Prisoners (1.18+)",
+                           "is_compatch":  false,
+                           "notes":  "Enhanced raiding and prisoner mechanics"
+                       },
+                       {
+                           "path":  "C:\\Users\\nateb\\Documents\\Paradox Interactive\\Crusader Kings III\\mod\\MiniSuperCompatch",
+                           "name":  "Mini Super Compatch",
+                           "is_compatch":  true,
+                           "notes":  "Multi-mod compatibility patches"
+                       },
+                       {
+                           "path":  "C:\\Users\\nateb\\Documents\\Paradox Interactive\\Crusader Kings III\\mod\\MSC-Religion-Expanded",
+                           "name":  "MSC Religion Expanded",
+                           "is_compatch":  true,
+                           "notes":  "Religion expansion compatch"
+                       },
+                       {
+                           "path":  "C:\\Users\\nateb\\Documents\\Paradox Interactive\\Crusader Kings III\\mod\\PVP2",
+                           "name":  "PVP2",
+                           "is_compatch":  false,
+                           "notes":  "PVP2 mod"
+                       }
+                   ],
+    "agent_briefing":  {
+                           "context":  "",
+                           "error_analysis_notes":  [
+                                                        "Fill in notes about which errors to prioritize or ignore"
+                                                    ],
+                           "conflict_resolution_notes":  [
+                                                             "Fill in notes about expected conflicts (e.g., compatch mods)"
+                                                         ],
+                           "mod_relationships":  [
+
+                                                 ],
+                           "priorities":  [
+                                              "1. Crashes and game-breaking errors",
+                                              "2. Gameplay-affecting bugs during steady play",
+                                              "3. Minor visual/localization issues"
+                                          ],
+                           "custom_instructions":  ""
+                       },
+    "sub_agent_config":  {
+                             "error_analysis":  {
+                                                    "enabled":  true,
+                                                    "auto_spawn_threshold":  50,
+                                                    "output_format":  "markdown",
+                                                    "include_recommendations":  true
+                                                },
+                             "conflict_review":  {
+                                                     "enabled":  false,
+                                                     "min_risk_score":  70,
+                                                     "require_approval":  true
+                                                 }
+                         }
 }

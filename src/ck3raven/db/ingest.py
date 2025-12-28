@@ -634,7 +634,6 @@ def incremental_update(
     conn.execute("""
         UPDATE content_versions 
         SET content_root_hash = ?, file_count = ?, 
-            is_stale = 1,
             symbols_extracted_at = NULL
         WHERE content_version_id = ?
     """, (new_root_hash, len(current_paths), content_version_id))

@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS content_versions (
     source_mtime TEXT,                       -- Latest mtime of source directory
     symbols_extracted_at TEXT,               -- When symbols were extracted
     contributions_extracted_at TEXT,         -- When contributions were extracted
-    is_stale INTEGER NOT NULL DEFAULT 1,     -- 1 = needs re-check, 0 = current
+    is_stale INTEGER NOT NULL DEFAULT 1,     -- DEPRECATED: never read, use symbols_extracted_at=NULL instead
     FOREIGN KEY (vanilla_version_id) REFERENCES vanilla_versions(vanilla_version_id),
     FOREIGN KEY (mod_package_id) REFERENCES mod_packages(mod_package_id)
 );
