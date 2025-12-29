@@ -181,8 +181,12 @@ class LensWorldSandbox:
 # MONKEY-PATCH IMPLEMENTATIONS
 # =============================================================================
 
+import io as _io_module  # For patching io.open
+
 _active_sandbox: Optional[LensWorldSandbox] = None
 _original_open: Optional[Callable] = None
+_original_io_open: Optional[Callable] = None
+_original_path_open: Optional[Callable] = None
 _original_path_exists: Optional[Callable] = None
 _original_path_is_file: Optional[Callable] = None
 _original_path_is_dir: Optional[Callable] = None
@@ -191,17 +195,25 @@ _original_os_listdir: Optional[Callable] = None
 _original_os_makedirs: Optional[Callable] = None
 
 
-def _sandboxed_open(file, mode='r', *args, **kwargs):
-    """Sandboxed version of open() that checks LensWorld permissions."""
-    global _active_sandbox, _original_open
+def _check_path_access(file, mode='r'):
+    """
+    Check if file access is allowed by sandbox.
+    Returns the resolved Path if allowed, raises FileNotFoundError if not.
+    """
+    global _active_sandbox
     
     if _active_sandbox is None:
-        return _original_open(file, mode, *args, **kwargs)
+        return True
     
+    # Handle file descriptors (ints) - allow them through
+    if isinstance(file, int):
+        return True
+    
+    # Convert to Path for checking
     path = Path(file) if not isinstance(file, Path) else file
     
     # Check if this is a write operation
-    is_write = any(c in mode for c in 'waxb+')
+    is_write = any(c in str(mode) for c in 'waxb+')
     
     if is_write:
         if not _active_sandbox.check_write(path):
@@ -210,7 +222,40 @@ def _sandboxed_open(file, mode='r', *args, **kwargs):
         if not _active_sandbox.check_read(path):
             raise FileNotFoundError(f"[LensWorld] Path not in scope: {path}")
     
+    return True
+
+
+def _sandboxed_open(file, mode='r', *args, **kwargs):
+    """Sandboxed version of builtins.open() that checks LensWorld permissions."""
+    global _active_sandbox, _original_open
+    
+    if _active_sandbox is None:
+        return _original_open(file, mode, *args, **kwargs)
+    
+    _check_path_access(file, mode)
     return _original_open(file, mode, *args, **kwargs)
+
+
+def _sandboxed_io_open(file, mode='r', *args, **kwargs):
+    """Sandboxed version of io.open() that checks LensWorld permissions."""
+    global _active_sandbox, _original_io_open
+    
+    if _active_sandbox is None:
+        return _original_io_open(file, mode, *args, **kwargs)
+    
+    _check_path_access(file, mode)
+    return _original_io_open(file, mode, *args, **kwargs)
+
+
+def _sandboxed_path_open(self, mode='r', buffering=-1, encoding=None, errors=None, newline=None):
+    """Sandboxed version of Path.open() that checks LensWorld permissions."""
+    global _active_sandbox, _original_path_open
+    
+    if _active_sandbox is None:
+        return _original_path_open(self, mode, buffering, encoding, errors, newline)
+    
+    _check_path_access(self, mode)
+    return _original_path_open(self, mode, buffering, encoding, errors, newline)
 
 
 def _sandboxed_path_exists(self):
@@ -305,7 +350,8 @@ def activate_sandbox(sandbox: LensWorldSandbox) -> None:
     WARNING: This modifies global state. Use with try/finally and deactivate_sandbox().
     """
     global _active_sandbox
-    global _original_open, _original_path_exists, _original_path_is_file
+    global _original_open, _original_io_open, _original_path_open
+    global _original_path_exists, _original_path_is_file
     global _original_path_is_dir, _original_os_path_exists, _original_os_listdir
     global _original_os_makedirs
     
@@ -316,6 +362,8 @@ def activate_sandbox(sandbox: LensWorldSandbox) -> None:
     
     # Save originals
     _original_open = builtins.open
+    _original_io_open = _io_module.open
+    _original_path_open = Path.open
     _original_path_exists = Path.exists
     _original_path_is_file = Path.is_file
     _original_path_is_dir = Path.is_dir
@@ -325,6 +373,8 @@ def activate_sandbox(sandbox: LensWorldSandbox) -> None:
     
     # Apply patches
     builtins.open = _sandboxed_open
+    _io_module.open = _sandboxed_io_open
+    Path.open = _sandboxed_path_open
     Path.exists = _sandboxed_path_exists
     Path.is_file = _sandboxed_path_is_file
     Path.is_dir = _sandboxed_path_is_dir
@@ -341,7 +391,8 @@ def deactivate_sandbox() -> Optional[dict]:
         Audit summary from the sandbox, or None if no sandbox was active.
     """
     global _active_sandbox
-    global _original_open, _original_path_exists, _original_path_is_file
+    global _original_open, _original_io_open, _original_path_open
+    global _original_path_exists, _original_path_is_file
     global _original_path_is_dir, _original_os_path_exists, _original_os_listdir
     global _original_os_makedirs
     
@@ -352,6 +403,8 @@ def deactivate_sandbox() -> Optional[dict]:
     
     # Restore originals
     builtins.open = _original_open
+    _io_module.open = _original_io_open
+    Path.open = _original_path_open
     Path.exists = _original_path_exists
     Path.is_file = _original_path_is_file
     Path.is_dir = _original_path_is_dir
@@ -361,6 +414,8 @@ def deactivate_sandbox() -> Optional[dict]:
     
     _active_sandbox = None
     _original_open = None
+    _original_io_open = None
+    _original_path_open = None
     _original_path_exists = None
     _original_path_is_file = None
     _original_path_is_dir = None
