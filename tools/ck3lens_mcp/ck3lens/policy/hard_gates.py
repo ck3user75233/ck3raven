@@ -144,15 +144,18 @@ def gate_write_requires_write_intent(
 # SCOPE DOMAIN GATES
 # =============================================================================
 
-def gate_write_active_local_mods_only(
+def gate_write_under_local_mods_folder(
     target_path: str | Path,
-    local_mod_roots: set[str],
+    local_mods_folder: Path | None,
     ck3raven_root: Path | None = None,
 ) -> GateResult:
     """
-    HARD GATE: Writes only allowed to active local mods or WIP workspace.
+    HARD GATE: Writes only allowed under local_mods_folder or WIP workspace.
     
-    Write outside active local mods → AUTO_DENY
+    CANONICAL MODEL: local_mods_folder is the single boundary for ck3lens writes.
+    Mods in mods[] that are under this folder are editable.
+    
+    Write outside local_mods_folder → AUTO_DENY
     Write to ck3raven source → AUTO_DENY (even with contract)
     """
     if isinstance(target_path, str):
@@ -164,7 +167,7 @@ def gate_write_active_local_mods_only(
     # WIP workspace is always allowed
     if is_wip_path(target_path):
         return allow(
-            "WRITE_ACTIVE_LOCAL_MODS_ONLY",
+            "WRITE_UNDER_LOCAL_MODS_FOLDER",
             "WIP workspace write allowed",
             domain=ScopeDomain.WIP_WORKSPACE.value,
         )
@@ -180,23 +183,37 @@ def gate_write_active_local_mods_only(
                 ck3raven_root=str(ck3raven_root),
             )
     
-    # Check if it's within any local mod root
-    for mod_root in local_mod_roots:
-        mod_root_lower = mod_root.replace("\\", "/").lower()
-        if target_str.startswith(mod_root_lower):
+    # Check if path is under local_mods_folder
+    if local_mods_folder:
+        local_folder_str = str(local_mods_folder.resolve()).replace("\\", "/").lower()
+        if target_str.startswith(local_folder_str):
             return allow(
-                "WRITE_ACTIVE_LOCAL_MODS_ONLY",
-                "Write to active local mod allowed",
+                "WRITE_UNDER_LOCAL_MODS_FOLDER",
+                "Write under local_mods_folder allowed",
                 domain=ScopeDomain.ACTIVE_LOCAL_MODS.value,
-                mod_root=mod_root,
             )
     
     return deny(
-        "WRITE_ACTIVE_LOCAL_MODS_ONLY",
-        "Write outside active local mods not allowed",
+        "WRITE_UNDER_LOCAL_MODS_FOLDER",
+        "Write outside local_mods_folder not allowed",
         target=str(target_path),
-        allowed_roots=list(local_mod_roots),
+        local_mods_folder=str(local_mods_folder) if local_mods_folder else None,
     )
+
+
+# DEPRECATED: Keep old name as alias for backwards compatibility during transition
+def gate_write_active_local_mods_only(
+    target_path: str | Path,
+    local_mod_roots: set[str],
+    ck3raven_root: Path | None = None,
+) -> GateResult:
+    """DEPRECATED: Use gate_write_under_local_mods_folder instead."""
+    # Convert old set-based API to new single-folder API
+    # Pick the common parent if multiple roots, or first one
+    if local_mod_roots:
+        first_root = Path(next(iter(local_mod_roots)))
+        return gate_write_under_local_mods_folder(target_path, first_root.parent, ck3raven_root)
+    return gate_write_under_local_mods_folder(target_path, None, ck3raven_root)
 
 
 def gate_no_workshop_vanilla_writes(

@@ -1,7 +1,7 @@
 """
 Git Operations
 
-Git commands for live mods, sandboxed to whitelisted paths.
+Git commands for mods, sandboxed to mods under local_mods_folder.
 """
 from __future__ import annotations
 import subprocess

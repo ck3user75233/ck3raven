@@ -10,7 +10,7 @@ An MCP server providing CK3 modding tools:
 
 Architecture:
 - ALL reads come from ck3raven's SQLite database (symbols, files, AST)
-- Writes only allowed to whitelisted live mods
+- Writes only allowed to mods under local_mods_folder
 """
 from __future__ import annotations
 import sys
@@ -707,7 +707,7 @@ def _init_session_internal(
     db_status = _check_db_health(_db.conn)
     
     result = {
-        "mod_root": str(mod_root),
+        "mod_root": str(_session.mod_root),
         "local_mods": [m.name for m in _session.local_mods],
         "db_path": str(_db.db_path) if _db.db_path else None,
         "playset_id": playset_id,
@@ -4009,7 +4009,7 @@ def ck3_read_live_file(
     max_bytes: int = 200000
 ) -> dict:
     """
-    Read a file from a whitelisted live mod.
+    Read a file from a mod in the active playset.
     
     Args:
         mod_name: Name of the live mod (folder name)
@@ -4042,10 +4042,10 @@ def ck3_write_file(
     """
     DEPRECATED: Use ck3_file(command="write", mod_name=..., rel_path=..., content=...) instead.
     
-    Write a file to a whitelisted live mod.
+    Write a file to a mod under local_mods_folder.
     
     Args:
-        mod_name: Name of the live mod (must be whitelisted)
+        mod_name: Name of the mod
         rel_path: Relative path within the mod
         content: File content to write
         validate_syntax: If True, validate CK3 script syntax before writing
@@ -4097,7 +4097,7 @@ def ck3_edit_file(
     """
     DEPRECATED: Use ck3_file(command="edit", mod_name=..., rel_path=..., old_content=..., new_content=...) instead.
     
-    Edit a file in a whitelisted live mod (search-replace style).
+    Edit a file in a mod under local_mods_folder (search-replace style).
     
     Args:
         mod_name: Name of the live mod
@@ -4153,7 +4153,7 @@ def ck3_delete_file(
     """
     DEPRECATED: Use ck3_file(command="delete", mod_name=..., rel_path=...) instead.
     
-    Delete a file from a whitelisted live mod.
+    Delete a file from a mod under local_mods_folder.
     
     Args:
         mod_name: Name of the live mod
@@ -4188,7 +4188,7 @@ def ck3_rename_file(
 ) -> dict:
     """
     DEPRECATED: Use ck3_file(command="rename", mod_name=..., rel_path=..., new_path=...) instead.
-    Rename or move a file within a whitelisted live mod.
+    Rename or move a file within a mod under local_mods_folder.
     
     Args:
         mod_name: Name of the live mod
@@ -4394,7 +4394,7 @@ def ck3_list_live_files(
     """
     DEPRECATED: Use ck3_file(command="list", mod_name=...) instead.
     
-    List files in a whitelisted live mod.
+    List files in a mod.
     
     Args:
         mod_name: Name of the live mod
@@ -8327,7 +8327,7 @@ def ck3_get_workspace_config() -> dict:
     Use this to understand:
     - Available modes/tool sets and what tools they enable
     - MCP server configuration
-    - Live mod whitelist
+    - local_mods_folder (for editable mods)
     - Database path
     
     Returns:

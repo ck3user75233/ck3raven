@@ -1,23 +1,24 @@
 """
 Local Mod File Operations
 
-Sandboxed file operations for user-configured local mods only.
-Mods are loaded from playset configuration, not hardcoded.
+File operations for mods in the active playset.
+
+CANONICAL MODEL (December 2025):
+- Operations use session.mods[] to find mod paths
+- Enforcement is at the write boundary (mod_files.py or enforcement.py)
+- NO permission oracles in this file
 """
 from __future__ import annotations
-import os
 from pathlib import Path
 from typing import Optional
 
-from .workspace import Session, LocalMod, validate_relpath
+from .workspace import Session, ModEntry, validate_relpath
 
 
 def list_local_mods(session: Session) -> dict:
-    """List all mods the agent can write to.
+    """List all mods in the session.
     
-    Returns mods configured in the active playset's local_mods list.
-    May return empty list if no playset is active or no local mods configured.
-    This is valid - read-only mode is fully supported.
+    Returns mods from the active playset's mods[] list.
     """
     return {
         "mods": [
@@ -25,21 +26,21 @@ def list_local_mods(session: Session) -> dict:
                 "mod_id": mod.mod_id,
                 "name": mod.name,
                 "path": str(mod.path),
-                "exists": mod.exists()
+                "exists": mod.exists(),
+                "load_order": mod.load_order,
             }
-            for mod in session.local_mods
+            for mod in session.mods
         ]
     }
 
 
 def read_local_file(session: Session, mod_id: str, relpath: str) -> dict:
     """
-    Read a file from a local mod (current disk state).
+    Read a file from a mod (current disk state).
     
     This reads the actual file on disk, not from DB.
-    Use for seeing current state after modifications.
     """
-    mod = session.get_local_mod(mod_id)
+    mod = session.get_mod(mod_id)
     if not mod:
         return {"error": f"Unknown mod_id: {mod_id}", "exists": False}
     
@@ -83,15 +84,12 @@ def write_file(
     create_dirs: bool = True
 ) -> dict:
     """
-    Write or create a file in a local mod.
+    Write or create a file in a mod.
     
-    Args:
-        mod_id: Target mod
-        relpath: Relative path within mod
-        content: File content
-        create_dirs: Create parent directories if needed
+    NOTE: Enforcement is handled by mod_files.py or enforcement.py.
+    This function assumes the caller has already passed enforcement.
     """
-    mod = session.get_local_mod(mod_id)
+    mod = session.get_mod(mod_id)
     if not mod:
         return {"success": False, "error": f"Unknown mod_id: {mod_id}"}
     
@@ -101,10 +99,6 @@ def write_file(
         return {"success": False, "error": err}
     
     file_path = mod.path / relpath
-    
-    # Double-check path is within mod
-    if not session.is_path_allowed(file_path):
-        return {"success": False, "error": "Path escapes sandbox"}
     
     try:
         if create_dirs:
@@ -131,11 +125,11 @@ def edit_file(
     new_content: str
 ) -> dict:
     """
-    Edit a portion of an existing file.
+    Edit a portion of an existing file (search/replace).
     
-    Like replace_string_in_file - finds old_content and replaces with new_content.
+    NOTE: Enforcement is handled by mod_files.py or enforcement.py.
     """
-    mod = session.get_local_mod(mod_id)
+    mod = session.get_mod(mod_id)
     if not mod:
         return {"success": False, "error": f"Unknown mod_id: {mod_id}"}
     
@@ -169,8 +163,11 @@ def edit_file(
 
 
 def delete_file(session: Session, mod_id: str, relpath: str) -> dict:
-    """Delete a file from a local mod."""
-    mod = session.get_local_mod(mod_id)
+    """Delete a file from a mod.
+    
+    NOTE: Enforcement is handled by mod_files.py or enforcement.py.
+    """
+    mod = session.get_mod(mod_id)
     if not mod:
         return {"success": False, "error": f"Unknown mod_id: {mod_id}"}
     
@@ -201,14 +198,11 @@ def rename_file(
     new_relpath: str
 ) -> dict:
     """
-    Rename/move a file within a local mod.
+    Rename/move a file within a mod.
     
-    Args:
-        mod_id: Target mod
-        old_relpath: Current relative path within mod
-        new_relpath: New relative path within mod
+    NOTE: Enforcement is handled by mod_files.py or enforcement.py.
     """
-    mod = session.get_local_mod(mod_id)
+    mod = session.get_mod(mod_id)
     if not mod:
         return {"success": False, "error": f"Unknown mod_id: {mod_id}"}
     
@@ -223,12 +217,6 @@ def rename_file(
     
     old_path = mod.path / old_relpath
     new_path = mod.path / new_relpath
-    
-    # Security checks
-    if not session.is_path_allowed(old_path):
-        return {"success": False, "error": "Old path escapes sandbox"}
-    if not session.is_path_allowed(new_path):
-        return {"success": False, "error": "New path escapes sandbox"}
     
     if not old_path.exists():
         return {"success": False, "error": f"File not found: {old_relpath}"}
@@ -260,8 +248,8 @@ def list_local_files(
     folder: str = "",
     pattern: str = "*.txt"
 ) -> dict:
-    """List files in a local mod folder."""
-    mod = session.get_local_mod(mod_id)
+    """List files in a mod folder."""
+    mod = session.get_mod(mod_id)
     if not mod:
         return {"error": f"Unknown mod_id: {mod_id}"}
     

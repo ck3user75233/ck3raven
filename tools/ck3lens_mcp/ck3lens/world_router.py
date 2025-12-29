@@ -5,31 +5,22 @@ This module provides the WorldRouter, the ONLY entry point for obtaining
 a WorldAdapter. All MCP tools must use WorldRouter to get the appropriate
 adapter for the current agent mode.
 
-Architecture Mandate (B.5):
+Architecture (NO-ORACLE REFACTOR - December 2025):
+- WorldAdapter handles visibility (FOUND/NOT_FOUND)
+- Enforcement.py handles permission (ALLOW/DENY)
+- WorldRouter builds the appropriate adapter based on mode
+
 All MCP tools must:
-1. Call the single agent-mode detection function (via WorldRouter)
-2. Request the appropriate WorldAdapter from WorldRouter
-3. Resolve references through the adapter
-4. Apply policy only after reference resolution
+1. Get WorldAdapter from WorldRouter
+2. Resolve references through the adapter
+3. If mutation needed → call enforcement.py
+4. Enforcement decides ALLOW/DENY
 
 Forbidden patterns:
 - Tool-local agent mode checks
-- Tool-local visibility logic
+- Tool-local visibility logic  
 - Policy checks on unresolved paths
-
-Usage:
-    from ck3lens.world_router import get_world
-    
-    # In any MCP tool:
-    world = get_world()
-    result = world.resolve(path_or_address)
-    
-    if not result.found:
-        return {"error": result.error_message}  # NOT_FOUND, not DENY
-    
-    # Now apply policy for mutation operations
-    if wants_to_write and not result.is_writable:
-        return {"error": "Policy violation: target is not writable"}
+- is_writable checks (enforcement.py decides)
 """
 from __future__ import annotations
 
@@ -41,7 +32,6 @@ from .world_adapter import WorldAdapter, LensWorldAdapter, DevWorldAdapter
 
 if TYPE_CHECKING:
     from .db_queries import DBQueries, PlaysetLens
-    from .playset_scope import PlaysetScope
 
 
 class WorldRouter:
@@ -78,7 +68,8 @@ class WorldRouter:
         self,
         db: Optional["DBQueries"] = None,
         lens: Optional["PlaysetLens"] = None,
-        scope: Optional["PlaysetScope"] = None,
+        local_mods_folder: Optional[Path] = None,
+        mods: Optional[list] = None,
         force_mode: Optional[str] = None,
     ) -> WorldAdapter:
         """
@@ -87,7 +78,8 @@ class WorldRouter:
         Args:
             db: Database queries instance (required for full functionality)
             lens: PlaysetLens for DB filtering (required for ck3lens)
-            scope: PlaysetScope for filesystem filtering (required for ck3lens)
+            local_mods_folder: Path to local mods folder (for ck3lens write enforcement)
+            mods: List of mod entries from session (for ck3lens visibility)
             force_mode: Override detected mode (for testing)
         
         Returns:
@@ -113,7 +105,7 @@ class WorldRouter:
         
         # Build new adapter
         if mode == "ck3lens":
-            adapter = self._build_lens_adapter(db, lens, scope)
+            adapter = self._build_lens_adapter(db, lens, local_mods_folder, mods)
         elif mode == "ck3raven-dev":
             adapter = self._build_dev_adapter(db)
         else:
@@ -127,12 +119,13 @@ class WorldRouter:
         self,
         db: Optional["DBQueries"],
         lens: Optional["PlaysetLens"],
-        scope: Optional["PlaysetScope"],
+        local_mods_folder: Optional[Path],
+        mods: Optional[list],
     ) -> LensWorldAdapter:
         """Build a LensWorldAdapter for ck3lens mode."""
-        if lens is None or scope is None:
+        if lens is None:
             raise RuntimeError(
-                "LensWorldAdapter requires PlaysetLens and PlaysetScope. "
+                "LensWorldAdapter requires PlaysetLens. "
                 "Ensure a playset is active."
             )
         
@@ -140,13 +133,12 @@ class WorldRouter:
             raise RuntimeError("DBQueries required for LensWorldAdapter")
         
         # Get path configurations
-        vanilla_root = scope.vanilla_root
+        vanilla_root = self._get_vanilla_root()
         
         # WIP workspace for ck3lens is ~/.ck3raven/wip/
         wip_root = Path.home() / ".ck3raven" / "wip"
         
         # ck3raven source root (for bug report context)
-        # Detect from current file location
         ck3raven_root = self._detect_ck3raven_root()
         
         # Utility roots (logs, saves, etc.)
@@ -154,12 +146,13 @@ class WorldRouter:
         
         return LensWorldAdapter(
             lens=lens,
-            scope=scope,
             db=db,
+            local_mods_folder=local_mods_folder,
             vanilla_root=vanilla_root,
             ck3raven_root=ck3raven_root,
             wip_root=wip_root,
             utility_roots=utility_roots,
+            mods=mods or [],
         )
     
     def _build_dev_adapter(
@@ -178,16 +171,16 @@ class WorldRouter:
         # WIP workspace for dev mode is <repo>/.wip/
         wip_root = ck3raven_root / ".wip"
         
-        # Get vanilla and mod roots for read access
+        # Get vanilla and mod paths for read access
         vanilla_root = self._get_vanilla_root()
-        mod_roots = self._get_mod_roots()
+        mod_paths = self._get_mod_paths()
         
         return DevWorldAdapter(
             db=db,
             ck3raven_root=ck3raven_root,
             wip_root=wip_root,
             vanilla_root=vanilla_root,
-            mod_roots=mod_roots,
+            mod_paths=mod_paths,
         )
     
     def _detect_ck3raven_root(self) -> Optional[Path]:
@@ -228,25 +221,25 @@ class WorldRouter:
         
         return None
     
-    def _get_mod_roots(self) -> set[Path]:
-        """Get all mod root directories for read access."""
-        mod_roots = set()
+    def _get_mod_paths(self) -> set[Path]:
+        """Get all mod paths for read access (dev mode)."""
+        mod_paths = set()
         
         # CK3 mod directory
         ck3_mods = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
         if ck3_mods.exists():
             for item in ck3_mods.iterdir():
                 if item.is_dir():
-                    mod_roots.add(item)
+                    mod_paths.add(item)
         
         # Steam workshop mods
         workshop = Path("C:/Program Files (x86)/Steam/steamapps/workshop/content/1158310")
         if workshop.exists():
             for item in workshop.iterdir():
                 if item.is_dir():
-                    mod_roots.add(item)
+                    mod_paths.add(item)
         
-        return mod_roots
+        return mod_paths
     
     def _get_utility_roots(self) -> dict[str, Path]:
         """Get utility file roots (logs, saves, etc.)."""
@@ -279,7 +272,8 @@ class WorldRouter:
 def get_world(
     db: Optional["DBQueries"] = None,
     lens: Optional["PlaysetLens"] = None,
-    scope: Optional["PlaysetScope"] = None,
+    local_mods_folder: Optional[Path] = None,
+    mods: Optional[list] = None,
     force_mode: Optional[str] = None,
 ) -> WorldAdapter:
     """
@@ -288,17 +282,20 @@ def get_world(
     This is the canonical entry point for all MCP tools.
     
     Example:
-        world = get_world(db=db, lens=lens, scope=scope)
+        world = get_world(db=db, lens=lens, mods=session.mods)
         result = world.resolve("mod:MSC/common/traits/test.txt")
         
         if not result.found:
             return {"error": result.error_message}
+        
+        # For writes, call enforcement.py - do NOT check result.is_writable
     """
     router = WorldRouter.get_instance()
     return router.get_adapter(
         db=db,
         lens=lens,
-        scope=scope,
+        local_mods_folder=local_mods_folder,
+        mods=mods,
         force_mode=force_mode,
     )
 

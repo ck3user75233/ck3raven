@@ -1,16 +1,13 @@
 """
-Workspace and Local Mod Configuration
+Workspace and Session Configuration
 
-Manages local mod paths (whitelisted for agent writes) and session state.
-NO file copying - all reads come from ck3raven DB or filesystem wrappers.
+Manages session state for the MCP server.
 
-Local mods are loaded from:
-1. Active playset configuration (playsets/*.json)
-2. VS Code settings (ck3lens.localMods)
-3. ck3lens_config.yaml in AI Workspace
-
-If no local mods are configured, the agent operates in read-only mode.
-This is perfectly valid - not everyone needs write access.
+CANONICAL MODEL (December 2025):
+- Session contains: playset info, db_path, local_mods_folder, mods[]
+- mods[] is loaded from active playset at runtime
+- local_mods_folder is a path - mods under it are potentially editable
+- NO permission oracles here - enforcement.py decides writability
 """
 from __future__ import annotations
 import json
@@ -28,11 +25,15 @@ except ImportError:
 
 
 @dataclass
-class LocalMod:
-    """A mod the agent is allowed to write to (user-configured)."""
+class ModEntry:
+    """A mod entry from the active playset.
+    
+    This is pure data - no permission methods.
+    """
     mod_id: str
     name: str
     path: Path
+    load_order: int = 0
     
     def exists(self) -> bool:
         return self.path.exists()
@@ -40,41 +41,39 @@ class LocalMod:
 
 @dataclass
 class Session:
-    """Current agent session state."""
+    """Current agent session state.
+    
+    CANONICAL MODEL:
+    - mods[]: List of mods from active playset (ephemeral, loaded at runtime)
+    - local_mods_folder: Path to folder where editable mods live
+    - NO permission methods - enforcement.py handles that
+    """
     playset_id: Optional[int] = None
     playset_name: Optional[str] = None
     db_path: Optional[Path] = None
-    local_mods: list[LocalMod] = field(default_factory=list)
-    mod_root: Path = field(default_factory=lambda: DEFAULT_CK3_MOD_DIR)
+    mods: list[ModEntry] = field(default_factory=list)
+    local_mods_folder: Path = field(default_factory=lambda: DEFAULT_CK3_MOD_DIR)
     
-    def get_local_mod(self, mod_id: str) -> Optional[LocalMod]:
-        """Get local mod by ID."""
-        for mod in self.local_mods:
-            if mod.mod_id == mod_id:
+    def get_mod(self, mod_id: str) -> Optional[ModEntry]:
+        """Get mod by ID from mods[]."""
+        for mod in self.mods:
+            if mod.mod_id == mod_id or mod.name == mod_id:
                 return mod
         return None
     
-    def is_path_allowed(self, path: Path) -> bool:
-        """Check if path is within a local mod directory."""
-        resolved = path.resolve()
-        for mod in self.local_mods:
-            mod_resolved = mod.path.resolve()
-            try:
-                resolved.relative_to(mod_resolved)
-                return True
-            except ValueError:
-                continue
-        return False
+    # DEPRECATED - use get_mod instead
+    def get_local_mod(self, mod_id: str) -> Optional[ModEntry]:
+        """DEPRECATED: Use get_mod() instead."""
+        return self.get_mod(mod_id)
 
 
-# Default CK3 mod directory
+# Default CK3 mod directory (this is local_mods_folder)
 DEFAULT_CK3_MOD_DIR = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
 
 # Default ck3raven database
 DEFAULT_DB_PATH = Path.home() / ".ck3raven" / "ck3raven.db"
 
-# Playsets directory - in ck3raven repo, not ~/.ck3raven/
-# This is the design of record - same location as MCP tools use
+# Playsets directory - in ck3raven repo
 REPO_PLAYSETS_DIR = Path(__file__).parent.parent.parent.parent / "playsets"
 
 # Legacy location (deprecated)
@@ -98,20 +97,10 @@ def load_config(config_path: Optional[Path] = None) -> Session:
     2. Explicit config_path if provided
     3. ck3lens_config.yaml in AI Workspace
     4. Empty defaults (read-only mode)
-    
-    Config file format (YAML):
-        db_path: "~/.ck3raven/ck3raven.db"
-        mod_root: "~/Documents/Paradox Interactive/Crusader Kings III/mod"
-        local_mods:
-          - mod_id: MyMod
-            name: My Custom Mod
-            path: "~/Documents/.../MyMod"
-    
-    If no local_mods configured, agent operates in read-only mode.
     """
     session = Session(
         db_path=DEFAULT_DB_PATH,
-        local_mods=[]  # Start empty - user must configure
+        mods=[]
     )
     
     # Try to load active playset first
@@ -149,11 +138,7 @@ def load_config(config_path: Optional[Path] = None) -> Session:
 
 
 def _load_active_playset() -> Optional[dict]:
-    """Load the active playset configuration if one exists.
-    
-    Uses the playset_manifest.json in ck3raven/playsets/ directory
-    (same source as MCP tools like ck3_playset).
-    """
+    """Load the active playset configuration if one exists."""
     manifest_file = REPO_PLAYSETS_DIR / "playset_manifest.json"
     
     if not manifest_file.exists():
@@ -180,20 +165,27 @@ def _apply_playset(session: Session, data: dict) -> None:
     """Apply playset configuration to session."""
     session.playset_name = data.get("name")
     
-    if "mod_root" in data:
-        session.mod_root = _expand_path(data["mod_root"])
+    if "local_mods_folder" in data:
+        session.local_mods_folder = _expand_path(data["local_mods_folder"])
     
-    # Load local mods from playset
-    session.local_mods = []
-    for m in data.get("local_mods", []):
-        path = _expand_path(m["path"]) if "path" in m else session.mod_root / m.get("folder", m["mod_id"])
-        mod = LocalMod(
+    # Load mods from playset mods[] array
+    session.mods = []
+    for i, m in enumerate(data.get("mods", [])):
+        path_str = m.get("path")
+        if path_str:
+            path = _expand_path(path_str)
+        else:
+            # Fallback: construct from local_mods_folder + folder name
+            folder = m.get("folder", m.get("mod_id", ""))
+            path = session.local_mods_folder / folder
+        
+        mod = ModEntry(
             mod_id=m.get("mod_id", m.get("name", "")),
             name=m.get("name", m.get("mod_id", "")),
-            path=path
+            path=path,
+            load_order=m.get("load_order", i),
         )
-        if mod.exists():
-            session.local_mods.append(mod)
+        session.mods.append(mod)
 
 
 def _apply_config(session: Session, data: dict[str, Any]) -> None:
@@ -201,37 +193,27 @@ def _apply_config(session: Session, data: dict[str, Any]) -> None:
     if "db_path" in data and data["db_path"]:
         session.db_path = _expand_path(data["db_path"])
     
-    if "mod_root" in data and data["mod_root"]:
-        session.mod_root = _expand_path(data["mod_root"])
-    # Legacy support
-    elif "local_mods_path" in data and data["local_mods_path"]:
-        session.mod_root = _expand_path(data["local_mods_path"])
+    if "local_mods_folder" in data and data["local_mods_folder"]:
+        session.local_mods_folder = _expand_path(data["local_mods_folder"])
     
-    # Load local_mods from config
-    local_mods_data = data.get("local_mods", [])
-    # Legacy support for live_mods key
-    if not local_mods_data:
-        local_mods_data = data.get("live_mods", [])
+    # Load mods from config
+    mods_data = data.get("mods", [])
     
-    if local_mods_data:
-        session.local_mods = []
-        for m in local_mods_data:
-            path = _expand_path(m["path"]) if "path" in m else session.mod_root / m["mod_id"]
-            mod = LocalMod(
+    if mods_data:
+        session.mods = []
+        for i, m in enumerate(mods_data):
+            path = _expand_path(m["path"]) if "path" in m else session.local_mods_folder / m["mod_id"]
+            mod = ModEntry(
                 mod_id=m["mod_id"],
                 name=m.get("name", m["mod_id"]),
-                path=path
+                path=path,
+                load_order=m.get("load_order", i),
             )
-            if mod.exists():
-                session.local_mods.append(mod)
+            session.mods.append(mod)
 
 
 def get_validation_rules_config(config_path: Optional[Path] = None) -> dict[str, dict[str, Any]]:
-    """
-    Load validation rules configuration from config file.
-    
-    Returns dict mapping rule_name -> {enabled: bool, severity: str}
-    """
+    """Load validation rules configuration from config file."""
     if config_path is None:
         config_path = DEFAULT_CONFIG_PATH
     
@@ -276,3 +258,23 @@ def validate_relpath(relpath: str) -> tuple[bool, str]:
     return True, ""
 
 
+def is_under_local_mods_folder(file_path: Path, local_mods_folder: Path) -> bool:
+    """
+    Check if a path is under the local mods folder.
+    
+    This is a STRUCTURAL FACT, not a permission oracle.
+    Used by enforcement.py at the write boundary.
+    """
+    try:
+        file_path.resolve().relative_to(local_mods_folder.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+# =============================================================================
+# DEPRECATED ALIASES - kept for backwards compatibility
+# =============================================================================
+
+# LocalMod is now ModEntry
+LocalMod = ModEntry

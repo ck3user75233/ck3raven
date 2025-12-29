@@ -383,7 +383,7 @@ class ValidationContext:
     active_roots: Optional[set[str]] = None
     vanilla_root: Optional[str] = None
     
-    # Local mods whitelist (folder names that are editable)
+    # local_mods_folder boundary (mods here are editable)
     local_mods: Optional[set[str]] = None
     
     # CK3Raven root path (for source read detection)

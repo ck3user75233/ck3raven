@@ -841,8 +841,8 @@ def ck3_file_impl(
     
     The world parameter provides WorldAdapter for unified path resolution:
     - Resolves raw paths to canonical addresses
-    - Validates visibility based on agent mode
-    - Provides is_writable hints for policy
+    - Validates visibility based on agent mode (FOUND/NOT_FOUND)
+    - Does NOT provide permission hints (enforcement.py decides)
     """
     from pathlib import Path as P
     from ck3lens.agent_mode import get_agent_mode
@@ -861,42 +861,28 @@ def ck3_file_impl(
     # ==========================================================================
     
     if command in write_commands and world is not None:
-        # Determine the target path for visibility check
-        target_path_for_visibility = path
-        if not target_path_for_visibility and mod_name and rel_path:
-            # For mod operations, resolve to absolute path first
-            if session:
-                live_mod = session.get_live_mod(mod_name)
-                if live_mod:
-                    target_path_for_visibility = str(live_mod.root / rel_path)
-                else:
-                    return {
-                        "success": False,
-                        "error": f"Mod '{mod_name}' not found in live mods",
-                        "visibility": "NOT_FOUND",
-                    }
+        # Determine the target address for WorldAdapter resolution
+        # WorldAdapter is the SINGLE resolver - no inline path building
+        target_address = path
+        if not target_address and mod_name and rel_path:
+            # Use canonical address format for mod paths
+            target_address = f"mod:{mod_name}/{rel_path}"
         
-        # Check visibility via WorldAdapter
-        if target_path_for_visibility:
-            visibility_result = world.resolve(target_path_for_visibility)
+        # Check visibility via WorldAdapter (in_world, not file_exists)
+        if target_address:
+            visibility_result = world.resolve(target_address)
             
             if not visibility_result.found:
-                # Path doesn't exist in this world - NOT_FOUND (not DENY)
+                # Path is outside this world's scope - NOT_FOUND (visibility)
                 return {
                     "success": False,
-                    "error": visibility_result.error_message or f"Path not visible: {target_path_for_visibility}",
+                    "error": visibility_result.error_message or f"Path not in world scope: {target_address}",
                     "visibility": "NOT_FOUND",
                     "guidance": "This path is outside your current lens/scope",
                 }
             
-            # For write/edit, check if writable
-            if command in {"write", "edit"} and not visibility_result.is_writable:
-                return {
-                    "success": False,
-                    "error": f"Path is read-only in {mode} mode: {target_path_for_visibility}",
-                    "visibility": "FOUND_READ_ONLY",
-                    "guidance": "This path is visible but not writable in your current mode",
-                }
+            # Path is in_world - ALWAYS proceed to enforcement.py
+            # Enforcement decides ALLOW/DENY, not visibility
     
     # ==========================================================================
     # STEP 2: CENTRALIZED ENFORCEMENT GATE (AFTER visibility)
@@ -1242,14 +1228,8 @@ def _file_write_raw(path, content, validate_syntax, token_id, trace, world=None)
                 "policy_decision": "DENY",
                 "hint": "This path is outside the visibility scope for the current agent mode",
             }
-        if not resolution.is_writable:
-            return {
-                "success": False,
-                "error": f"Path is not writable in {world.mode} mode: {path}",
-                "mode": world.mode,
-                "policy_decision": "DENY",
-                "hint": "This path is visible but not writable. Only live mods are writable in ck3lens mode.",
-            }
+        # NO-ORACLE: Writability is determined by enforcement.py, not visibility.
+        # If found=True, proceed to policy evaluation below.
         # Use resolved absolute path
         file_path = resolution.absolute_path
     
@@ -1363,14 +1343,8 @@ def _file_edit_raw(path, old_content, new_content, validate_syntax, token_id, tr
                 "policy_decision": "DENY",
                 "hint": "This path is outside the visibility scope for the current agent mode",
             }
-        if not resolution.is_writable:
-            return {
-                "success": False,
-                "error": f"Path is not writable in {world.mode} mode: {path}",
-                "mode": world.mode,
-                "policy_decision": "DENY",
-                "hint": "This path is visible but not writable. Only live mods are writable in ck3lens mode.",
-            }
+        # NO-ORACLE: Writability is determined by enforcement.py, not visibility.
+        # If found=True, proceed to policy evaluation below.
         # Use resolved absolute path
         file_path = resolution.absolute_path
     

@@ -1,0 +1,100 @@
+=== BANNED TERM SCAN ===
+
+
+--- live_mods ---
+.github/COPILOT_LENS_COMPATCH.md:114:| `ck3_list_live_mods` | List mods you can edit |
+docs/ARCHITECTURE.md:707:  "live_mods": ["MSC", "LocalizationPatch", "CrashFixes"],
+docs/ARCHITECTURE.md:732:| `live_mods` | Mods the agent can write to (whitelist) |
+docs/ARCHITECTURE.md:748:        return {"playset_name": None, "mods": [], "live_mods": []}
+docs/ARCHITECTURE.md:755:        "live_mods": playset.get("live_mods", []),
+docs/HARD CODING TO FIX.md:16:### Location 1: `list_live_mods()` function (Lines ~893-899)
+docs/HARD CODING TO FIX.md:19:live_mods_config = {
+docs/HARD CODING TO FIX.md:49:**Fix**: Should use same config as `list_live_mods()`.
+docs/HARD CODING TO FIX.md:94:**Fix**: Could read from `ck3lens_config.yaml` live_mods section.
+docs/HARD CODING TO FIX.md:118:| `bridge/server.py` | `list_live_mods()` | ?? Hardcoded | HIGH |
+docs/HARD CODING TO FIX.md:143:live_mods:
+playsets/README.md:9:- Which mods the agent can write to (live_mods)
+playsets/README.md:35:3. Add live_mods for mods the agent can write to
+playsets/README.md:132:| `live_mods` | array | Names of mods the agent can write to |
+playsets/example_playset.json:27:  "live_mods": [
+tools/ck3lens_mcp/ck3lens/live_mods.py:8:  - live_mods ? local_mods
+tools/ck3lens_mcp/ck3lens/live_mods.py:10:  - list_live_mods ? list_local_mods
+tools/ck3lens_mcp/ck3lens/live_mods.py:14:Session.live_mods property still works (forwards to local_mods).
+tools/ck3lens_mcp/ck3lens/live_mods.py:22:    list_live_mods,  # backwards compat alias
+tools/ck3lens_mcp/ck3lens/live_mods.py:35:    "live_mods module is deprecated, use local_mods instead",
+  ... and 6 more
+
+--- mod_roots ---
+tests/test_lensworld_sandbox.py:65:        local_mod_roots={local_mod_path},
+tests/test_lensworld_sandbox.py:94:        local_mod_roots={local_mod_path},
+tests/test_lensworld_sandbox.py:127:        local_mod_roots={local_mod_path},
+tests/test_lensworld_sandbox.py:159:        local_mod_roots={local_mod_path},
+tests/test_lensworld_sandbox.py:190:        local_mod_roots={local_mod_path},
+tests/test_lensworld_sandbox.py:222:        local_mod_roots={local_mod_path},
+tests/test_lensworld_sandbox.py:263:        local_mod_roots={local_mod_path},
+tools/ck3lens_mcp/ck3lens/playset_scope.py:24:    mod_roots: Set[Path]          # Paths to all active mod folders
+tools/ck3lens_mcp/ck3lens/playset_scope.py:25:    local_mod_roots: Set[Path]    # Subset of mod_roots that are writable (local mods)
+tools/ck3lens_mcp/ck3lens/playset_scope.py:44:        for mod_root in self.mod_roots:
+tools/ck3lens_mcp/ck3lens/playset_scope.py:62:        for mod_root in self.local_mod_roots:
+tools/ck3lens_mcp/ck3lens/playset_scope.py:91:        for mod_root in self.local_mod_roots:
+tools/ck3lens_mcp/ck3lens/playset_scope.py:99:        workshop_roots = self.mod_roots - self.local_mod_roots
+tools/ck3lens_mcp/ck3lens/playset_scope.py:125:    mod_roots = set()
+tools/ck3lens_mcp/ck3lens/playset_scope.py:127:        mod_roots.add(Path(root))
+tools/ck3lens_mcp/ck3lens/playset_scope.py:129:    local_mod_roots = set()
+tools/ck3lens_mcp/ck3lens/playset_scope.py:131:        local_mod_roots.add(Path(mod.path))
+tools/ck3lens_mcp/ck3lens/playset_scope.py:135:        mod_roots=mod_roots,
+tools/ck3lens_mcp/ck3lens/playset_scope.py:136:        local_mod_roots=local_mod_roots,
+tools/ck3lens_mcp/ck3lens/policy/ck3lens_rules.py:120:    local_mod_roots: set[str] | None = None,
+  ... and 46 more
+
+--- local_mod_roots ---
+tests/test_lensworld_sandbox.py:65:        local_mod_roots={local_mod_path},
+tests/test_lensworld_sandbox.py:94:        local_mod_roots={local_mod_path},
+tests/test_lensworld_sandbox.py:127:        local_mod_roots={local_mod_path},
+tests/test_lensworld_sandbox.py:159:        local_mod_roots={local_mod_path},
+tests/test_lensworld_sandbox.py:190:        local_mod_roots={local_mod_path},
+tests/test_lensworld_sandbox.py:222:        local_mod_roots={local_mod_path},
+tests/test_lensworld_sandbox.py:263:        local_mod_roots={local_mod_path},
+tools/ck3lens_mcp/ck3lens/playset_scope.py:25:    local_mod_roots: Set[Path]    # Subset of mod_roots that are writable (local mods)
+tools/ck3lens_mcp/ck3lens/playset_scope.py:62:        for mod_root in self.local_mod_roots:
+tools/ck3lens_mcp/ck3lens/playset_scope.py:91:        for mod_root in self.local_mod_roots:
+tools/ck3lens_mcp/ck3lens/playset_scope.py:99:        workshop_roots = self.mod_roots - self.local_mod_roots
+tools/ck3lens_mcp/ck3lens/playset_scope.py:129:    local_mod_roots = set()
+tools/ck3lens_mcp/ck3lens/playset_scope.py:131:        local_mod_roots.add(Path(mod.path))
+tools/ck3lens_mcp/ck3lens/playset_scope.py:136:        local_mod_roots=local_mod_roots,
+tools/ck3lens_mcp/ck3lens/policy/ck3lens_rules.py:120:    local_mod_roots: set[str] | None = None,
+tools/ck3lens_mcp/ck3lens/policy/ck3lens_rules.py:160:    if local_mod_roots:
+tools/ck3lens_mcp/ck3lens/policy/ck3lens_rules.py:161:        for mod_root in local_mod_roots:
+tools/ck3lens_mcp/ck3lens/policy/ck3lens_rules.py:203:    local_mod_roots = set()
+tools/ck3lens_mcp/ck3lens/policy/ck3lens_rules.py:205:        local_mod_roots = ctx.active_roots
+tools/ck3lens_mcp/ck3lens/policy/ck3lens_rules.py:225:            local_mod_roots=local_mod_roots,
+  ... and 25 more
+
+--- is_writable ---
+docs/LENSWORLD.md:215:    if wants_to_write and not result.is_writable:
+tools/ck3lens_mcp/ck3lens/unified_tools.py:845:    - Provides is_writable hints for policy
+tools/ck3lens_mcp/ck3lens/unified_tools.py:893:            if command in {"write", "edit"} and not visibility_result.is_writable:
+tools/ck3lens_mcp/ck3lens/unified_tools.py:1245:        if not resolution.is_writable:
+tools/ck3lens_mcp/ck3lens/unified_tools.py:1366:        if not resolution.is_writable:
+tools/ck3lens_mcp/ck3lens/world_adapter.py:101:    is_writable: bool = False  # For policy - can this be mutated?
+tools/ck3lens_mcp/ck3lens/world_adapter.py:400:                is_writable = mod_root in self._scope.local_mod_roots
+tools/ck3lens_mcp/ck3lens/world_adapter.py:406:                    is_writable=is_writable,
+tools/ck3lens_mcp/ck3lens/world_adapter.py:425:            is_writable=False,
+tools/ck3lens_mcp/ck3lens/world_adapter.py:447:            is_writable=False,
+tools/ck3lens_mcp/ck3lens/world_adapter.py:460:            is_writable=False,  # Always read-only in ck3lens
+tools/ck3lens_mcp/ck3lens/world_adapter.py:473:            is_writable=True,
+tools/ck3lens_mcp/ck3lens/world_adapter.py:535:                is_writable=True,  # Writable in dev mode
+tools/ck3lens_mcp/ck3lens/world_adapter.py:552:                is_writable=True,
+tools/ck3lens_mcp/ck3lens/world_adapter.py:570:                    is_writable=False,
+tools/ck3lens_mcp/ck3lens/world_adapter.py:588:                    is_writable=False,  # NEVER writable in dev mode
+tools/ck3lens_mcp/ck3lens/world_router.py:31:    if wants_to_write and not result.is_writable:
+
+--- is_path_writable ---
+tools/ck3lens_mcp/ck3lens/playset_scope.py:53:    def is_path_writable(self, path: Path) -> bool:
+
+--- is_path_allowed ---
+tools/ck3lens_mcp/ck3lens/local_mods.py:106:    if not session.is_path_allowed(file_path):
+tools/ck3lens_mcp/ck3lens/local_mods.py:228:    if not session.is_path_allowed(old_path):
+tools/ck3lens_mcp/ck3lens/local_mods.py:230:    if not session.is_path_allowed(new_path):
+tools/ck3lens_mcp/ck3lens/workspace.py:57:    def is_path_allowed(self, path: Path) -> bool:
+tools/ck3lens_mcp/tests/test_mcp_tools.py:438:        if not session.is_path_allowed(path, "AnyMod"):

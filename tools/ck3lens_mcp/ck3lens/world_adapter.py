@@ -2,16 +2,17 @@
 World Adapter - Visibility Layer for CK3 Lens
 
 This module provides the WorldAdapter interface and implementations that
-determine what exists and can be referenced in each agent mode.
+determine what EXISTS and can be REFERENCED in each agent mode.
 
-Architecture:
-- WorldAdapter is a FACADE over existing infrastructure (PlaysetLens, PlaysetScope, DBQueries)
-- WorldAdapter decides WHAT EXISTS (visibility)
-- Policy decides WHAT MAY BE DONE (mutation control)
+Architecture (NO-ORACLE REFACTOR - December 2025):
+- WorldAdapter answers: "Does this reference EXIST in my world?"
+- WorldAdapter returns FOUND or NOT_FOUND
+- WorldAdapter does NOT determine writability (that's enforcement.py)
+- Policy (enforcement.py) decides: "Is this operation ALLOWED?"
 
 These are orthogonal layers:
-- LensWorld answers: what exists and can be referenced?
-- Policy answers: what actions are permitted on those references?
+- LensWorld: visibility (what exists)
+- Enforcement: permission (what actions are permitted)
 
 Two implementations:
 - LensWorldAdapter: For ck3lens mode - visibility filtered to active playset
@@ -39,7 +40,6 @@ from typing import Optional, Set, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .db_queries import PlaysetLens, DBQueries
-    from .playset_scope import PlaysetScope
 
 
 class AddressType(Enum):
@@ -91,6 +91,9 @@ class ResolutionResult:
     
     If found=False, the reference does not exist in this world.
     Policy is NEVER consulted for not-found references.
+    
+    NO-ORACLE RULE: This result contains NO writability information.
+    Writability is determined by enforcement.py at the write boundary.
     """
     found: bool
     address: Optional[CanonicalAddress] = None
@@ -98,8 +101,11 @@ class ResolutionResult:
     file_id: Optional[int] = None  # For database operations
     content_version_id: Optional[int] = None
     mod_name: Optional[str] = None
-    is_writable: bool = False  # For policy - can this be mutated?
     error_message: Optional[str] = None
+    
+    # UI hint only - NOT for enforcement decisions
+    # This is purely for display purposes (e.g., showing a lock icon)
+    ui_hint_potentially_editable: bool = False
     
     @classmethod
     def not_found(cls, raw_input: str, reason: str = "Reference not found") -> "ResolutionResult":
@@ -114,13 +120,16 @@ class WorldAdapter(ABC):
     """
     Abstract base for world visibility adapters.
     
-    WorldAdapter determines what exists and can be referenced.
-    It does NOT make policy decisions about what actions are allowed.
+    WorldAdapter determines what EXISTS and can be REFERENCED.
+    It does NOT make permission decisions about what actions are allowed.
     
     All MCP tools should:
     1. Get the appropriate WorldAdapter from WorldRouter
     2. Resolve references through the adapter
-    3. Only then apply policy (if the reference was found)
+    3. If found=True and mutation needed → call enforcement.py
+    4. Enforcement decides ALLOW/DENY
+    
+    NO early denial based on resolution results.
     """
     
     @abstractmethod
@@ -176,20 +185,28 @@ class LensWorldAdapter(WorldAdapter):
     def __init__(
         self,
         lens: "PlaysetLens",
-        scope: "PlaysetScope",
         db: "DBQueries",
+        local_mods_folder: Optional[Path] = None,
         vanilla_root: Optional[Path] = None,
         ck3raven_root: Optional[Path] = None,
         wip_root: Optional[Path] = None,
         utility_roots: Optional[dict[str, Path]] = None,
+        mods: Optional[list] = None,  # List of mod entries from session
     ):
         self._lens = lens
-        self._scope = scope
         self._db = db
+        self._local_mods_folder = local_mods_folder
         self._vanilla_root = vanilla_root
         self._ck3raven_root = ck3raven_root
         self._wip_root = wip_root
         self._utility_roots = utility_roots or {}
+        self._mods = mods or []
+        
+        # Build mod path lookup from mods[]
+        self._mod_paths: dict[str, Path] = {}
+        for mod in self._mods:
+            if hasattr(mod, 'name') and hasattr(mod, 'path'):
+                self._mod_paths[mod.name] = Path(mod.path) if isinstance(mod.path, str) else mod.path
     
     @property
     def mode(self) -> str:
@@ -199,11 +216,6 @@ class LensWorldAdapter(WorldAdapter):
     def lens(self) -> "PlaysetLens":
         """Get the underlying PlaysetLens for direct DB query filtering."""
         return self._lens
-    
-    @property
-    def scope(self) -> "PlaysetScope":
-        """Get the underlying PlaysetScope for filesystem path validation."""
-        return self._scope
     
     def get_search_scope(self) -> Set[int]:
         """Return content_version_ids for the active playset."""
@@ -324,21 +336,18 @@ class LensWorldAdapter(WorldAdapter):
             except ValueError:
                 pass
         
-        # Check mod roots via scope
-        location_type, mod_name = self._scope.get_path_location(path)
-        if location_type in ("local_mod", "workshop_mod") and mod_name:
-            # Find the mod root to get relative path
-            for mod_root in self._scope.mod_roots:
-                try:
-                    rel = path.relative_to(mod_root.resolve())
-                    return CanonicalAddress(
-                        address_type=AddressType.MOD,
-                        identifier=mod_name,
-                        relative_path=str(rel).replace("\\", "/"),
-                        raw_input=raw_path,
-                    )
-                except ValueError:
-                    continue
+        # Check mod paths from mods[]
+        for mod_name, mod_path in self._mod_paths.items():
+            try:
+                rel = path.relative_to(mod_path.resolve())
+                return CanonicalAddress(
+                    address_type=AddressType.MOD,
+                    identifier=mod_name,
+                    relative_path=str(rel).replace("\\", "/"),
+                    raw_input=raw_path,
+                )
+            except ValueError:
+                continue
         
         # Check WIP
         if self._wip_root:
@@ -389,22 +398,29 @@ class LensWorldAdapter(WorldAdapter):
     
     def _resolve_mod(self, address: CanonicalAddress) -> ResolutionResult:
         """Resolve a mod address - check if in active playset."""
-        # TODO: Look up mod by identifier, check if in lens.mod_cv_ids
-        # For now, use scope to check path validity
         mod_name = address.identifier
         
-        # Find the mod root
-        for mod_root in self._scope.mod_roots:
-            if mod_root.name == mod_name:
-                abs_path = mod_root / address.relative_path
-                is_writable = mod_root in self._scope.local_mod_roots
-                return ResolutionResult(
-                    found=True,
-                    address=address,
-                    absolute_path=abs_path,
-                    mod_name=mod_name,
-                    is_writable=is_writable,
-                )
+        # Find the mod path from mods[]
+        if mod_name in self._mod_paths:
+            mod_path = self._mod_paths[mod_name]
+            abs_path = mod_path / address.relative_path
+            
+            # UI hint: potentially editable if mod is in local_mods_folder
+            ui_hint = False
+            if self._local_mods_folder:
+                try:
+                    mod_path.resolve().relative_to(self._local_mods_folder.resolve())
+                    ui_hint = True
+                except ValueError:
+                    pass
+            
+            return ResolutionResult(
+                found=True,
+                address=address,
+                absolute_path=abs_path,
+                mod_name=mod_name,
+                ui_hint_potentially_editable=ui_hint,
+            )
         
         return ResolutionResult.not_found(
             address.raw_input,
@@ -412,7 +428,7 @@ class LensWorldAdapter(WorldAdapter):
         )
     
     def _resolve_vanilla(self, address: CanonicalAddress) -> ResolutionResult:
-        """Resolve vanilla address - always visible, never writable."""
+        """Resolve vanilla address - always visible."""
         if not self._vanilla_root:
             return ResolutionResult.not_found(address.raw_input, "Vanilla root not configured")
         
@@ -422,12 +438,11 @@ class LensWorldAdapter(WorldAdapter):
             address=address,
             absolute_path=abs_path,
             mod_name="vanilla",
-            is_writable=False,
+            ui_hint_potentially_editable=False,
         )
     
     def _resolve_utility(self, address: CanonicalAddress) -> ResolutionResult:
-        """Resolve utility address - visible, never writable in ck3lens."""
-        # Parse utility type from relative path (e.g., "logs/error.log")
+        """Resolve utility address - visible."""
         parts = address.relative_path.split("/", 1)
         if len(parts) < 2:
             return ResolutionResult.not_found(address.raw_input, "Invalid utility path")
@@ -444,11 +459,11 @@ class LensWorldAdapter(WorldAdapter):
             found=True,
             address=address,
             absolute_path=abs_path,
-            is_writable=False,
+            ui_hint_potentially_editable=False,
         )
     
     def _resolve_ck3raven(self, address: CanonicalAddress) -> ResolutionResult:
-        """Resolve ck3raven source - visible for bug reports, never writable."""
+        """Resolve ck3raven source - visible for bug reports."""
         if not self._ck3raven_root:
             return ResolutionResult.not_found(address.raw_input, "ck3raven root not configured")
         
@@ -457,11 +472,11 @@ class LensWorldAdapter(WorldAdapter):
             found=True,
             address=address,
             absolute_path=abs_path,
-            is_writable=False,  # Always read-only in ck3lens
+            ui_hint_potentially_editable=False,
         )
     
     def _resolve_wip(self, address: CanonicalAddress) -> ResolutionResult:
-        """Resolve WIP address - visible and writable."""
+        """Resolve WIP address - visible and potentially editable."""
         if not self._wip_root:
             return ResolutionResult.not_found(address.raw_input, "WIP root not configured")
         
@@ -470,7 +485,7 @@ class LensWorldAdapter(WorldAdapter):
             found=True,
             address=address,
             absolute_path=abs_path,
-            is_writable=True,
+            ui_hint_potentially_editable=True,
         )
 
 
@@ -479,12 +494,11 @@ class DevWorldAdapter(WorldAdapter):
     WorldAdapter for ck3raven-dev mode.
     
     Full visibility to:
-    - ck3raven source code (writable)
-    - All mod content (read-only - for parser/ingestion testing)
-    - WIP workspace (writable)
+    - ck3raven source code
+    - All mod content (for parser/ingestion testing)
+    - WIP workspace
     
-    NOT visible/writable:
-    - Mod files for editing (absolute prohibition)
+    Writability is determined by enforcement.py, not here.
     """
     
     def __init__(
@@ -493,13 +507,13 @@ class DevWorldAdapter(WorldAdapter):
         ck3raven_root: Path,
         wip_root: Path,
         vanilla_root: Optional[Path] = None,
-        mod_roots: Optional[Set[Path]] = None,
+        mod_paths: Optional[Set[Path]] = None,
     ):
         self._db = db
         self._ck3raven_root = ck3raven_root
         self._wip_root = wip_root
         self._vanilla_root = vanilla_root
-        self._mod_roots = mod_roots or set()
+        self._mod_paths = mod_paths or set()
     
     @property
     def mode(self) -> str:
@@ -507,16 +521,14 @@ class DevWorldAdapter(WorldAdapter):
     
     def get_search_scope(self) -> Set[int]:
         """In dev mode, all content is searchable."""
-        # Return all content_version_ids
-        # TODO: Query database for all cv_ids
         return set()
     
     def resolve(self, path_or_address: str) -> ResolutionResult:
         """
         Resolve a path in dev world.
         
-        ck3raven source is the primary writable domain.
-        Mods are visible but NOT writable.
+        ck3raven source is the primary writable domain (per enforcement.py).
+        Mods are visible but enforcement.py will deny writes.
         """
         path = Path(path_or_address).resolve()
         
@@ -532,7 +544,7 @@ class DevWorldAdapter(WorldAdapter):
                     raw_input=path_or_address,
                 ),
                 absolute_path=path,
-                is_writable=True,  # Writable in dev mode
+                ui_hint_potentially_editable=True,
             )
         except ValueError:
             pass
@@ -549,7 +561,7 @@ class DevWorldAdapter(WorldAdapter):
                     raw_input=path_or_address,
                 ),
                 absolute_path=path,
-                is_writable=True,
+                ui_hint_potentially_editable=True,
             )
         except ValueError:
             pass
@@ -567,25 +579,25 @@ class DevWorldAdapter(WorldAdapter):
                         raw_input=path_or_address,
                     ),
                     absolute_path=path,
-                    is_writable=False,
+                    ui_hint_potentially_editable=False,
                 )
             except ValueError:
                 pass
         
-        # Check mod roots - readable but NOT writable
-        for mod_root in self._mod_roots:
+        # Check mod paths - readable but NOT writable (enforcement handles this)
+        for mod_path in self._mod_paths:
             try:
-                rel = path.relative_to(mod_root.resolve())
+                rel = path.relative_to(mod_path.resolve())
                 return ResolutionResult(
                     found=True,
                     address=CanonicalAddress(
                         address_type=AddressType.MOD,
-                        identifier=mod_root.name,
+                        identifier=mod_path.name,
                         relative_path=str(rel).replace("\\", "/"),
                         raw_input=path_or_address,
                     ),
                     absolute_path=path,
-                    is_writable=False,  # NEVER writable in dev mode
+                    ui_hint_potentially_editable=False,  # UI hint only
                 )
             except ValueError:
                 continue

@@ -97,31 +97,9 @@
       }
     },
     
-    "live_mods": {
-      "type": "array",
-      "description": "Mods the agent can write to",
-      "items": {
-        "type": "object",
-        "required": ["mod_id", "name", "path"],
-        "properties": {
-          "mod_id": {
-            "type": "string",
-            "description": "Unique identifier for the mod"
-          },
-          "name": {
-            "type": "string",
-            "description": "Display name"
-          },
-          "path": {
-            "type": "string",
-            "description": "Path to mod folder (~ allowed)"
-          },
-          "description": {
-            "type": "string",
-            "description": "What this mod is for"
-          }
-        }
-      }
+    "local_mods_folder": {
+      "type": "string",
+      "description": "Path to local mods folder. Mods under this path are editable by agents. Editability is DERIVED - no separate array."
     },
     
     "agent_briefing": {

@@ -1,0 +1,14 @@
+=== BANNED TERM CHECK (CODE ONLY) ===
+
+live_mods: 6 matches
+editable_mods: 0 matches
+writable_mods: 0 matches
+whitelist: 14 matches
+mod_roots: 41 matches
+local_mod_roots: 37 matches
+is_writable: 2 matches
+is_path_writable: 0 matches
+can_write: 0 matches
+is_allowed: 2 matches
+mod_write: 4 matches
+FOUND_READ_ONLY: 0 matches
