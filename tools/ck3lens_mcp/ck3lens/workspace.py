@@ -278,3 +278,5 @@ def is_under_local_mods_folder(file_path: Path, local_mods_folder: Path) -> bool
 
 # LocalMod is now ModEntry
 LocalMod = ModEntry
+
+

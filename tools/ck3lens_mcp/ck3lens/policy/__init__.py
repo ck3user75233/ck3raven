@@ -1,17 +1,25 @@
 """
 Policy module for agent validation and CLI wrapping.
 
+CANONICAL SOURCES (Dec 2025):
+- enforcement.py: THE single gate for all policy/permission decisions
+- WorldAdapter.is_visible(): THE single source for path visibility
+
+Supporting modules:
 - types.py: Core types for policy validation (includes ScopeDomain, IntentType, etc.)
 - loader.py: Policy file loading
 - validator.py: Policy validation logic
 - tokens.py: HMAC-signed approval tokens for risky operations
 - clw.py: Command Line Wrapper policy engine
-- ck3lens_rules.py: CK3Lens-specific validation rules
-- hard_gates.py: Pure functions for hard gate checks
+- ck3lens_rules.py: CK3Lens-specific validation rules (POST-HOC, calls enforcement.py)
 - wip_workspace.py: WIP workspace lifecycle management
 - contract_schema.py: Contract schema validation
-- enforcement.py: Centralized policy enforcement gate (NEW)
-- audit.py: Structured audit logging (NEW)
+- audit.py: Structured audit logging
+
+ARCHIVED (see archive/deprecated_policy/):
+- hard_gates.py: Superseded by enforcement.py - all gate logic consolidated there
+- script_sandbox.py: Moved to tools/script_sandbox.py (tool layer)
+- lensworld_sandbox.py: Merged into WorldAdapter
 """
 from .types import (
     Severity,
@@ -73,35 +81,9 @@ from .clw import (
     can_execute,
     check_path_in_scope,
 )
-from .hard_gates import (
-    GateResult,
-    # CK3Lens gates
-    gate_intent_type_required,
-    gate_write_active_local_mods_only,
-    gate_no_workshop_vanilla_writes,
-    gate_python_wip_only,
-    gate_inactive_mod_requires_user_prompt,
-    gate_script_syntax_validated,
-    gate_script_declarations_match,
-    gate_script_has_execution_token,
-    gate_write_contract_has_targets,
-    gate_write_contract_has_snippets,
-    gate_write_contract_has_diff_sanity,
-    gate_delete_explicit_file_list,
-    gate_delete_has_token,
-    run_all_gates,
-    # CK3Raven-dev gates
-    gate_ck3raven_dev_mod_write_prohibition,
-    gate_ck3raven_dev_run_in_terminal_prohibition,
-    gate_ck3raven_dev_git_command_classification,
-    gate_ck3raven_dev_db_destructive_requires_migration,
-    gate_ck3raven_dev_wip_intent_valid,
-    gate_ck3raven_dev_wip_not_workaround,
-    gate_ck3raven_dev_wip_path_valid,
-    gate_ck3raven_dev_launcher_repair_prohibition,
-    gate_ck3raven_dev_create_override_patch_prohibition,
-    run_ck3raven_dev_gates,
-)
+# REMOVED: hard_gates imports (Dec 2025)
+# hard_gates.py was archived - all enforcement now goes through enforcement.py
+# See docs/PLAYSET_ARCHITECTURE.md for canonical sources
 from .wip_workspace import (
     WipWorkspaceState,
     get_workspace_state,
@@ -136,12 +118,11 @@ from .ck3lens_rules import (
     CK3LENS_FORBIDDEN_EXTENSIONS,
     WIP_ONLY_EXTENSIONS,
 )
-from .script_sandbox import (
-    ScriptExecutionRequest,
-    ScriptExecutionResult,
-    execute_wip_script,
-    prepare_script_for_execution,
-)
+
+# DEPRECATED: script_sandbox moved to ck3lens.tools.script_sandbox
+# The old policy/script_sandbox.py has been archived.
+# Use the tools-layer sandbox instead:
+#   from ck3lens.tools.script_sandbox import run_script_sandboxed
 
 # =============================================================================
 # NEW: Centralized Enforcement Gate (Phase 1)
@@ -240,33 +221,7 @@ __all__ = [
     "evaluate_policy",
     "can_execute",
     "check_path_in_scope",
-    # Hard Gates - CK3Lens
-    "GateResult",
-    "gate_intent_type_required",
-    "gate_write_active_local_mods_only",
-    "gate_no_workshop_vanilla_writes",
-    "gate_python_wip_only",
-    "gate_inactive_mod_requires_user_prompt",
-    "gate_script_syntax_validated",
-    "gate_script_declarations_match",
-    "gate_script_has_execution_token",
-    "gate_write_contract_has_targets",
-    "gate_write_contract_has_snippets",
-    "gate_write_contract_has_diff_sanity",
-    "gate_delete_explicit_file_list",
-    "gate_delete_has_token",
-    "run_all_gates",
-    # Hard Gates - CK3Raven-dev
-    "gate_ck3raven_dev_launcher_repair_prohibition",
-    "gate_ck3raven_dev_create_override_patch_prohibition",
-    "gate_ck3raven_dev_mod_write_prohibition",
-    "gate_ck3raven_dev_run_in_terminal_prohibition",
-    "gate_ck3raven_dev_git_command_classification",
-    "gate_ck3raven_dev_db_destructive_requires_migration",
-    "gate_ck3raven_dev_wip_intent_valid",
-    "gate_ck3raven_dev_wip_not_workaround",
-    "gate_ck3raven_dev_wip_path_valid",
-    "run_ck3raven_dev_gates",
+    # REMOVED: Hard gates exports (Dec 2025) - use enforcement.py instead
     # WIP Workspace
     "WipWorkspaceState",
     "get_workspace_state",
@@ -298,11 +253,7 @@ __all__ = [
     "CK3LENS_FORBIDDEN_PATHS",
     "CK3LENS_FORBIDDEN_EXTENSIONS",
     "WIP_ONLY_EXTENSIONS",
-    # Script Sandbox
-    "ScriptExecutionRequest",
-    "ScriptExecutionResult",
-    "execute_wip_script",
-    "prepare_script_for_execution",
+    # Script Sandbox - DEPRECATED (moved to ck3lens.tools.script_sandbox)
     # =============================================================================
     # NEW: Centralized Enforcement (Phase 1)
     # =============================================================================

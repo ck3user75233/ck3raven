@@ -384,7 +384,7 @@ class ValidationContext:
     vanilla_root: Optional[str] = None
     
     # local_mods_folder boundary (mods here are editable)
-    local_mods: Optional[set[str]] = None
+    local_mods_folder: Optional[Path] = None
     
     # CK3Raven root path (for source read detection)
     ck3raven_root: Optional[Path] = None
@@ -435,8 +435,8 @@ class ValidationContext:
             self.active_roots = scope["active_roots"]
         if scope.get("vanilla_root") is not None:
             self.vanilla_root = scope["vanilla_root"]
-        if scope.get("local_mods") is not None:
-            self.local_mods = scope["local_mods"]
+        if scope.get("local_mods_folder") is not None:
+            self.local_mods_folder = Path(scope["local_mods_folder"])
         if scope.get("ck3raven_root") is not None:
             self.ck3raven_root = Path(scope["ck3raven_root"])
         return self

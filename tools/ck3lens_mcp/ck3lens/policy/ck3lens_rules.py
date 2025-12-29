@@ -25,20 +25,8 @@ from .types import (
     Severity, Violation, ValidationContext,
     ScopeDomain, IntentType, AcceptanceTest,
 )
-from .hard_gates import (
-    GateResult,
-    gate_intent_type_required,
-    gate_write_active_local_mods_only,
-    gate_no_workshop_vanilla_writes,
-    gate_python_wip_only,
-    gate_inactive_mod_requires_user_prompt,
-    gate_write_contract_has_targets,
-    gate_write_contract_has_snippets,
-    gate_write_contract_has_diff_sanity,
-    gate_delete_explicit_file_list,
-    gate_delete_has_token,
-    run_all_gates,
-)
+# REMOVED: hard_gates imports - this module was archived Dec 2025
+# All enforcement decisions should go through enforcement.py
 from .wip_workspace import is_wip_path, get_wip_workspace_path
 from .trace_helpers import (
     trace_has_call,
@@ -117,8 +105,7 @@ WIP_ONLY_EXTENSIONS = frozenset({
 def classify_path_domain(
     path: str | Path,
     *,
-    local_mod_roots: set[str] | None = None,
-    workshop_roots: set[str] | None = None,
+    local_mods_folder: Path | None = None,
     vanilla_root: str | None = None,
     ck3raven_root: Path | None = None,
 ) -> ScopeDomain:
@@ -126,6 +113,10 @@ def classify_path_domain(
     Classify a path into its scope domain.
     
     Returns the ScopeDomain for the path to determine access permissions.
+    
+    Local vs Workshop determination:
+    - Path under local_mods_folder → ACTIVE_LOCAL_MODS (editable)
+    - Other mod paths → ACTIVE_WORKSHOP_MODS (read-only)
     """
     if isinstance(path, str):
         path = Path(path)
@@ -149,22 +140,34 @@ def classify_path_domain(
         if path_str.startswith(vanilla_str):
             return ScopeDomain.VANILLA_GAME
     
-    # Workshop mods
-    if workshop_roots:
-        for workshop_root in workshop_roots:
-            workshop_str = workshop_root.replace("\\", "/").lower()
-            if path_str.startswith(workshop_str):
-                return ScopeDomain.ACTIVE_WORKSHOP_MODS
+    # Local mods - path under local_mods_folder
+    if local_mods_folder:
+        local_str = str(local_mods_folder.resolve()).replace("\\", "/").lower()
+        if path_str.startswith(local_str):
+            return ScopeDomain.ACTIVE_LOCAL_MODS
     
-    # Local mods
-    if local_mod_roots:
-        for mod_root in local_mod_roots:
-            mod_str = mod_root.replace("\\", "/").lower()
-            if path_str.startswith(mod_str):
-                return ScopeDomain.ACTIVE_LOCAL_MODS
+    # If it looks like a mod path but not under local_mods_folder, it's workshop
+    # Workshop mods are in Steam workshop folder or other locations
+    if _looks_like_mod_path(path_str):
+        return ScopeDomain.ACTIVE_WORKSHOP_MODS
     
     # Unknown - treat as potentially inactive
     return ScopeDomain.INACTIVE_LOCAL_MODS
+
+
+def _looks_like_mod_path(path_str: str) -> bool:
+    """Check if path looks like a CK3 mod path (has common mod structure)."""
+    mod_indicators = [
+        "/common/",
+        "/events/",
+        "/localization/",
+        "/gfx/",
+        "/gui/",
+        "/music/",
+        "/sound/",
+        "workshop/content/1158310/",  # CK3 Steam workshop ID
+    ]
+    return any(indicator in path_str for indicator in mod_indicators)
 
 
 # =============================================================================
@@ -199,11 +202,6 @@ def enforce_ck3lens_file_restrictions(
     wip_python_files = []  # Python files in WIP (allowed)
     ck3raven_writes = []   # Attempted writes to ck3raven source (NEVER allowed)
     
-    # Get roots for classification
-    local_mod_roots = set()
-    if ctx.local_mods and ctx.active_roots:
-        local_mod_roots = ctx.active_roots
-    
     for artifact in bundle.artifacts:
         path = getattr(artifact, "path", "")
         if not path:
@@ -219,11 +217,10 @@ def enforce_ck3lens_file_restrictions(
         else:
             ext = ""
         
-        # Classify the domain
+        # Classify the domain using local_mods_folder boundary
         domain = classify_path_domain(
             path,
-            local_mod_roots=local_mod_roots,
-            workshop_roots=ctx.active_roots - local_mod_roots if ctx.active_roots else None,
+            local_mods_folder=ctx.local_mods_folder,
             vanilla_root=ctx.vanilla_root,
             ck3raven_root=ctx.ck3raven_root,
         )

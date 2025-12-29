@@ -344,12 +344,16 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
     
     # --- File operations ---
     if op == OperationType.FILE_WRITE:
-        return EnforcementResult(
-            decision=Decision.ALLOW,
-            reason="File write allowed with valid contract scope",
-            contract_id=contract.contract_id if contract else None,
-            scope_check_details=scope_details,
-        )
+        if mode == "ck3lens":
+            return _enforce_ck3lens_write(request, contract)
+        else:
+            # ck3raven-dev: already validated by scope check in STEP 4
+            return EnforcementResult(
+                decision=Decision.ALLOW,
+                reason="File write allowed with valid contract scope",
+                contract_id=contract.contract_id if contract else None,
+                scope_check_details=scope_details,
+            )
     
     if op == OperationType.FILE_DELETE:
         # Deletes always require token
@@ -594,6 +598,106 @@ def _enforce_git_push(
             "repo_domains": repo_domains,
         },
     )
+
+
+# =============================================================================
+# CK3LENS WRITE ENFORCEMENT
+# =============================================================================
+
+def _enforce_ck3lens_write(
+    request: EnforcementRequest,
+    contract: Any,  # WorkContract or None
+) -> EnforcementResult:
+    """
+    Enforce write operations for ck3lens mode.
+    
+    ck3lens can write to:
+    1. WIP workspace (~/.ck3raven/wip/) - always allowed, no contract
+    2. Local mods (via mod_name + rel_path) - requires contract
+    3. Launcher registry - requires token (repair operations)
+    
+    ck3lens CANNOT write to:
+    - ck3raven source
+    - Workshop mods
+    - Vanilla game files
+    - Arbitrary filesystem paths
+    """
+    from .wip_workspace import get_wip_workspace_path, is_wip_path
+    from .types import AgentMode
+    
+    target_path = request.target_path
+    mod_name = request.mod_name
+    rel_path = request.rel_path
+    
+    # Case 1: WIP workspace - always allowed
+    if target_path:
+        try:
+            wip_root = get_wip_workspace_path(AgentMode.CK3LENS)
+            if is_wip_path(target_path, wip_root):
+                return EnforcementResult(
+                    decision=Decision.ALLOW,
+                    reason="Write to WIP workspace allowed",
+                )
+        except Exception:
+            pass
+    
+    # Case 2: Local mod via mod_name + rel_path
+    if mod_name and rel_path:
+        # Contract required for mod writes
+        if contract is None:
+            return EnforcementResult(
+                decision=Decision.REQUIRE_CONTRACT,
+                reason=f"Write to mod '{mod_name}' requires active contract",
+                required_contract=True,
+            )
+        
+        # Validate mod is a local mod (not workshop)
+        # This is done by checking if it's under local_mods_folder
+        # The actual resolution happens in the tool layer
+        return EnforcementResult(
+            decision=Decision.ALLOW,
+            reason=f"Write to local mod '{mod_name}' allowed with contract",
+            contract_id=contract.contract_id,
+            scope_check_details={
+                "mod_name": mod_name,
+                "rel_path": rel_path,
+            },
+        )
+    
+    # Case 3: Raw path - check if it's a valid ck3lens write target
+    if target_path:
+        # Check if it's launcher registry (special case for ck3_repair)
+        if _is_launcher_registry_path(target_path):
+            if not request.token_id:
+                return EnforcementResult(
+                    decision=Decision.REQUIRE_TOKEN,
+                    reason="Launcher registry writes require REGISTRY_REPAIR token",
+                    required_token_tier=TokenTier.TIER_B,
+                    required_token_type="REGISTRY_REPAIR",
+                )
+            return EnforcementResult(
+                decision=Decision.ALLOW,
+                reason="Launcher registry write allowed with token",
+                token_id=request.token_id,
+            )
+        
+        # Deny other raw paths in ck3lens mode
+        return EnforcementResult(
+            decision=Decision.DENY,
+            reason=f"ck3lens cannot write to raw path: {target_path}. Use mod_name + rel_path for mod files.",
+        )
+    
+    # No path info at all
+    return EnforcementResult(
+        decision=Decision.DENY,
+        reason="Write target not specified (need target_path or mod_name + rel_path)",
+    )
+
+
+def _is_launcher_registry_path(path: str) -> bool:
+    """Check if path is the CK3 launcher registry."""
+    path_lower = path.replace("\\", "/").lower()
+    return "launcher-v2.sqlite" in path_lower or "launcher-v2_openbeta.sqlite" in path_lower
 
 
 # =============================================================================

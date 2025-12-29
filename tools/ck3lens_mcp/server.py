@@ -211,15 +211,7 @@ def _get_playset_scope():
     if scope.get("source") == "none":
         return None
     
-    _cached_playset_scope = build_scope_from_session(scope, session.local_mods)
-    return _cached_playset_scope
-
-
-# Cached WorldAdapter for the current mode
-_cached_world_adapter = None
-_cached_world_mode = None
-
-
+    _cached_playset_scope = build_scope_from_session(scope, session.local_mods_folder)
 def _get_world():
     """
     Get the WorldAdapter for the current agent mode.
@@ -661,64 +653,61 @@ def ck3_init_session(
 
 def _init_session_internal(
     db_path: Optional[str] = None,
-    local_mods_override: Optional[list[str]] = None
 ) -> dict:
     """
     Internal session initialization - called by ck3_get_mode_instructions.
-    
+
+    CANONICAL MODEL:
+    - Session is loaded from active playset via load_config()
+    - mods[] contains all mods from playset
+    - local_mods_folder is the folder boundary for editable mods
+    - "Local mods" are derived at runtime, not stored
+
     Returns session info dict.
     """
-    from ck3lens.workspace import load_config, DEFAULT_DB_PATH, DEFAULT_CK3_MOD_DIR, LocalMod
-    
+    from ck3lens.workspace import load_config
+
     global _session, _db, _trace, _playset_id, _session_scope
-    
+
     # Reset playset and scope cache
     _playset_id = None
     _session_scope = None
-    
-    # Use load_config to get default session with local mods from playset
+
+    # Use load_config to get session from active playset
     _session = load_config()
-    
+
     # Override DB path if provided
     if db_path:
         _session.db_path = Path(db_path)
-    
-    # Override local mods if specific names provided
-    if local_mods_override:
-        _session.local_mods = [
-            LocalMod(mod_id=name, name=name, path=DEFAULT_CK3_MOD_DIR / name)
-            for name in local_mods_override
-            if (DEFAULT_CK3_MOD_DIR / name).exists()
-        ]
-    
+
     _db = DBQueries(db_path=_session.db_path)
-    
+
     # Initialize trace with proper path based on mode
     _trace = ToolTrace(_get_trace_path())
-    
+
     # Auto-detect playset
     playset_id = _get_playset_id()
     playset_info = _db.conn.execute(
         "SELECT name, is_active FROM playsets WHERE playset_id = ?",
         (playset_id,)
     ).fetchone()
-    
+
     # Check database health
     db_status = _check_db_health(_db.conn)
-    
+
+    # Return minimal session info - WorldAdapter handles visibility,
+    # enforcement.py handles write permission. No "local_mods" listing needed.
     result = {
-        "mod_root": str(_session.mod_root),
-        "local_mods": [m.name for m in _session.local_mods],
         "db_path": str(_db.db_path) if _db.db_path else None,
         "playset_id": playset_id,
         "playset_name": playset_info[0] if playset_info else None,
         "db_status": db_status,
     }
-    
+
     # Add warning if database needs attention
     if not db_status.get("is_complete"):
         result["warning"] = f"Database incomplete: {db_status.get('rebuild_reason', 'unknown')}. Run: python builder/daemon.py start"
-    
+
     return result
 
 
@@ -3077,8 +3066,7 @@ def ck3_exec(
         # Per Canonical Initialization #9: Scripts must be sandboxed
         # =======================================================================
         from ck3lens.policy.tokens import validate_token
-        from ck3lens.policy.lensworld_sandbox import run_script_sandboxed
-        from ck3lens import local_mods
+        from ck3lens.tools.script_sandbox import run_script_sandboxed
         
         script_path = Path(wip_script_info["script_path"])
         
@@ -3124,34 +3112,11 @@ def ck3_exec(
         # Get sandbox paths
         from ck3lens.policy.wip_workspace import get_wip_workspace_path
         from ck3lens.policy.types import AgentMode
-        
+
         wip_path = get_wip_workspace_path(AgentMode.CK3LENS)
-        
-        # Get active local mod roots
-        local_mod_roots = set()
-        try:
-            for mod_name in local_mods.LOCAL_MODS:
-                mod_path = local_mods.get_mod_path(mod_name)
-                if mod_path:
-                    local_mod_roots.add(Path(mod_path))
-        except Exception:
-            pass
-        
-        # Utility paths (read-only) - logs, saves, etc.
-        utility_paths = set()
-        try:
-            from ck3lens.paths import get_ck3_user_path
-            ck3_user = get_ck3_user_path()
-            if ck3_user:
-                utility_paths.add(Path(ck3_user) / "logs")
-                utility_paths.add(Path(ck3_user) / "save games")
-        except Exception:
-            pass
-        
-        # Declared write paths from target_paths
-        declared_write_paths = set()
-        for p in (target_paths or []):
-            declared_write_paths.add(Path(p))
+
+        # Get session for WorldAdapter access
+        session = _get_session()
         
         # Dry run returns early
         if dry_run:
@@ -3168,31 +3133,24 @@ def ck3_exec(
                 "message": "Dry run - script would be executed in LensWorld sandbox",
                 "sandbox_config": {
                     "wip_path": str(wip_path),
-                    "local_mod_roots": [str(p) for p in local_mod_roots],
-                    "declared_write_paths": [str(p) for p in declared_write_paths],
                 },
             }
-        
-        # Execute in sandbox
+
+        # Execute in sandbox (delegates to WorldAdapter.is_visible + enforcement.gate_write)
         trace.log("ck3lens.exec.sandbox_start", {
             "script_path": str(script_path),
             "script_hash": wip_script_info.get("script_hash", "")[:16],
             "token_id": token_id,
         }, {})
-        
+
         sandbox_result = run_script_sandboxed(
             script_path=script_path,
+            session=session,
             wip_path=wip_path,
-            local_mod_roots=local_mod_roots,
-            utility_paths=utility_paths,
-            declared_write_paths=declared_write_paths,
+            contract_id=None,  # TODO: pass active contract if available
+            token_id=token_id,
         )
-        
-        trace.log("ck3lens.exec.sandbox_complete", {
-            "success": sandbox_result["success"],
-            "blocked_count": sandbox_result["audit"].get("blocked_operations", 0),
-        }, {})
-        
+
         return {
             "allowed": True,
             "executed": True,
@@ -5159,12 +5117,13 @@ def ck3_report_validation_issue(
         "reported_at": datetime.now().isoformat(),
         "status": "open",
     }
-    
-    # Write to issues file in mod root
-    issues_file = session.mod_root / "ck3lens_validation_issues.jsonl"
+
+    # Write to issues file in ck3raven project folder
+    ck3raven_root = Path(__file__).parent.parent.parent
+    issues_file = ck3raven_root / "ck3lens_validation_issues.jsonl"
     with issues_file.open("a", encoding="utf-8") as f:
         f.write(json.dumps(issue, ensure_ascii=False) + "\n")
-    
+
     trace.log("ck3lens.report_validation_issue", {
         "issue_type": issue_type,
         "snippet_length": len(code_snippet)
@@ -8335,18 +8294,16 @@ def ck3_get_workspace_config() -> dict:
     """
     from pathlib import Path
     import json
-    
+
     session = _get_session()
-    
+
+    # Minimal config - WorldAdapter handles visibility, enforcement handles writes
     result = {
         "database": {
             "path": str(session.db_path),
             "exists": session.db_path.exists(),
         },
-        "local_mods": [
-            {"mod_id": m.mod_id, "name": m.name, "path": str(m.path)}
-            for m in (session.local_mods or [])
-        ],
+        "playset_name": session.playset_name,
         "tool_sets": None,
         "mcp_config": None,
         "available_modes": [
@@ -8362,11 +8319,11 @@ def ck3_get_workspace_config() -> dict:
             },
         ],
     }
-    
+
     # Try to read toolSets.json
     ai_workspace = Path(__file__).parent.parent.parent.parent
     tool_sets_path = ai_workspace / ".vscode" / "toolSets.json"
-    
+
     if tool_sets_path.exists():
         try:
             result["tool_sets"] = json.loads(tool_sets_path.read_text(encoding="utf-8"))

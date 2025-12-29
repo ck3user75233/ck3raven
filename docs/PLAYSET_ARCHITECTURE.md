@@ -1,8 +1,10 @@
-# Canonical Playset Management Architecture
+# Playset Architecture (Deep Dive)
 
 > **Status:** FINAL (LOCKED)  
-> **Date:** December 29, 2025  
-> **Purpose:** Define the single source of truth for playset management in ck3raven/ck3lens
+> **Date:** December 30, 2025  
+> **Purpose:** Detailed specification for playset management in ck3raven/ck3lens
+
+**See also:** [CANONICAL_ARCHITECTURE.md](CANONICAL_ARCHITECTURE.md) for the 5 rules every agent must know
 
 ---
 
@@ -47,6 +49,62 @@ The field `ui_hint_potentially_editable` on ResolutionResult is permitted becaus
 - It MUST NOT be used in control flow
 - It MUST NOT gate execution
 - It is for display purposes only (lock icons, etc.)
+
+---
+
+## CANONICAL SOURCES (SINGLE POINTS OF TRUTH)
+
+### For Policy/Permission Decisions: `enforcement.py`
+
+**File:** `tools/ck3lens_mcp/ck3lens/policy/enforcement.py`
+
+ALL "can I do X?" questions MUST go through `enforce_policy()` or `enforce_and_log()`.
+
+```python
+from ck3lens.policy.enforcement import enforce_policy, EnforcementRequest, OperationType
+
+result = enforce_policy(EnforcementRequest(
+    operation=OperationType.FILE_WRITE,
+    mode="ck3lens",
+    tool_name="ck3_file",
+    mod_name="MSC",
+    rel_path="common/traits/zzz_fix.txt",
+))
+
+if result.decision != Decision.ALLOW:
+    return {"error": result.reason}
+```
+
+**NEVER:**
+- Implement permission logic elsewhere
+- Create parallel permission systems
+- Import archived gate functions (hard_gates.py is ARCHIVED)
+
+### For Path Visibility/Resolution: `WorldAdapter`
+
+**File:** `tools/ck3lens_mcp/ck3lens/world_adapter.py`
+
+ALL "can I see X?" or "does X exist in my world?" questions go through `WorldAdapter`.
+
+```python
+adapter = LensWorldAdapter(lens, db, ...)
+result = adapter.resolve("common/traits/00_traits.txt")
+
+if not result.found:
+    raise FileNotFoundError(...)  # NOT PermissionError
+```
+
+**Key principle:** If WorldAdapter says NOT_FOUND, the resource doesn't exist in LensWorld.
+This is NOT a permission denial - it's visibility.
+
+### Enforcement vs Visibility
+
+| Question | Go To | Returns |
+|----------|-------|---------|
+| "Does this path exist for me?" | WorldAdapter.is_visible() | True/False |
+| "Can I write to this path?" | enforcement.enforce_policy() | ALLOW/DENY/REQUIRE_TOKEN |
+| "What mods are in my playset?" | Session.mods[] | List of mods |
+| "Where is the local mods folder?" | Session.local_mods_folder | Path |
 
 ---
 

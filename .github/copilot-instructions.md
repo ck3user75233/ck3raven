@@ -1,7 +1,24 @@
 # CK3 Lens - Comprehensive Copilot Instructions
 
-> **Last Updated:** December 29, 2025  
+> **Last Updated:** December 30, 2025  
 > **For use with:** ck3raven, CK3 Lens MCP, CK3 Lens Explorer
+
+---
+
+## ⚠️ REQUIRED READING FOR INFRASTRUCTURE WORK
+
+If you are working on ck3raven source code (ck3raven-dev mode), read this first:
+
+**[docs/CANONICAL_ARCHITECTURE.md](../docs/CANONICAL_ARCHITECTURE.md)** — The 5 rules every agent must follow
+
+Key rules (violations will be rejected):
+1. **ONE enforcement boundary** — only `enforcement.py` may deny operations
+2. **NO permission oracles** — never ask "am I allowed?" outside enforcement
+3. **mods[] is THE mod list** — no parallel lists like `local_mods[]`
+4. **WorldAdapter = visibility** — describes what exists, NOT what's allowed
+5. **Enforcement = decisions** — decides allow/deny at execution time only
+
+**For MCP tool development:** See [Section 5: MCP Tool Architecture](../docs/CANONICAL_ARCHITECTURE.md#5-mcp-tool-architecture) for the canonical pattern all tools must follow.
 
 ---
 

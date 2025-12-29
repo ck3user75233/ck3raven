@@ -2514,29 +2514,25 @@ def ck3_git_impl(
         
         result = _git_ops_for_path(command, ck3raven_root, file_path, files, all_files, message, limit)
         if trace:
-            trace.log(f"ck3lens.git.{command}", {"target": "ck3raven"}, 
+            trace.log(f"ck3lens.git.{command}", {"target": "ck3raven"},
                       {"success": result.get("success", "error" not in result)})
         return result
-    
+
     # ck3lens mode: require mod_name for live mod operations
     if not mod_name:
-        available = [m.mod_id for m in session.local_mods] if session.local_mods else []
         return {
             "error": "mod_name required for git operations in ck3lens mode",
-            "available_mods": available,
-            "hint": "Specify which live mod to operate on"
+            "hint": "Specify which mod to operate on"
         }
-    
-    # Standard live mod git ops
-    local_mod = session.get_local_mod(mod_name)
-    if not local_mod:
-        available = [m.mod_id for m in session.local_mods] if session.local_mods else []
+
+    # Get mod from session (mods[] from active playset)
+    mod = session.get_mod(mod_name)
+    if not mod:
         return {
-            "error": f"Not a live mod: {mod_name}",
-            "available_mods": available,
+            "error": f"Mod not found in active playset: {mod_name}",
             "hint": "Use mod folder name, not display name"
         }
-    
+
     # git_ops functions expect (session, mod_id) - pass correctly
     if command == "status":
         result = git_ops.git_status(session, mod_name)
