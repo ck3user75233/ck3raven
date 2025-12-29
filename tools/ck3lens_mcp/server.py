@@ -2531,16 +2531,16 @@ def ck3_repair(
                 "cache": {
                     "files": len(cache_files),
                     "path": str(ck3raven_dir),
-                    "can_delete": True,
+                    # NO permission oracles - enforcement decides at execution time
                 },
                 "wip": {
                     "files": len(wip_files),
                     "path": str(ck3raven_dir / "wip"),
-                    "can_delete": True,
+                    # NO permission oracles - enforcement decides at execution time
                 },
                 "launcher": {
                     "path": str(launcher_db) if launcher_db else None,
-                    "can_repair": launcher_db is not None,
+                    "exists": launcher_db is not None,
                     "requires_backup": True,
                 },
             },

@@ -234,13 +234,13 @@ def enforce_allowed_python_paths(
         
         path_normalized = path.replace("\\", "/")
         
-        # Check if file is in an allowed path
-        is_allowed = any(
+        # Check if file path matches allowed location patterns
+        in_allowed_location = any(
             path_normalized.startswith(allowed) or f"/{allowed}" in path_normalized
             for allowed in ALLOWED_PYTHON_PATHS
         )
         
-        if not is_allowed:
+        if not in_allowed_location:
             disallowed_files.append(path)
     
     summary["disallowed_python_files"] = disallowed_files
