@@ -1,6 +1,6 @@
 # CK3 Lens - Comprehensive Copilot Instructions
 
-> **Last Updated:** December 19, 2025  
+> **Last Updated:** December 29, 2025  
 > **For use with:** ck3raven, CK3 Lens MCP, CK3 Lens Explorer
 
 ---
@@ -28,11 +28,33 @@ This workspace contains the **CK3 Lens** ecosystem - a complete AI-powered toolk
 
 ## MCP Tools Reference (28+ Tools)
 
-### Session Management
+### Initialization (CRITICAL - Call First!)
+
 | Tool | Purpose | Usage |
 |------|---------|-------|
-| `ck3_init_session` | Initialize database connection | **Call first before any other tools** |
-| `ck3_list_live_mods` | List editable mods | Returns MSC, MSCRE, LRE with paths |
+| `ck3_get_mode_instructions` | **THE initialization function** | **Call first with mode="ck3lens" or "ck3raven-dev"** |
+
+**Single Entry Point:**
+```
+ck3_get_mode_instructions(mode="ck3lens")
+```
+
+This single call handles:
+1. Database connection initialization
+2. Mode setting (persisted)
+3. WIP workspace initialization
+4. Playset detection
+5. Returns mode instructions + policy boundaries + session info
+
+> ⚠️ `ck3_init_session` is **DEPRECATED**. Use `ck3_get_mode_instructions` instead.
+
+### Session & Status
+| Tool | Purpose |
+|------|---------|
+| `ck3_get_db_status` | Check database health and build status |
+| `ck3_get_scope_info` | Get active playset/lens info |
+| `ck3_list_local_mods` | List editable mods (MSC, MSCRE, LRE, MRP) |
+| `ck3_get_detected_mode` | Check current mode from trace |
 
 ### Symbol Search & Validation
 | Tool | Purpose | Critical Notes |

@@ -836,7 +836,7 @@ ASTs are cached by (content_hash, parser_version):
 
 | Category | Tools | Purpose |
 |----------|-------|---------|
-| **Session** | `ck3_init_session`, `ck3_get_workspace_config` | Initialize and configure |
+| **Initialization** | `ck3_get_mode_instructions` (primary), `ck3_get_workspace_config` | Initialize session with mode |
 | **Search** | `ck3_search`, `ck3_confirm_not_exists` | Find symbols with adjacency matching |
 | **Files** | `ck3_get_file`, `ck3_list_live_files`, `ck3_list_dir` | Read content from database |
 | **Playset** | `ck3_list_playsets`, `ck3_get_active_playset`, `ck3_switch_playset`, `ck3_get_agent_briefing` | Manage playset JSON files |
@@ -846,6 +846,8 @@ ASTs are cached by (content_hash, parser_version):
 | **Validation** | `ck3_validate_syntax`, `ck3_validate_python`, `ck3_validate_policy` | Pre-write validation |
 | **Logs** | `ck3_parse_error_log`, `ck3_get_crash_report` | Error analysis |
 | **Database** | `ck3_get_db_status`, `ck3_db_delete`, `ck3_refresh_file` | Database management |
+
+> **Note:** `ck3_init_session` is DEPRECATED. Use `ck3_get_mode_instructions(mode="ck3lens")` instead.
 
 #### Agent Modes
 

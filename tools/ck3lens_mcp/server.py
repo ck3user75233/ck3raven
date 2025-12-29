@@ -632,18 +632,41 @@ def ck3_init_session(
     local_mods: Optional[list[str]] = None
 ) -> dict:
     """
-    Initialize the CK3 Lens session.
+    DEPRECATED: Use ck3_get_mode_instructions() instead.
     
-    Works in both modes:
-    - ck3lens mode: Initializes with playset context for mod work
-    - ck3raven-dev mode: Initializes with repo context for infrastructure work
+    This tool is kept for backwards compatibility but redirects to
+    ck3_get_mode_instructions with mode auto-detection.
     
-    Args:
-        db_path: Path to ck3raven SQLite database (optional, uses default)
-        local_mods: Override list of whitelisted local mod folder names (optional)
+    The recommended initialization flow is:
+        ck3_get_mode_instructions(mode="ck3lens")  # or "ck3raven-dev"
     
-    Returns:
-        Session info including mod_root and local_mods list
+    This single call handles:
+    - Database connection
+    - Mode setting
+    - WIP workspace initialization
+    - Returns instructions + policy boundaries
+    """
+    return {
+        "deprecated": True,
+        "message": "ck3_init_session is deprecated. Use ck3_get_mode_instructions() instead.",
+        "guidance": (
+            "Call ck3_get_mode_instructions(mode='ck3lens') or "
+            "ck3_get_mode_instructions(mode='ck3raven-dev') to initialize properly.\n\n"
+            "This single call handles: database connection, mode setting, "
+            "WIP workspace initialization, and returns mode instructions."
+        ),
+        "example": "ck3_get_mode_instructions(mode='ck3lens')",
+    }
+
+
+def _init_session_internal(
+    db_path: Optional[str] = None,
+    local_mods_override: Optional[list[str]] = None
+) -> dict:
+    """
+    Internal session initialization - called by ck3_get_mode_instructions.
+    
+    Returns session info dict.
     """
     from ck3lens.workspace import load_config, DEFAULT_DB_PATH, DEFAULT_CK3_MOD_DIR, LocalMod
     
@@ -661,10 +684,10 @@ def ck3_init_session(
         _session.db_path = Path(db_path)
     
     # Override local mods if specific names provided
-    if local_mods:
+    if local_mods_override:
         _session.local_mods = [
             LocalMod(mod_id=name, name=name, path=DEFAULT_CK3_MOD_DIR / name)
-            for name in local_mods
+            for name in local_mods_override
             if (DEFAULT_CK3_MOD_DIR / name).exists()
         ]
     
@@ -672,11 +695,6 @@ def ck3_init_session(
     
     # Initialize trace with proper path based on mode
     _trace = ToolTrace(_get_trace_path())
-    
-    _trace.log("ck3lens.init_session", {"db_path": db_path, "local_mods": local_mods}, {
-        "trace_path": str(_get_trace_path()),
-        "local_mods_count": len(_session.local_mods)
-    })
     
     # Auto-detect playset
     playset_id = _get_playset_id()
@@ -7951,19 +7969,22 @@ def ck3_get_mode_instructions(
     """
     Get the instruction content for a specific agent mode.
     
-    CRITICAL: This is the MODE INITIALIZATION function. It:
-    1. Loads mode-specific instructions
-    2. Initializes WIP workspace (mode-specific location)
-    3. Returns policy boundaries for the mode
-    4. Logs mode activation to trace
+    CRITICAL: This is THE initialization function. Call this FIRST.
+    
+    This single call handles:
+    1. Database connection initialization
+    2. Mode setting (persisted to file)
+    3. WIP workspace initialization (mode-specific location)
+    4. Playset detection
+    5. Returns mode instructions + policy boundaries + session info
     
     Args:
-        mode: The mode to get instructions for:
+        mode: The mode to initialize:
             - "ck3lens": CK3 modding with database search and live mod editing
             - "ck3raven-dev": Full development mode for infrastructure
     
     Returns:
-        Mode instructions, policy boundaries, and session context
+        Mode instructions, policy boundaries, session context, and database status
     """
     from pathlib import Path
     from ck3lens.policy import (
@@ -7979,25 +8000,27 @@ def ck3_get_mode_instructions(
             "valid_modes": list(VALID_MODES),
         }
     
-    # PERSIST the mode to file - this is the single source of truth
+    # =========================================================================
+    # STEP 1: Initialize database connection (what ck3_init_session used to do)
+    # =========================================================================
+    session_info = _init_session_internal()
+    
+    # =========================================================================
+    # STEP 2: Set mode (persisted to file as single source of truth)
+    # =========================================================================
     set_agent_mode(mode)
     
     # Reset cached world adapter - mode change invalidates the cache
     _reset_world_cache()
     
-    # Map modes to instruction files
+    # =========================================================================
+    # STEP 3: Load mode-specific instructions
+    # =========================================================================
     mode_files = {
         "ck3lens": "COPILOT_LENS_COMPATCH.md",
         "ck3raven-dev": "COPILOT_RAVEN_DEV.md",
     }
     
-    if mode not in mode_files:
-        return {
-            "error": f"Unknown mode: {mode}",
-            "available_modes": list(mode_files.keys()),
-        }
-    
-    # Find the instructions file
     ck3raven_root = Path(__file__).parent.parent.parent
     instructions_path = ck3raven_root / ".github" / mode_files[mode]
     
@@ -8005,12 +8028,15 @@ def ck3_get_mode_instructions(
         return {
             "error": f"Instructions file not found: {mode_files[mode]}",
             "expected_path": str(instructions_path),
+            "session": session_info,  # Still return session info
         }
     
     try:
         content = instructions_path.read_text(encoding="utf-8")
         
-        # Initialize WIP workspace (mode-specific location and behavior)
+        # =====================================================================
+        # STEP 4: Initialize WIP workspace (mode-specific location)
+        # =====================================================================
         wip_info = None
         agent_mode = AgentMode.CK3LENS if mode == "ck3lens" else AgentMode.CK3RAVEN_DEV
         
@@ -8026,7 +8052,9 @@ def ck3_get_mode_instructions(
         # Build policy context for the mode
         policy_context = _get_mode_policy_context(mode)
         
-        # Log mode initialization to trace
+        # =====================================================================
+        # STEP 5: Log initialization to trace
+        # =====================================================================
         trace = _get_trace()
         wip_path = get_wip_workspace_path(
             agent_mode,
@@ -8036,18 +8064,42 @@ def ck3_get_mode_instructions(
             "mode": mode,
             "source_file": str(instructions_path),
             "wip_workspace": str(wip_path),
+            "playset_id": session_info.get("playset_id"),
+            "playset_name": session_info.get("playset_name"),
         })
         
-        return {
+        # =====================================================================
+        # Build complete response
+        # =====================================================================
+        result = {
             "mode": mode,
             "instructions": content,
             "source_file": str(instructions_path),
             "policy": policy_context,
             "wip_workspace": wip_info,
             "session_note": _get_mode_session_note(mode),
+            # Session info (from what ck3_init_session used to return)
+            "session": {
+                "mod_root": session_info.get("mod_root"),
+                "local_mods": session_info.get("local_mods", []),
+                "db_path": session_info.get("db_path"),
+                "playset_id": session_info.get("playset_id"),
+                "playset_name": session_info.get("playset_name"),
+                "db_status": session_info.get("db_status", {}),
+            },
         }
+        
+        # Add warning if database needs attention
+        if session_info.get("warning"):
+            result["db_warning"] = session_info["warning"]
+        
+        return result
+        
     except Exception as e:
-        return {"error": str(e)}
+        return {
+            "error": str(e),
+            "session": session_info,  # Still return session info on error
+        }
 
 
 def _get_mode_policy_context(mode: str) -> dict:
