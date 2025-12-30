@@ -21,6 +21,7 @@ import argparse
 import fnmatch
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -99,21 +100,32 @@ FILENAME_ALLOWED_PATHS = [
 # Forbidden path-derivation APIs outside canonical modules
 # These indicate path normalization leaking out of WorldAdapter
 # -----------------------------
-FORBIDDEN_PATH_PATTERNS = [
-    # NOTE: We need to be careful not to match "world.resolve(" which is correct
-    # The pattern "Path.resolve(" or ".resolve()" catches direct Path method calls
-    "Path.resolve(",       # Explicit Path.resolve() call
-    ").resolve(",          # Chained .resolve() on a Path-returning expression
+
+# ALWAYS forbidden - no exceptions by variable name
+FORBIDDEN_PATH_PATTERNS_ALWAYS = [
+    ".relative_to(",       # Any .relative_to() call - use WorldAdapter
     "os.path.relpath(",    # os.path.relpath - should use WorldAdapter
     "posixpath.relpath(",
     "ntpath.relpath(",
 ]
 
-# Patterns that indicate inline relative_to usage (violation)
-# But we need context - relative_to after resolve() is particularly problematic
-FORBIDDEN_RELATIVE_TO_PATTERNS = [
-    ".relative_to(",       # Any .relative_to() call
-]
+# Allowed base names for .resolve() calls
+# These are WorldAdapter/LensWorld instances where resolve() is the correct API
+ALLOWED_RESOLVE_BASE_NAMES = {
+    "world",
+    "adapter",
+    "world_adapter",
+    "lens_world",
+    "lensworld",
+}
+
+# Regex to match attr.resolve( calls and capture the base name
+# Matches: world.resolve(, adapter.resolve(, etc.
+RE_ATTR_CALL = re.compile(r"(?P<base>[A-Za-z_][A-Za-z0-9_]*)\s*\.\s*resolve\s*\(")
+
+# Regex to match Path(...).resolve( pattern - always forbidden
+# Matches: Path(p).resolve(, Path("foo").resolve(, Path(some_var).resolve(
+RE_PATH_RESOLVE = re.compile(r"Path\s*\([^)]*\)\s*\.\s*resolve\s*\(")
 
 # Files (or directories) allowed to contain path derivation logic.
 # These are the canonical path normalization modules.
@@ -329,21 +341,13 @@ def check_forbidden_path_apis(root: Path, files: Iterable[Path]) -> List[LintErr
         except Exception:
             continue
         
-        # Check forbidden resolve patterns
-        for pat in FORBIDDEN_PATH_PATTERNS:
+        # Check ALWAYS-forbidden patterns (relative_to, os.path.relpath, etc.)
+        for pat in FORBIDDEN_PATH_PATTERNS_ALWAYS:
             idx = 0
             while True:
                 idx = text.find(pat, idx)
                 if idx == -1:
                     break
-                
-                # Check for false positive: "world.resolve(" is allowed
-                # Look back to see if this is preceded by "world"
-                context_start = max(0, idx - 20)
-                context = text[context_start:idx + len(pat)]
-                if "world.resolve(" in context or "adapter.resolve(" in context:
-                    idx += 1
-                    continue
 
                 # Compute line/col
                 prefix = text[:idx]
@@ -362,30 +366,51 @@ def check_forbidden_path_apis(root: Path, files: Iterable[Path]) -> List[LintErr
                 )
                 idx += 1
         
-        # Check forbidden relative_to patterns
-        for pat in FORBIDDEN_RELATIVE_TO_PATTERNS:
-            idx = 0
-            while True:
-                idx = text.find(pat, idx)
-                if idx == -1:
-                    break
-
-                # Compute line/col
-                prefix = text[:idx]
-                line = prefix.count("\n") + 1
-                col = len(prefix.split("\n")[-1]) if "\n" in prefix else len(prefix)
-
-                errs.append(
-                    LintError(
-                        rule_id=RULE_FORBIDDEN_PATH_APIS,
-                        path=rel,
-                        line=line,
-                        col=col,
-                        message=f"Forbidden path derivation API '{pat}' used outside canonical path modules. "
-                                f"Relative path derivation must flow through WorldAdapter.",
-                    )
+        # Check for Path(...).resolve( pattern - ALWAYS forbidden
+        for m in RE_PATH_RESOLVE.finditer(text):
+            prefix = text[:m.start()]
+            line = prefix.count("\n") + 1
+            col = len(prefix.split("\n")[-1]) if "\n" in prefix else len(prefix)
+            
+            errs.append(
+                LintError(
+                    rule_id=RULE_FORBIDDEN_PATH_APIS,
+                    path=rel,
+                    line=line,
+                    col=col,
+                    message=f"Forbidden Path(...).resolve() used outside canonical path modules. "
+                            f"Use WorldAdapter.resolve() instead.",
                 )
-                idx += 1
+            )
+        
+        # Check for base.resolve( patterns, allow if base is in ALLOWED_RESOLVE_BASE_NAMES
+        for m in RE_ATTR_CALL.finditer(text):
+            base_name = m.group("base")
+            if base_name.lower() in ALLOWED_RESOLVE_BASE_NAMES:
+                # This is an allowed WorldAdapter.resolve() call
+                continue
+            
+            # Check if this is a Path(...).resolve( which we already caught above
+            # The Path pattern is more specific, so skip if it matches
+            match_text = text[max(0, m.start() - 20):m.end()]
+            if RE_PATH_RESOLVE.search(match_text):
+                continue
+            
+            prefix = text[:m.start()]
+            line = prefix.count("\n") + 1
+            col = len(prefix.split("\n")[-1]) if "\n" in prefix else len(prefix)
+            
+            errs.append(
+                LintError(
+                    rule_id=RULE_FORBIDDEN_PATH_APIS,
+                    path=rel,
+                    line=line,
+                    col=col,
+                    message=f"Suspicious .resolve() call on '{base_name}' outside canonical path modules. "
+                            f"Only WorldAdapter (world.resolve()) is allowed. "
+                            f"If this is a Path, use WorldAdapter.resolve() instead.",
+                )
+            )
                 
     return errs
 
