@@ -28,6 +28,8 @@ EXCLUDE_DIRS = {
     "node_modules",
     ".vscode",
     "*.egg-info",
+    "exports",  # Don't include previous exports in new exports
+    ".wip",     # Agent workspace - transient
 }
 
 EXCLUDE_FILES = {

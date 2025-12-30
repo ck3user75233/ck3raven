@@ -89,6 +89,7 @@ _session: Optional[Session] = None
 _db: Optional[DBQueries] = None
 _trace: Optional[ToolTrace] = None
 _playset_id: Optional[int] = None
+_session_cv_ids_resolved: bool = False
 
 
 def _get_session() -> Session:
@@ -100,10 +101,21 @@ def _get_session() -> Session:
 
 
 def _get_db() -> DBQueries:
-    global _db
+    global _db, _session_cv_ids_resolved
     if _db is None:
         session = _get_session()
         _db = DBQueries(db_path=session.db_path)
+        
+        # Resolve cvids on first DB connection
+        if not _session_cv_ids_resolved:
+            stats = session.resolve_cvids(_db)
+            _session_cv_ids_resolved = True
+            # Log resolution stats for debugging
+            if stats.get("mods_missing"):
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"Mods not indexed: {stats['mods_missing']}"
+                )
     return _db
 
 
@@ -127,61 +139,44 @@ def _get_playset_id() -> int:
     return _playset_id
 
 
-# Cached file-based lens
-_cached_file_lens = None
-_cached_file_lens_source = None
+# No more cached lens - derive cvids directly from session.mods[]
 
 
-def _get_lens(no_lens: bool = False):
+def _get_cvids(no_lens: bool = False) -> Optional[set[int]]:
     """
-    Get the active playset lens for filtering queries.
+    Get the active playset cvids for filtering queries.
     
-    The lens is like putting on glasses - you only see content from the active playset.
-    
-    The ONLY source for playset data is file-based JSON configuration.
-    Database-based playsets are DEPRECATED and NOT used.
+    The cvids are derived from session.mods[].cvid.
+    mods[0] is always vanilla, mods[1:] are user mods.
     
     Args:
         no_lens: If True, return None to search ALL content (take glasses off)
     
     Returns:
-        PlaysetLens object or None if no_lens=True or no playset configured
+        Set of cvids or None if no_lens=True or no mods configured
     """
-    global _cached_file_lens, _cached_file_lens_source
-    
     if no_lens:
         return None
     
-    db = _get_db()
+    # Ensure DB is connected (triggers cvid resolution)
+    _get_db()
     
-    # File-based playset is the ONLY source (database is DEPRECATED)
-    scope = _get_session_scope()
+    session = _get_session()
+    if not session.mods:
+        return None
     
-    if scope.get("source") in ("json", "legacy_file"):
-        # Check if we have a cached lens for this source
-        source_key = scope.get("file_path")
-        if _cached_file_lens is not None and _cached_file_lens_source == source_key:
-            return _cached_file_lens
-        
-        # Build lens from file-based scope
-        mod_steam_ids = list(scope.get("active_mod_ids", set()))
-        mod_paths = list(scope.get("active_roots", set()))
-        playset_name = scope.get("playset_name", "File Playset")
-        
-        lens = db.build_lens_from_scope(
-            playset_name=playset_name,
-            mod_steam_ids=mod_steam_ids,
-            mod_paths=mod_paths
-        )
-        
-        if lens:
-            _cached_file_lens = lens
-            _cached_file_lens_source = source_key
-            return lens
-    
-    # No playset configured - return None (searches ALL content)
-    # NOTE: Database-based playsets are DEPRECATED and NOT used
-    return None
+    # Derive cvids from mods[] - THE canonical way
+    cvids = {m.cvid for m in session.mods if m.cvid}
+    return cvids if cvids else None
+
+
+# Backward compatibility - _get_lens() now returns cvids set
+def _get_lens(no_lens: bool = False):
+    """
+    DEPRECATED: Returns cvids set, not PlaysetLens.
+    Use _get_cvids() directly.
+    """
+    return _get_cvids(no_lens)
 
 
 # Cached playset scope for path validation
@@ -2133,8 +2128,6 @@ def ck3_playset(
             return {"success": False, "error": f"Failed to read playset: {e}"}
         
         # Check if mod_name is a path or a name
-        from ck3lens.world_adapter import normalize_path_for_comparison
-        
         mod_path = None
         if Path(mod_name).exists():
             # It's a path - normalize it via canonical utility

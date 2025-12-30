@@ -10,7 +10,7 @@ import sqlite3
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Any, Set
+from typing import Optional, Any, Set, TYPE_CHECKING
 
 # Add ck3raven to path if not installed
 CK3RAVEN_PATH = Path(__file__).parent.parent.parent.parent / "src"
@@ -19,6 +19,9 @@ if CK3RAVEN_PATH.exists():
 
 from ck3raven.db.schema import get_connection
 from ck3raven.resolver import SQLResolver, MergePolicy, get_policy_for_path
+
+if TYPE_CHECKING:
+    from .world_adapter import WorldAdapter
 
 
 # =============================================================================
@@ -52,30 +55,6 @@ class FileHit:
     relpath: str
     mod_name: str
     matches: list[ContentMatch]
-
-
-@dataclass
-class PlaysetLens:
-    """
-    A playset lens filters all database queries to a specific set of content.
-    
-    Think of it as putting on glasses - you only see what's in the playset.
-    The underlying data is unchanged; the lens is just a filter.
-    """
-    playset_id: int
-    playset_name: str
-    vanilla_cv_id: int  # content_version_id for vanilla
-    mod_cv_ids: list[int]  # content_version_ids for mods in load order
-    
-    @property
-    def all_cv_ids(self) -> Set[int]:
-        """All content_version_ids visible through this lens."""
-        return {self.vanilla_cv_id} | set(self.mod_cv_ids)
-    
-    def get_file_ids_sql(self, conn: sqlite3.Connection) -> str:
-        """Return SQL subquery for valid file_ids."""
-        cv_list = ",".join(str(cv) for cv in self.all_cv_ids)
-        return f"SELECT file_id FROM files WHERE content_version_id IN ({cv_list})"
 
 
 # =============================================================================
@@ -140,108 +119,63 @@ def dedupe_results(results: list[SymbolHit]) -> list[SymbolHit]:
 # =============================================================================
 
 class DBQueries:
-    """Query interface to ck3raven database."""
+    """Query interface to ck3raven database.
+    
+    CANONICAL MODEL:
+    - mods[0] is vanilla, mods[1:] are user mods
+    - DB filtering = {m.cvid for m in mods if m.cvid}
+    - No separate PlaysetLens or vanilla_cvid concepts
+    """
     
     def __init__(self, db_path: Path):
         self.db_path = db_path
         self.conn = get_connection(db_path)
         self.conn.row_factory = sqlite3.Row
-        self._lens_cache: dict[int, PlaysetLens] = {}
     
     # =========================================================================
-    # PLAYSET LENS MANAGEMENT
+    # CVID RESOLUTION
     # =========================================================================
     
-    def get_lens(self, playset_id: int) -> Optional[PlaysetLens]:
+    def get_cvids(self, mods: list, world: Optional["WorldAdapter"] = None) -> dict:
         """
-        Get the playset lens for a given playset_id.
+        Resolve cvids for all mods (including vanilla at mods[0]).
         
-        The lens defines what content is visible for all queries.
-        Returns None if playset doesn't exist.
-        """
-        if playset_id in self._lens_cache:
-            return self._lens_cache[playset_id]
-        
-        # Get playset info
-        playset = self.conn.execute("""
-            SELECT playset_id, name, vanilla_version_id
-            FROM playsets WHERE playset_id = ?
-        """, (playset_id,)).fetchone()
-        
-        if not playset:
-            return None
-        
-        # Get vanilla content_version_id
-        vanilla_cv = self.conn.execute("""
-            SELECT content_version_id 
-            FROM content_versions 
-            WHERE vanilla_version_id = ? AND kind = 'vanilla'
-            ORDER BY ingested_at DESC LIMIT 1
-        """, (playset["vanilla_version_id"],)).fetchone()
-        
-        if not vanilla_cv:
-            return None
-        
-        # Get mod content_version_ids in load order
-        mod_rows = self.conn.execute("""
-            SELECT content_version_id 
-            FROM playset_mods 
-            WHERE playset_id = ? AND enabled = 1
-            ORDER BY load_order_index ASC
-        """, (playset_id,)).fetchall()
-        
-        mod_cv_ids = [row["content_version_id"] for row in mod_rows]
-        
-        lens = PlaysetLens(
-            playset_id=playset_id,
-            playset_name=playset["name"],
-            vanilla_cv_id=vanilla_cv["content_version_id"],
-            mod_cv_ids=mod_cv_ids
-        )
-        
-        self._lens_cache[playset_id] = lens
-        return lens
-    
-    def get_active_lens(self) -> Optional[PlaysetLens]:
-        """
-        Get the lens for the currently active playset.
-        
-        DEPRECATED: This method queries the database which is empty.
-        Use build_lens_from_scope() instead with file-based playset data.
-        """
-        row = self.conn.execute("""
-            SELECT playset_id FROM playsets WHERE is_active = 1 LIMIT 1
-        """).fetchone()
-        
-        if row:
-            return self.get_lens(row["playset_id"])
-        return None
-    
-    def build_lens_from_scope(
-        self,
-        playset_name: str,
-        mod_steam_ids: list[str],
-        mod_paths: list[str],
-        load_order: Optional[list[str]] = None
-    ) -> Optional[PlaysetLens]:
-        """
-        Build a PlaysetLens from file-based playset data.
-        
-        This is the PRIMARY method for creating a lens from JSON playset files.
-        It resolves mod identifiers (steam IDs or paths) to content_version_ids.
+        This is the CANONICAL method for looking up mod database IDs.
+        Call this when a playset is activated to populate mods[].cvid.
         
         Args:
-            playset_name: Human-readable name for the playset
-            mod_steam_ids: List of Steam Workshop IDs for mods in playset
-            mod_paths: List of filesystem paths for mods in playset
-            load_order: Optional list of mod names/IDs defining load order
-                        (if None, uses database ingestion order)
-        
+            mods: List of ModEntry objects. mods[0] should be vanilla.
+            world: Optional WorldAdapter for path normalization.
+            
         Returns:
-            PlaysetLens with vanilla and mod content_version_ids,
-            or None if vanilla not found in database.
+            Dict with resolution stats:
+            - mods_resolved: int (count)
+            - mods_missing: list of mod names not found in DB
+            
+        Side effect: Updates mod.cvid on each mod
         """
-        # 1. Get vanilla content_version_id (most recent)
+        # Path normalization - use WorldAdapter if available
+        def normalize(path: str) -> str:
+            if world:
+                return world.normalize(path)
+            try:
+                return str(Path(path).resolve()).lower().replace("\\", "/").rstrip("/")
+            except Exception:
+                return path.lower().replace("\\", "/").rstrip("/")
+        
+        stats = {
+            "mods_resolved": 0,
+            "mods_missing": []
+        }
+        
+        if not mods:
+            return stats
+        
+        # Build lookup tables
+        # For vanilla (mods[0]): lookup by kind='vanilla'
+        # For mods: lookup by workshop_id or path
+        
+        # Get latest vanilla cvid
         vanilla_row = self.conn.execute("""
             SELECT content_version_id 
             FROM content_versions 
@@ -249,79 +183,126 @@ class DBQueries:
             ORDER BY ingested_at DESC 
             LIMIT 1
         """).fetchone()
+        vanilla_cvid = vanilla_row["content_version_id"] if vanilla_row else None
         
-        if not vanilla_row:
-            return None
+        # workshop_id -> cvid (latest)
+        workshop_to_cv: dict[str, int] = {}
+        rows = self.conn.execute("""
+            SELECT mp.workshop_id, cv.content_version_id
+            FROM mod_packages mp
+            JOIN content_versions cv ON cv.mod_package_id = mp.mod_package_id
+            WHERE mp.workshop_id IS NOT NULL
+            ORDER BY cv.ingested_at DESC
+        """).fetchall()
+        for row in rows:
+            wid = row["workshop_id"]
+            if wid and wid not in workshop_to_cv:
+                workshop_to_cv[wid] = row["content_version_id"]
         
-        vanilla_cv_id = vanilla_row["content_version_id"]
+        # normalized_path -> cvid (latest)
+        path_to_cv: dict[str, int] = {}
+        rows = self.conn.execute("""
+            SELECT mp.source_path, cv.content_version_id
+            FROM mod_packages mp
+            JOIN content_versions cv ON cv.mod_package_id = mp.mod_package_id
+            WHERE mp.source_path IS NOT NULL
+            ORDER BY cv.ingested_at DESC
+        """).fetchall()
+        for row in rows:
+            if row["source_path"]:
+                norm = normalize(row["source_path"])
+                if norm not in path_to_cv:
+                    path_to_cv[norm] = row["content_version_id"]
         
-        # 2. Find mod content_version_ids by steam ID or path
-        mod_cv_ids = []
-        found_mods = set()
-        
-        # Build lookup: steam_id -> content_version_id
-        # We need the LATEST content_version for each mod
-        steam_id_to_cv = {}
-        if mod_steam_ids:
-            placeholders = ",".join("?" * len(mod_steam_ids))
-            rows = self.conn.execute(f"""
-                SELECT mp.workshop_id, cv.content_version_id, cv.ingested_at
-                FROM mod_packages mp
-                JOIN content_versions cv ON cv.mod_package_id = mp.mod_package_id
-                WHERE mp.workshop_id IN ({placeholders})
-                ORDER BY cv.ingested_at DESC
-            """, mod_steam_ids).fetchall()
+        # Resolve each mod
+        for mod in mods:
+            mod_id = getattr(mod, 'mod_id', None)
             
-            for row in rows:
-                wid = row["workshop_id"]
-                if wid not in steam_id_to_cv:  # Keep only latest
-                    steam_id_to_cv[wid] = row["content_version_id"]
-        
-        # Build lookup: normalized_path -> content_version_id
-        path_to_cv = {}
-        if mod_paths:
-            # Use canonical path normalization from world_adapter
-            from .world_adapter import normalize_path_for_comparison
+            # Handle vanilla (mods[0])
+            if mod_id == "vanilla":
+                if vanilla_cvid:
+                    mod.cvid = vanilla_cvid
+                    stats["mods_resolved"] += 1
+                else:
+                    stats["mods_missing"].append("vanilla")
+                continue
             
-            # Query all mod packages with paths
-            rows = self.conn.execute("""
-                SELECT mp.source_path, cv.content_version_id, cv.ingested_at
-                FROM mod_packages mp
-                JOIN content_versions cv ON cv.mod_package_id = mp.mod_package_id
-                WHERE mp.source_path IS NOT NULL
-                ORDER BY cv.ingested_at DESC
-            """).fetchall()
+            cv_id = None
             
-            for row in rows:
-                if row["source_path"]:
-                    norm = normalize_path_for_comparison(row["source_path"])
-                    if norm not in path_to_cv:  # Keep only latest
-                        path_to_cv[norm] = row["content_version_id"]
+            # Try workshop_id first
+            workshop_id = getattr(mod, 'workshop_id', None)
+            if workshop_id and workshop_id in workshop_to_cv:
+                cv_id = workshop_to_cv[workshop_id]
             
-            # Match requested paths
-            for mod_path in mod_paths:
-                norm = normalize_path_for_comparison(mod_path)
-                if norm in path_to_cv:
-                    cv_id = path_to_cv[norm]
-                    if cv_id not in found_mods:
-                        mod_cv_ids.append(cv_id)
-                        found_mods.add(cv_id)
+            # Try path lookup
+            if cv_id is None:
+                path = getattr(mod, 'path', None)
+                if path:
+                    norm = normalize(str(path))
+                    if norm in path_to_cv:
+                        cv_id = path_to_cv[norm]
+            
+            if cv_id is not None:
+                mod.cvid = cv_id
+                stats["mods_resolved"] += 1
+            else:
+                mod_name = getattr(mod, 'name', str(mod))
+                stats["mods_missing"].append(mod_name)
         
-        # Now add steam ID matches (if not already added via path)
-        for steam_id in mod_steam_ids:
-            if steam_id in steam_id_to_cv:
-                cv_id = steam_id_to_cv[steam_id]
-                if cv_id not in found_mods:
-                    mod_cv_ids.append(cv_id)
-                    found_mods.add(cv_id)
+        return stats
+        workshop_to_cv: dict[str, int] = {}
+        rows = self.conn.execute("""
+            SELECT mp.workshop_id, cv.content_version_id
+            FROM mod_packages mp
+            JOIN content_versions cv ON cv.mod_package_id = mp.mod_package_id
+            WHERE mp.workshop_id IS NOT NULL
+            ORDER BY cv.ingested_at DESC
+        """).fetchall()
+        for row in rows:
+            wid = row["workshop_id"]
+            if wid and wid not in workshop_to_cv:
+                workshop_to_cv[wid] = row["content_version_id"]
         
-        # 3. Build the lens
-        return PlaysetLens(
-            playset_id=-1,  # No database ID for file-based playsets
-            playset_name=playset_name,
-            vanilla_cv_id=vanilla_cv_id,
-            mod_cv_ids=mod_cv_ids
-        )
+        # normalized_path -> cvid (latest)
+        path_to_cv: dict[str, int] = {}
+        rows = self.conn.execute("""
+            SELECT mp.source_path, cv.content_version_id
+            FROM mod_packages mp
+            JOIN content_versions cv ON cv.mod_package_id = mp.mod_package_id
+            WHERE mp.source_path IS NOT NULL
+            ORDER BY cv.ingested_at DESC
+        """).fetchall()
+        for row in rows:
+            if row["source_path"]:
+                norm = normalize(row["source_path"])
+                if norm not in path_to_cv:
+                    path_to_cv[norm] = row["content_version_id"]
+        
+        # Resolve each mod
+        for mod in mods:
+            cv_id = None
+            
+            # Try workshop_id first
+            workshop_id = getattr(mod, 'workshop_id', None)
+            if workshop_id and workshop_id in workshop_to_cv:
+                cv_id = workshop_to_cv[workshop_id]
+            
+            # Try path lookup
+            if cv_id is None:
+                path = getattr(mod, 'path', None)
+                if path:
+                    norm = normalize(str(path))
+                    if norm in path_to_cv:
+                        cv_id = path_to_cv[norm]
+            
+            if cv_id is not None:
+                mod.cvid = cv_id
+                stats["mods_resolved"] += 1
+            else:
+                mod_name = getattr(mod, 'name', str(mod))
+                stats["mods_missing"].append(mod_name)
+        
+        return stats
     
     def invalidate_lens_cache(self, playset_id: Optional[int] = None):
         """Clear cached lens (call after playset changes)."""
@@ -379,7 +360,7 @@ class DBQueries:
     
     def search_symbols(
         self,
-        lens: Optional[PlaysetLens],
+        cvids: Optional[set[int]],
         query: str,
         symbol_type: Optional[str] = None,
         file_pattern: Optional[str] = None,
@@ -392,7 +373,7 @@ class DBQueries:
         Search symbols with adjacency expansion.
         
         Args:
-            lens: PlaysetLens to filter through (None = search ALL content)
+            cvids: Set of content_version_ids to filter through (None = search ALL content)
             query: Search term
             symbol_type: Optional filter (tradition, event, etc.)
             file_pattern: SQL LIKE pattern for file paths (applies to references)
@@ -414,10 +395,10 @@ class DBQueries:
         adjacencies = []
         patterns_searched = []
         
-        # Build content_version filter if lens is active
+        # Build content_version filter if cvids is provided
         cv_filter = ""
-        if lens:
-            cv_list = ",".join(str(cv) for cv in lens.all_cv_ids)
+        if cvids:
+            cv_list = ",".join(str(cv) for cv in cvids)
             cv_filter = f" AND s.content_version_id IN ({cv_list})"
         
         # Determine which patterns to use
@@ -535,7 +516,7 @@ class DBQueries:
     def _get_references_for_symbols(
         self, 
         symbol_names: list[str], 
-        lens: Optional[PlaysetLens],
+        cvids: Optional[set[int]],
         file_pattern: Optional[str] = None,
         limit: int = 500
     ) -> list[dict]:
@@ -547,8 +528,8 @@ class DBQueries:
         params = list(symbol_names)
         
         cv_filter = ""
-        if lens:
-            cv_list = ",".join(str(cv) for cv in lens.all_cv_ids)
+        if cvids:
+            cv_list = ",".join(str(cv) for cv in cvids)
             cv_filter = f" AND r.content_version_id IN ({cv_list})"
         
         file_filter = ""
@@ -611,7 +592,7 @@ class DBQueries:
     
     def confirm_not_exists(
         self,
-        lens: Optional[PlaysetLens],
+        cvids: Optional[set[int]],
         query: str,
         symbol_type: Optional[str] = None
     ) -> dict:
@@ -621,7 +602,7 @@ class DBQueries:
         MUST be called before agent can claim "not found".
         """
         result = self.search_symbols(
-            lens=lens,
+            cvids=cvids,
             query=query,
             symbol_type=symbol_type,
             adjacency="fuzzy",
@@ -645,7 +626,7 @@ class DBQueries:
     
     def get_file(
         self,
-        lens: Optional[PlaysetLens],
+        cvids: Optional[set[int]],
         file_id: Optional[int] = None,
         relpath: Optional[str] = None,
         include_ast: bool = False
@@ -654,14 +635,14 @@ class DBQueries:
         Get file content by file_id or relpath.
         
         Args:
-            lens: PlaysetLens to filter through (None = search ALL content)
+            cvids: Set of content_version_ids to filter through (None = search ALL content)
             file_id: Specific file ID to retrieve
             relpath: Relative path to search for
             include_ast: If True, also return parsed AST
         """
         cv_filter = ""
-        if lens:
-            cv_list = ",".join(str(cv) for cv in lens.all_cv_ids)
+        if cvids:
+            cv_list = ",".join(str(cv) for cv in cvids)
             cv_filter = f" AND f.content_version_id IN ({cv_list})"
         
         sql = f"""
@@ -725,7 +706,7 @@ class DBQueries:
     
     def search_files(
         self,
-        lens: Optional[PlaysetLens],
+        cvids: Optional[set[int]],
         pattern: str,
         source_filter: Optional[str] = None,
         limit: int = 100
@@ -734,7 +715,7 @@ class DBQueries:
         Search for files by path pattern.
         
         Args:
-            lens: PlaysetLens to filter through (None = search ALL content)
+            cvids: Set of content_version_ids to filter through (None = search ALL content)
             pattern: SQL LIKE pattern for file path
             source_filter: Filter by source ("vanilla", mod name, or mod ID)
             limit: Maximum results
@@ -743,8 +724,8 @@ class DBQueries:
             List of matching files with source info
         """
         cv_filter = ""
-        if lens:
-            cv_list = ",".join(str(cv) for cv in lens.all_cv_ids)
+        if cvids:
+            cv_list = ",".join(str(cv) for cv in cvids)
             cv_filter = f" AND f.content_version_id IN ({cv_list})"
         
         sql = f"""
@@ -790,7 +771,7 @@ class DBQueries:
     
     def search_content(
         self,
-        lens: Optional[PlaysetLens],
+        cvids: Optional[set[int]],
         query: str,
         file_pattern: Optional[str] = None,
         source_filter: Optional[str] = None,
@@ -809,7 +790,7 @@ class DBQueries:
         Returns line numbers and snippets for EACH match.
         
         Args:
-            lens: PlaysetLens to filter through (None = search ALL content)
+            cvids: Set of content_version_ids to filter through (None = search ALL content)
             query: Text to search for (case-insensitive). Space = AND, quotes = exact phrase
             file_pattern: SQL LIKE pattern to filter files
             source_filter: Filter by source
@@ -824,8 +805,8 @@ class DBQueries:
         terms = self._parse_search_terms(query)
         
         cv_filter = ""
-        if lens:
-            cv_list = ",".join(str(cv) for cv in lens.all_cv_ids)
+        if cvids:
+            cv_list = ",".join(str(cv) for cv in cvids)
             cv_filter = f" AND f.content_version_id IN ({cv_list})"
         
         # Build SQL with AND for all terms
@@ -975,7 +956,7 @@ class DBQueries:
     
     def unified_search(
         self,
-        lens: Optional[PlaysetLens],
+        cvids: Optional[set[int]],
         query: str,
         file_pattern: Optional[str] = None,
         source_filter: Optional[str] = None,
@@ -984,7 +965,8 @@ class DBQueries:
         limit: int = 50,
         matches_per_file: int = 5,
         include_references: bool = False,
-        verbose: bool = False
+        verbose: bool = False,
+        playset_name: Optional[str] = None
     ) -> dict:
         """
         Unified search across symbols AND content.
@@ -996,7 +978,7 @@ class DBQueries:
         Returns both in one response - no need to decide if something is a symbol.
         
         Args:
-            lens: PlaysetLens to filter (None = search ALL)
+            cvids: Set of content_version_ids to filter (None = search ALL)
             query: Search term
             file_pattern: SQL LIKE pattern for file paths (optional)
             source_filter: Filter by mod/source (optional)
@@ -1006,6 +988,7 @@ class DBQueries:
             matches_per_file: Max content matches per file (default 5)
             include_references: Include mods that reference found symbols
             verbose: More detail (all matches, snippets)
+            playset_name: Optional name for display
         
         Returns:
             {
@@ -1028,7 +1011,7 @@ class DBQueries:
         """
         result = {
             "query": query,
-            "lens": lens.playset_name if lens else "ALL CONTENT (no lens)",
+            "playset": playset_name if playset_name else ("ACTIVE PLAYSET" if cvids else "ALL CONTENT"),
             "symbols": {"count": 0, "results": [], "adjacencies": [], "definitions_by_mod": {}},
             "content": {"count": 0, "results": []},
             "files": {"count": 0, "results": []}
@@ -1036,7 +1019,7 @@ class DBQueries:
         
         # 1. Symbol search (file_pattern filters references, not definitions)
         symbol_result = self.search_symbols(
-            lens=lens,
+            cvids=cvids,
             query=query,
             symbol_type=symbol_type,
             file_pattern=file_pattern,
@@ -1056,7 +1039,7 @@ class DBQueries:
         
         # 2. Content search (grep)
         content_result = self.search_content(
-            lens=lens,
+            cvids=cvids,
             query=query,
             file_pattern=file_pattern,
             source_filter=source_filter,
@@ -1072,7 +1055,7 @@ class DBQueries:
         # 3. File path search (if file_pattern provided or query looks like a path)
         if file_pattern or '/' in query or '\\' in query or query.endswith('.txt'):
             search_pattern = file_pattern if file_pattern else f"%{query}%"
-            files = self.search_files(lens, search_pattern, source_filter, limit)
+            files = self.search_files(cvids, search_pattern, source_filter, limit)
             result["files"] = {
                 "count": len(files),
                 "results": files
@@ -1099,11 +1082,12 @@ class DBQueries:
     
     def get_symbol_conflicts(
         self,
-        lens: "PlaysetLens",
+        cvids: set[int],
         symbol_type: Optional[str] = None,
         game_folder: Optional[str] = None,
         limit: int = 100,
-        include_compatch: bool = False
+        include_compatch: bool = False,
+        playset_name: Optional[str] = None
     ) -> dict:
         """
         Fast ID-level conflict detection using the symbols table.
@@ -1112,12 +1096,13 @@ class DBQueries:
         Uses GROUP BY to find symbols defined in multiple mods.
         
         Args:
-            lens: PlaysetLens to filter through
+            cvids: Set of content_version_ids to search
             symbol_type: Filter by type (trait, event, decision, etc.)
             game_folder: Filter by CK3 folder (e.g., "common/traits")
             limit: Maximum conflicts to return
             include_compatch: If True, include conflicts from compatch mods
                               (default False - compatch mods are expected to conflict)
+            playset_name: Optional playset name for display
         
         Returns:
             {
@@ -1134,9 +1119,13 @@ class DBQueries:
                 "compatch_conflicts_hidden": int  # Count of conflicts filtered out
             }
         """
-        cv_list = ",".join(str(cv) for cv in lens.all_cv_ids)
+        if not cvids:
+            return {"conflict_count": 0, "conflicts": [], "compatch_conflicts_hidden": 0}
+        
+        cv_list = ",".join(str(cv) for cv in cvids)
         
         # Build query to find symbols with multiple definitions
+        # Filter to only symbols within the provided cvids
         sql = f"""
             SELECT 
                 s.symbol_type,
@@ -1144,10 +1133,9 @@ class DBQueries:
                 COUNT(DISTINCT s.content_version_id) as source_count,
                 GROUP_CONCAT(DISTINCT s.content_version_id) as cv_ids
             FROM symbols s
-            JOIN playset_mods pm ON s.content_version_id = pm.content_version_id
-            WHERE pm.playset_id = ? AND pm.enabled = 1
+            WHERE s.content_version_id IN ({cv_list})
         """
-        params = [lens.playset_id]
+        params = []
         
         if symbol_type:
             sql += " AND s.symbol_type = ?"
@@ -1176,13 +1164,13 @@ class DBQueries:
                 
             symbol_type_val = row["symbol_type"]
             name = row["name"]
-            cv_ids = [int(cv) for cv in row["cv_ids"].split(",")]
+            cv_ids_found = [int(cv) for cv in row["cv_ids"].split(",")]
             
             # Get details for each source
             sources = []
             is_compatch_conflict = False
             
-            for cv_id in cv_ids:
+            for cv_id in cv_ids_found:
                 detail_row = self.conn.execute("""
                     SELECT 
                         COALESCE(mp.name, 'vanilla') as mod_name,
@@ -1223,50 +1211,30 @@ class DBQueries:
             "conflict_count": len(conflicts),
             "conflicts": conflicts,
             "compatch_conflicts_hidden": compatch_hidden,
-            "lens": lens.playset_name
+            "playset": playset_name if playset_name else "ACTIVE PLAYSET"
         }
 
     def get_conflicts(
         self,
-        lens: PlaysetLens,
+        cvids: set[int],
         folder: Optional[str] = None,
         symbol_type: Optional[str] = None
     ) -> dict:
-        """Get conflict report for a folder."""
-        resolver = SQLResolver(self.conn)
+        """
+        Get conflict report for a folder.
         
-        if folder:
-            result = resolver.resolve_folder(lens.playset_id, folder, symbol_type)
-            policy = result.policy
-            
-            conflicts = []
-            for ov in result.overridden:
-                winner = result.symbols.get(ov.name)
-                if winner:
-                    conflicts.append({
-                        "name": ov.name,
-                        "symbol_type": ov.symbol_type,
-                        "winner": {
-                            "mod": self._get_mod_name(winner.content_version_id),
-                            "file": winner.relpath,
-                            "line": winner.line_number
-                        },
-                        "loser": {
-                            "mod": self._get_mod_name(ov.content_version_id),
-                            "file": ov.relpath,
-                            "line": ov.line_number
-                        }
-                    })
-            
-            return {
-                "folder": folder,
-                "policy": policy.name,
-                "file_overrides": result.file_override_count,
-                "symbol_conflicts": conflicts
-            }
-        else:
-            summary = resolver.get_conflict_summary(lens.playset_id)
-            return summary
+        DEPRECATED: SQLResolver still uses playset_id which joins to empty playset_mods table.
+        Use get_symbol_conflicts() instead for now.
+        
+        TODO: Rewrite SQLResolver to take cvids directly.
+        """
+        # For now, return empty result - SQLResolver needs rewrite
+        return {
+            "error": "get_conflicts deprecated - SQLResolver needs rewrite to use cvids",
+            "use_instead": "get_symbol_conflicts(cvids=cvids, ...)",
+            "folder": folder,
+            "symbol_type": symbol_type
+        }
     
     # =========================================================================
     # HELPERS

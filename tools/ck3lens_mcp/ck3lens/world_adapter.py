@@ -42,31 +42,6 @@ if TYPE_CHECKING:
     from .db_queries import PlaysetLens, DBQueries
 
 
-# =============================================================================
-# CANONICAL PATH NORMALIZATION (shared utility)
-# =============================================================================
-
-def normalize_path_for_comparison(path: str) -> str:
-    """
-    Normalize a filesystem path for comparison purposes.
-    
-    This is the CANONICAL utility for path normalization across the codebase.
-    Use this when you need to compare paths (e.g., database key matching).
-    
-    Normalization:
-    - Resolves to absolute path
-    - Lowercases (case-insensitive comparison on Windows)
-    - Converts backslashes to forward slashes
-    
-    Args:
-        path: Raw filesystem path
-        
-    Returns:
-        Normalized path string suitable for comparison
-    """
-    return str(Path(path).resolve()).lower().replace("\\", "/")
-
-
 class AddressType(Enum):
     """Types of canonical addresses."""
     MOD = "mod"
@@ -190,7 +165,6 @@ class ResolutionResult:
     - file_id/content_version_id: For database operations
     - mod_name: Mod identifier if applicable
     - error_message: Reason for not_found
-    - ui_hint_potentially_editable: Display only, NEVER control flow
     """
     found: bool
     address: Optional[CanonicalAddress] = None
@@ -200,10 +174,6 @@ class ResolutionResult:
     content_version_id: Optional[int] = None
     mod_name: Optional[str] = None
     error_message: Optional[str] = None
-    
-    # UI hint only - NOT for enforcement decisions
-    # This is purely for display purposes (e.g., showing a lock icon)
-    ui_hint_potentially_editable: bool = False
     
     @classmethod
     def not_found(cls, raw_input: str, reason: str = "Reference not found") -> "ResolutionResult":
@@ -336,6 +306,35 @@ class WorldAdapter(ABC):
     def mode(self) -> str:
         """Return the agent mode this adapter serves."""
         pass
+    
+    def normalize(self, path: str) -> str:
+        """
+        Normalize a filesystem path for comparison.
+        
+        This is a STRUCTURAL operation that does NOT depend on lens/scope.
+        Used for matching paths between different sources (e.g., playset config vs database).
+        
+        Normalization:
+        - Resolves to absolute path (handles ~, relative paths)
+        - Lowercases (case-insensitive on Windows)
+        - Forward slashes only
+        - Trailing slashes stripped
+        
+        This method can be called during mods[] construction (before lens is active)
+        because it's just path string manipulation, not visibility checking.
+        
+        Args:
+            path: Any filesystem path string
+            
+        Returns:
+            Normalized path string suitable for comparison
+        """
+        try:
+            resolved = Path(path).expanduser().resolve()
+            return str(resolved).lower().replace("\\", "/").rstrip("/")
+        except Exception:
+            # If path is invalid, just normalize what we can
+            return path.lower().replace("\\", "/").rstrip("/")
 
 
 class LensWorldAdapter(WorldAdapter):
@@ -579,13 +578,10 @@ class LensWorldAdapter(WorldAdapter):
             abs_path = mod_path / address.relative_path
             
             # Determine domain: LOCAL_MOD vs WORKSHOP_MOD
-            # UI hint: potentially editable if mod is in local_mods_folder
-            ui_hint = False
             domain = PathDomain.WORKSHOP_MOD  # Default to workshop
             if self._local_mods_folder:
                 try:
                     mod_path.resolve().relative_to(self._local_mods_folder.resolve())
-                    ui_hint = True
                     domain = PathDomain.LOCAL_MOD
                 except ValueError:
                     pass
@@ -596,7 +592,6 @@ class LensWorldAdapter(WorldAdapter):
                 absolute_path=abs_path,
                 domain=domain,
                 mod_name=mod_name,
-                ui_hint_potentially_editable=ui_hint,
             )
         
         return ResolutionResult.not_found(
@@ -616,7 +611,6 @@ class LensWorldAdapter(WorldAdapter):
             absolute_path=abs_path,
             domain=PathDomain.VANILLA,
             mod_name="vanilla",
-            ui_hint_potentially_editable=False,
         )
     
     def _resolve_utility(self, address: CanonicalAddress) -> ResolutionResult:
@@ -638,7 +632,6 @@ class LensWorldAdapter(WorldAdapter):
             address=address,
             absolute_path=abs_path,
             domain=PathDomain.UTILITY,
-            ui_hint_potentially_editable=False,
         )
     
     def _resolve_ck3raven(self, address: CanonicalAddress) -> ResolutionResult:
@@ -652,7 +645,6 @@ class LensWorldAdapter(WorldAdapter):
             address=address,
             absolute_path=abs_path,
             domain=PathDomain.CK3RAVEN,
-            ui_hint_potentially_editable=False,
         )
     
     def _resolve_wip(self, address: CanonicalAddress) -> ResolutionResult:
@@ -666,7 +658,6 @@ class LensWorldAdapter(WorldAdapter):
             address=address,
             absolute_path=abs_path,
             domain=PathDomain.WIP,
-            ui_hint_potentially_editable=True,
         )
 
 
@@ -726,7 +717,6 @@ class DevWorldAdapter(WorldAdapter):
                 ),
                 absolute_path=path,
                 domain=PathDomain.CK3RAVEN,
-                ui_hint_potentially_editable=True,
             )
         except ValueError:
             pass
@@ -744,7 +734,6 @@ class DevWorldAdapter(WorldAdapter):
                 ),
                 absolute_path=path,
                 domain=PathDomain.WIP,
-                ui_hint_potentially_editable=True,
             )
         except ValueError:
             pass
@@ -763,7 +752,6 @@ class DevWorldAdapter(WorldAdapter):
                     ),
                     absolute_path=path,
                     domain=PathDomain.VANILLA,
-                    ui_hint_potentially_editable=False,
                 )
             except ValueError:
                 pass
@@ -783,7 +771,6 @@ class DevWorldAdapter(WorldAdapter):
                     ),
                     absolute_path=path,
                     domain=PathDomain.WORKSHOP_MOD,  # In dev mode, mods are read-only
-                    ui_hint_potentially_editable=False,  # UI hint only
                 )
             except ValueError:
                 continue
