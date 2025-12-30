@@ -23,6 +23,7 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Optional, List, Any
 import fnmatch
+import re
 
 
 # =============================================================================
@@ -63,6 +64,206 @@ class OperationType(Enum):
     # Specialized operations
     LAUNCHER_REPAIR = auto()
     CACHE_DELETE = auto()
+
+
+# =============================================================================
+# SHELL COMMAND CLASSIFICATION (migrated from clw.py Dec 2025)
+# =============================================================================
+
+class CommandCategory(Enum):
+    """Categories of shell commands by risk level."""
+    READ_ONLY = auto()          # Safe read operations
+    WRITE_IN_SCOPE = auto()     # Write within contract scope
+    WRITE_OUT_OF_SCOPE = auto() # Write outside contract scope
+    DESTRUCTIVE = auto()        # File deletion, data loss
+    GIT_SAFE = auto()           # git status, log, diff
+    GIT_MODIFY = auto()         # git commit, branch
+    GIT_DANGEROUS = auto()      # git push, rebase, force
+    NETWORK = auto()            # curl, wget, etc.
+    SYSTEM = auto()             # System commands
+    BLOCKED = auto()            # Never allowed
+
+
+# Commands that are always allowed (no contract/token needed)
+SAFE_COMMANDS = frozenset({
+    # File reading
+    "cat", "type", "more", "less", "head", "tail", "bat",
+    # Directory listing
+    "ls", "dir", "tree", "find", "fd", "rg", "grep",
+    # Git safe operations (per policy doc Section 9)
+    "git status", "git log", "git diff", "git show", "git branch -a",
+    "git remote -v", "git stash list",
+    "git add", "git commit",  # Allowed without approval per policy
+    "git fetch", "git pull",  # Read-like remote operations
+    # Python/tools
+    "python -c", "python -m pytest", "python -m mypy",
+    # Info commands
+    "pwd", "echo", "which", "where", "whoami",
+})
+
+# Commands that are NEVER allowed (hard deny)
+BLOCKED_COMMANDS = frozenset({
+    # System modification
+    "rm -rf /", "del /s /q c:\\",
+    "format", "diskpart", "shutdown", "reboot",
+    # Package management (risky)
+    "pip uninstall", "npm uninstall",
+    # History rewriting
+    "git filter-branch", "git reset --hard origin",
+    # Destructive force
+    "git push --force origin main", "git push -f origin main",
+})
+
+# Patterns requiring tokens, keyed by token type
+TOKEN_REQUIRED_PATTERNS: dict[str, list[str]] = {
+    "FS_DELETE_CODE": [
+        r"rm\s+.*\.py",
+        r"del\s+.*\.py",
+        r"rmdir",
+        r"rm\s+-r",
+        r"rd\s+/s",
+    ],
+    "CMD_RUN_DESTRUCTIVE": [
+        r"drop\s+table",
+        r"truncate\s+table",
+        r"delete\s+from",
+    ],
+    "GIT_PUSH": [
+        r"git\s+push(?!\s+--force)",
+    ],
+    "GIT_FORCE_PUSH": [
+        r"git\s+push\s+(--force|-f)",
+    ],
+    "GIT_REWRITE_HISTORY": [
+        r"git\s+rebase",
+        r"git\s+reset\s+--hard",
+        r"git\s+cherry-pick",
+    ],
+    "CMD_RUN_ARBITRARY": [
+        r"curl\s+.*\|\s*(bash|sh|python)",
+        r"wget\s+.*-O-\s*\|",
+        r"powershell\s+-c",
+        r"cmd\s+/c",
+    ],
+}
+
+# Git commands that modify local state (require contract)
+GIT_MODIFY_PATTERNS = [
+    r"git\s+stash(?!\s+list)",  # stash list is safe, stash push/pop is modify
+    r"git\s+checkout",
+    r"git\s+switch",
+    r"git\s+merge",
+    r"git\s+branch\s+(?!-a|-v|-l|--list)",  # Creating/deleting branches
+]
+
+
+def classify_command(command: str) -> CommandCategory:
+    """
+    Classify a shell command into a risk category.
+    
+    This is structural classification for enforcement decisions.
+    The category is then mapped to OperationType for enforce_and_log().
+    
+    Args:
+        command: The shell command string
+    
+    Returns:
+        CommandCategory indicating risk level
+    """
+    cmd_lower = command.lower()
+    
+    # Check blocked first
+    for blocked in BLOCKED_COMMANDS:
+        if blocked in cmd_lower:
+            return CommandCategory.BLOCKED
+    
+    # Check safe commands
+    for safe in SAFE_COMMANDS:
+        if cmd_lower.startswith(safe):
+            return CommandCategory.READ_ONLY
+    
+    # Git classification
+    if cmd_lower.startswith("git "):
+        if any(re.search(p, cmd_lower) for p in [r"push.*--force", r"push.*-f"]):
+            return CommandCategory.GIT_DANGEROUS
+        if "push" in cmd_lower or "rebase" in cmd_lower or "reset --hard" in cmd_lower:
+            return CommandCategory.GIT_DANGEROUS
+        if any(re.search(p, cmd_lower) for p in GIT_MODIFY_PATTERNS):
+            return CommandCategory.GIT_MODIFY
+        return CommandCategory.GIT_SAFE
+    
+    # Destructive patterns
+    if any(re.search(p, cmd_lower) for patterns in TOKEN_REQUIRED_PATTERNS.values() 
+           for p in patterns if "rm" in p or "del" in p or "drop" in p):
+        return CommandCategory.DESTRUCTIVE
+    
+    # Network
+    if any(x in cmd_lower for x in ["curl", "wget", "invoke-webrequest"]):
+        return CommandCategory.NETWORK
+    
+    # Write operations (heuristic)
+    if any(x in cmd_lower for x in [">", ">>", "| tee", "out-file"]):
+        return CommandCategory.WRITE_OUT_OF_SCOPE
+    
+    # Default to system
+    return CommandCategory.SYSTEM
+
+
+def get_required_token_type(command: str) -> Optional[str]:
+    """
+    Check if a command matches a token-required pattern.
+    
+    Args:
+        command: The shell command to check
+        
+    Returns:
+        Token type string if token required, None otherwise
+    """
+    cmd_lower = command.lower()
+    
+    for token_type, patterns in TOKEN_REQUIRED_PATTERNS.items():
+        for pattern in patterns:
+            if re.search(pattern, cmd_lower, re.IGNORECASE):
+                return token_type
+    return None
+
+
+# =============================================================================
+# CONTRACT PATH SCOPE (temporary home - may move to work_contracts.py)
+# =============================================================================
+
+def check_path_in_contract_scope(
+    path: str,
+    contract_paths: list[str],
+) -> bool:
+    """
+    Check if a path is within the contract's allowed scope.
+    
+    NOTE: This may be relocated to work_contracts.py in a future refactor.
+    
+    Args:
+        path: Path to check
+        contract_paths: List of allowed path patterns from contract
+    
+    Returns:
+        True if path is in scope
+    """
+    if not contract_paths:
+        return True  # No restriction
+    
+    path = path.replace("\\", "/")
+    
+    for pattern in contract_paths:
+        pattern = pattern.replace("\\", "/")
+        if fnmatch.fnmatch(path, pattern):
+            return True
+        # Also check if path is under a directory pattern
+        if pattern.endswith("/*") or pattern.endswith("/**"):
+            dir_pattern = pattern.rstrip("/*")
+            if path.startswith(dir_pattern):
+                return True
+    
+    return False
 
 
 class TokenTier(Enum):

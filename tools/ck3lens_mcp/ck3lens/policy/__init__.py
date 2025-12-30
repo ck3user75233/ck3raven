@@ -10,13 +10,13 @@ Supporting modules:
 - loader.py: Policy file loading
 - validator.py: Policy validation logic
 - tokens.py: HMAC-signed approval tokens for risky operations
-- clw.py: Command Line Wrapper policy engine
 - ck3lens_rules.py: CK3Lens-specific validation rules (POST-HOC, calls enforcement.py)
 - wip_workspace.py: WIP workspace lifecycle management
 - contract_schema.py: Contract schema validation
 - audit.py: Structured audit logging
 
 ARCHIVED (see archive/deprecated_policy/):
+- clw.py: Command Line Wrapper - oracle functions archived, classification migrated to enforcement.py
 - hard_gates.py: Superseded by enforcement.py - all gate logic consolidated there
 - script_sandbox.py: Moved to tools/script_sandbox.py (tool layer)
 - lensworld_sandbox.py: Merged into WorldAdapter
@@ -71,16 +71,13 @@ from .tokens import (
     check_user_prompt_required,
     check_script_hash_required,
 )
-from .clw import (
-    # REFACTORED Dec 2025: clw.py now provides classification only
-    # Policy decisions route through enforcement.py (NO-ORACLE architecture)
-    CommandCategory,
-    classify_command,
-    # REMOVED: can_execute, evaluate_policy - these were oracle functions
-    # REMOVED: CommandRequest, PolicyResult, Decision - use enforcement.py types
-    # check_path_in_scope is kept for contract scope validation
-    check_path_in_scope,
-)
+# ARCHIVED: clw.py (Dec 2025)
+# All CLW functionality migrated to enforcement.py
+# - CommandCategory, classify_command, check_path_in_contract_scope -> enforcement.py
+# - evaluate_policy, can_execute -> DELETED (banned oracle functions)
+# - CommandRequest, PolicyResult, Decision -> use enforcement.py types
+# See archive/deprecated_policy/clw.py for original code
+
 # REMOVED: hard_gates imports (Dec 2025)
 # hard_gates.py was archived - all enforcement now goes through enforcement.py
 # See docs/PLAYSET_ARCHITECTURE.md for canonical sources
@@ -131,7 +128,7 @@ from .enforcement import (
     # Operation types
     OperationType,
     TokenTier,
-    Decision as EnforcementDecision,  # Aliased to avoid conflict with clw.Decision
+    Decision as EnforcementDecision,  # Aliased to avoid conflict with old clw.Decision
     # Request/Result
     EnforcementRequest,
     EnforcementResult,
@@ -143,6 +140,15 @@ from .enforcement import (
     enforce_policy as enforce_policy_gate,  # Aliased to distinguish from validator.validate_policy
     log_enforcement_decision,
     enforce_and_log,
+    # Shell command classification (migrated from clw.py Dec 2025)
+    CommandCategory,
+    SAFE_COMMANDS,
+    BLOCKED_COMMANDS,
+    TOKEN_REQUIRED_PATTERNS,
+    GIT_MODIFY_PATTERNS,
+    classify_command,
+    get_required_token_type,
+    check_path_in_contract_scope,
 )
 
 # =============================================================================
@@ -212,13 +218,18 @@ __all__ = [
     "validate_script_token",
     "check_user_prompt_required",
     "check_script_hash_required",
-    # CLW Classification (classification only, not policy)
-    # REFACTORED Dec 2025: Policy decisions route through enforcement.py
+    # CLW Classification (migrated to enforcement.py Dec 2025)
     "CommandCategory",
+    "SAFE_COMMANDS",
+    "BLOCKED_COMMANDS",
+    "TOKEN_REQUIRED_PATTERNS",
+    "GIT_MODIFY_PATTERNS",
     "classify_command",
-    "check_path_in_scope",
-    # REMOVED: can_execute, evaluate_policy, Decision, CommandRequest, PolicyResult
-    # These were oracle functions - use enforcement.py instead
+    "get_required_token_type",
+    "check_path_in_contract_scope",
+    # ARCHIVED: clw.py (Dec 2025)
+    # - evaluate_policy, can_execute -> DELETED (banned oracle functions)
+    # - CommandRequest, PolicyResult, Decision -> use enforcement.py types
     # REMOVED: Hard gates exports (Dec 2025) - use enforcement.py instead
     # WIP Workspace
     "WipWorkspaceState",

@@ -3004,12 +3004,12 @@ def ck3_exec(
         ck3_exec("git push --force", dry_run=True)  # Check if would be allowed
     """
     # ==========================================================================
-    # CANONICAL IMPORTS: Use enforcement.py for policy, clw for classification only
+    # CANONICAL IMPORTS: All from enforcement.py (clw.py archived Dec 2025)
     # ==========================================================================
-    from ck3lens.policy.clw import classify_command, CommandCategory  # Classification only
     from ck3lens.policy.enforcement import (
         enforce_and_log, EnforcementRequest, 
         OperationType, Decision,
+        classify_command, CommandCategory,  # Shell command classification
     )
     from ck3lens.policy.audit import get_audit_logger
     from ck3lens.work_contracts import get_active_contract
