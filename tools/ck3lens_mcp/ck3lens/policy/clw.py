@@ -284,18 +284,32 @@ def classify_command(command: str) -> CommandCategory:
 
 def evaluate_policy(request: CommandRequest) -> PolicyResult:
     """
-    Evaluate a command request against the policy.
+    DEPRECATED: This is an oracle function. Use enforcement.py instead.
     
-    Mode-aware behavior:
-    - ck3lens mode: Additional restrictions on ck3raven source modification
-    - ck3raven-dev mode: Additional restrictions on mod file modification
+    Policy decisions now route through enforcement.enforce_and_log().
+    This function is kept for backwards compatibility but will be removed.
     
-    Args:
-        request: CommandRequest to evaluate
-    
-    Returns:
-        PolicyResult with decision
+    Use instead:
+        from ck3lens.policy.enforcement import enforce_and_log, EnforcementRequest, OperationType
+        from ck3lens.policy.clw import classify_command, CommandCategory
+        
+        category = classify_command(command)
+        op_type = map_category_to_operation(category)  # SHELL_SAFE, SHELL_WRITE, etc.
+        result = enforce_and_log(EnforcementRequest(
+            operation=op_type,
+            mode=...,
+            tool_name="ck3_exec",
+            command=...,
+        ))
     """
+    import warnings
+    warnings.warn(
+        "evaluate_policy is deprecated. Use enforcement.enforce_and_log() instead. "
+        "See docs/CANONICAL_ARCHITECTURE.md for the NO-ORACLE pattern.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    
     cmd = request.command
     category = classify_command(cmd)
     
@@ -457,7 +471,14 @@ def check_path_in_scope(
 
 
 # ============================================================================
-# High-Level API
+# DEPRECATED: Oracle functions removed in NO-ORACLE refactor (Dec 2025)
+# 
+# Policy decisions now route through enforcement.py, not clw.py.
+# This module now provides CLASSIFICATION ONLY via classify_command().
+# 
+# For shell command enforcement, use:
+#   from ck3lens.policy.enforcement import enforce_and_log, EnforcementRequest, OperationType
+#   result = enforce_and_log(EnforcementRequest(operation=OperationType.SHELL_*, ...))
 # ============================================================================
 
 def can_execute(
@@ -468,18 +489,27 @@ def can_execute(
     token_id: Optional[str] = None,
 ) -> tuple[bool, str, Optional[str]]:
     """
-    Simple API: Can this command be executed?
+    DEPRECATED: This is a banned oracle function.
     
-    Args:
-        command: Command to execute
-        working_dir: Working directory
-        target_paths: Paths being affected
-        contract_id: Active work contract
-        token_id: Approval token
+    Use enforcement.py instead:
+        from ck3lens.policy.enforcement import enforce_and_log, EnforcementRequest, OperationType
+        result = enforce_and_log(EnforcementRequest(
+            operation=OperationType.SHELL_SAFE,  # or SHELL_WRITE, SHELL_DESTRUCTIVE
+            mode=...,
+            tool_name="ck3_exec",
+            command=...,
+        ))
     
-    Returns:
-        (allowed, reason, required_token_type_if_blocked)
+    This function will be removed in a future version.
     """
+    import warnings
+    warnings.warn(
+        "can_execute is deprecated. Use enforcement.enforce_and_log() instead. "
+        "See docs/CANONICAL_ARCHITECTURE.md for the NO-ORACLE pattern.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    
     request = CommandRequest(
         command=command,
         working_dir=working_dir,

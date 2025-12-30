@@ -3003,9 +3003,13 @@ def ck3_exec(
         ck3_exec("rm test.py", token_id="tok-abc123")  # Risky - needs token
         ck3_exec("git push --force", dry_run=True)  # Check if would be allowed
     """
-    from ck3lens.policy.clw import (
-        can_execute, classify_command, evaluate_policy,
-        CommandRequest, Decision, CommandCategory,
+    # ==========================================================================
+    # CANONICAL IMPORTS: Use enforcement.py for policy, clw for classification only
+    # ==========================================================================
+    from ck3lens.policy.clw import classify_command, CommandCategory  # Classification only
+    from ck3lens.policy.enforcement import (
+        enforce_and_log, EnforcementRequest, 
+        OperationType, Decision,
     )
     from ck3lens.policy.audit import get_audit_logger
     from ck3lens.work_contracts import get_active_contract
@@ -3244,60 +3248,52 @@ def ck3_exec(
                 "error": enf_result.reason,
             }
     
-    # Evaluate policy (with mode-awareness) - for non-WIP commands
-    request = CommandRequest(
+    # ==========================================================================
+    # CANONICAL ENFORCEMENT: Route through enforcement.py for non-WIP commands
+    # 
+    # Pattern: classify → map to OperationType → enforce_and_log → execute
+    # ==========================================================================
+    
+    # Step 1: Classify the command (structural classification, not policy)
+    category = classify_command(command)
+    
+    # Step 2: Map CommandCategory to OperationType for enforcement.py
+    def _category_to_operation(cat: CommandCategory) -> OperationType:
+        """Map command category to enforcement OperationType."""
+        if cat in (CommandCategory.READ_ONLY, CommandCategory.GIT_SAFE):
+            return OperationType.SHELL_SAFE
+        elif cat in (CommandCategory.WRITE_IN_SCOPE, CommandCategory.WRITE_OUT_OF_SCOPE, 
+                     CommandCategory.GIT_MODIFY, CommandCategory.NETWORK, CommandCategory.SYSTEM):
+            return OperationType.SHELL_WRITE
+        elif cat in (CommandCategory.DESTRUCTIVE, CommandCategory.GIT_DANGEROUS, CommandCategory.BLOCKED):
+            return OperationType.SHELL_DESTRUCTIVE
+        else:
+            return OperationType.SHELL_SAFE  # Default to safe for unknown
+    
+    op_type = _category_to_operation(category)
+    
+    # Step 3: Build EnforcementRequest for enforcement.py
+    enforcement_request = EnforcementRequest(
+        operation=op_type,
+        mode=mode or "unknown",
+        tool_name="ck3_exec",
         command=command,
-        working_dir=working_dir or str(Path(__file__).parent.parent.parent),
-        target_paths=target_paths or [],
+        target_path=target_paths[0] if target_paths else None,  # Primary target for mode checks
         contract_id=contract_id,
         token_id=token_id,
-        mode=mode,  # Pass mode for mode-specific restrictions
     )
     
-    result = evaluate_policy(request)
+    # Step 4: Call enforcement.py - THE single policy gate
+    result = enforce_and_log(enforcement_request, trace, session_id="mcp_server")
     
     policy_info = {
         "decision": result.decision.name,
         "reason": result.reason,
         "required_token_type": result.required_token_type,
-        "category": result.category.name if result.category else None,
+        "category": category.name,
     }
-    
-    # ==========================================================================
-    # STRUCTURED AUDIT LOGGING (Phase 2)
-    # Log to structured audit trail for analytics
-    # ==========================================================================
-    
-    # Map CLW category to operation type for consistency
-    op_type_name = "SHELL_SAFE"
-    if result.category in (CommandCategory.WRITE_IN_SCOPE, CommandCategory.WRITE_OUT_OF_SCOPE):
-        op_type_name = "SHELL_WRITE"
-    elif result.category == CommandCategory.DESTRUCTIVE:
-        op_type_name = "SHELL_DESTRUCTIVE"
-    
-    # Use structured audit logger
-    audit = get_audit_logger(trace, session_id="mcp_server")
-    audit.log_enforcement(
-        operation_type=op_type_name,
-        mode=mode or "unknown",
-        tool_name="ck3_exec",
-        decision=result.decision.name,
-        reason=result.reason,
-        contract_id=contract_id,
-        token_id=token_id,
-        required_token_type=result.required_token_type,
-        command=command[:100] if command else None,  # Truncate for logging
-        target_paths=target_paths[:10] if target_paths else None,  # Limit paths
-    )
-    
-    # Legacy trace log for backwards compatibility
-    trace.log("ck3lens.exec", {
-        "command": command,
-        "token_id": token_id,
-        "contract_id": contract_id,
-    }, {"decision": result.decision.name})
-    
-    # Check decision
+
+    # Check decision - canonical enforcement result handling
     if result.decision == Decision.DENY:
         return {
             "allowed": False,
@@ -3306,6 +3302,17 @@ def ck3_exec(
             "exit_code": None,
             "policy": policy_info,
             "error": result.reason,
+        }
+    
+    if result.decision == Decision.REQUIRE_CONTRACT:
+        return {
+            "allowed": False,
+            "executed": False,
+            "output": None,
+            "exit_code": None,
+            "policy": policy_info,
+            "error": "Contract required for this operation",
+            "hint": "Use ck3_contract(command='open', ...) to open a work contract first",
         }
     
     if result.decision == Decision.REQUIRE_TOKEN:

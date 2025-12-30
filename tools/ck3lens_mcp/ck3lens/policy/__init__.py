@@ -72,13 +72,13 @@ from .tokens import (
     check_script_hash_required,
 )
 from .clw import (
-    Decision,
+    # REFACTORED Dec 2025: clw.py now provides classification only
+    # Policy decisions route through enforcement.py (NO-ORACLE architecture)
     CommandCategory,
-    CommandRequest,
-    PolicyResult,
     classify_command,
-    evaluate_policy,
-    can_execute,
+    # REMOVED: can_execute, evaluate_policy - these were oracle functions
+    # REMOVED: CommandRequest, PolicyResult, Decision - use enforcement.py types
+    # check_path_in_scope is kept for contract scope validation
     check_path_in_scope,
 )
 # REMOVED: hard_gates imports (Dec 2025)
@@ -212,15 +212,13 @@ __all__ = [
     "validate_script_token",
     "check_user_prompt_required",
     "check_script_hash_required",
-    # CLW Policy Engine
-    "Decision",
+    # CLW Classification (classification only, not policy)
+    # REFACTORED Dec 2025: Policy decisions route through enforcement.py
     "CommandCategory",
-    "CommandRequest",
-    "PolicyResult",
     "classify_command",
-    "evaluate_policy",
-    "can_execute",
     "check_path_in_scope",
+    # REMOVED: can_execute, evaluate_policy, Decision, CommandRequest, PolicyResult
+    # These were oracle functions - use enforcement.py instead
     # REMOVED: Hard gates exports (Dec 2025) - use enforcement.py instead
     # WIP Workspace
     "WipWorkspaceState",
