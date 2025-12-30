@@ -210,6 +210,36 @@ def _normalize_request_paths(request: EnforcementRequest) -> None:
         request.staged_files = [_normalize_path_to_relative(p) for p in request.staged_files]
 
 
+def _validate_token_for_operation(
+    token_id: str,
+    required_type: str,
+    target_path: Optional[str] = None,
+    command: Optional[str] = None,
+) -> tuple[bool, str]:
+    """
+    Validate a token for a specific operation.
+    
+    Centralizes token validation logic for enforcement.py.
+    
+    Args:
+        token_id: The token ID to validate
+        required_type: The token type required (e.g., "DELETE_LOCALMOD")
+        target_path: Optional path to check against token's path_patterns
+        command: Optional command to check against token's command_patterns
+        
+    Returns:
+        (is_valid, reason) tuple
+    """
+    from .tokens import validate_token
+    
+    return validate_token(
+        token_id=token_id,
+        required_capability=required_type,
+        path=target_path,
+        command=command,
+    )
+
+
 # =============================================================================
 # MAIN ENFORCEMENT FUNCTION
 # =============================================================================
@@ -366,10 +396,24 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
                 required_token_type=token_type,
                 contract_id=contract.contract_id if contract else None,
             )
-        # TODO: Validate token
+        
+        # Validate the provided token
+        target_path = request.target_path or (f"{request.mod_name}/{request.rel_path}" if request.mod_name else None)
+        is_valid, reason = _validate_token_for_operation(
+            token_id=request.token_id,
+            required_type=token_type,
+            target_path=target_path,
+        )
+        if not is_valid:
+            return EnforcementResult(
+                decision=Decision.DENY,
+                reason=f"Token validation failed: {reason}",
+                contract_id=contract.contract_id if contract else None,
+            )
+        
         return EnforcementResult(
             decision=Decision.ALLOW,
-            reason="File delete allowed with token",
+            reason="File delete allowed with valid token",
             contract_id=contract.contract_id if contract else None,
             token_id=request.token_id,
         )
@@ -435,9 +479,22 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
                 required_token_type="DB_DELETE_DATA",
                 contract_id=contract.contract_id if contract else None,
             )
+        
+        # Validate the provided token
+        is_valid, reason = _validate_token_for_operation(
+            token_id=request.token_id,
+            required_type="DB_DELETE_DATA",
+        )
+        if not is_valid:
+            return EnforcementResult(
+                decision=Decision.DENY,
+                reason=f"Token validation failed: {reason}",
+                contract_id=contract.contract_id if contract else None,
+            )
+        
         return EnforcementResult(
             decision=Decision.ALLOW,
-            reason="DB delete allowed with token",
+            reason="DB delete allowed with valid token",
             contract_id=contract.contract_id if contract else None,
             token_id=request.token_id,
         )
@@ -459,9 +516,23 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
                 required_token_type="CMD_RUN_DESTRUCTIVE",
                 contract_id=contract.contract_id if contract else None,
             )
+        
+        # Validate the provided token
+        is_valid, reason = _validate_token_for_operation(
+            token_id=request.token_id,
+            required_type="CMD_RUN_DESTRUCTIVE",
+            command=request.command,
+        )
+        if not is_valid:
+            return EnforcementResult(
+                decision=Decision.DENY,
+                reason=f"Token validation failed: {reason}",
+                contract_id=contract.contract_id if contract else None,
+            )
+        
         return EnforcementResult(
             decision=Decision.ALLOW,
-            reason="Destructive shell command allowed with token",
+            reason="Destructive shell command allowed with valid token",
             contract_id=contract.contract_id if contract else None,
             token_id=request.token_id,
         )
@@ -479,9 +550,21 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
                 required_token_tier=TokenTier.TIER_B,
                 required_token_type="REGISTRY_REPAIR",
             )
+        
+        # Validate the provided token
+        is_valid, reason = _validate_token_for_operation(
+            token_id=request.token_id,
+            required_type="REGISTRY_REPAIR",
+        )
+        if not is_valid:
+            return EnforcementResult(
+                decision=Decision.DENY,
+                reason=f"Token validation failed: {reason}",
+            )
+        
         return EnforcementResult(
             decision=Decision.ALLOW,
-            reason="Launcher repair allowed with token",
+            reason="Launcher repair allowed with valid token",
             token_id=request.token_id,
         )
     
@@ -493,9 +576,21 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
                 required_token_tier=TokenTier.TIER_B,
                 required_token_type="CACHE_DELETE",
             )
+        
+        # Validate the provided token
+        is_valid, reason = _validate_token_for_operation(
+            token_id=request.token_id,
+            required_type="CACHE_DELETE",
+        )
+        if not is_valid:
+            return EnforcementResult(
+                decision=Decision.DENY,
+                reason=f"Token validation failed: {reason}",
+            )
+        
         return EnforcementResult(
             decision=Decision.ALLOW,
-            reason="Cache deletion allowed with token",
+            reason="Cache deletion allowed with valid token",
             token_id=request.token_id,
         )
     
@@ -675,9 +770,22 @@ def _enforce_ck3lens_write(
                     required_token_tier=TokenTier.TIER_B,
                     required_token_type="REGISTRY_REPAIR",
                 )
+            
+            # Validate the provided token
+            is_valid, reason = _validate_token_for_operation(
+                token_id=request.token_id,
+                required_type="REGISTRY_REPAIR",
+                target_path=target_path,
+            )
+            if not is_valid:
+                return EnforcementResult(
+                    decision=Decision.DENY,
+                    reason=f"Token validation failed: {reason}",
+                )
+            
             return EnforcementResult(
                 decision=Decision.ALLOW,
-                reason="Launcher registry write allowed with token",
+                reason="Launcher registry write allowed with valid token",
                 token_id=request.token_id,
             )
         
