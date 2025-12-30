@@ -2508,19 +2508,42 @@ def _validate_syntax(content, filename, trace):
 
 
 def _validate_python(content, file_path, trace):
-    """Validate Python syntax."""
+    """Validate Python syntax.
+    
+    NOTE: For .txt files (CK3 script files), this automatically routes to
+    CK3 syntax validation using our Paradox script parser instead of Python's ast.
+    This prevents false positives when validating CK3 mod files.
+    """
     import ast
     from pathlib import Path as P
     
+    # Determine filename for extension check
+    filename = file_path or "<string>"
+    
+    # CK3 script files (.txt) should use CK3 syntax validation, not Python
+    if filename.lower().endswith('.txt'):
+        # Route to CK3 syntax validation
+        if content:
+            source = content
+        elif file_path:
+            path = P(file_path)
+            if not path.exists():
+                return {"valid": False, "error": f"File not found: {file_path}"}
+            source = path.read_text(encoding='utf-8')
+        else:
+            return {"error": "Either content or file_path required"}
+        
+        # Use CK3 parser for .txt files
+        return _validate_syntax(source, filename, trace)
+    
+    # Python files - use ast.parse
     if content:
         source = content
-        filename = file_path or "<string>"
     elif file_path:
         path = P(file_path)
         if not path.exists():
             return {"valid": False, "error": f"File not found: {file_path}"}
         source = path.read_text(encoding='utf-8')
-        filename = file_path
     else:
         return {"error": "Either content or file_path required"}
     
