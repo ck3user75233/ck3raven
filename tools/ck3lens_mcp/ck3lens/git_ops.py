@@ -11,19 +11,37 @@ from typing import Optional
 from .workspace import Session
 
 
-def _run_git(mod_path: Path, *args: str) -> tuple[bool, str, str]:
-    """Run git command in mod directory."""
+def _run_git(mod_path: Path, *args: str, timeout: int = 60) -> tuple[bool, str, str]:
+    """Run git command in mod directory.
+    
+    Uses non-interactive mode to prevent hanging on credential prompts.
+    Increased timeout for push/pull operations.
+    """
+    import os
+    
+    # Environment variables to prevent git from hanging
+    exec_env = os.environ.copy()
+    exec_env["GIT_TERMINAL_PROMPT"] = "0"  # Disable credential prompts
+    exec_env["GIT_PAGER"] = "cat"  # Disable pager for git commands
+    exec_env["PAGER"] = "cat"  # Disable pager generally
+    exec_env["GCM_INTERACTIVE"] = "never"  # Disable Git Credential Manager GUI
+    exec_env["GIT_ASKPASS"] = ""  # Disable askpass
+    exec_env["SSH_ASKPASS"] = ""  # Disable SSH askpass
+    exec_env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"  # SSH non-interactive
+    
     try:
         result = subprocess.run(
             ["git"] + list(args),
             cwd=mod_path,
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=timeout,
+            env=exec_env,
+            stdin=subprocess.DEVNULL,  # Prevent any stdin reads
         )
         return result.returncode == 0, result.stdout, result.stderr
     except subprocess.TimeoutExpired:
-        return False, "", "Command timed out"
+        return False, "", f"Command timed out after {timeout}s"
     except FileNotFoundError:
         return False, "", "Git not found in PATH"
     except Exception as e:
@@ -163,7 +181,8 @@ def git_push(
     if branch:
         args.append(branch)
     
-    ok, out, err = _run_git(mod.path, *args)
+    # Network operations need longer timeout
+    ok, out, err = _run_git(mod.path, *args, timeout=120)
     if not ok:
         return {"success": False, "error": err}
     
@@ -190,7 +209,8 @@ def git_pull(
     if branch:
         args.append(branch)
     
-    ok, out, err = _run_git(mod.path, *args)
+    # Network operations need longer timeout
+    ok, out, err = _run_git(mod.path, *args, timeout=120)
     if not ok:
         return {"success": False, "error": err}
     

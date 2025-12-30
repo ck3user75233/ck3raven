@@ -1980,21 +1980,39 @@ def _playset_import(launcher_playset_name, db, trace):
 GitCommand = Literal["status", "diff", "add", "commit", "push", "pull", "log"]
 
 
-def _run_git_in_path(repo_path, *args: str) -> tuple[bool, str, str]:
-    """Run git command in specified directory."""
+def _run_git_in_path(repo_path, *args: str, timeout: int = 60) -> tuple[bool, str, str]:
+    """Run git command in specified directory.
+    
+    Uses non-interactive mode to prevent hanging on credential prompts.
+    Increased timeout for push/pull operations.
+    """
     import subprocess
+    import os
     from pathlib import Path as P
+    
+    # Environment variables to prevent git from hanging
+    exec_env = os.environ.copy()
+    exec_env["GIT_TERMINAL_PROMPT"] = "0"  # Disable credential prompts
+    exec_env["GIT_PAGER"] = "cat"  # Disable pager for git commands
+    exec_env["PAGER"] = "cat"  # Disable pager generally
+    exec_env["GCM_INTERACTIVE"] = "never"  # Disable Git Credential Manager GUI
+    exec_env["GIT_ASKPASS"] = ""  # Disable askpass
+    exec_env["SSH_ASKPASS"] = ""  # Disable SSH askpass
+    exec_env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"  # SSH non-interactive
+    
     try:
         result = subprocess.run(
             ["git"] + list(args),
             cwd=P(repo_path),
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=timeout,
+            env=exec_env,
+            stdin=subprocess.DEVNULL,  # Prevent any stdin reads
         )
         return result.returncode == 0, result.stdout, result.stderr
     except subprocess.TimeoutExpired:
-        return False, "", "Command timed out"
+        return False, "", f"Command timed out after {timeout}s"
     except FileNotFoundError:
         return False, "", "Git not found in PATH"
     except Exception as e:
@@ -2104,7 +2122,8 @@ def _git_ops_for_path(command, repo_path, file_path, files, all_files, message, 
         }
     
     elif command == "push":
-        ok, out, err = _run_git_in_path(repo_path, "push", "origin")
+        # Network operations need longer timeout
+        ok, out, err = _run_git_in_path(repo_path, "push", "origin", timeout=120)
         if not ok:
             return {"success": False, "error": err}
         
@@ -2115,7 +2134,8 @@ def _git_ops_for_path(command, repo_path, file_path, files, all_files, message, 
         }
     
     elif command == "pull":
-        ok, out, err = _run_git_in_path(repo_path, "pull", "origin")
+        # Network operations need longer timeout
+        ok, out, err = _run_git_in_path(repo_path, "pull", "origin", timeout=120)
         if not ok:
             return {"success": False, "error": err}
         
@@ -2221,6 +2241,19 @@ def ck3_git_impl(
             "pull": OperationType.GIT_LOCAL_WORKFLOW,
         }
         
+        # Helper to get non-interactive git environment
+        def get_git_env():
+            import os
+            env = os.environ.copy()
+            env["GIT_TERMINAL_PROMPT"] = "0"
+            env["GIT_PAGER"] = "cat"
+            env["PAGER"] = "cat"
+            env["GCM_INTERACTIVE"] = "never"
+            env["GIT_ASKPASS"] = ""
+            env["SSH_ASKPASS"] = ""
+            env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+            return env
+        
         # Get current branch for push enforcement
         branch_name = None
         if command == "push":
@@ -2232,6 +2265,9 @@ def ck3_git_impl(
                         cwd=str(ck3raven_root),
                         capture_output=True,
                         text=True,
+                        timeout=30,
+                        env=get_git_env(),
+                        stdin=subprocess.DEVNULL,
                     )
                     if result_obj.returncode == 0:
                         branch_name = result_obj.stdout.strip()
@@ -2249,6 +2285,9 @@ def ck3_git_impl(
                         cwd=str(ck3raven_root),
                         capture_output=True,
                         text=True,
+                        timeout=30,
+                        env=get_git_env(),
+                        stdin=subprocess.DEVNULL,
                     )
                     if result_obj.returncode == 0:
                         staged_files = [f for f in result_obj.stdout.strip().split("\n") if f]
