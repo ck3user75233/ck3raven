@@ -84,6 +84,68 @@ class CanonicalAddress:
         return self.canonical_form
 
 
+class PathDomain(Enum):
+    """
+    Structural classification of a resolved path.
+    
+    This is for STRUCTURAL identification only, NOT permission decisions.
+    Enforcement.py makes all allow/deny decisions based on the enforcement target.
+    """
+    WIP = "wip"
+    LOCAL_MOD = "local_mod"
+    WORKSHOP_MOD = "workshop_mod"
+    VANILLA = "vanilla"
+    CK3RAVEN = "ck3raven"
+    UTILITY = "utility"
+    LAUNCHER_REGISTRY = "launcher_registry"
+    UNKNOWN = "unknown"
+
+
+@dataclass
+class EnforcementTarget:
+    """
+    The enforcement target derived from a canonical address.
+    
+    This is what gets passed to enforcement.py for allow/deny decisions.
+    Constructed from ResolutionResult by normalize_path_input().
+    
+    MCP tools should use this instead of building their own path strings.
+    """
+    mod_name: Optional[str]  # For LOCAL_MOD domain
+    rel_path: Optional[str]  # For LOCAL_MOD domain
+    canonical_address: str   # Full canonical form for non-mod domains
+    domain: PathDomain       # Structural classification
+    
+    @classmethod
+    def from_resolution(cls, result: "ResolutionResult") -> "EnforcementTarget":
+        """Create enforcement target from resolution result."""
+        if not result.found or not result.address:
+            return cls(
+                mod_name=None,
+                rel_path=None,
+                canonical_address=result.address.canonical_form if result.address else "",
+                domain=PathDomain.UNKNOWN,
+            )
+        
+        addr = result.address
+        domain = result.domain or PathDomain.UNKNOWN
+        
+        if addr.address_type == AddressType.MOD:
+            return cls(
+                mod_name=addr.identifier,
+                rel_path=addr.relative_path,
+                canonical_address=addr.canonical_form,
+                domain=domain,
+            )
+        else:
+            return cls(
+                mod_name=None,
+                rel_path=None,
+                canonical_address=addr.canonical_form,
+                domain=domain,
+            )
+
+
 @dataclass
 class ResolutionResult:
     """
@@ -94,10 +156,21 @@ class ResolutionResult:
     
     NO-ORACLE RULE: This result contains NO writability information.
     Writability is determined by enforcement.py at the write boundary.
+    
+    Fields:
+    - found: Whether the reference exists in this world
+    - address: The canonical address (sole identity)
+    - absolute_path: For filesystem execution only
+    - domain: Structural classification (NOT for permission decisions)
+    - file_id/content_version_id: For database operations
+    - mod_name: Mod identifier if applicable
+    - error_message: Reason for not_found
+    - ui_hint_potentially_editable: Display only, NEVER control flow
     """
     found: bool
     address: Optional[CanonicalAddress] = None
-    absolute_path: Optional[Path] = None  # For filesystem operations
+    absolute_path: Optional[Path] = None  # For filesystem execution ONLY
+    domain: Optional[PathDomain] = None   # Structural classification
     file_id: Optional[int] = None  # For database operations
     content_version_id: Optional[int] = None
     mod_name: Optional[str] = None
@@ -112,8 +185,82 @@ class ResolutionResult:
         """Create a not-found result."""
         return cls(
             found=False,
+            domain=PathDomain.UNKNOWN,
             error_message=f"{reason}: {raw_input}"
         )
+    
+    def get_enforcement_target(self) -> EnforcementTarget:
+        """
+        Get the enforcement target for this resolution.
+        
+        This is the ONLY way to derive an enforcement target from a resolution.
+        MCP tools should call this instead of building their own path strings.
+        """
+        return EnforcementTarget.from_resolution(self)
+
+
+def normalize_path_input(
+    world: "WorldAdapter",
+    *,
+    path: Optional[str] = None,
+    mod_name: Optional[str] = None,
+    rel_path: Optional[str] = None,
+) -> ResolutionResult:
+    """
+    CANONICAL PATH NORMALIZATION UTILITY
+    
+    This is THE single entry point for path resolution in MCP tools.
+    It handles all input forms and returns a unified ResolutionResult.
+    
+    Input forms (mutually exclusive):
+    1. path: Raw filesystem path (C:/...) or canonical address (mod:xyz/...)
+    2. mod_name + rel_path: Explicit mod addressing
+    
+    Returns:
+        ResolutionResult with:
+        - found: Whether the reference exists in this world
+        - address: The canonical address (sole identity)
+        - absolute_path: For filesystem execution ONLY
+        - domain: Structural classification
+        - get_enforcement_target(): Method to get EnforcementTarget
+    
+    Usage in MCP tools:
+        result = normalize_path_input(world, path=path, mod_name=mod_name, rel_path=rel_path)
+        if not result.found:
+            return {"error": result.error_message}
+        
+        # Get enforcement target (for enforcement.py)
+        target = result.get_enforcement_target()
+        
+        # Get execution path (for filesystem operations)
+        abs_path = result.absolute_path
+    
+    This utility:
+    - Parses user input
+    - Calls WorldAdapter.resolve() exactly once
+    - Exposes enforcement targets via get_enforcement_target()
+    - Exposes execution paths via absolute_path
+    - Does NOT perform permission checks or eligibility logic
+    """
+    # Determine input to resolve
+    if path:
+        # User provided a raw path or canonical address
+        address_to_resolve = path
+    elif mod_name and rel_path:
+        # User provided mod_name + rel_path - convert to canonical form
+        address_to_resolve = f"mod:{mod_name}/{rel_path}"
+    elif mod_name:
+        # Just mod_name without rel_path - use mod root
+        address_to_resolve = f"mod:{mod_name}/"
+    else:
+        # No valid input
+        return ResolutionResult.not_found(
+            "<no input>",
+            "Either 'path' or 'mod_name'+'rel_path' required"
+        )
+    
+    # Call WorldAdapter.resolve() exactly once
+    return world.resolve(address_to_resolve)
 
 
 class WorldAdapter(ABC):
@@ -405,12 +552,15 @@ class LensWorldAdapter(WorldAdapter):
             mod_path = self._mod_paths[mod_name]
             abs_path = mod_path / address.relative_path
             
+            # Determine domain: LOCAL_MOD vs WORKSHOP_MOD
             # UI hint: potentially editable if mod is in local_mods_folder
             ui_hint = False
+            domain = PathDomain.WORKSHOP_MOD  # Default to workshop
             if self._local_mods_folder:
                 try:
                     mod_path.resolve().relative_to(self._local_mods_folder.resolve())
                     ui_hint = True
+                    domain = PathDomain.LOCAL_MOD
                 except ValueError:
                     pass
             
@@ -418,6 +568,7 @@ class LensWorldAdapter(WorldAdapter):
                 found=True,
                 address=address,
                 absolute_path=abs_path,
+                domain=domain,
                 mod_name=mod_name,
                 ui_hint_potentially_editable=ui_hint,
             )
@@ -437,6 +588,7 @@ class LensWorldAdapter(WorldAdapter):
             found=True,
             address=address,
             absolute_path=abs_path,
+            domain=PathDomain.VANILLA,
             mod_name="vanilla",
             ui_hint_potentially_editable=False,
         )
@@ -459,6 +611,7 @@ class LensWorldAdapter(WorldAdapter):
             found=True,
             address=address,
             absolute_path=abs_path,
+            domain=PathDomain.UTILITY,
             ui_hint_potentially_editable=False,
         )
     
@@ -472,6 +625,7 @@ class LensWorldAdapter(WorldAdapter):
             found=True,
             address=address,
             absolute_path=abs_path,
+            domain=PathDomain.CK3RAVEN,
             ui_hint_potentially_editable=False,
         )
     
@@ -485,6 +639,7 @@ class LensWorldAdapter(WorldAdapter):
             found=True,
             address=address,
             absolute_path=abs_path,
+            domain=PathDomain.WIP,
             ui_hint_potentially_editable=True,
         )
 
@@ -544,6 +699,7 @@ class DevWorldAdapter(WorldAdapter):
                     raw_input=path_or_address,
                 ),
                 absolute_path=path,
+                domain=PathDomain.CK3RAVEN,
                 ui_hint_potentially_editable=True,
             )
         except ValueError:
@@ -561,6 +717,7 @@ class DevWorldAdapter(WorldAdapter):
                     raw_input=path_or_address,
                 ),
                 absolute_path=path,
+                domain=PathDomain.WIP,
                 ui_hint_potentially_editable=True,
             )
         except ValueError:
@@ -579,12 +736,14 @@ class DevWorldAdapter(WorldAdapter):
                         raw_input=path_or_address,
                     ),
                     absolute_path=path,
+                    domain=PathDomain.VANILLA,
                     ui_hint_potentially_editable=False,
                 )
             except ValueError:
                 pass
         
         # Check mod paths - readable but NOT writable (enforcement handles this)
+        # In dev mode, mods are always workshop (not editable)
         for mod_path in self._mod_paths:
             try:
                 rel = path.relative_to(mod_path.resolve())
@@ -597,6 +756,7 @@ class DevWorldAdapter(WorldAdapter):
                         raw_input=path_or_address,
                     ),
                     absolute_path=path,
+                    domain=PathDomain.WORKSHOP_MOD,  # In dev mode, mods are read-only
                     ui_hint_potentially_editable=False,  # UI hint only
                 )
             except ValueError:

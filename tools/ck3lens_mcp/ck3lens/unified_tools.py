@@ -850,42 +850,38 @@ def ck3_file_impl(
         OperationType, Decision, EnforcementRequest, enforce_and_log
     )
     from ck3lens.work_contracts import get_active_contract
+    from ck3lens.world_adapter import normalize_path_input
     
     mode = get_agent_mode()
     write_commands = {"write", "edit", "delete", "rename"}
     
     # ==========================================================================
-    # STEP 1: WORLDADAPTER VISIBILITY CHECK (FIRST)
-    # If the path is not visible in this agent's world, return NOT_FOUND.
-    # Policy enforcement is ONLY consulted for visible paths.
+    # STEP 1: CANONICAL PATH NORMALIZATION (FIRST)
+    # Use normalize_path_input() for all path resolution.
+    # This is the SINGLE resolver - no inline path building anywhere.
     # ==========================================================================
+    
+    resolution = None
+    enforcement_target = None
     
     if command in write_commands and world is not None:
-        # Determine the target address for WorldAdapter resolution
-        # WorldAdapter is the SINGLE resolver - no inline path building
-        target_address = path
-        if not target_address and mod_name and rel_path:
-            # Use canonical address format for mod paths
-            target_address = f"mod:{mod_name}/{rel_path}"
+        # Use canonical path normalization utility
+        resolution = normalize_path_input(world, path=path, mod_name=mod_name, rel_path=rel_path)
         
-        # Check visibility via WorldAdapter (in_world, not file_exists)
-        if target_address:
-            visibility_result = world.resolve(target_address)
-            
-            if not visibility_result.found:
-                # Path is outside this world's scope - NOT_FOUND (visibility)
-                return {
-                    "success": False,
-                    "error": visibility_result.error_message or f"Path not in world scope: {target_address}",
-                    "visibility": "NOT_FOUND",
-                    "guidance": "This path is outside your current lens/scope",
-                }
-            
-            # Path is in_world - ALWAYS proceed to enforcement.py
-            # Enforcement decides ALLOW/DENY, not visibility
+        if not resolution.found:
+            # Path is outside this world's scope - structural error
+            return {
+                "success": False,
+                "error": resolution.error_message or "Path not in world scope",
+                "visibility": "NOT_FOUND",
+                "guidance": "This path is outside your current lens/scope",
+            }
+        
+        # Get enforcement target from resolution (the ONLY way to derive it)
+        enforcement_target = resolution.get_enforcement_target()
     
     # ==========================================================================
-    # STEP 2: CENTRALIZED ENFORCEMENT GATE (AFTER visibility)
+    # STEP 2: CENTRALIZED ENFORCEMENT GATE (AFTER resolution)
     # Only reached if the path is visible. Now check policy.
     # ==========================================================================
     
@@ -898,20 +894,17 @@ def ck3_file_impl(
             "rename": OperationType.FILE_RENAME,
         }
         
-        # Determine target path
-        target = path or (f"{mod_name}/{rel_path}" if mod_name and rel_path else None)
-        
         # Get contract for scope validation
         contract = get_active_contract()
         
-        # Build enforcement request
+        # Build enforcement request using enforcement_target (derived from resolution)
         request = EnforcementRequest(
             operation=op_type_map[command],
             mode=mode,
             tool_name="ck3_file",
-            target_path=target,
-            mod_name=mod_name,
-            rel_path=rel_path,
+            target_path=enforcement_target.canonical_address if enforcement_target else path,
+            mod_name=enforcement_target.mod_name if enforcement_target else mod_name,
+            rel_path=enforcement_target.rel_path if enforcement_target else rel_path,
             contract_id=contract.contract_id if contract else None,
             repo_domains=contract.canonical_domains if contract else [],
             token_id=token_id,
