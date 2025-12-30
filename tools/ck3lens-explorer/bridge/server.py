@@ -110,7 +110,6 @@ class CK3LensBridge:
             "list_files": self.list_files,
             "get_conflicts": self.get_conflicts,
             "confirm_not_exists": self.confirm_not_exists,
-            "get_playset_mod_config": self.get_playset_mod_config,
             "read_local_file": self.read_local_file,
             "write_file": self.write_file,
             "git_status": self.git_status,
@@ -890,60 +889,11 @@ class CK3LensBridge:
         except Exception as e:
             return {"can_claim_not_exists": False, "similar_matches": [], "error": str(e)}
     
-    def get_playset_mod_config(self, params: dict) -> dict:
-        """Get mod configuration from active playset.
-        
-        Returns mods configured in playset JSON. The consumer (UI) should derive
-        editability by checking if mod paths are under local_mods_folder.
-        
-        Loads from playset configuration. If no playset is active, returns empty list.
-        This is valid - read-only mode with no writable mods.
-        
-        NOTE: The playset JSON may still use legacy 'local_mods' key for the config.
-        """
-        mod_root = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
-        raven_dir = Path.home() / ".ck3raven"
-        
-        mods = []
-        
-        # Try to load from active playset
-        active_file = raven_dir / "playsets" / "active.txt"
-        if active_file.exists():
-            try:
-                playset_name = active_file.read_text().strip()
-                playset_file = raven_dir / "playsets" / f"{playset_name}.json"
-                if playset_file.exists():
-                    import json
-                    playset_data = json.loads(playset_file.read_text())
-                    # Read from legacy 'local_mods' key in JSON config
-                    mods_config = playset_data.get("local_mods", [])
-                    
-                    for mod_cfg in mods_config:
-                        # Support both old and new formats
-                        if isinstance(mod_cfg, dict):
-                            mod_id = mod_cfg.get("short_id", mod_cfg.get("name", ""))
-                            display_name = mod_cfg.get("name", mod_id)
-                            folder_name = mod_cfg.get("folder", display_name)
-                        else:
-                            # Legacy: just a folder name string
-                            mod_id = folder_name = display_name = mod_cfg
-                        
-                        path = mod_root / folder_name
-                        mods.append({
-                            "mod_id": mod_id,
-                            "name": display_name,
-                            "path": str(path),
-                            "exists": path.exists()
-                        })
-            except Exception:
-                pass  # Fall through to empty list
-        
-        return {
-            "mods": mods,  # THE list - consumer derives editability from paths
-            "local_mods_folder": str(mod_root),  # For editability derivation
-        }
+    # DELETED: get_playset_mod_config (December 30, 2025)
+    # This was a BANNED parallel list (the "local_mods" concept trying to survive).
+    # Use get_playset_mods() instead - it returns mods[] from the database.
+    # Editability is derived at runtime: mod.path.startswith(local_mods_folder)
 
-    
     def read_local_file(self, params: dict) -> dict:
         """Read file from local mod."""
         mod_name = params.get("mod_name", "")
