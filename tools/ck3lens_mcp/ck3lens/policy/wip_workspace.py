@@ -439,7 +439,7 @@ class ScriptDeclaration:
 def validate_script_declarations(
     script_hash: str,
     declarations: ScriptDeclaration,
-    local_mods: set[str],
+    allowed_write_mods: set[str],
 ) -> dict[str, Any]:
     """
     Validate that script declarations are within allowed scope.
@@ -447,25 +447,26 @@ def validate_script_declarations(
     Args:
         script_hash: SHA256 of script content
         declarations: What the script claims to read/write
-        local_mods: Set of allowed local mod names for writes
+        allowed_write_mods: Set of mod names where writes are allowed
+                            (mods whose paths are under local_mods_folder)
     
     Returns:
         Validation result with any errors
     """
     errors = []
     
-    # Check writes - only WIP or active local mods allowed
+    # Check writes - only WIP or editable mods allowed
     for write_path in declarations.declared_writes:
         # WIP writes are always allowed
         if write_path.startswith("wip:") or write_path.startswith("~/.ck3raven/wip/"):
             continue
         
-        # Check if it's a local mod write
+        # Check if it's a write to an editable mod
         parts = write_path.split("/", 1)
         if len(parts) >= 1:
             mod_name = parts[0]
-            if mod_name not in local_mods:
-                errors.append(f"Write to non-local mod not allowed: {write_path}")
+            if mod_name not in allowed_write_mods:
+                errors.append(f"Write to non-editable mod not allowed: {write_path}")
     
     return {
         "script_hash": script_hash,

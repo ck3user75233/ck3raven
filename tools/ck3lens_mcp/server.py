@@ -634,7 +634,6 @@ def ck3_ping() -> dict:
 @mcp.tool()
 def ck3_init_session(
     db_path: Optional[str] = None,
-    local_mods: Optional[list[str]] = None
 ) -> dict:
     """
     DEPRECATED: Use ck3_get_mode_instructions() instead.
@@ -1635,7 +1634,7 @@ def ck3_conflicts(
 
 @mcp.tool()
 def ck3_file(
-    command: Literal["get", "read", "write", "edit", "delete", "rename", "refresh", "list"],
+    command: Literal["get", "read", "write", "edit", "delete", "rename", "refresh", "list", "create_patch"],
     # Path identification
     path: str | None = None,
     mod_name: str | None = None,
@@ -1661,20 +1660,24 @@ def ck3_file(
     # For list
     path_prefix: str | None = None,
     pattern: str | None = None,
+    # For create_patch (ck3lens mode only)
+    source_path: str | None = None,
+    patch_mode: Literal["partial_patch", "full_replace"] | None = None,
 ) -> dict:
     """
     Unified file operations tool.
     
     Commands:
     
-    command=get      → Get file content from database (path required)
-    command=read     → Read file from filesystem (path or mod_name+rel_path)
-    command=write    → Write file (path for raw write, or mod_name+rel_path for mod)
-    command=edit     → Search-replace in live mod file (mod_name, rel_path, old_content, new_content)
-    command=delete   → Delete file from live mod (mod_name, rel_path required)
-    command=rename   → Rename/move file in live mod (mod_name, rel_path, new_path required)
-    command=refresh  → Re-sync file to database (mod_name, rel_path required)
-    command=list     → List files in live mod (mod_name required, path_prefix/pattern optional)
+    command=get          → Get file content from database (path required)
+    command=read         → Read file from filesystem (path or mod_name+rel_path)
+    command=write        → Write file (path for raw write, or mod_name+rel_path for mod)
+    command=edit         → Search-replace in live mod file (mod_name, rel_path, old_content, new_content)
+    command=delete       → Delete file from live mod (mod_name, rel_path required)
+    command=rename       → Rename/move file in live mod (mod_name, rel_path, new_path required)
+    command=refresh      → Re-sync file to database (mod_name, rel_path required)
+    command=list         → List files in live mod (mod_name required, path_prefix/pattern optional)
+    command=create_patch → Create override patch file (⚠️ ck3lens mode only; mod_name, source_path, patch_mode required)
     
     For write command with raw path:
     - ck3lens mode: DENIED (must use mod_name+rel_path)
@@ -1698,6 +1701,8 @@ def ck3_file(
         validate_syntax: Validate CK3 syntax before write/edit
         path_prefix: Filter by path prefix (for list)
         pattern: Glob pattern (for list)
+        source_path: Path being overridden (for create_patch, e.g., "common/traits/00_traits.txt")
+        patch_mode: "partial_patch" (zzz_ prefix, loads last) or "full_replace" (same name)
     
     Returns:
         Dict with results based on command
@@ -1729,6 +1734,8 @@ def ck3_file(
         token_id=token_id,
         path_prefix=path_prefix,
         pattern=pattern,
+        source_path=source_path,
+        patch_mode=patch_mode,
         session=session,
         db=db,
         trace=trace,
@@ -3946,152 +3953,11 @@ def ck3_get_symbol_conflicts(
 # - ck3_delete_file() → Use ck3_file(command="delete", mod_name=..., rel_path=...)
 # - ck3_rename_file() → Use ck3_file(command="rename", mod_name=..., rel_path=..., new_path=...)
 # - ck3_refresh_file() → Use ck3_file(command="refresh", mod_name=..., rel_path=...)
+# - ck3_create_override_patch() → Use ck3_file(command="create_patch", mod_name=..., source_path=..., patch_mode=...)
 #
 # These used the BANNED "local_mods" module which has been deleted.
 # All file operations now flow through ck3_file unified tool with enforcement.
 # ============================================================================
-
-
-@mcp.tool()
-def ck3_create_override_patch(
-    source_path: str,
-    target_mod: str,
-    mode: Literal["override_patch", "full_replace"],
-    initial_content: str | None = None,
-) -> dict:
-    """
-    Create an override patch file in a live mod.
-    
-    ⚠️ MODE: ck3lens only. Cannot write to mod files in ck3raven-dev mode.
-    
-    Use this when you need to patch a file from vanilla or a non-editable mod.
-    Automatically creates the correct directory structure and follows naming conventions.
-    
-    Modes:
-    - override_patch: Creates zzz_msc_[original_name].txt (for adding/modifying specific units)
-    - full_replace: Creates [original_name].txt (full replacement, last-wins)
-    
-    Args:
-        source_path: The relative path being overridden (e.g., "common/traits/00_traits.txt")
-        target_mod: Name of the live mod to create the patch in (e.g., "MSC")
-        mode: "override_patch" for partial override, "full_replace" for full replacement
-        initial_content: Optional initial content for the file. If None, creates with comment header.
-    
-    Returns:
-        {
-            "success": bool,
-            "created_path": str,  # Relative path in target mod
-            "full_path": str,     # Absolute filesystem path
-            "mode": str,
-            "source_path": str
-        }
-    
-    Example:
-        ck3_create_override_patch(
-            source_path="common/traits/00_traits.txt",
-            target_mod="MSC",
-            mode="override_patch"
-        )
-        # Creates: MSC/common/traits/zzz_msc_00_traits.txt
-    """
-    from pathlib import Path as P
-    from datetime import datetime
-    
-    session = _get_session()
-    trace = _get_trace()
-    
-    # Parse source path
-    source = P(source_path)
-    if source.is_absolute() or ".." in source.parts:
-        return {"success": False, "error": "source_path must be relative without .."}
-    
-    # Determine output filename
-    if mode == "override_patch":
-        # zzz_msc_[original_name].txt
-        new_name = f"zzz_msc_{source.name}"
-    elif mode == "full_replace":
-        # Same name (will override due to load order)
-        new_name = source.name
-    else:
-        return {"success": False, "error": f"Invalid mode: {mode}. Use 'override_patch' or 'full_replace'"}
-    
-    # Build target path (same directory structure)
-    target_rel_path = str(source.parent / new_name)
-    
-    # Generate default content if not provided
-    if initial_content is None:
-        initial_content = f"""# Override patch for: {source_path}
-# Created: {datetime.now().strftime("%Y-%m-%d %H:%M")}
-# Mode: {mode}
-# 
-# Add your overrides below. For 'override_patch' mode, only include
-# the specific units you want to override/add.
-
-"""
-    
-    # Write the file
-    result = local_mods.write_file(session, target_mod, target_rel_path, initial_content)
-    
-    if result.get("success"):
-        # Get the full path for navigation
-        local_mod = session.get_local_mod(target_mod)
-        full_path = str(local_mod.path / target_rel_path) if local_mod else None
-        
-        trace.log("ck3lens.create_override_patch", {
-            "source_path": source_path,
-            "target_mod": target_mod,
-            "mode": mode
-        }, {"success": True, "created_path": target_rel_path})
-        
-        return {
-            "success": True,
-            "created_path": target_rel_path,
-            "full_path": full_path,
-            "mode": mode,
-            "source_path": source_path,
-            "message": f"Created override patch: {target_rel_path}"
-        }
-    else:
-        trace.log("ck3lens.create_override_patch", {
-            "source_path": source_path,
-            "target_mod": target_mod,
-            "mode": mode
-        }, {"success": False, "error": result.get("error")})
-        
-        return result
-
-
-# @mcp.tool()  # DEPRECATED - use ck3_file(command="list")
-def ck3_list_live_files(
-    mod_name: str,
-    path_prefix: Optional[str] = None,
-    pattern: Optional[str] = None
-) -> dict:
-    """
-    DEPRECATED: Use ck3_file(command="list", mod_name=...) instead.
-    
-    List files in a mod.
-    
-    Args:
-        mod_name: Name of the live mod
-        path_prefix: Filter by path prefix (e.g., "common/traits")
-        pattern: Glob pattern filter (e.g., "*.txt")
-    
-    Returns:
-        List of file paths
-    """
-    session = _get_session()
-    trace = _get_trace()
-    
-    result = local_mods.list_local_files(session, mod_name, path_prefix, pattern)
-    
-    trace.log("ck3lens.list_live_files", {
-        "mod_name": mod_name,
-        "path_prefix": path_prefix,
-        "pattern": pattern
-    }, {"files_count": len(result.get("files", []))})
-    
-    return result
 
 
 # ============================================================================

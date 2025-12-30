@@ -788,7 +788,7 @@ def _conflict_report(
 # ck3_file - Unified File Operations
 # ============================================================================
 
-FileCommand = Literal["get", "read", "write", "edit", "delete", "rename", "refresh", "list"]
+FileCommand = Literal["get", "read", "write", "edit", "delete", "rename", "refresh", "list", "create_patch"]
 
 
 def ck3_file_impl(
@@ -818,6 +818,9 @@ def ck3_file_impl(
     # For list
     path_prefix: str | None = None,
     pattern: str | None = None,
+    # For create_patch (ck3lens mode only)
+    source_path: str | None = None,
+    patch_mode: str | None = None,  # "partial_patch" or "full_replace"
     # Dependencies (injected)
     session=None,
     db=None,
@@ -830,14 +833,17 @@ def ck3_file_impl(
     
     Commands:
     
-    command=get      → Get file content from database (path required)
-    command=read     → Read file from filesystem (path or mod_name+rel_path)
-    command=write    → Write file to live mod (mod_name, rel_path, content required)
-    command=edit     → Search-replace in live mod file (mod_name, rel_path, old_content, new_content)
-    command=delete   → Delete file from live mod (mod_name, rel_path required)
-    command=rename   → Rename/move file in live mod (mod_name, rel_path, new_path required)
-    command=refresh  → Re-sync file to database (mod_name, rel_path required)
-    command=list     → List files in live mod (mod_name required, path_prefix/pattern optional)
+    command=get          → Get file content from database (path required)
+    command=read         → Read file from filesystem (path or mod_name+rel_path)
+    command=write        → Write file to live mod (mod_name, rel_path, content required)
+    command=edit         → Search-replace in live mod file (mod_name, rel_path, old_content, new_content)
+    command=delete       → Delete file from live mod (mod_name, rel_path required)
+    command=rename       → Rename/move file in live mod (mod_name, rel_path, new_path required)
+    command=refresh      → Re-sync file to database (mod_name, rel_path required)
+    command=list         → List files in live mod (mod_name required, path_prefix/pattern optional)
+    command=create_patch → Create override patch file (ck3lens only; mod_name, source_path, patch_mode required)
+    
+    ⚠️ create_patch is ck3lens mode only. Creates override patch files in live mods.
     
     The world parameter provides WorldAdapter for unified path resolution:
     - Resolves raw paths to canonical addresses
@@ -1012,6 +1018,19 @@ def ck3_file_impl(
         if not mod_name:
             return {"error": "mod_name required for list"}
         return _file_list(mod_name, path_prefix, pattern, session, trace)
+    
+    elif command == "create_patch":
+        # ck3lens mode only - creates override patch file
+        return _file_create_patch(
+            mod_name=mod_name,
+            source_path=source_path,
+            patch_mode=patch_mode,
+            initial_content=content,
+            validate_syntax=validate_syntax,
+            session=session,
+            trace=trace,
+            mode=mode,
+        )
     
     return {"error": f"Unknown command: {command}"}
 
@@ -1550,6 +1569,91 @@ def _file_list(mod_name, path_prefix, pattern, session, trace):
                   {"files_count": len(result.get("files", []))})
     
     return result
+
+
+def _file_create_patch(mod_name, source_path, patch_mode, initial_content, validate_syntax, session, trace, mode):
+    """
+    Create an override patch file in a live mod.
+    
+    ⚠️ MODE: ck3lens only. Not available in ck3raven-dev mode.
+    
+    Modes:
+    - partial_patch: Creates zzz_[mod]_[original_name].txt (for adding/modifying specific units)
+    - full_replace: Creates [original_name].txt (full replacement, last-wins)
+    
+    NOTE: This function computes paths and delegates to _file_write.
+    Enforcement happens via the normal _file_write path.
+    """
+    from pathlib import Path as P
+    from datetime import datetime
+    
+    # Mode check: ck3lens only
+    if mode == "ck3raven-dev":
+        return {
+            "success": False,
+            "error": "create_patch command is only available in ck3lens mode",
+            "guidance": "This tool creates override patches in CK3 mods, which is not relevant to ck3raven development",
+        }
+    
+    # Validate required parameters
+    if not mod_name:
+        return {"success": False, "error": "mod_name required for create_patch"}
+    if not source_path:
+        return {"success": False, "error": "source_path required for create_patch (the file being overridden)"}
+    if not patch_mode:
+        return {"success": False, "error": "patch_mode required: 'partial_patch' or 'full_replace'"}
+    if patch_mode not in ("partial_patch", "full_replace"):
+        return {"success": False, "error": f"Invalid patch_mode: {patch_mode}. Use 'partial_patch' or 'full_replace'"}
+    
+    # Parse and validate source path
+    source = P(source_path)
+    if source.is_absolute() or ".." in source.parts:
+        return {"success": False, "error": "source_path must be relative without '..'"}
+    
+    # Compute output filename based on patch mode
+    if patch_mode == "partial_patch":
+        # Prefix with zzz_[mod]_ to load LAST (wins for OVERRIDE types)
+        mod_prefix = mod_name.lower().replace(" ", "_")
+        new_name = f"zzz_{mod_prefix}_{source.name}"
+    else:  # full_replace
+        # Same name (will override due to load order)
+        new_name = source.name
+    
+    # Build target relative path (same directory structure)
+    target_rel_path = str(source.parent / new_name)
+    
+    # Generate default content if not provided
+    if initial_content is None:
+        initial_content = f"""# Override patch for: {source_path}
+# Created: {datetime.now().strftime("%Y-%m-%d %H:%M")}
+# Patch mode: {patch_mode}
+# Target mod: {mod_name}
+# 
+# For 'partial_patch' mode: Add only the specific units you want to override/add.
+# For 'full_replace' mode: This file completely replaces the original.
+
+"""
+    
+    # Delegate to existing _file_write (handles folder creation, syntax validation)
+    write_result = _file_write(mod_name, target_rel_path, initial_content, validate_syntax, session, trace)
+    
+    if write_result.get("success"):
+        # Enhance result with patch-specific info
+        write_result["patch_info"] = {
+            "source_path": source_path,
+            "patch_mode": patch_mode,
+            "created_path": target_rel_path,
+        }
+        write_result["message"] = f"Created {patch_mode} patch: {target_rel_path}"
+        
+        if trace:
+            trace.log("ck3lens.file.create_patch", {
+                "mod_name": mod_name,
+                "source_path": source_path,
+                "patch_mode": patch_mode,
+            }, {"success": True, "created_path": target_rel_path})
+    
+    return write_result
 
 
 def _refresh_file_in_db_internal(mod_name, rel_path, content=None, deleted=False):

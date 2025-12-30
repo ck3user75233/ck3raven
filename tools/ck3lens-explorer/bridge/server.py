@@ -110,7 +110,7 @@ class CK3LensBridge:
             "list_files": self.list_files,
             "get_conflicts": self.get_conflicts,
             "confirm_not_exists": self.confirm_not_exists,
-            "list_local_mods": self.list_local_mods,
+            "get_playset_mod_config": self.get_playset_mod_config,
             "read_local_file": self.read_local_file,
             "write_file": self.write_file,
             "git_status": self.git_status,
@@ -174,17 +174,18 @@ class CK3LensBridge:
             
             self.initialized = True
             
-            # Get local mods from playset config
-            local_mods_result = self.list_local_mods({})
-            local_mods = local_mods_result.get("local_mods", {"mods": []})
+            # Return mod root and local_mods_folder for the UI to derive editability
+            # Following canonical architecture: mods[] is THE list, editability derived from path
+            mod_root = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
+            local_mods_folder = str(mod_root)  # The folder that contains writable mods
             
             return {
                 "initialized": True,
                 "db_path": str(self.db_path),
-                "mod_root": str(Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"),
+                "mod_root": str(mod_root),
+                "local_mods_folder": local_mods_folder,  # For editability checks by UI
                 "playset_id": self.playset_id,
                 "playset_name": playset_name,
-                "local_mods": local_mods
             }
         except Exception as e:
             return {
@@ -889,11 +890,16 @@ class CK3LensBridge:
         except Exception as e:
             return {"can_claim_not_exists": False, "similar_matches": [], "error": str(e)}
     
-    def list_local_mods(self, params: dict) -> dict:
-        """List local mods that can be written to.
+    def get_playset_mod_config(self, params: dict) -> dict:
+        """Get mod configuration from active playset.
+        
+        Returns mods configured in playset JSON. The consumer (UI) should derive
+        editability by checking if mod paths are under local_mods_folder.
         
         Loads from playset configuration. If no playset is active, returns empty list.
         This is valid - read-only mode with no writable mods.
+        
+        NOTE: The playset JSON may still use legacy 'local_mods' key for the config.
         """
         mod_root = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
         raven_dir = Path.home() / ".ck3raven"
@@ -909,9 +915,10 @@ class CK3LensBridge:
                 if playset_file.exists():
                     import json
                     playset_data = json.loads(playset_file.read_text())
-                    local_mods_config = playset_data.get("local_mods", [])
+                    # Read from legacy 'local_mods' key in JSON config
+                    mods_config = playset_data.get("local_mods", [])
                     
-                    for mod_cfg in local_mods_config:
+                    for mod_cfg in mods_config:
                         # Support both old and new formats
                         if isinstance(mod_cfg, dict):
                             mod_id = mod_cfg.get("short_id", mod_cfg.get("name", ""))
@@ -931,7 +938,10 @@ class CK3LensBridge:
             except Exception:
                 pass  # Fall through to empty list
         
-        return {"local_mods": {"mods": mods}}
+        return {
+            "mods": mods,  # THE list - consumer derives editability from paths
+            "local_mods_folder": str(mod_root),  # For editability derivation
+        }
 
     
     def read_local_file(self, params: dict) -> dict:
@@ -1176,6 +1186,7 @@ class CK3LensBridge:
                     if playset_file.exists():
                         import json
                         playset_data = json.loads(playset_file.read_text())
+                        # Read from legacy 'local_mods' key in playset JSON
                         for mod_cfg in playset_data.get("local_mods", []):
                             if isinstance(mod_cfg, dict):
                                 if mod_cfg.get("short_id") == target_mod or mod_cfg.get("name") == target_mod:
