@@ -71,10 +71,14 @@ BANNED_PARALLEL_AUTHORITY = {
 
 BANNED_TERMS = BANNED_PERMISSION_ORACLES | BANNED_PARALLEL_AUTHORITY
 
-# Terms that are warnings (used legitimately in some contexts but should be reviewed)
-WARN_TERMS = {
-    "local_mods",  # Valid in Session.local_mods_folder context, banned as derived list
+# local_mods is BANNED except as part of local_mods_folder
+# This is checked contextually in check_banned_terms()
+BANNED_CONTEXTUAL = {
+    "local_mods",  # Only allowed as part of local_mods_folder
 }
+
+# No longer used - local_mods is now contextually banned, not warned
+WARN_TERMS: set = set()
 
 # -----------------------------
 # Forbidden filename patterns (Phase 1)
@@ -283,7 +287,7 @@ def _tokenize_names(p: Path) -> Iterator[Tuple[str, int, int]]:
             for tok in tokenize.tokenize(f.readline):
                 if tok.type == tokenize.NAME:
                     yield tok.string, tok.start[0], tok.start[1]
-    except (tokenize.TokenizeError, SyntaxError, UnicodeDecodeError):
+    except (tokenize.TokenError, SyntaxError, UnicodeDecodeError):
         # Skip files that can't be tokenized
         pass
 
@@ -314,15 +318,26 @@ def check_banned_terms(root: Path, files: Iterable[Path]) -> List[LintError]:
                                 f"These are forbidden permission/capability oracles or parallel authority structures.",
                     )
                 )
-            elif name in WARN_TERMS:
+            elif name in BANNED_CONTEXTUAL:
+                # local_mods is only allowed as part of local_mods_folder
+                # Read the line to check context
+                try:
+                    lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+                    if line <= len(lines):
+                        line_text = lines[line - 1]
+                        # If local_mods_folder appears on this line, it's allowed
+                        if "local_mods_folder" in line_text:
+                            continue
+                except Exception:
+                    pass
+                
                 errs.append(
                     LintError(
                         rule_id=RULE_BANNED_TERMS,
                         path=rel,
                         line=line,
                         col=col,
-                        message=f"Term '{name}' should be reviewed - valid in some contexts, banned as derived list.",
-                        severity="WARN",
+                        message=f"Banned term '{name}' used. Only 'local_mods_folder' is allowed, not 'local_mods' as a standalone concept.",
                     )
                 )
     return errs

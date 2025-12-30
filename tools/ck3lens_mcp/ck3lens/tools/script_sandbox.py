@@ -134,10 +134,10 @@ class SandboxedIO:
             pass
         
         # Check via WorldAdapter.is_visible()
-        from ..world_adapter import WorldAdapter
+        from ..world_router import get_world
         
-        adapter = WorldAdapter(self.ctx.session)
-        if adapter.is_visible(path_str):
+        adapter = get_world(session=self.ctx.session)
+        if adapter and adapter.is_visible(path_str):
             self.ctx.reads_allowed.append(path_str)
             return path
         
@@ -211,10 +211,10 @@ class SandboxedIO:
             pass
         
         # Check via WorldAdapter.is_visible()
-        from ..world_adapter import WorldAdapter
-        adapter = WorldAdapter(self.ctx.session)
+        from ..world_router import get_world
+        adapter = get_world(session=self.ctx.session)
         
-        if not adapter.is_visible(str(p)):
+        if not adapter or not adapter.is_visible(str(p)):
             return False  # Not in LensWorld = doesn't exist
         
         return self._original_exists(path)

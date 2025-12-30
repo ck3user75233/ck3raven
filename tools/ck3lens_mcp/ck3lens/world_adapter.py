@@ -526,10 +526,11 @@ class LensWorldAdapter(WorldAdapter):
         for util_name, util_root in self._utility_roots.items():
             try:
                 rel = path.relative_to(util_root.resolve())
+                rel_str = str(rel).replace("\\", "/")
                 return CanonicalAddress(
                     address_type=AddressType.UTILITY,
                     identifier=None,
-                    relative_path=f"{util_name}/{str(rel).replace('\\', '/')}",
+                    relative_path=f"{util_name}/{rel_str}",
                     raw_input=raw_path,
                 )
             except ValueError:
