@@ -6,6 +6,17 @@
 
 ---
 
+## Canonical Permissions Model
+
+**Permissions apply to mutation actions (read / write / delete) executed against concrete filesystem targets.**
+
+- In **ck3lens mode**, `mods[]` exist only to provide path roots and canonical addressing for targets.
+- In **ck3raven-dev mode**, mods are not part of the execution or permission model; only paths and mutation actions exist.
+
+Nothing elsewhere in this document may contradict this formulation.
+
+---
+
 ## Quick Reference (Read This First)
 
 Every agent working on this codebase MUST understand these 5 rules:
@@ -15,7 +26,7 @@ Every agent working on this codebase MUST understand these 5 rules:
 | 1 | **ONE enforcement boundary** — only `enforcement.py` may deny operations | Adding `if not can_write(path)` anywhere else |
 | 2 | **NO permission oracles** — never ask "am I allowed?" outside enforcement | Creating `is_path_writable()` helper |
 | 3 | **mods[] is THE mod list** — no parallel lists | Creating `local_mods[]` or `editable_mods[]` |
-| 4 | **WorldAdapter = visibility** — it describes what exists, NOT what's allowed | Using `adapter.is_visible()` to gate writes |
+| 4 | **WorldAdapter = resolution** — it resolves paths to canonical addresses, NOT permission decisions | Using `adapter.resolve()` result to gate writes |
 | 5 | **Enforcement = decisions** — it decides allow/deny at execution time | Pre-checking permissions before calling enforcement |
 
 ---
@@ -25,9 +36,9 @@ Every agent working on this codebase MUST understand these 5 rules:
 | Section | Summary | Link |
 |---------|---------|------|
 | **1. Enforcement** | Single gate for all policy decisions | [→ Details](#1-enforcement-architecture) |
-| **2. Visibility** | WorldAdapter describes what exists in LensWorld | [→ Details](#2-visibility-architecture) |
+| **2. Resolution** | WorldAdapter resolves paths to canonical addresses | [→ Details](#2-resolution-architecture) |
 | **3. Playsets** | How mods are grouped and filtered | [→ Details](#3-playset-architecture) |
-| **4. Path Resolution** | How paths map to mods and files | [→ Details](#4-path-resolution) |
+| **4. Path Resolution** | Canonical path normalization pipeline | [→ Details](#4-path-resolution) |
 | **5. MCP Tools** | Canonical pattern for all MCP tool implementations | [→ Details](#5-mcp-tool-architecture) |
 | **6. Banned Terms** | Hard-banned naming patterns | [→ Details](#6-banned-terms) |
 | **7. File Locations** | Where canonical implementations live | [→ Details](#7-file-locations) |
@@ -44,6 +55,14 @@ Every agent working on this codebase MUST understand these 5 rules:
 - Returns `ALLOW`, `DENY`, or `REQUIRE_TOKEN` — never throws for policy denial
 - Enforcement happens at **execution time**, not at planning/validation time
 - No pre-checks, no early denials, no "fail fast" permission logic
+
+### Enforcement Scope
+
+Enforcement evaluates whether a specific **mutation action** (`file_read`, `file_write`, `file_delete`) may be applied to a **resolved target**.
+
+- Enforcement does **not** evaluate mods, directories, or abstract containers.
+- Enforcement targets are derived from `CanonicalAddress` after resolution.
+- Launcher registry is a **path domain only**. Mutation actions targeting `LAUNCHER_REGISTRY` paths return `REQUIRE_TOKEN`. All registry changes are executed as standard file mutations and are not a separate operation type.
 
 ### Usage Pattern
 
@@ -74,16 +93,29 @@ if result.decision != Decision.ALLOW:
 
 ---
 
-## 2. Visibility Architecture
+## 2. Resolution Architecture
 
 **Canonical File:** `tools/ck3lens_mcp/ck3lens/world_adapter.py`
 
 ### Key Points
 
-- **ALL** "can I see X?" or "does X exist?" questions go through `WorldAdapter.is_visible()` or `.resolve()`
-- Visibility is NOT permission — if something isn't visible, it doesn't exist in LensWorld
-- Returns `ResolutionResult` with `found`, `source`, `path_under_local_mods`, etc.
-- The `ui_hint_potentially_editable` field is for display only — **NEVER use in control flow**
+- **ALL** "does X exist?" and "where is X?" questions go through `WorldAdapter.resolve()`
+- Resolution is **structural identity**, not permission — it answers what/where, never allowed/denied
+- Returns `ResolutionResult` with `found`, `address`, `absolute_path`, `domain`, etc.
+- The `ui_hint_potentially_editable` field is for **display only** — **NEVER use in control flow**
+
+### What Resolution Does
+
+| Responsibility | Yes/No |
+|----------------|--------|
+| Parse user input into canonical address | ✅ |
+| Determine domain (WIP, LOCAL_MOD, VANILLA, WORKSHOP, LAUNCHER_REGISTRY) | ✅ |
+| Compute absolute filesystem path | ✅ |
+| Fail for invalid address format | ✅ |
+| Fail for path not found (for reads) | ✅ |
+| Decide "allowed" or "denied" | ❌ |
+| Pre-check writability | ❌ |
+| Branch on domain to deny mutation | ❌ |
 
 ### Usage Pattern
 
@@ -92,14 +124,15 @@ adapter = LensWorldAdapter(lens, db, config)
 result = adapter.resolve("common/traits/00_traits.txt")
 
 if not result.found:
-    raise FileNotFoundError(...)  # NOT PermissionError
+    raise FileNotFoundError(...)  # NOT PermissionError - structural error only
 ```
 
-### Visibility vs Enforcement
+### Resolution vs Enforcement
 
 | Question | Go To | Error Type |
 |----------|-------|------------|
-| "Does this file exist in my world?" | WorldAdapter | FileNotFoundError |
+| "Does this file exist?" | WorldAdapter | FileNotFoundError |
+| "What is the canonical address?" | WorldAdapter | ValueError (invalid format) |
 | "Can I write to this file?" | enforcement.py | PermissionError (via DENY) |
 | "What source provides this file?" | WorldAdapter | N/A (returns metadata) |
 
@@ -136,11 +169,40 @@ Launcher Playset → playsets/*.json → PlaysetLens → DB Queries (filtered)
 
 ## 4. Path Resolution
 
-### Key Points
+### Canonical Path Normalization Pipeline (MANDATORY)
 
-- All paths are relative to their content source (mod or vanilla)
-- `classify_path_domain()` determines domain from path + local_mods_folder
-- Path containment is structural, not permission
+1. **User-supplied input is interpreted only as a request to identify a target, never as a permission query.**
+
+2. **All tools must call `WorldAdapter.resolve()` exactly once per target.**
+
+3. **`ResolutionResult.address` is the sole canonical identity of the target.**
+
+4. **For ck3lens mod mutations**, enforcement targets are derived from `(mod_name, rel_path)` contained in the address.
+
+5. **For non-mod domains** (vanilla, workshop, wip, ck3raven, launcher registry), enforcement targets are expressed as canonical addresses.
+
+6. **`ResolutionResult.absolute_path` is used exclusively for filesystem execution.**
+
+7. **No secondary path derivation, normalization, or inference is permitted outside this pipeline.**
+
+### Prohibited Patterns
+
+- Computing relative paths outside WorldAdapter
+- Inferring mod identity from filesystem paths
+- Branching control flow based on domain classification
+- Using UI hint metadata in execution or permission logic
+
+### Canonical Path Utility Requirement
+
+A single shared path normalization utility must exist and be used by all tools.
+
+Its responsibilities are limited to:
+- Parsing user input
+- Calling `WorldAdapter.resolve()`
+- Exposing enforcement targets derived from canonical addresses
+- Exposing execution paths derived from absolute paths
+
+**This utility must not perform permission checks or eligibility logic.**
 
 ### Domain Classification
 
@@ -155,12 +217,12 @@ Launcher Playset → playsets/*.json → PlaysetLens → DB Queries (filtered)
 ### Resolution Flow
 
 ```
-relative_path → WorldAdapter.resolve() → ResolutionResult {
+user_input → WorldAdapter.resolve() → ResolutionResult {
     found: bool,
-    source: "vanilla" | mod_name,
-    full_path: Path,
-    path_under_local_mods: bool,  # structural only
-    ui_hint_potentially_editable: bool  # display only
+    address: CanonicalAddress,  # sole identity
+    absolute_path: Path,        # for execution only
+    domain: str,                # structural classification
+    ui_hint_potentially_editable: bool  # display only, NEVER control flow
 }
 ```
 
@@ -257,6 +319,20 @@ if result.decision != Decision.ALLOW:
     return {"error": result.reason}
 ```
 
+### No-Oracle Invariant
+
+**Any logic that answers "is this allowed?" outside enforcement is forbidden.**
+
+Helper functions using `is_*`, `can_*`, or capability-style naming are not permitted.
+
+### Canonical Tool Flow
+
+```
+1. Resolve via WorldAdapter (identity only — structural errors only)
+2. Enforce at boundary (ALLOW / DENY / REQUIRE_TOKEN)
+3. Execute (impl functions: syntax validation + filesystem mutation)
+```
+
 ### Mode-Aware Behavior
 
 MCP tools MUST be mode-aware. The mode is available from `session.mode`:
@@ -265,6 +341,12 @@ MCP tools MUST be mode-aware. The mode is available from `session.mode`:
 |------|----------|
 | `ck3lens` | Write to live mods only, use mod_name + rel_path |
 | `ck3raven-dev` | Write to ck3raven source, use contract + token |
+
+### Execution Model
+
+- **In ck3lens**, mods provide path context only; they never confer permission.
+- **In ck3raven-dev**, mods are not part of the execution model.
+- **In all modes**, permissions apply only to mutation actions on resolved targets.
 
 ```python
 session = _get_session()
@@ -291,20 +373,39 @@ Use `CanonicalAddress` for uniform path handling:
 
 ## 6. Banned Terms
 
-These terms **MUST NOT** appear in executable code (documentation exceptions allowed):
+These terms are banned by **concept, not spelling**. Semantic equivalents are equally forbidden.
 
-### Permission Oracles (HARD BAN)
+Use is permitted **only** in documentation describing the ban itself.
 
-```
-can_write, can_edit, can_delete, is_writable, is_editable,
-is_allowed, is_path_allowed, is_path_writable
-```
-
-### Parallel Lists (HARD BAN)
+### Permission / Capability Oracles (HARD BAN)
 
 ```
-local_mods (as array), editable_mods, writable_mods, live_mods,
-mod_whitelist, whitelist, blacklist, mod_roots
+can_write
+can_edit
+can_delete
+is_writable
+is_editable
+is_allowed
+is_path_allowed
+is_path_writable
+writable_mod
+editable_mod
+mod_write
+mod_read
+mod_delete
+```
+
+### Parallel Authority Structures (HARD BAN)
+
+```
+editable_mods
+writable_mods
+local_mods (as derived or filtered lists)
+live_mods
+mod_whitelist
+whitelist
+blacklist
+mod_roots
 ```
 
 ### Required Replacements
@@ -314,6 +415,8 @@ mod_whitelist, whitelist, blacklist, mod_roots
 | `mod_roots` | `mod_paths` | "roots" implies authority |
 | `is_writable` | `ui_hint_potentially_editable` | explicit non-authority |
 | `local_mods[]` | `mods[]` + containment check | no parallel lists |
+| `can_write_to_mod()` | N/A — delete entirely | oracle function |
+| `is_path_allowed()` | N/A — delete entirely | oracle function |
 
 **Full Details:** [CANONICAL REFACTOR INSTRUCTIONS.md](CANONICAL%20REFACTOR%20INSTRUCTIONS.md)
 
@@ -326,7 +429,7 @@ mod_whitelist, whitelist, blacklist, mod_roots
 | Responsibility | File |
 |----------------|------|
 | Enforcement (all policy) | `tools/ck3lens_mcp/ck3lens/policy/enforcement.py` |
-| Visibility (WorldAdapter) | `tools/ck3lens_mcp/ck3lens/world_adapter.py` |
+| Resolution (WorldAdapter) | `tools/ck3lens_mcp/ck3lens/world_adapter.py` |
 | Playset filtering | `src/ck3raven/db/lens.py` |
 | Session state | `tools/ck3lens_mcp/ck3lens/session.py` |
 | Path classification | `tools/ck3lens_mcp/ck3lens/policy/ck3lens_rules.py` |
@@ -362,7 +465,10 @@ Before submitting any code, verify:
 - [ ] No permission checks outside `enforcement.py`
 - [ ] No banned terms in executable code
 - [ ] No parallel mod lists created
-- [ ] WorldAdapter used for visibility, not permission
+- [ ] No helper answers permission questions outside enforcement
+- [ ] WorldAdapter used for resolution only, not permission
 - [ ] Enforcement called at execution time, not planning time
 - [ ] `mods[]` is the only mod list referenced
-- [ ] Path containment via `local_mods_folder`, not a separate list
+- [ ] All mutations flow: resolve → enforce → execute
+- [ ] Launcher registry treated only as a path domain
+- [ ] No section treats mods as permission objects
