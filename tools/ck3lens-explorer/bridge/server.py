@@ -29,11 +29,11 @@ def find_ck3raven_root():
     if (dev_root / "src" / "ck3raven").exists():
         return dev_root
     
-    # Installed extension mode: check common locations
+    # Installed extension mode: check environment variable or common locations
     common_locations = [
-        Path.home() / "Documents" / "AI Workspace" / "ck3raven",
-        Path.home() / "ck3raven",
         Path(os.environ.get("CK3RAVEN_PATH", "")) if os.environ.get("CK3RAVEN_PATH") else None,
+        Path.home() / ".ck3raven" / "ck3raven",  # Standard user data location
+        Path.home() / "ck3raven",
     ]
     for loc in common_locations:
         if loc and (loc / "src" / "ck3raven").exists():

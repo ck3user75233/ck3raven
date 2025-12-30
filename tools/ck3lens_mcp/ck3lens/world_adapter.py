@@ -42,6 +42,31 @@ if TYPE_CHECKING:
     from .db_queries import PlaysetLens, DBQueries
 
 
+# =============================================================================
+# CANONICAL PATH NORMALIZATION (shared utility)
+# =============================================================================
+
+def normalize_path_for_comparison(path: str) -> str:
+    """
+    Normalize a filesystem path for comparison purposes.
+    
+    This is the CANONICAL utility for path normalization across the codebase.
+    Use this when you need to compare paths (e.g., database key matching).
+    
+    Normalization:
+    - Resolves to absolute path
+    - Lowercases (case-insensitive comparison on Windows)
+    - Converts backslashes to forward slashes
+    
+    Args:
+        path: Raw filesystem path
+        
+    Returns:
+        Normalized path string suitable for comparison
+    """
+    return str(Path(path).resolve()).lower().replace("\\", "/")
+
+
 class AddressType(Enum):
     """Types of canonical addresses."""
     MOD = "mod"

@@ -97,10 +97,16 @@ learned_schema.json
 .DS_Store
 Thumbs.db
 
-# Local machine-specific config
+# Local machine-specific config (NEVER COMMIT THESE)
 playset_manifest.json
 active_mod_paths.json
 local_config.py
+ck3lens_config.yaml
+ck3lens_config.json
+
+# VS Code MCP settings (machine-specific paths)
+.vscode/mcp.json
+.vscode/mcp-config.json
 
 # Generated database (large, machine-specific)
 *.db

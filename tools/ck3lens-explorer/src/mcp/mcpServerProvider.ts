@@ -77,22 +77,14 @@ function findPythonPath(ck3ravenRoot: string, logger: Logger): string | undefine
         return configuredPython;
     }
 
-    // Priority 2: Virtual environment in AI Workspace (parent of ck3raven)
-    const aiWorkspace = path.dirname(ck3ravenRoot);
-    const venvPython = path.join(aiWorkspace, '.venv', 'Scripts', 'python.exe');
-    if (fs.existsSync(venvPython)) {
-        logger.debug(`Using venv Python: ${venvPython}`);
-        return venvPython;
-    }
-
-    // Priority 3: Virtual environment in ck3raven itself
+    // Priority 2: Virtual environment in ck3raven repo
     const localVenv = path.join(ck3ravenRoot, '.venv', 'Scripts', 'python.exe');
     if (fs.existsSync(localVenv)) {
-        logger.debug(`Using local venv Python: ${localVenv}`);
+        logger.debug(`Using ck3raven venv Python: ${localVenv}`);
         return localVenv;
     }
 
-    // Priority 4: System Python
+    // Priority 3: System Python
     logger.debug('Falling back to system python');
     return 'python';
 }

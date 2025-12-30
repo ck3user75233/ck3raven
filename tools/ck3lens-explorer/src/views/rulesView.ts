@@ -137,12 +137,9 @@ export class RulesViewProvider implements vscode.TreeDataProvider<RuleItem | War
     };
     
     constructor(private logger?: { info: (msg: string) => void; error: (msg: string, error?: unknown) => void }) {
-        // Look for config in AI Workspace
-        const aiWorkspace = path.join(
-            process.env.USERPROFILE || process.env.HOME || '',
-            'Documents', 'AI Workspace'
-        );
-        this.configPath = path.join(aiWorkspace, 'ck3lens_config.yaml');
+        // Look for config in standard user data location
+        const userHome = process.env.USERPROFILE || process.env.HOME || '';
+        this.configPath = path.join(userHome, '.ck3raven', 'ck3lens_config.yaml');
         this.loadConfig();
         
         // Check MCP status immediately and periodically

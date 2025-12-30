@@ -280,10 +280,8 @@ class DBQueries:
         # Build lookup: normalized_path -> content_version_id
         path_to_cv = {}
         if mod_paths:
-            # Normalize paths for comparison
-            def normalize_path(p: str) -> str:
-                from pathlib import Path
-                return str(Path(p).resolve()).lower().replace("\\", "/")
+            # Use canonical path normalization from world_adapter
+            from .world_adapter import normalize_path_for_comparison
             
             # Query all mod packages with paths
             rows = self.conn.execute("""
@@ -296,13 +294,13 @@ class DBQueries:
             
             for row in rows:
                 if row["source_path"]:
-                    norm = normalize_path(row["source_path"])
+                    norm = normalize_path_for_comparison(row["source_path"])
                     if norm not in path_to_cv:  # Keep only latest
                         path_to_cv[norm] = row["content_version_id"]
             
             # Match requested paths
             for mod_path in mod_paths:
-                norm = normalize_path(mod_path)
+                norm = normalize_path_for_comparison(mod_path)
                 if norm in path_to_cv:
                     cv_id = path_to_cv[norm]
                     if cv_id not in found_mods:

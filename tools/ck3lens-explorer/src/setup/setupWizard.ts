@@ -198,16 +198,13 @@ export class SetupWizard {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         const possibleVenvs: string[] = [];
 
-        // First check workspace-relative paths
+        // Check workspace-relative paths (standard .venv naming only)
         if (workspaceFolders) {
             for (const folder of workspaceFolders) {
-                // .venv in workspace root
+                // .venv in workspace root (standard naming)
                 possibleVenvs.push(path.join(folder.uri.fsPath, '.venv', 'Scripts', 'python.exe'));
                 possibleVenvs.push(path.join(folder.uri.fsPath, '.venv', 'bin', 'python'));
-                // .venv-1 in workspace root (your naming convention)
-                possibleVenvs.push(path.join(folder.uri.fsPath, '.venv-1', 'Scripts', 'python.exe'));
-                possibleVenvs.push(path.join(folder.uri.fsPath, '.venv-1', 'bin', 'python'));
-                // ck3raven/.venv
+                // ck3raven/.venv (if ck3raven is a subfolder)
                 possibleVenvs.push(path.join(folder.uri.fsPath, 'ck3raven', '.venv', 'Scripts', 'python.exe'));
                 possibleVenvs.push(path.join(folder.uri.fsPath, 'ck3raven', '.venv', 'bin', 'python'));
             }

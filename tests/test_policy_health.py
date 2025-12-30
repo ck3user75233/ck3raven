@@ -2,7 +2,9 @@
 """Test policy health check and import."""
 
 import sys
-sys.path.insert(0, "C:\\Users\\Nathan\\Documents\\AI Workspace\\ck3raven\\tools\\ck3lens_mcp")
+from pathlib import Path
+# Add ck3lens_mcp to path (repo-relative)
+sys.path.insert(0, str(Path(__file__).parent.parent / "tools" / "ck3lens_mcp"))
 
 import importlib
 from ck3lens import policy

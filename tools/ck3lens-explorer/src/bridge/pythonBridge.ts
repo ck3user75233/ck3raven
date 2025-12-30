@@ -78,26 +78,30 @@ export class PythonBridge implements vscode.Disposable {
 
         // ck3ravenPath is needed for Python imports - try to auto-detect if not configured
         if (!ck3ravenPath) {
-            // Check common locations
-            const possiblePaths = [
-                path.join(process.env.USERPROFILE || '', 'Documents', 'AI Workspace', 'ck3raven'),
-                path.join(process.env.HOME || '', 'ck3raven'),
-            ];
-            for (const p of possiblePaths) {
-                if (require('fs').existsSync(path.join(p, 'src', 'ck3raven'))) {
-                    ck3ravenPath = p;
-                    break;
+            // First check environment variable
+            if (process.env.CK3RAVEN_PATH) {
+                ck3ravenPath = process.env.CK3RAVEN_PATH;
+            } else {
+                // Check common locations (no machine-specific paths!)
+                const possiblePaths = [
+                    path.join(process.env.USERPROFILE || process.env.HOME || '', '.ck3raven', 'ck3raven'),
+                    path.join(process.env.HOME || '', 'ck3raven'),
+                ];
+                for (const p of possiblePaths) {
+                    if (require('fs').existsSync(path.join(p, 'src', 'ck3raven'))) {
+                        ck3ravenPath = p;
+                        break;
+                    }
                 }
             }
         }
 
-        // Auto-detect Python if not configured - look for venv in AI Workspace or ck3raven
+        // Auto-detect Python if not configured - look for venv in ck3raven repo
         if (!pythonPath) {
             const venvPaths = [
-                path.join(process.env.USERPROFILE || '', 'Documents', 'AI Workspace', '.venv', 'Scripts', 'python.exe'),
-                path.join(ck3ravenPath, '.venv', 'Scripts', 'python.exe'),
-                path.join(ck3ravenPath, '.venv', 'bin', 'python'),
-                path.join(process.env.USERPROFILE || '', 'Documents', 'AI Workspace', '.venv', 'bin', 'python'),
+                // Look relative to ck3ravenPath (the repo root)
+                path.join(ck3ravenPath, '.venv', 'Scripts', 'python.exe'),  // Windows
+                path.join(ck3ravenPath, '.venv', 'bin', 'python'),          // Unix
             ];
             for (const venvPython of venvPaths) {
                 if (require('fs').existsSync(venvPython)) {
@@ -109,6 +113,7 @@ export class PythonBridge implements vscode.Disposable {
             // Fall back to system python
             if (!pythonPath) {
                 pythonPath = 'python';
+                this.logger.warn('No .venv found in ck3raven repo. Using system Python. Run setup wizard if this fails.');
             }
         }
 

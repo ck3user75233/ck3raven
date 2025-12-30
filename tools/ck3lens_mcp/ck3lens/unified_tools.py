@@ -1535,6 +1535,8 @@ def _file_refresh(mod_name, rel_path, session, trace):
 
 def _file_list(mod_name, path_prefix, pattern, session, trace):
     """List files in live mod."""
+    from .world_router import get_world
+    
     mod = session.get_mod(mod_name)
     if not mod:
         result = {"error": f"Unknown mod_id: {mod_name}"}
@@ -1543,15 +1545,24 @@ def _file_list(mod_name, path_prefix, pattern, session, trace):
         if not target.exists():
             result = {"files": [], "folder": path_prefix}
         else:
+            # Get WorldAdapter for canonical path resolution
+            adapter = get_world(session=session)
+            
             files = []
             glob_pattern = pattern or "*.txt"
             for f in target.rglob(glob_pattern):
                 if f.is_file():
                     try:
-                        rel = f.relative_to(mod.path)
+                        # Use WorldAdapter.resolve() to get canonical address
+                        resolution = adapter.resolve(str(f)) if adapter else None
+                        if resolution and resolution.found:
+                            rel = resolution.address.relative_path
+                        else:
+                            # Fallback: just use filename
+                            rel = str(f.name)
                         stat = f.stat()
                         files.append({
-                            "relpath": str(rel).replace("\\", "/"),
+                            "relpath": rel,
                             "size": stat.st_size,
                             "modified": stat.st_mtime
                         })

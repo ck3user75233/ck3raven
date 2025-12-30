@@ -79,8 +79,8 @@ REPO_PLAYSETS_DIR = Path(__file__).parent.parent.parent.parent / "playsets"
 # Legacy location (deprecated)
 LEGACY_PLAYSETS_DIR = Path.home() / ".ck3raven" / "playsets"
 
-# Default config file location
-DEFAULT_CONFIG_PATH = Path.home() / "Documents" / "AI Workspace" / "ck3lens_config.yaml"
+# Default config file location (portable - uses standard user data location)
+DEFAULT_CONFIG_PATH = Path.home() / ".ck3raven" / "ck3lens_config.yaml"
 
 
 def _expand_path(path_str: str) -> Path:
@@ -95,7 +95,7 @@ def load_config(config_path: Optional[Path] = None) -> Session:
     Searches for config in this order:
     1. Active playset (from ck3raven/playsets/playset_manifest.json)
     2. Explicit config_path if provided
-    3. ck3lens_config.yaml in AI Workspace
+    3. ck3lens_config.yaml in ~/.ck3raven/
     4. Empty defaults (read-only mode)
     """
     session = Session(

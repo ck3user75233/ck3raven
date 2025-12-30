@@ -277,8 +277,8 @@ PLAYSETS_DIR = Path(__file__).parent.parent.parent / "playsets"
 # Lives in the playsets folder alongside the playset files
 PLAYSET_MANIFEST_FILE = PLAYSETS_DIR / "playset_manifest.json"
 
-# Legacy fallback
-LEGACY_PLAYSET_FILE = Path.home() / "Documents" / "AI Workspace" / "active_mod_paths.json"
+# Legacy fallback (deprecated - will be removed)
+LEGACY_PLAYSET_FILE = Path.home() / ".ck3raven" / "active_mod_paths.json"
 
 
 def _list_available_playsets() -> list[dict]:
@@ -345,25 +345,8 @@ def _load_playset_from_json(playset_file: Path) -> Optional[dict]:
         local_mods_folder_raw = data.get("local_mods_folder", "")
         local_mods_folder = Path(local_mods_folder_raw).expanduser() if local_mods_folder_raw else None
         
-        # Derive editable mods by checking which mods[] are under local_mods_folder
-        editable_mods_list = []
-        if local_mods_folder and local_mods_folder.exists():
-            for mod in data.get("mods", []):
-                if not mod.get("enabled", True):
-                    continue
-                mod_path = mod.get("path", "")
-                if mod_path:
-                    try:
-                        mod_path_expanded = Path(mod_path).expanduser().resolve()
-                        # Check if mod is under local_mods_folder
-                        if str(mod_path_expanded).lower().startswith(str(local_mods_folder.resolve()).lower()):
-                            editable_mods_list.append({
-                                "mod_id": mod.get("name"),  # Use name as ID
-                                "name": mod.get("name"),
-                                "path": str(mod_path_expanded),
-                            })
-                    except Exception:
-                        pass
+        # NOTE: No editable_mods list - enforcement.py determines writability at execution time
+        # based on path containment under local_mods_folder. No pre-computed permission lists.
         
         # Get agent briefing
         agent_briefing = data.get("agent_briefing", {})
@@ -378,7 +361,6 @@ def _load_playset_from_json(playset_file: Path) -> Optional[dict]:
             "source": "json",
             "file_path": str(playset_file),
             "local_mods_folder": str(local_mods_folder) if local_mods_folder else None,
-            "editable_mods": editable_mods_list,  # DERIVED from mods[] + local_mods_folder path
             "agent_briefing": agent_briefing,
             "sub_agent_config": data.get("sub_agent_config", {}),
             "mod_list": data.get("mods", []),  # Full mod list for reference
@@ -2151,10 +2133,12 @@ def ck3_playset(
             return {"success": False, "error": f"Failed to read playset: {e}"}
         
         # Check if mod_name is a path or a name
+        from ck3lens.world_adapter import normalize_path_for_comparison
+        
         mod_path = None
         if Path(mod_name).exists():
-            # It's a path
-            mod_path = str(Path(mod_name).resolve())
+            # It's a path - normalize it via canonical utility
+            mod_path = str(Path(mod_name).resolve())  # Needed for absolute path
             # Try to get the actual mod name from descriptor.mod
             descriptor = Path(mod_name) / "descriptor.mod"
             if descriptor.exists():
@@ -2190,7 +2174,7 @@ def ck3_playset(
                                 if line.strip().startswith("name="):
                                     name_in_desc = line.split("=", 1)[1].strip().strip('"')
                                     if name_in_desc.lower() == mod_name.lower():
-                                        mod_path = str(folder.resolve())
+                                        mod_path = str(folder.resolve())  # Needed for absolute path
                                         mod_name = name_in_desc  # Use canonical name
                                         break
                         except Exception:
@@ -5283,7 +5267,6 @@ def ck3_get_active_playset() -> dict:
         "active_roots": list(scope.get("active_roots", set())),
         "vanilla_root": scope.get("vanilla_root"),
         "local_mods_folder": scope.get("local_mods_folder"),
-        "editable_mods": scope.get("editable_mods", []),
         "agent_briefing": scope.get("agent_briefing", {}),
         "sub_agent_config": scope.get("sub_agent_config", {}),
     }
@@ -7626,7 +7609,6 @@ def ck3_get_mode_instructions(
             "session": {
                 "mod_root": session_info.get("mod_root"),
                 "local_mods_folder": session_info.get("local_mods_folder"),
-                "editable_mods": session_info.get("editable_mods", []),
                 "db_path": session_info.get("db_path"),
                 "playset_id": session_info.get("playset_id"),
                 "playset_name": session_info.get("playset_name"),
