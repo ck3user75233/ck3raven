@@ -30,7 +30,7 @@ if CK3RAVEN_ROOT.exists():
 
 from ck3lens.workspace import Session, LocalMod
 from ck3lens.db_queries import DBQueries
-from ck3lens import local_mods, git_ops
+from ck3lens import git_ops
 from ck3lens.validate import parse_content, validate_artifact_bundle
 from ck3lens.contracts import ArtifactBundle
 from ck3lens.trace import ToolTrace
@@ -341,17 +341,29 @@ def _load_playset_from_json(playset_file: Path) -> Optional[dict]:
         vanilla_config = data.get("vanilla", {})
         vanilla_root = vanilla_config.get("path", "C:/Program Files (x86)/Steam/steamapps/common/Crusader Kings III/game")
         
-        # Get local mods (writable)
-        local_mods_list = []
-        for lm in data.get("local_mods", []):
-            path = lm.get("path", "")
-            if path:
-                expanded = str(Path(path).expanduser())
-                local_mods_list.append({
-                    "mod_id": lm.get("mod_id"),
-                    "name": lm.get("name"),
-                    "path": expanded,
-                })
+        # Get local_mods_folder path (editability is DERIVED from path containment)
+        local_mods_folder_raw = data.get("local_mods_folder", "")
+        local_mods_folder = Path(local_mods_folder_raw).expanduser() if local_mods_folder_raw else None
+        
+        # Derive editable mods by checking which mods[] are under local_mods_folder
+        editable_mods_list = []
+        if local_mods_folder and local_mods_folder.exists():
+            for mod in data.get("mods", []):
+                if not mod.get("enabled", True):
+                    continue
+                mod_path = mod.get("path", "")
+                if mod_path:
+                    try:
+                        mod_path_expanded = Path(mod_path).expanduser().resolve()
+                        # Check if mod is under local_mods_folder
+                        if str(mod_path_expanded).lower().startswith(str(local_mods_folder.resolve()).lower()):
+                            editable_mods_list.append({
+                                "mod_id": mod.get("name"),  # Use name as ID
+                                "name": mod.get("name"),
+                                "path": str(mod_path_expanded),
+                            })
+                    except Exception:
+                        pass
         
         # Get agent briefing
         agent_briefing = data.get("agent_briefing", {})
@@ -365,7 +377,8 @@ def _load_playset_from_json(playset_file: Path) -> Optional[dict]:
             "vanilla_root": str(Path(vanilla_root).expanduser()),
             "source": "json",
             "file_path": str(playset_file),
-            "local_mods": local_mods_list,
+            "local_mods_folder": str(local_mods_folder) if local_mods_folder else None,
+            "editable_mods": editable_mods_list,  # DERIVED from mods[] + local_mods_folder path
             "agent_briefing": agent_briefing,
             "sub_agent_config": data.get("sub_agent_config", {}),
             "mod_list": data.get("mods", []),  # Full mod list for reference
@@ -2187,25 +2200,30 @@ def ck3_playset(
                 "hint": "Use full path to mod folder, e.g., 'C:\\...\\mod\\MyModFolder'"
             }
         
-        # Check if already in local_mods
-        local_mods = playset_data.get("local_mods", [])
-        for existing in local_mods:
+        # Check if already in mods[]
+        mods_list = playset_data.get("mods", [])
+        for existing in mods_list:
             if existing.get("name", "").lower() == mod_name.lower() or existing.get("path") == mod_path:
                 return {
                     "success": False,
-                    "error": f"Mod '{mod_name}' is already in local_mods",
+                    "error": f"Mod '{mod_name}' is already in mods[]",
                     "existing_entry": existing
                 }
         
-        # Add to local_mods
+        # Calculate next load order
+        max_load_order = max((m.get("load_order", 0) for m in mods_list), default=-1)
+        
+        # Add to mods[] (THE list, not a separate local_mods array)
         new_mod_entry = {
             "name": mod_name,
             "path": mod_path,
+            "load_order": max_load_order + 1,
+            "enabled": True,
             "is_compatch": False,
             "notes": f"Added by ck3_playset add_mod on {datetime.now().isoformat()}"
         }
-        local_mods.append(new_mod_entry)
-        playset_data["local_mods"] = local_mods
+        mods_list.append(new_mod_entry)
+        playset_data["mods"] = mods_list
         
         # Write back
         try:
@@ -2232,9 +2250,9 @@ def ck3_playset(
         
         result = {
             "success": True,
-            "message": f"Added '{mod_name}' to local_mods",
+            "message": f"Added '{mod_name}' to mods[]",
             "mod_entry": new_mod_entry,
-            "local_mods_count": len(local_mods),
+            "mods_count": len(mods_list),
         }
         
         if build_needed:
@@ -3918,332 +3936,20 @@ def ck3_get_symbol_conflicts(
 
 
 # ============================================================================
-# Local Mod Operations (sandboxed writes)
+# ARCHIVED: Legacy Local Mod Operations
 # ============================================================================
-
-@mcp.tool()
-def ck3_list_local_mods() -> dict:
-    """
-    List local mods that can be modified.
-    
-    Mode-aware behavior:
-    - ck3lens mode: These mods are writable (MSC, MSCRE, LRE, MRP)
-    - ck3raven-dev mode: These mods are READ-ONLY (mod writes absolutely prohibited)
-    
-    Returns:
-        List of mod names and paths that are available for writing
-    """
-    session = _get_session()
-    trace = _get_trace()
-    
-    mods = local_mods.list_local_mods(session)
-    
-    trace.log("ck3lens.list_local_mods", {}, {"mods_count": len(mods)})
-    
-    return {"local_mods": mods}
-
-
-@mcp.tool()
-def _refresh_file_in_db(mod_name: str, rel_path: str, content: str = None, deleted: bool = False) -> dict:
-    """
-    Internal helper to refresh a file in the database after write/edit/delete.
-    
-    This is the incremental update path - much faster than full rebuild.
-    """
-    try:
-        # Add project root to path so 'builder' package is importable
-        import sys
-        from pathlib import Path
-        project_root = Path(__file__).parent.parent.parent
-        if str(project_root) not in sys.path:
-            sys.path.insert(0, str(project_root))
-        
-        from builder.incremental import refresh_single_file, mark_file_deleted
-        from ck3raven.db.schema import get_connection, DEFAULT_DB_PATH
-        
-        conn = get_connection(DEFAULT_DB_PATH)
-        
-        if deleted:
-            return mark_file_deleted(conn, mod_name, rel_path)
-        else:
-            return refresh_single_file(conn, mod_name, rel_path, content=content)
-            
-    except Exception as e:
-        # Don't fail the write operation if refresh fails
-        return {"success": False, "error": str(e)}
-
-
-def ck3_read_live_file(
-    mod_name: str,
-    rel_path: str,
-    max_bytes: int = 200000
-) -> dict:
-    """
-    Read a file from a mod in the active playset.
-    
-    Args:
-        mod_name: Name of the live mod (folder name)
-        rel_path: Relative path within the mod
-        max_bytes: Maximum bytes to read
-    
-    Returns:
-        File content
-    """
-    session = _get_session()
-    trace = _get_trace()
-    
-    result = local_mods.read_local_file(session, mod_name, rel_path, max_bytes)
-    
-    trace.log("ck3lens.read_live_file", {
-        "mod_name": mod_name,
-        "rel_path": rel_path
-    }, {"success": result.get("success", False)})
-    
-    return result
-
-
-# @mcp.tool()  # DEPRECATED - use ck3_file(command="write")
-def ck3_write_file(
-    mod_name: str,
-    rel_path: str,
-    content: str,
-    validate_syntax: bool = True
-) -> dict:
-    """
-    DEPRECATED: Use ck3_file(command="write", mod_name=..., rel_path=..., content=...) instead.
-    
-    Write a file to a mod under local_mods_folder.
-    
-    Args:
-        mod_name: Name of the mod
-        rel_path: Relative path within the mod
-        content: File content to write
-        validate_syntax: If True, validate CK3 script syntax before writing
-    
-    Returns:
-        Success status and validation results
-    """
-    session = _get_session()
-    trace = _get_trace()
-    
-    # Optional syntax validation
-    if validate_syntax and rel_path.endswith(".txt"):
-        parse_result = parse_content(content, rel_path)
-        if not parse_result["success"]:
-            trace.log("ck3lens.write_file", {
-                "mod_name": mod_name,
-                "rel_path": rel_path
-            }, {"success": False, "reason": "syntax_error"})
-            return {
-                "success": False,
-                "error": "Syntax validation failed",
-                "parse_errors": parse_result["errors"]
-            }
-    
-    result = local_mods.write_file(session, mod_name, rel_path, content)
-    
-    # Auto-refresh in database after successful write
-    if result.get("success"):
-        db_refresh = _refresh_file_in_db(mod_name, rel_path, content=content)
-        result["db_refresh"] = db_refresh
-    
-    trace.log("ck3lens.write_file", {
-        "mod_name": mod_name,
-        "rel_path": rel_path,
-        "content_length": len(content)
-    }, {"success": result.get("success", False)})
-    
-    return result
-
-
-# @mcp.tool()  # DEPRECATED - use ck3_file(command="edit")
-def ck3_edit_file(
-    mod_name: str,
-    rel_path: str,
-    old_content: str,
-    new_content: str,
-    validate_syntax: bool = True
-) -> dict:
-    """
-    DEPRECATED: Use ck3_file(command="edit", mod_name=..., rel_path=..., old_content=..., new_content=...) instead.
-    
-    Edit a file in a mod under local_mods_folder (search-replace style).
-    
-    Args:
-        mod_name: Name of the live mod
-        rel_path: Relative path within the mod
-        old_content: Exact content to find and replace
-        new_content: Content to replace with
-        validate_syntax: If True, validate resulting syntax
-    
-    Returns:
-        Success status
-    """
-    session = _get_session()
-    trace = _get_trace()
-    
-    result = local_mods.edit_file(session, mod_name, rel_path, old_content, new_content)
-    
-    # Validate resulting file if requested
-    updated_content = None
-    if result.get("success") and validate_syntax and rel_path.endswith(".txt"):
-        read_result = local_mods.read_local_file(session, mod_name, rel_path)
-        if read_result.get("success"):
-            updated_content = read_result["content"]
-            parse_result = parse_content(updated_content, rel_path)
-            result["syntax_valid"] = parse_result["success"]
-            if not parse_result["success"]:
-                result["syntax_warnings"] = parse_result["errors"]
-    
-    # Auto-refresh in database after successful edit
-    if result.get("success"):
-        # Read content if not already read for validation
-        if updated_content is None:
-            read_result = local_mods.read_local_file(session, mod_name, rel_path)
-            if read_result.get("success"):
-                updated_content = read_result["content"]
-        
-        if updated_content:
-            db_refresh = _refresh_file_in_db(mod_name, rel_path, content=updated_content)
-            result["db_refresh"] = db_refresh
-    
-    trace.log("ck3lens.edit_file", {
-        "mod_name": mod_name,
-        "rel_path": rel_path
-    }, {"success": result.get("success", False)})
-    
-    return result
-
-
-# @mcp.tool()  # DEPRECATED - use ck3_file(command="delete")
-def ck3_delete_file(
-    mod_name: str,
-    rel_path: str
-) -> dict:
-    """
-    DEPRECATED: Use ck3_file(command="delete", mod_name=..., rel_path=...) instead.
-    
-    Delete a file from a mod under local_mods_folder.
-    
-    Args:
-        mod_name: Name of the live mod
-        rel_path: Relative path within the mod
-    
-    Returns:
-        Success status
-    """
-    session = _get_session()
-    trace = _get_trace()
-    
-    result = local_mods.delete_file(session, mod_name, rel_path)
-    
-    # Mark file as deleted in database
-    if result.get("success"):
-        db_refresh = _refresh_file_in_db(mod_name, rel_path, deleted=True)
-        result["db_refresh"] = db_refresh
-    
-    trace.log("ck3lens.delete_file", {
-        "mod_name": mod_name,
-        "rel_path": rel_path
-    }, {"success": result.get("success", False)})
-    
-    return result
-
-
-# @mcp.tool()  # DEPRECATED - use ck3_file(command="rename")
-def ck3_rename_file(
-    mod_name: str,
-    old_rel_path: str,
-    new_rel_path: str
-) -> dict:
-    """
-    DEPRECATED: Use ck3_file(command="rename", mod_name=..., rel_path=..., new_path=...) instead.
-    Rename or move a file within a mod under local_mods_folder.
-    
-    Args:
-        mod_name: Name of the live mod
-        old_rel_path: Current relative path within the mod
-        new_rel_path: New relative path within the mod
-    
-    Returns:
-        Success status
-    """
-    session = _get_session()
-    trace = _get_trace()
-    
-    result = local_mods.rename_file(session, mod_name, old_rel_path, new_rel_path)
-    
-    # Handle DB refresh for rename: mark old as deleted, refresh new
-    if result.get("success"):
-        _refresh_file_in_db(mod_name, old_rel_path, deleted=True)
-        # Read the new file content and refresh
-        new_content = local_mods.read_local_file(session, mod_name, new_rel_path)
-        if new_content.get("success"):
-            db_refresh = _refresh_file_in_db(mod_name, new_rel_path, content=new_content["content"])
-            result["db_refresh"] = db_refresh
-    
-    trace.log("ck3lens.rename_file", {
-        "mod_name": mod_name,
-        "old_rel_path": old_rel_path,
-        "new_rel_path": new_rel_path
-    }, {"success": result.get("success", False)})
-    
-    return result
-
-
-# @mcp.tool()  # DEPRECATED - use ck3_file(command="refresh")
-def ck3_refresh_file(
-    mod_name: str,
-    rel_path: str
-) -> dict:
-    """
-    DEPRECATED: Use ck3_file(command="refresh", mod_name=..., rel_path=...) instead.
-    
-    Manually refresh a file in the database.
-    
-    Use this after editing a file outside of MCP tools (e.g., with VS Code).
-    Reads the current file from disk and updates the database:
-    - Updates content hash
-    - Re-parses AST (if script file)
-    - Re-extracts symbols and references
-    
-    Typical time: < 500ms for normal script files.
-    
-    Args:
-        mod_name: Name of the live mod
-        rel_path: Relative path within the mod
-    
-    Returns:
-        {
-            "success": bool,
-            "ingested": bool,
-            "parsed": bool,
-            "symbols": int,
-            "refs": int,
-            "time_ms": float
-        }
-    """
-    session = _get_session()
-    trace = _get_trace()
-    
-    # Read current file content
-    read_result = local_mods.read_local_file(session, mod_name, rel_path)
-    
-    if not read_result.get("success"):
-        if not read_result.get("exists", True):
-            # File was deleted - mark as deleted in DB
-            result = _refresh_file_in_db(mod_name, rel_path, deleted=True)
-        else:
-            result = {"success": False, "error": read_result.get("error", "Failed to read file")}
-    else:
-        result = _refresh_file_in_db(mod_name, rel_path, content=read_result["content"])
-    
-    trace.log("ck3lens.refresh_file", {
-        "mod_name": mod_name,
-        "rel_path": rel_path
-    }, {"success": result.get("success", False)})
-    
-    return result
+# The following tools have been DELETED (December 30, 2025):
+# - ck3_list_local_mods() → Use ck3_file(command="list", mod_name=...)
+# - ck3_read_live_file() → Use ck3_file(command="read", mod_name=..., rel_path=...)
+# - ck3_write_file() → Use ck3_file(command="write", mod_name=..., rel_path=..., content=...)
+# - ck3_edit_file() → Use ck3_file(command="edit", mod_name=..., rel_path=..., old_content=..., new_content=...)
+# - ck3_delete_file() → Use ck3_file(command="delete", mod_name=..., rel_path=...)
+# - ck3_rename_file() → Use ck3_file(command="rename", mod_name=..., rel_path=..., new_path=...)
+# - ck3_refresh_file() → Use ck3_file(command="refresh", mod_name=..., rel_path=...)
+#
+# These used the BANNED "local_mods" module which has been deleted.
+# All file operations now flow through ck3_file unified tool with enforcement.
+# ============================================================================
 
 
 @mcp.tool()
@@ -5710,7 +5416,8 @@ def ck3_get_active_playset() -> dict:
         "active_mod_ids": list(scope.get("active_mod_ids", set())),
         "active_roots": list(scope.get("active_roots", set())),
         "vanilla_root": scope.get("vanilla_root"),
-        "local_mods": scope.get("local_mods", []),
+        "local_mods_folder": scope.get("local_mods_folder"),
+        "editable_mods": scope.get("editable_mods", []),
         "agent_briefing": scope.get("agent_briefing", {}),
         "sub_agent_config": scope.get("sub_agent_config", {}),
     }
@@ -8052,7 +7759,8 @@ def ck3_get_mode_instructions(
             # Session info (from what ck3_init_session used to return)
             "session": {
                 "mod_root": session_info.get("mod_root"),
-                "local_mods": session_info.get("local_mods", []),
+                "local_mods_folder": session_info.get("local_mods_folder"),
+                "editable_mods": session_info.get("editable_mods", []),
                 "db_path": session_info.get("db_path"),
                 "playset_id": session_info.get("playset_id"),
                 "playset_name": session_info.get("playset_name"),

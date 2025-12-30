@@ -1112,13 +1112,38 @@ def _file_read_raw(path, justification, start_line, end_line, trace, world=None)
 
 def _file_read_live(mod_name, rel_path, max_bytes, session, trace):
     """Read file from live mod."""
-    from ck3lens import local_mods
+    from ck3lens.workspace import validate_relpath
     
-    result = local_mods.read_local_file(session, mod_name, rel_path, max_bytes)
+    mod = session.get_mod(mod_name)
+    if not mod:
+        return {"error": f"Unknown mod_id: {mod_name}", "exists": False}
+    
+    valid, err = validate_relpath(rel_path)
+    if not valid:
+        return {"error": err, "exists": False}
+    
+    file_path = mod.path / rel_path
+    
+    if not file_path.exists():
+        result = {"mod_id": mod_name, "relpath": rel_path, "exists": False, "content": None}
+    else:
+        try:
+            content = file_path.read_text(encoding="utf-8-sig")
+            if max_bytes and len(content.encode("utf-8")) > max_bytes:
+                content = content[:max_bytes]
+            result = {
+                "mod_id": mod_name,
+                "relpath": rel_path,
+                "exists": True,
+                "content": content,
+                "size": len(content)
+            }
+        except Exception as e:
+            result = {"error": str(e), "exists": True}
     
     if trace:
         trace.log("ck3lens.file.read_live", {"mod_name": mod_name, "rel_path": rel_path},
-                  {"success": result.get("success", False)})
+                  {"success": result.get("exists", False)})
     
     return result
 
@@ -1130,7 +1155,7 @@ def _file_write(mod_name, rel_path, content, validate_syntax, session, trace):
     NOTE: Enforcement already happened in ck3_file dispatcher.
     This function only does the actual write + syntax validation.
     """
-    from ck3lens import local_mods
+    from ck3lens.workspace import validate_relpath
     from ck3lens.validate import parse_content
     
     # Optional syntax validation
@@ -1146,7 +1171,28 @@ def _file_write(mod_name, rel_path, content, validate_syntax, session, trace):
                 "parse_errors": parse_result["errors"]
             }
     
-    result = local_mods.write_file(session, mod_name, rel_path, content)
+    # Inline write operation
+    mod = session.get_mod(mod_name)
+    if not mod:
+        result = {"success": False, "error": f"Unknown mod_id: {mod_name}"}
+    else:
+        valid, err = validate_relpath(rel_path)
+        if not valid:
+            result = {"success": False, "error": err}
+        else:
+            file_path = mod.path / rel_path
+            try:
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+                file_path.write_text(content, encoding="utf-8")
+                result = {
+                    "success": True,
+                    "mod_id": mod_name,
+                    "relpath": rel_path,
+                    "bytes_written": len(content.encode("utf-8")),
+                    "full_path": str(file_path)
+                }
+            except Exception as e:
+                result = {"success": False, "error": str(e)}
     
     # Auto-refresh in database
     if result.get("success"):
@@ -1291,26 +1337,52 @@ def _file_edit(mod_name, rel_path, old_content, new_content, validate_syntax, se
     NOTE: Enforcement already happened in ck3_file dispatcher.
     This function only does the actual edit + syntax validation.
     """
-    from ck3lens import local_mods
+    from ck3lens.workspace import validate_relpath
     from ck3lens.validate import parse_content
     
-    result = local_mods.edit_file(session, mod_name, rel_path, old_content, new_content)
+    # Inline edit operation
+    mod = session.get_mod(mod_name)
+    if not mod:
+        result = {"success": False, "error": f"Unknown mod_id: {mod_name}"}
+    else:
+        valid, err = validate_relpath(rel_path)
+        if not valid:
+            result = {"success": False, "error": err}
+        else:
+            file_path = mod.path / rel_path
+            if not file_path.exists():
+                result = {"success": False, "error": f"File not found: {rel_path}"}
+            else:
+                try:
+                    current = file_path.read_text(encoding="utf-8-sig")
+                    count = current.count(old_content)
+                    if count == 0:
+                        result = {"success": False, "error": "old_content not found in file", "file_length": len(current)}
+                    else:
+                        updated = current.replace(old_content, new_content)
+                        file_path.write_text(updated, encoding="utf-8")
+                        result = {"success": True, "mod_id": mod_name, "relpath": rel_path, "replacements": count}
+                except Exception as e:
+                    result = {"success": False, "error": str(e)}
     
     updated_content = None
     if result.get("success") and validate_syntax and rel_path.endswith(".txt"):
-        read_result = local_mods.read_local_file(session, mod_name, rel_path)
-        if read_result.get("success"):
-            updated_content = read_result["content"]
+        # Re-read file after edit for validation
+        try:
+            updated_content = (mod.path / rel_path).read_text(encoding="utf-8-sig")
             parse_result = parse_content(updated_content, rel_path)
             result["syntax_valid"] = parse_result["success"]
             if not parse_result["success"]:
                 result["syntax_warnings"] = parse_result["errors"]
+        except Exception:
+            pass
     
     if result.get("success"):
         if updated_content is None:
-            read_result = local_mods.read_local_file(session, mod_name, rel_path)
-            if read_result.get("success"):
-                updated_content = read_result["content"]
+            try:
+                updated_content = (mod.path / rel_path).read_text(encoding="utf-8-sig")
+            except Exception:
+                pass
         
         if updated_content:
             db_refresh = _refresh_file_in_db_internal(mod_name, rel_path, content=updated_content)
@@ -1330,9 +1402,25 @@ def _file_delete(mod_name, rel_path, session, trace):
     NOTE: Enforcement already happened in ck3_file dispatcher.
     This function only does the actual delete.
     """
-    from ck3lens import local_mods
+    from ck3lens.workspace import validate_relpath
     
-    result = local_mods.delete_file(session, mod_name, rel_path)
+    mod = session.get_mod(mod_name)
+    if not mod:
+        result = {"success": False, "error": f"Unknown mod_id: {mod_name}"}
+    else:
+        valid, err = validate_relpath(rel_path)
+        if not valid:
+            result = {"success": False, "error": err}
+        else:
+            file_path = mod.path / rel_path
+            if not file_path.exists():
+                result = {"success": False, "error": f"File not found: {rel_path}"}
+            else:
+                try:
+                    file_path.unlink()
+                    result = {"success": True, "mod_id": mod_name, "relpath": rel_path}
+                except Exception as e:
+                    result = {"success": False, "error": str(e)}
     
     if result.get("success"):
         db_refresh = _refresh_file_in_db_internal(mod_name, rel_path, deleted=True)
@@ -1347,16 +1435,48 @@ def _file_delete(mod_name, rel_path, session, trace):
 
 def _file_rename(mod_name, old_path, new_path, session, trace):
     """Rename file in live mod."""
-    from ck3lens import local_mods
+    from ck3lens.workspace import validate_relpath
     
-    result = local_mods.rename_file(session, mod_name, old_path, new_path)
+    mod = session.get_mod(mod_name)
+    if not mod:
+        result = {"success": False, "error": f"Unknown mod_id: {mod_name}"}
+    else:
+        valid, err = validate_relpath(old_path)
+        if not valid:
+            result = {"success": False, "error": f"old_path: {err}"}
+        else:
+            valid, err = validate_relpath(new_path)
+            if not valid:
+                result = {"success": False, "error": f"new_path: {err}"}
+            else:
+                old_file = mod.path / old_path
+                new_file = mod.path / new_path
+                if not old_file.exists():
+                    result = {"success": False, "error": f"File not found: {old_path}"}
+                elif new_file.exists():
+                    result = {"success": False, "error": f"Destination already exists: {new_path}"}
+                else:
+                    try:
+                        new_file.parent.mkdir(parents=True, exist_ok=True)
+                        old_file.rename(new_file)
+                        result = {
+                            "success": True,
+                            "mod_id": mod_name,
+                            "old_relpath": old_path,
+                            "new_relpath": new_path,
+                            "full_path": str(new_file)
+                        }
+                    except Exception as e:
+                        result = {"success": False, "error": str(e)}
     
     if result.get("success"):
         _refresh_file_in_db_internal(mod_name, old_path, deleted=True)
-        new_content = local_mods.read_local_file(session, mod_name, new_path)
-        if new_content.get("success"):
-            db_refresh = _refresh_file_in_db_internal(mod_name, new_path, content=new_content["content"])
+        try:
+            new_content = (mod.path / new_path).read_text(encoding="utf-8-sig")
+            db_refresh = _refresh_file_in_db_internal(mod_name, new_path, content=new_content)
             result["db_refresh"] = db_refresh
+        except Exception:
+            pass
     
     if trace:
         trace.log("ck3lens.file.rename", {"mod_name": mod_name, "old_path": old_path, "new_path": new_path},
@@ -1367,17 +1487,25 @@ def _file_rename(mod_name, old_path, new_path, session, trace):
 
 def _file_refresh(mod_name, rel_path, session, trace):
     """Refresh file in database."""
-    from ck3lens import local_mods
+    from ck3lens.workspace import validate_relpath
     
-    read_result = local_mods.read_local_file(session, mod_name, rel_path)
-    
-    if not read_result.get("success"):
-        if not read_result.get("exists", True):
-            result = _refresh_file_in_db_internal(mod_name, rel_path, deleted=True)
-        else:
-            result = {"success": False, "error": read_result.get("error", "Failed to read file")}
+    mod = session.get_mod(mod_name)
+    if not mod:
+        result = {"success": False, "error": f"Unknown mod_id: {mod_name}"}
     else:
-        result = _refresh_file_in_db_internal(mod_name, rel_path, content=read_result["content"])
+        valid, err = validate_relpath(rel_path)
+        if not valid:
+            result = {"success": False, "error": err}
+        else:
+            file_path = mod.path / rel_path
+            if not file_path.exists():
+                result = _refresh_file_in_db_internal(mod_name, rel_path, deleted=True)
+            else:
+                try:
+                    content = file_path.read_text(encoding="utf-8-sig")
+                    result = _refresh_file_in_db_internal(mod_name, rel_path, content=content)
+                except Exception as e:
+                    result = {"success": False, "error": str(e)}
     
     if trace:
         trace.log("ck3lens.file.refresh", {"mod_name": mod_name, "rel_path": rel_path},
@@ -1388,9 +1516,34 @@ def _file_refresh(mod_name, rel_path, session, trace):
 
 def _file_list(mod_name, path_prefix, pattern, session, trace):
     """List files in live mod."""
-    from ck3lens import local_mods
-    
-    result = local_mods.list_local_files(session, mod_name, path_prefix, pattern)
+    mod = session.get_mod(mod_name)
+    if not mod:
+        result = {"error": f"Unknown mod_id: {mod_name}"}
+    else:
+        target = mod.path / path_prefix if path_prefix else mod.path
+        if not target.exists():
+            result = {"files": [], "folder": path_prefix}
+        else:
+            files = []
+            glob_pattern = pattern or "*.txt"
+            for f in target.rglob(glob_pattern):
+                if f.is_file():
+                    try:
+                        rel = f.relative_to(mod.path)
+                        stat = f.stat()
+                        files.append({
+                            "relpath": str(rel).replace("\\", "/"),
+                            "size": stat.st_size,
+                            "modified": stat.st_mtime
+                        })
+                    except Exception:
+                        pass
+            result = {
+                "mod_id": mod_name,
+                "folder": path_prefix,
+                "pattern": glob_pattern,
+                "files": sorted(files, key=lambda x: x["relpath"])
+            }
     
     if trace:
         trace.log("ck3lens.file.list", {"mod_name": mod_name, "path_prefix": path_prefix},
