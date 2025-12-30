@@ -3009,16 +3009,21 @@ def ck3_exec(
     )
     from ck3lens.policy.audit import get_audit_logger
     from ck3lens.work_contracts import get_active_contract
+    from ck3lens.world_adapter import normalize_path_input
     import subprocess
     
     trace = _get_trace()
     
-    # WorldAdapter visibility check for working_dir and target_paths
+    # ==========================================================================
+    # CANONICAL PATH NORMALIZATION for working_dir and target_paths
+    # Use normalize_path_input() for all path resolution.
+    # ==========================================================================
+    
     world = _get_world()
     if world is not None:
         # Check working directory visibility
         if working_dir:
-            resolution = world.resolve(working_dir)
+            resolution = normalize_path_input(world, path=working_dir)
             if not resolution.found:
                 return {
                     "allowed": False,
@@ -3033,7 +3038,7 @@ def ck3_exec(
         # Check target paths visibility
         if target_paths:
             for target in target_paths:
-                resolution = world.resolve(target)
+                resolution = normalize_path_input(world, path=target)
                 if not resolution.found:
                     return {
                         "allowed": False,
