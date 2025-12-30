@@ -1131,42 +1131,14 @@ def _file_read_live(mod_name, rel_path, max_bytes, session, trace):
 
 
 def _file_write(mod_name, rel_path, content, validate_syntax, session, trace):
-    """Write file to live mod with ck3lens contract enforcement."""
+    """
+    Write file to live mod.
+    
+    NOTE: Enforcement already happened in ck3_file dispatcher.
+    This function only does the actual write + syntax validation.
+    """
     from ck3lens import local_mods
     from ck3lens.validate import parse_content
-    from ck3lens.agent_mode import get_agent_mode
-    from ck3lens.work_contracts import (
-        get_active_contract, validate_target_in_contract
-    )
-    
-    mode = get_agent_mode()
-    
-    # CK3Lens mode requires contract validation for writes
-    if mode == "ck3lens":
-        contract = get_active_contract()
-        if contract is None:
-            if trace:
-                trace.log("ck3lens.file.write", {"mod_name": mod_name, "rel_path": rel_path},
-                          {"success": False, "reason": "no_contract"})
-            return {
-                "success": False,
-                "error": "ck3lens write requires active contract",
-                "guidance": "Use ck3_contract(command='open', ...) to open a write contract",
-            }
-        
-        # Validate target is declared in contract
-        allowed, reason = validate_target_in_contract(mod_name, rel_path, contract)
-        if not allowed:
-            if trace:
-                trace.log("ck3lens.file.write", {"mod_name": mod_name, "rel_path": rel_path},
-                          {"success": False, "reason": "target_not_in_contract"})
-            return {
-                "success": False,
-                "error": f"Target not in contract scope: {reason}",
-                "contract_id": contract.contract_id,
-                "declared_targets": contract.targets,
-                "guidance": "Add target to contract or update contract scope",
-            }
     
     # Optional syntax validation
     if validate_syntax and rel_path.endswith(".txt"):
@@ -1196,87 +1168,20 @@ def _file_write(mod_name, rel_path, content, validate_syntax, session, trace):
 
 
 def _file_write_raw(path, content, validate_syntax, token_id, trace, world=None):
-    """Write file to raw filesystem path with WorldAdapter visibility and policy enforcement."""
+    """
+    Write file to raw filesystem path.
+    
+    NOTE: Enforcement already happened in ck3_file dispatcher.
+    This function only does the actual write + syntax validation.
+    """
     from pathlib import Path as P
-    from ck3lens.policy.file_policy import (
-        evaluate_file_operation, FileRequest, FileOperation
-    )
-    from ck3lens.policy.clw import Decision
-    from ck3lens.work_contracts import get_active_contract
     from ck3lens.validate import parse_content
     from ck3lens.agent_mode import get_agent_mode
     
     file_path = P(path).resolve()
-    
-    # Get mode from persistent file (single source of truth)
     mode = get_agent_mode()
-    if mode is None:
-        return {
-            "success": False,
-            "error": "Agent mode not initialized",
-            "guidance": "Call ck3_get_mode_instructions() first to set mode",
-        }
     
-    # WorldAdapter visibility and writability check (preferred path)
-    if world is not None:
-        resolution = world.resolve(str(file_path))
-        if not resolution.found:
-            return {
-                "success": False,
-                "error": resolution.error_message or f"Path not visible in {world.mode} mode: {path}",
-                "mode": world.mode,
-                "policy_decision": "DENY",
-                "hint": "This path is outside the visibility scope for the current agent mode",
-            }
-        # NO-ORACLE: Writability is determined by enforcement.py, not visibility.
-        # If found=True, proceed to policy evaluation below.
-        # Use resolved absolute path
-        file_path = resolution.absolute_path
-    
-    # Get ck3raven root (parent of tools/)
-    ck3raven_root = P(__file__).parent.parent.parent.parent
-    
-    # Get active contract
-    active_contract = get_active_contract()
-    contract_id = active_contract.contract_id if active_contract else None
-    
-    # Evaluate policy (for additional contract/token checks)
-    request = FileRequest(
-        operation=FileOperation.WRITE,
-        path=file_path,
-        mode=mode,
-        ck3raven_root=ck3raven_root,
-        contract_id=contract_id,
-        token_id=token_id,
-    )
-    
-    result = evaluate_file_operation(request)
-    
-    if trace:
-        trace.log("ck3lens.file.write_raw", {
-            "path": str(file_path),
-            "mode": mode,
-            "token_id": token_id,
-            "world_mode": world.mode if world else None,
-        }, {"decision": result.decision.name})
-    
-    if result.decision == Decision.DENY:
-        return {
-            "success": False,
-            "error": result.reason,
-            "policy_decision": "DENY",
-        }
-    
-    if result.decision == Decision.REQUIRE_TOKEN:
-        return {
-            "success": False,
-            "error": result.reason,
-            "policy_decision": "REQUIRE_TOKEN",
-            "required_token_type": result.required_token_type,
-            "hint": f"Use ck3_token to request a {result.required_token_type} token",
-        }
-    
-    # Policy allowed - validate syntax if requested
+    # Validate syntax if requested
     if validate_syntax and path.endswith(".txt"):
         parse_result = parse_content(content, path)
         if not parse_result["success"]:
@@ -1292,106 +1197,44 @@ def _file_write_raw(path, content, validate_syntax, token_id, trace, world=None)
         file_path.write_text(content, encoding="utf-8")
         
         # Track core source change for WIP workaround detection
-        if contract_id and mode == "ck3raven-dev":
+        if mode == "ck3raven-dev":
             from ck3lens.policy.wip_workspace import record_core_source_change
-            # Check if this is a core source file (not WIP)
-            path_str = str(file_path).replace("\\", "/").lower()
-            if ".wip/" not in path_str:
-                record_core_source_change(contract_id)
+            from ck3lens.work_contracts import get_active_contract
+            contract = get_active_contract()
+            if contract:
+                # Check if this is a core source file (not WIP)
+                path_str = str(file_path).replace("\\", "/").lower()
+                if ".wip/" not in path_str:
+                    record_core_source_change(contract.contract_id)
+        
+        if trace:
+            trace.log("ck3lens.file.write_raw", {"path": str(file_path), "mode": mode},
+                      {"success": True})
         
         return {
             "success": True,
             "path": str(file_path),
             "bytes_written": len(content.encode("utf-8")),
-            "policy_decision": "ALLOW",
-            "policy_reason": result.reason,
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
 def _file_edit_raw(path, old_content, new_content, validate_syntax, token_id, trace, world=None):
-    """Edit file at raw filesystem path with WorldAdapter visibility and policy enforcement."""
+    """
+    Edit file at raw filesystem path.
+    
+    NOTE: Enforcement already happened in ck3_file dispatcher.
+    This function only does the actual edit + syntax validation.
+    """
     from pathlib import Path as P
-    from ck3lens.policy.file_policy import (
-        evaluate_file_operation, FileRequest, FileOperation
-    )
-    from ck3lens.policy.clw import Decision
-    from ck3lens.work_contracts import get_active_contract
     from ck3lens.validate import parse_content
     from ck3lens.agent_mode import get_agent_mode
     
     file_path = P(path).resolve()
-    
-    # Get mode from persistent file (single source of truth)
     mode = get_agent_mode()
-    if mode is None:
-        return {
-            "success": False,
-            "error": "Agent mode not initialized",
-            "guidance": "Call ck3_get_mode_instructions() first to set mode",
-        }
     
-    # WorldAdapter visibility and writability check (preferred path)
-    if world is not None:
-        resolution = world.resolve(str(file_path))
-        if not resolution.found:
-            return {
-                "success": False,
-                "error": resolution.error_message or f"Path not visible in {world.mode} mode: {path}",
-                "mode": world.mode,
-                "policy_decision": "DENY",
-                "hint": "This path is outside the visibility scope for the current agent mode",
-            }
-        # NO-ORACLE: Writability is determined by enforcement.py, not visibility.
-        # If found=True, proceed to policy evaluation below.
-        # Use resolved absolute path
-        file_path = resolution.absolute_path
-    
-    # Get ck3raven root (parent of tools/)
-    ck3raven_root = P(__file__).parent.parent.parent.parent
-    
-    # Get active contract
-    active_contract = get_active_contract()
-    contract_id = active_contract.contract_id if active_contract else None
-    
-    # Evaluate policy (for additional contract/token checks)
-    request = FileRequest(
-        operation=FileOperation.WRITE,
-        path=file_path,
-        mode=mode,
-        ck3raven_root=ck3raven_root,
-        contract_id=contract_id,
-        token_id=token_id,
-    )
-    
-    result = evaluate_file_operation(request)
-    
-    if trace:
-        trace.log("ck3lens.file.edit_raw", {
-            "path": str(file_path),
-            "mode": mode,
-            "token_id": token_id,
-            "world_mode": world.mode if world else None,
-        }, {"decision": result.decision.name})
-    
-    if result.decision == Decision.DENY:
-        return {
-            "success": False,
-            "error": result.reason,
-            "policy_decision": "DENY",
-        }
-    
-    if result.decision == Decision.REQUIRE_TOKEN:
-        return {
-            "success": False,
-            "error": result.reason,
-            "policy_decision": "REQUIRE_TOKEN",
-            "required_token_type": result.required_token_type,
-            "hint": f"Use ck3_token to request a {result.required_token_type} token",
-        }
-    
-    # Policy allowed - read file, apply edit, validate, write
+    # Read file, apply edit, validate, write
     if not file_path.exists():
         return {"success": False, "error": f"File not found: {path}"}
     
@@ -1426,61 +1269,37 @@ def _file_edit_raw(path, old_content, new_content, validate_syntax, token_id, tr
         file_path.write_text(updated_content, encoding="utf-8")
         
         # Track core source change for WIP workaround detection
-        if contract_id and mode == "ck3raven-dev":
+        if mode == "ck3raven-dev":
             from ck3lens.policy.wip_workspace import record_core_source_change
-            # Check if this is a core source file (not WIP)
-            path_str = str(file_path).replace("\\", "/").lower()
-            if ".wip/" not in path_str:
-                record_core_source_change(contract_id)
+            from ck3lens.work_contracts import get_active_contract
+            contract = get_active_contract()
+            if contract:
+                path_str = str(file_path).replace("\\", "/").lower()
+                if ".wip/" not in path_str:
+                    record_core_source_change(contract.contract_id)
+        
+        if trace:
+            trace.log("ck3lens.file.edit_raw", {"path": str(file_path), "mode": mode},
+                      {"success": True})
         
         return {
             "success": True,
             "path": str(file_path),
             "bytes_written": len(updated_content.encode("utf-8")),
-            "policy_decision": "ALLOW",
-            "policy_reason": result.reason,
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
 def _file_edit(mod_name, rel_path, old_content, new_content, validate_syntax, session, trace):
-    """Edit file in live mod with ck3lens contract enforcement."""
+    """
+    Edit file in live mod.
+    
+    NOTE: Enforcement already happened in ck3_file dispatcher.
+    This function only does the actual edit + syntax validation.
+    """
     from ck3lens import local_mods
     from ck3lens.validate import parse_content
-    from ck3lens.agent_mode import get_agent_mode
-    from ck3lens.work_contracts import (
-        get_active_contract, validate_target_in_contract
-    )
-    
-    mode = get_agent_mode()
-    
-    # CK3Lens mode requires contract validation for edits
-    if mode == "ck3lens":
-        contract = get_active_contract()
-        if contract is None:
-            if trace:
-                trace.log("ck3lens.file.edit", {"mod_name": mod_name, "rel_path": rel_path},
-                          {"success": False, "reason": "no_contract"})
-            return {
-                "success": False,
-                "error": "ck3lens edit requires active contract",
-                "guidance": "Use ck3_contract(command='open', ...) to open a write contract",
-            }
-        
-        # Validate target is declared in contract
-        allowed, reason = validate_target_in_contract(mod_name, rel_path, contract)
-        if not allowed:
-            if trace:
-                trace.log("ck3lens.file.edit", {"mod_name": mod_name, "rel_path": rel_path},
-                          {"success": False, "reason": "target_not_in_contract"})
-            return {
-                "success": False,
-                "error": f"Target not in contract scope: {reason}",
-                "contract_id": contract.contract_id,
-                "declared_targets": contract.targets,
-                "guidance": "Add target to contract or update contract scope",
-            }
     
     result = local_mods.edit_file(session, mod_name, rel_path, old_content, new_content)
     
@@ -1512,7 +1331,12 @@ def _file_edit(mod_name, rel_path, old_content, new_content, validate_syntax, se
 
 
 def _file_delete(mod_name, rel_path, session, trace):
-    """Delete file from live mod."""
+    """
+    Delete file from live mod.
+    
+    NOTE: Enforcement already happened in ck3_file dispatcher.
+    This function only does the actual delete.
+    """
     from ck3lens import local_mods
     
     result = local_mods.delete_file(session, mod_name, rel_path)
