@@ -237,17 +237,20 @@ Refactor:
 | work_contracts.py | 4 |
 | paths.py | 4 |
 
-### Fix
+### ⚠️ ARCHITECTURAL CONCERN
 
-`paths.py` already defines `normalize_path()`. Refactor all 61 occurrences to use it:
-```python
-# Instead of:
-path.replace("\\", "/")
+**paths.py is itself a potential violation.** Per CANONICAL_ARCHITECTURE.md:
+> "All tools must call `WorldAdapter.resolve()` exactly once per target."
+> "No secondary path derivation, normalization, or inference is permitted outside this pipeline."
 
-# Use:
-from ck3lens.policy.paths import normalize_path
-normalize_path(path)
-```
+A standalone `paths.py` with normalization functions is likely a parallel path resolution layer. This file needs architectural review.
+
+### Correct Fix
+
+All path normalization MUST go through `WorldAdapter.resolve()`. The 61 inline `.replace("\\", "/")` calls should be:
+1. Removed if they pre-process before WorldAdapter
+2. Moved INTO WorldAdapter if they're internal implementation
+3. Eliminated by ensuring callers use WorldAdapter from the start
 
 ---
 
@@ -332,9 +335,22 @@ Fix `wip_workspace.py:468` - remove `allowed_write_mods` oracle and route throug
 3. Refactor `PlaysetLens` → use `mods[]` directly
 4. Rename `_build_lens_adapter` → `_build_adapter`
 
-### Priority 5: Path Normalization Consolidation
+### Priority 5: Path Normalization Consolidation - **CORRECTION**
 
-Refactor 61 inline `.replace("\\", "/")` calls to use `normalize_path()`.
+**⚠️ AGENT ERROR:** The original recommendation to "create `normalize_path()` in paths.py" was a BANNED IDEA.
+
+**Canonical Architecture States:**
+> "All tools must call `WorldAdapter.resolve()` exactly once per target."
+> "No secondary path derivation, normalization, or inference is permitted outside this pipeline."
+
+**Correct Fix:**
+All 61 inline `.replace("\\", "/")` calls must be refactored to use `world.resolve()` or removed entirely if they're pre-processing paths before resolution.
+
+**paths.py Review Required:**
+The file `tools/ck3lens_mcp/ck3lens/policy/paths.py` itself is potentially dangerous as it may be creating a parallel path normalization layer. Needs architectural review to determine:
+1. Whether it should exist at all
+2. Whether its functions should be absorbed into WorldAdapter
+3. Whether callers should be refactored to use WorldAdapter directly
 
 ### Priority 6: git_ops Integration
 
@@ -360,13 +376,42 @@ Either:
 
 ## Files to Delete/Expunge
 
+### Files Requiring Review for Deletion
+
+1. **`tools/ck3lens_mcp/ck3lens/policy/paths.py`** - Potential parallel path normalization layer. Violates canonical architecture if it provides normalization outside WorldAdapter.
+
 ### Confirmed Safe to Delete
 
-None identified - `live_mods_config` only exists in documentation about what to fix.
+None confirmed yet - requires deeper analysis.
 
 ### Documentation Updates Needed
 
 - `docs/HARD CODING TO FIX.md` - Contains `live_mods_config` as example of what to fix. Should be updated when hardcoding is removed.
+
+---
+
+## Agent Self-Correction Notes
+
+### Error 1: Recommending `normalize_path()` in paths.py
+
+**Original recommendation:** "Create `normalize_path()` in paths.py and refactor all to use it."
+
+**Why this was wrong:** This is exactly the BANNED pattern - creating a parallel path resolution layer. CANONICAL_ARCHITECTURE.md clearly states all path normalization must go through `WorldAdapter.resolve()`.
+
+**Lesson:** Before recommending any path/permission utility, check CANONICAL_ARCHITECTURE.md first.
+
+### Error 2: Claiming `live_mods_config` only in docs
+
+**Original claim:** "Only exists in documentation"
+
+**Status:** User reports this exists in workspace.py. Search didn't find `live_mods_config` but did find `live_mods` in lint rules. Need thorough review of workspace.py for any `live_*` patterns.
+
+### Recommendation: Lint the Recommendations
+
+Before issuing architectural recommendations, cross-check against:
+1. CANONICAL_ARCHITECTURE.md banned terms
+2. arch_lint rules
+3. The 5 canonical rules (ONE enforcement boundary, NO permission oracles, etc.)
 
 ---
 
