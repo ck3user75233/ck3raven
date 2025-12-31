@@ -408,6 +408,30 @@ blacklist
 mod_roots
 ```
 
+### Visibility / Scope Caching (HARD BAN - December 2025)
+
+```
+_lens_cache
+lens_cache
+_validate_visibility()
+_build_cv_filter()
+_derive_*cvid*()
+*_cv_filter*
+*_visibility* helpers (outside WorldAdapter)
+invalidate_lens_cache()
+VisibilityScope (replaced by DbHandle)
+_VISIBILITY_TOKEN (replaced by _CAP_TOKEN)
+db_visibility() as primary API (use db_handle())
+```
+
+### Legacy Format Support (HARD BAN - December 2025)
+
+```
+_load_legacy_playset()
+paths[] key in playsets (use mods[] only)
+active_mod_paths.json (deprecated format)
+```
+
 ### Required Replacements
 
 | ❌ Banned | ✅ Replacement | Reason |

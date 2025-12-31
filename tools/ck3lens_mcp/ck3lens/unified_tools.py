@@ -825,7 +825,7 @@ def ck3_file_impl(
     session=None,
     db=None,
     trace=None,
-    lens=None,
+    visibility=None,  # VisibilityScope for DB queries
     world=None,  # WorldAdapter for unified path resolution
 ) -> dict:
     """
@@ -960,7 +960,7 @@ def ck3_file_impl(
     # ==========================================================================
     
     if command == "get":
-        return _file_get(path, include_ast, max_bytes, no_lens, db, trace, lens)
+        return _file_get(path, include_ast, max_bytes, no_lens, db, trace, visibility)
     
     elif command == "read":
         if path:
@@ -1000,14 +1000,22 @@ def ck3_file_impl(
             return {"error": "Either 'path' or 'mod_name'+'rel_path' required for edit"}
     
     elif command == "delete":
-        if not all([mod_name, rel_path]):
-            return {"error": "mod_name and rel_path required for delete"}
-        return _file_delete(mod_name, rel_path, session, trace)
+        if path and mode == "ck3raven-dev":
+            # Raw path delete for ck3raven-dev mode
+            return _file_delete_raw(path, token_id, trace, world)
+        elif mod_name and rel_path:
+            return _file_delete(mod_name, rel_path, session, trace)
+        else:
+            return {"error": "mod_name and rel_path required for delete (or 'path' in ck3raven-dev mode)"}
     
     elif command == "rename":
-        if not all([mod_name, rel_path, new_path]):
-            return {"error": "mod_name, rel_path, new_path required for rename"}
-        return _file_rename(mod_name, rel_path, new_path, session, trace)
+        if path and new_path and mode == "ck3raven-dev":
+            # Raw path rename for ck3raven-dev mode
+            return _file_rename_raw(path, new_path, token_id, trace, world)
+        elif mod_name and rel_path and new_path:
+            return _file_rename(mod_name, rel_path, new_path, session, trace)
+        else:
+            return {"error": "mod_name, rel_path, new_path required for rename (or 'path' + 'new_path' in ck3raven-dev mode)"}
     
     elif command == "refresh":
         if not all([mod_name, rel_path]):
@@ -1015,9 +1023,13 @@ def ck3_file_impl(
         return _file_refresh(mod_name, rel_path, session, trace)
     
     elif command == "list":
-        if not mod_name:
-            return {"error": "mod_name required for list"}
-        return _file_list(mod_name, path_prefix, pattern, session, trace)
+        if path and mode == "ck3raven-dev":
+            # Raw path list for ck3raven-dev mode
+            return _file_list_raw(path, pattern, trace, world)
+        elif mod_name:
+            return _file_list(mod_name, path_prefix, pattern, session, trace)
+        else:
+            return {"error": "mod_name required for list (or 'path' in ck3raven-dev mode)"}
     
     elif command == "create_patch":
         # ck3lens mode only - creates override patch file
@@ -1035,19 +1047,19 @@ def ck3_file_impl(
     return {"error": f"Unknown command: {command}"}
 
 
-def _file_get(path, include_ast, max_bytes, no_lens, db, trace, lens):
+def _file_get(path, include_ast, max_bytes, no_lens, db, trace, visibility):
     """Get file from database."""
     if not path:
         return {"error": "path required for get command"}
     
-    result = db.get_file(lens if not no_lens else None, relpath=path, include_ast=include_ast)
+    result = db.get_file(relpath=path, include_ast=include_ast, visibility=visibility)
     
     if trace:
         trace.log("ck3lens.file.get", {"path": path, "include_ast": include_ast}, 
                   {"found": result is not None})
     
     if result:
-        result["lens"] = lens.playset_name if lens and not no_lens else "ALL CONTENT"
+        result["scope"] = visibility.purpose if visibility else "ALL CONTENT"
         return result
     return {"error": f"File not found: {path}"}
 
@@ -1546,7 +1558,11 @@ def _file_list(mod_name, path_prefix, pattern, session, trace):
             result = {"files": [], "folder": path_prefix}
         else:
             # Get WorldAdapter for canonical path resolution
-            adapter = get_world(session=session)
+            # Note: WorldAdapter should be pre-initialized; we use mods from session
+            adapter = get_world(
+                local_mods_folder=session.local_mods_folder,
+                mods=session.mods
+            )
             
             files = []
             glob_pattern = pattern or "*.txt"
@@ -1580,6 +1596,105 @@ def _file_list(mod_name, path_prefix, pattern, session, trace):
                   {"files_count": len(result.get("files", []))})
     
     return result
+
+
+def _file_delete_raw(path, token_id, trace, world=None):
+    """
+    Delete file at raw filesystem path.
+    
+    MODE: ck3raven-dev only (enforced by caller).
+    Requires token for destructive operation.
+    """
+    from pathlib import Path as P
+    from ck3lens.policy.tokens import validate_token
+    
+    file_path = P(path).resolve()
+    
+    # Token required for file deletion
+    if not token_id:
+        return {"success": False, "error": "token_id required for file deletion", "required_token_type": "FS_DELETE_CODE"}
+    
+    # Validate token
+    token_result = validate_token(token_id, capability="FS_DELETE_CODE", path=str(file_path))
+    if not token_result.get("valid"):
+        return {"success": False, "error": token_result.get("reason", "Invalid token")}
+    
+    if not file_path.exists():
+        return {"success": False, "error": f"File not found: {path}"}
+    
+    try:
+        file_path.unlink()
+        if trace:
+            trace.log("ck3lens.file.delete_raw", {"path": str(file_path)}, {"success": True})
+        return {"success": True, "path": str(file_path)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def _file_rename_raw(old_path, new_path, token_id, trace, world=None):
+    """
+    Rename/move file at raw filesystem path.
+    
+    MODE: ck3raven-dev only (enforced by caller).
+    """
+    from pathlib import Path as P
+    
+    old_file = P(old_path).resolve()
+    new_file = P(new_path).resolve()
+    
+    if not old_file.exists():
+        return {"success": False, "error": f"File not found: {old_path}"}
+    
+    if new_file.exists():
+        return {"success": False, "error": f"Destination already exists: {new_path}"}
+    
+    try:
+        new_file.parent.mkdir(parents=True, exist_ok=True)
+        old_file.rename(new_file)
+        if trace:
+            trace.log("ck3lens.file.rename_raw", {"old_path": str(old_file), "new_path": str(new_file)}, {"success": True})
+        return {"success": True, "old_path": str(old_file), "new_path": str(new_file)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def _file_list_raw(path, pattern, trace, world=None):
+    """
+    List files at raw filesystem path.
+    
+    MODE: ck3raven-dev only (enforced by caller).
+    """
+    from pathlib import Path as P
+    
+    target = P(path).resolve()
+    
+    if not target.exists():
+        return {"files": [], "path": path}
+    
+    if not target.is_dir():
+        # Single file
+        stat = target.stat()
+        return {"files": [{"path": str(target), "size": stat.st_size, "modified": stat.st_mtime}], "path": path}
+    
+    files = []
+    glob_pattern = pattern or "*"
+    for f in target.rglob(glob_pattern):
+        if f.is_file():
+            try:
+                stat = f.stat()
+                files.append({
+                    "path": str(f),
+                    "relpath": str(f.relative_to(target)),
+                    "size": stat.st_size,
+                    "modified": stat.st_mtime
+                })
+            except Exception:
+                pass
+    
+    if trace:
+        trace.log("ck3lens.file.list_raw", {"path": path, "pattern": pattern}, {"files_count": len(files)})
+    
+    return {"path": path, "pattern": glob_pattern, "files": sorted(files, key=lambda x: x.get("relpath", ""))}
 
 
 def _file_create_patch(mod_name, source_path, patch_mode, initial_content, validate_syntax, session, trace, mode):

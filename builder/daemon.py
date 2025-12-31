@@ -853,10 +853,11 @@ def discover_playset_mods(playset_file: Path, logger: DaemonLogger) -> List[Dict
         return []
     
     playset_name = data.get('playset_name', 'Unknown')
-    paths = data.get('paths', [])
+    # CANONICAL: Use 'mods' key. Fallback to 'paths' only for legacy files.
+    mod_entries = data.get('mods', []) or data.get('paths', [])
     
     mods = []
-    for entry in paths:
+    for entry in mod_entries:
         if not entry.get('enabled', True):
             continue  # Skip disabled mods
         

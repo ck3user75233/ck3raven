@@ -3,14 +3,27 @@ Database Query Layer
 
 Provides query wrappers around ck3raven's SQLite database.
 Includes adjacency search pattern expansion for robust symbol lookup.
-All queries are scoped through the active playset (the "lens").
+
+CAPABILITY-GATED ARCHITECTURE (December 2025):
+- All queries go through _*_internal methods
+- _*_internal methods accept visible_cvids: Optional[FrozenSet[int]] directly
+- DbHandle (from WorldAdapter) calls these internal methods
+- External callers MUST use DbHandle, NOT direct DB methods
+
+BANNED (December 2025 purge):
+- _validate_visibility() method
+- _build_cv_filter() method
+- _lens_cache or any caching of visibility
+- invalidate_lens_cache() method
+- lens as parameter
+- VisibilityScope (replaced by visible_cvids parameter to internal methods)
 """
 from __future__ import annotations
 import sqlite3
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Any, Set, TYPE_CHECKING
+from typing import Optional, Any, FrozenSet
 
 # Add ck3raven to path if not installed
 CK3RAVEN_PATH = Path(__file__).parent.parent.parent.parent / "src"
@@ -19,9 +32,6 @@ if CK3RAVEN_PATH.exists():
 
 from ck3raven.db.schema import get_connection
 from ck3raven.resolver import SQLResolver, MergePolicy, get_policy_for_path
-
-if TYPE_CHECKING:
-    from .world_adapter import WorldAdapter
 
 
 # =============================================================================
@@ -121,10 +131,16 @@ def dedupe_results(results: list[SymbolHit]) -> list[SymbolHit]:
 class DBQueries:
     """Query interface to ck3raven database.
     
-    CANONICAL MODEL:
-    - mods[0] is vanilla, mods[1:] are user mods
-    - DB filtering = {m.cvid for m in mods if m.cvid}
-    - No separate PlaysetLens or vanilla_cvid concepts
+    CAPABILITY-GATED ARCHITECTURE (December 2025):
+    - External callers MUST use DbHandle from WorldAdapter
+    - DbHandle calls _*_internal methods with visible_cvids
+    - _*_internal methods build CV filter inline
+    
+    BANNED:
+    - _validate_visibility() - REMOVED
+    - _build_cv_filter() - REMOVED
+    - _lens_cache - REMOVED
+    - invalidate_lens_cache() - REMOVED
     """
     
     def __init__(self, db_path: Path):
@@ -133,10 +149,35 @@ class DBQueries:
         self.conn.row_factory = sqlite3.Row
     
     # =========================================================================
-    # CVID RESOLUTION
+    # INTERNAL: CV FILTER BUILDER (inline, not a method)
     # =========================================================================
     
-    def get_cvids(self, mods: list, world: Optional["WorldAdapter"] = None) -> dict:
+    @staticmethod
+    def _cv_filter_sql(cvids: Optional[FrozenSet[int]], column: str = "content_version_id") -> str:
+        """
+        Build SQL WHERE clause fragment for cvid filtering.
+        
+        This is a static helper, NOT an instance method that could be overridden.
+        
+        Args:
+            cvids: FrozenSet of allowed cvids, or None for no filter
+            column: Column name (default: content_version_id)
+            
+        Returns:
+            SQL fragment like " AND s.content_version_id IN (1,2,3)" or ""
+        """
+        if cvids is None:
+            return ""
+        if not cvids:
+            return " AND 1=0"  # Empty set = no results
+        cv_list = ",".join(str(cv) for cv in cvids)
+        return f" AND {column} IN ({cv_list})"
+    
+    # =========================================================================
+    # CVID RESOLUTION (used during playset activation)
+    # =========================================================================
+    
+    def get_cvids(self, mods: list, normalize_func=None) -> dict:
         """
         Resolve cvids for all mods (including vanilla at mods[0]).
         
@@ -145,7 +186,7 @@ class DBQueries:
         
         Args:
             mods: List of ModEntry objects. mods[0] should be vanilla.
-            world: Optional WorldAdapter for path normalization.
+            normalize_func: Optional path normalization function.
             
         Returns:
             Dict with resolution stats:
@@ -154,10 +195,10 @@ class DBQueries:
             
         Side effect: Updates mod.cvid on each mod
         """
-        # Path normalization - use WorldAdapter if available
+        # Path normalization helper
         def normalize(path: str) -> str:
-            if world:
-                return world.normalize(path)
+            if normalize_func:
+                return normalize_func(path)
             try:
                 return str(Path(path).resolve()).lower().replace("\\", "/").rstrip("/")
             except Exception:
@@ -170,10 +211,6 @@ class DBQueries:
         
         if not mods:
             return stats
-        
-        # Build lookup tables
-        # For vanilla (mods[0]): lookup by kind='vanilla'
-        # For mods: lookup by workshop_id or path
         
         # Get latest vanilla cvid
         vanilla_row = self.conn.execute("""
@@ -250,66 +287,6 @@ class DBQueries:
                 stats["mods_missing"].append(mod_name)
         
         return stats
-        workshop_to_cv: dict[str, int] = {}
-        rows = self.conn.execute("""
-            SELECT mp.workshop_id, cv.content_version_id
-            FROM mod_packages mp
-            JOIN content_versions cv ON cv.mod_package_id = mp.mod_package_id
-            WHERE mp.workshop_id IS NOT NULL
-            ORDER BY cv.ingested_at DESC
-        """).fetchall()
-        for row in rows:
-            wid = row["workshop_id"]
-            if wid and wid not in workshop_to_cv:
-                workshop_to_cv[wid] = row["content_version_id"]
-        
-        # normalized_path -> cvid (latest)
-        path_to_cv: dict[str, int] = {}
-        rows = self.conn.execute("""
-            SELECT mp.source_path, cv.content_version_id
-            FROM mod_packages mp
-            JOIN content_versions cv ON cv.mod_package_id = mp.mod_package_id
-            WHERE mp.source_path IS NOT NULL
-            ORDER BY cv.ingested_at DESC
-        """).fetchall()
-        for row in rows:
-            if row["source_path"]:
-                norm = normalize(row["source_path"])
-                if norm not in path_to_cv:
-                    path_to_cv[norm] = row["content_version_id"]
-        
-        # Resolve each mod
-        for mod in mods:
-            cv_id = None
-            
-            # Try workshop_id first
-            workshop_id = getattr(mod, 'workshop_id', None)
-            if workshop_id and workshop_id in workshop_to_cv:
-                cv_id = workshop_to_cv[workshop_id]
-            
-            # Try path lookup
-            if cv_id is None:
-                path = getattr(mod, 'path', None)
-                if path:
-                    norm = normalize(str(path))
-                    if norm in path_to_cv:
-                        cv_id = path_to_cv[norm]
-            
-            if cv_id is not None:
-                mod.cvid = cv_id
-                stats["mods_resolved"] += 1
-            else:
-                mod_name = getattr(mod, 'name', str(mod))
-                stats["mods_missing"].append(mod_name)
-        
-        return stats
-    
-    def invalidate_lens_cache(self, playset_id: Optional[int] = None):
-        """Clear cached lens (call after playset changes)."""
-        if playset_id:
-            self._lens_cache.pop(playset_id, None)
-        else:
-            self._lens_cache.clear()
     
     def list_playsets(self) -> list[dict]:
         """List all available playsets."""
@@ -328,7 +305,7 @@ class DBQueries:
     
     def set_active_playset(self, playset_id: int) -> bool:
         """
-        Switch the active playset (change the lens).
+        Switch the active playset.
         
         This is instant - just updates which playset is marked active.
         Does NOT modify any mod data.
@@ -349,19 +326,17 @@ class DBQueries:
         )
         self.conn.commit()
         
-        # Clear lens cache
-        self.invalidate_lens_cache()
-        
         return True
     
     # =========================================================================
-    # SYMBOL SEARCH
+    # SYMBOL SEARCH - INTERNAL
     # =========================================================================
     
-    def search_symbols(
+    def _search_symbols_internal(
         self,
-        cvids: Optional[set[int]],
         query: str,
+        *,
+        visible_cvids: Optional[FrozenSet[int]],
         symbol_type: Optional[str] = None,
         file_pattern: Optional[str] = None,
         adjacency: str = "auto",
@@ -372,9 +347,11 @@ class DBQueries:
         """
         Search symbols with adjacency expansion.
         
+        INTERNAL: Called by DbHandle.search_symbols()
+        
         Args:
-            cvids: Set of content_version_ids to filter through (None = search ALL content)
             query: Search term
+            visible_cvids: FrozenSet of content_version_ids to search within, or None for all
             symbol_type: Optional filter (tradition, event, etc.)
             file_pattern: SQL LIKE pattern for file paths (applies to references)
             adjacency: "strict" | "auto" | "fuzzy"
@@ -395,11 +372,8 @@ class DBQueries:
         adjacencies = []
         patterns_searched = []
         
-        # Build content_version filter if cvids is provided
-        cv_filter = ""
-        if cvids:
-            cv_list = ",".join(str(cv) for cv in cvids)
-            cv_filter = f" AND s.content_version_id IN ({cv_list})"
+        # Build content_version filter
+        cv_filter = self._cv_filter_sql(visible_cvids, "s.content_version_id")
         
         # Determine which patterns to use
         if adjacency == "strict":
@@ -488,7 +462,7 @@ class DBQueries:
         if include_references and results:
             # Get all symbol names we found
             symbol_names = list({h.name for h in results})
-            refs = self._get_references_for_symbols(symbol_names, lens, file_pattern, limit)
+            refs = self._get_references_for_symbols_internal(symbol_names, visible_cvids, file_pattern, limit)
             
             for ref in refs:
                 mod = ref["mod_name"]
@@ -513,10 +487,10 @@ class DBQueries:
         
         return result
     
-    def _get_references_for_symbols(
+    def _get_references_for_symbols_internal(
         self, 
         symbol_names: list[str], 
-        cvids: Optional[set[int]],
+        visible_cvids: Optional[FrozenSet[int]],
         file_pattern: Optional[str] = None,
         limit: int = 500
     ) -> list[dict]:
@@ -527,10 +501,7 @@ class DBQueries:
         placeholders = ",".join("?" * len(symbol_names))
         params = list(symbol_names)
         
-        cv_filter = ""
-        if cvids:
-            cv_list = ",".join(str(cv) for cv in cvids)
-            cv_filter = f" AND r.content_version_id IN ({cv_list})"
+        cv_filter = self._cv_filter_sql(visible_cvids, "r.content_version_id")
         
         file_filter = ""
         if file_pattern:
@@ -590,23 +561,24 @@ class DBQueries:
         snippet_lines = lines[start:end]
         return "\n".join(snippet_lines).strip()
     
-    def confirm_not_exists(
+    def _confirm_not_exists_internal(
         self,
-        cvids: Optional[set[int]],
         query: str,
-        symbol_type: Optional[str] = None
+        symbol_type: Optional[str] = None,
+        *,
+        visible_cvids: Optional[FrozenSet[int]]
     ) -> dict:
         """
         Exhaustive search to confirm something truly doesn't exist.
         
         MUST be called before agent can claim "not found".
         """
-        result = self.search_symbols(
-            cvids=cvids,
+        result = self._search_symbols_internal(
             query=query,
             symbol_type=symbol_type,
             adjacency="fuzzy",
-            limit=50
+            limit=50,
+            visible_cvids=visible_cvids
         )
         
         has_exact = len(result["results"]) > 0
@@ -621,29 +593,29 @@ class DBQueries:
         }
     
     # =========================================================================
-    # FILE RETRIEVAL
+    # FILE RETRIEVAL - INTERNAL
     # =========================================================================
     
-    def get_file(
+    def _get_file_internal(
         self,
-        cvids: Optional[set[int]],
+        relpath: str,
+        *,
+        visible_cvids: Optional[FrozenSet[int]],
         file_id: Optional[int] = None,
-        relpath: Optional[str] = None,
         include_ast: bool = False
     ) -> Optional[dict]:
         """
         Get file content by file_id or relpath.
         
+        INTERNAL: Called by DbHandle.get_file()
+        
         Args:
-            cvids: Set of content_version_ids to filter through (None = search ALL content)
-            file_id: Specific file ID to retrieve
             relpath: Relative path to search for
+            visible_cvids: FrozenSet of cvids to filter, or None for all
+            file_id: Specific file ID to retrieve (overrides relpath)
             include_ast: If True, also return parsed AST
         """
-        cv_filter = ""
-        if cvids:
-            cv_list = ",".join(str(cv) for cv in cvids)
-            cv_filter = f" AND f.content_version_id IN ({cv_list})"
+        cv_filter = self._cv_filter_sql(visible_cvids, "f.content_version_id")
         
         sql = f"""
             SELECT 
@@ -701,32 +673,32 @@ class DBQueries:
         return result
     
     # =========================================================================
-    # FILE SEARCH
+    # FILE SEARCH - INTERNAL
     # =========================================================================
     
-    def search_files(
+    def _search_files_internal(
         self,
-        cvids: Optional[set[int]],
         pattern: str,
+        *,
+        visible_cvids: Optional[FrozenSet[int]],
         source_filter: Optional[str] = None,
         limit: int = 100
     ) -> list[dict]:
         """
         Search for files by path pattern.
         
+        INTERNAL: Called by DbHandle.search_files()
+        
         Args:
-            cvids: Set of content_version_ids to filter through (None = search ALL content)
             pattern: SQL LIKE pattern for file path
+            visible_cvids: FrozenSet of cvids to filter, or None for all
             source_filter: Filter by source ("vanilla", mod name, or mod ID)
             limit: Maximum results
         
         Returns:
             List of matching files with source info
         """
-        cv_filter = ""
-        if cvids:
-            cv_list = ",".join(str(cv) for cv in cvids)
-            cv_filter = f" AND f.content_version_id IN ({cv_list})"
+        cv_filter = self._cv_filter_sql(visible_cvids, "f.content_version_id")
         
         sql = f"""
             SELECT 
@@ -766,13 +738,14 @@ class DBQueries:
         return files
     
     # =========================================================================
-    # CONTENT SEARCH (GREP)
+    # CONTENT SEARCH (GREP) - INTERNAL
     # =========================================================================
     
-    def search_content(
+    def _search_content_internal(
         self,
-        cvids: Optional[set[int]],
         query: str,
+        *,
+        visible_cvids: Optional[FrozenSet[int]],
         file_pattern: Optional[str] = None,
         source_filter: Optional[str] = None,
         limit: int = 50,
@@ -782,6 +755,8 @@ class DBQueries:
         """
         Search file contents for text matches (grep-style).
         
+        INTERNAL: Called by DbHandle.search_content()
+        
         Supports multiple search terms:
         - Space-separated words are treated as AND (all must appear in file)
         - Quoted strings search for exact phrases
@@ -790,8 +765,8 @@ class DBQueries:
         Returns line numbers and snippets for EACH match.
         
         Args:
-            cvids: Set of content_version_ids to filter through (None = search ALL content)
             query: Text to search for (case-insensitive). Space = AND, quotes = exact phrase
+            visible_cvids: FrozenSet of cvids to filter, or None for all
             file_pattern: SQL LIKE pattern to filter files
             source_filter: Filter by source
             limit: Maximum files to return
@@ -804,10 +779,7 @@ class DBQueries:
         # Parse query into terms (handle quoted phrases)
         terms = self._parse_search_terms(query)
         
-        cv_filter = ""
-        if cvids:
-            cv_list = ",".join(str(cv) for cv in cvids)
-            cv_filter = f" AND f.content_version_id IN ({cv_list})"
+        cv_filter = self._cv_filter_sql(visible_cvids, "f.content_version_id")
         
         # Build SQL with AND for all terms
         term_conditions = []
@@ -951,13 +923,14 @@ class DBQueries:
         return total
     
     # =========================================================================
-    # UNIFIED SEARCH
+    # UNIFIED SEARCH - INTERNAL
     # =========================================================================
     
-    def unified_search(
+    def _unified_search_internal(
         self,
-        cvids: Optional[set[int]],
         query: str,
+        *,
+        visible_cvids: Optional[FrozenSet[int]],
         file_pattern: Optional[str] = None,
         source_filter: Optional[str] = None,
         symbol_type: Optional[str] = None,
@@ -971,62 +944,32 @@ class DBQueries:
         """
         Unified search across symbols AND content.
         
+        INTERNAL: Called by DbHandle.unified_search()
+        
         Searches both:
         1. Symbol definitions (traits, events, decisions, etc.)
         2. File content (grep-style text search)
         
         Returns both in one response - no need to decide if something is a symbol.
-        
-        Args:
-            cvids: Set of content_version_ids to filter (None = search ALL)
-            query: Search term
-            file_pattern: SQL LIKE pattern for file paths (optional)
-            source_filter: Filter by mod/source (optional)
-            symbol_type: Filter symbols by type (optional)
-            adjacency: Pattern expansion mode ("auto", "strict", "fuzzy")
-            limit: Max results per category
-            matches_per_file: Max content matches per file (default 5)
-            include_references: Include mods that reference found symbols
-            verbose: More detail (all matches, snippets)
-            playset_name: Optional name for display
-        
-        Returns:
-            {
-                "query": str,
-                "symbols": {
-                    "count": int,
-                    "results": [...],
-                    "adjacencies": [...],
-                    "definitions_by_mod": {...}
-                },
-                "content": {
-                    "count": int,
-                    "results": [...]  # Line-by-line matches
-                },
-                "files": {
-                    "count": int,
-                    "results": [...]  # Matching file paths
-                }
-            }
         """
         result = {
             "query": query,
-            "playset": playset_name if playset_name else ("ACTIVE PLAYSET" if cvids else "ALL CONTENT"),
+            "playset": playset_name if playset_name else ("ACTIVE PLAYSET" if visible_cvids else "ALL CONTENT"),
             "symbols": {"count": 0, "results": [], "adjacencies": [], "definitions_by_mod": {}},
             "content": {"count": 0, "results": []},
             "files": {"count": 0, "results": []}
         }
         
         # 1. Symbol search (file_pattern filters references, not definitions)
-        symbol_result = self.search_symbols(
-            cvids=cvids,
+        symbol_result = self._search_symbols_internal(
             query=query,
             symbol_type=symbol_type,
             file_pattern=file_pattern,
             adjacency=adjacency,
             limit=limit,
             include_references=include_references,
-            verbose=verbose
+            verbose=verbose,
+            visible_cvids=visible_cvids
         )
         result["symbols"] = {
             "count": len(symbol_result.get("results", [])),
@@ -1038,14 +981,14 @@ class DBQueries:
             result["symbols"]["references_by_mod"] = symbol_result.get("references_by_mod", {})
         
         # 2. Content search (grep)
-        content_result = self.search_content(
-            cvids=cvids,
+        content_result = self._search_content_internal(
             query=query,
             file_pattern=file_pattern,
             source_filter=source_filter,
             limit=limit,
             matches_per_file=matches_per_file if not verbose else 1000,
-            verbose=verbose
+            verbose=verbose,
+            visible_cvids=visible_cvids
         )
         result["content"] = {
             "count": len(content_result),
@@ -1053,9 +996,9 @@ class DBQueries:
         }
         
         # 3. File path search (if file_pattern provided or query looks like a path)
-        if file_pattern or '/' in query or '\\' in query or query.endswith('.txt'):
+        if file_pattern or '/' in query or '\\\\' in query or query.endswith('.txt'):
             search_pattern = file_pattern if file_pattern else f"%{query}%"
-            files = self.search_files(cvids, search_pattern, source_filter, limit)
+            files = self._search_files_internal(search_pattern, visible_cvids=visible_cvids, source_filter=source_filter, limit=limit)
             result["files"] = {
                 "count": len(files),
                 "results": files
@@ -1064,7 +1007,134 @@ class DBQueries:
         return result
     
     # =========================================================================
-    # CONFLICT ANALYSIS
+    # SYMBOL BY NAME/FILE - INTERNAL
+    # =========================================================================
+    
+    def _get_symbol_internal(
+        self,
+        name: str,
+        symbol_type: Optional[str] = None,
+        *,
+        visible_cvids: Optional[FrozenSet[int]]
+    ) -> Optional[dict]:
+        """
+        Get a symbol by exact name.
+        
+        INTERNAL: Called by DbHandle.get_symbol()
+        """
+        cv_filter = self._cv_filter_sql(visible_cvids, "s.content_version_id")
+        
+        sql = f"""
+            SELECT 
+                s.symbol_id,
+                s.name,
+                s.symbol_type,
+                s.defining_file_id as file_id,
+                f.relpath,
+                COALESCE(mp.name, 'vanilla') as mod_name,
+                s.line_number
+            FROM symbols s
+            JOIN files f ON s.defining_file_id = f.file_id
+            JOIN content_versions cv ON s.content_version_id = cv.content_version_id
+            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            WHERE s.name = ?
+            {cv_filter}
+        """
+        params = [name]
+        
+        if symbol_type:
+            sql += " AND s.symbol_type = ?"
+            params.append(symbol_type)
+        
+        sql += " LIMIT 1"
+        
+        row = self.conn.execute(sql, params).fetchone()
+        if not row:
+            return None
+        
+        return {
+            "symbol_id": row["symbol_id"],
+            "name": row["name"],
+            "symbol_type": row["symbol_type"],
+            "file_id": row["file_id"],
+            "relpath": row["relpath"],
+            "mod": row["mod_name"],
+            "line": row["line_number"]
+        }
+    
+    def _get_symbols_by_file_internal(
+        self,
+        file_id: int,
+        *,
+        visible_cvids: Optional[FrozenSet[int]]
+    ) -> list[dict]:
+        """
+        Get all symbols defined in a file.
+        
+        INTERNAL: Called by DbHandle.get_symbols_by_file()
+        """
+        cv_filter = self._cv_filter_sql(visible_cvids, "s.content_version_id")
+        
+        sql = f"""
+            SELECT 
+                s.symbol_id,
+                s.name,
+                s.symbol_type,
+                s.line_number
+            FROM symbols s
+            WHERE s.defining_file_id = ?
+            {cv_filter}
+            ORDER BY s.line_number
+        """
+        
+        rows = self.conn.execute(sql, (file_id,)).fetchall()
+        return [dict(row) for row in rows]
+    
+    def _get_refs_internal(
+        self,
+        symbol_name: str,
+        *,
+        visible_cvids: Optional[FrozenSet[int]],
+        file_pattern: Optional[str] = None,
+        limit: int = 100
+    ) -> list[dict]:
+        """
+        Get references to a symbol.
+        
+        INTERNAL: Called by DbHandle.get_refs()
+        """
+        cv_filter = self._cv_filter_sql(visible_cvids, "r.content_version_id")
+        
+        sql = f"""
+            SELECT 
+                r.ref_id,
+                r.name,
+                r.ref_type,
+                r.line_number,
+                r.context,
+                f.relpath,
+                COALESCE(mp.name, 'vanilla') as mod_name
+            FROM refs r
+            JOIN files f ON r.using_file_id = f.file_id
+            JOIN content_versions cv ON r.content_version_id = cv.content_version_id
+            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            WHERE r.name = ?
+            {cv_filter}
+        """
+        params = [symbol_name]
+        
+        if file_pattern:
+            sql += " AND LOWER(f.relpath) LIKE LOWER(?)"
+            params.append(file_pattern)
+        
+        sql += " ORDER BY mod_name, f.relpath, r.line_number LIMIT ?"
+        params.append(limit)
+        
+        rows = self.conn.execute(sql, params).fetchall()
+        return [dict(row) for row in rows]
+    
+    # =========================================================================
+    # CONFLICT ANALYSIS - INTERNAL
     # =========================================================================
     
     # Known compatch mod name patterns - these are DESIGNED to conflict
@@ -1080,9 +1150,10 @@ class DBQueries:
         name_lower = mod_name.lower()
         return any(pattern in name_lower for pattern in self.COMPATCH_PATTERNS)
     
-    def get_symbol_conflicts(
+    def _get_symbol_conflicts_internal(
         self,
-        cvids: set[int],
+        *,
+        visible_cvids: Optional[FrozenSet[int]],
         symbol_type: Optional[str] = None,
         game_folder: Optional[str] = None,
         limit: int = 100,
@@ -1092,40 +1163,17 @@ class DBQueries:
         """
         Fast ID-level conflict detection using the symbols table.
         
+        INTERNAL: Called by DbHandle.get_symbol_conflicts()
+        
         This is INSTANT compared to contribution_units extraction.
         Uses GROUP BY to find symbols defined in multiple mods.
-        
-        Args:
-            cvids: Set of content_version_ids to search
-            symbol_type: Filter by type (trait, event, decision, etc.)
-            game_folder: Filter by CK3 folder (e.g., "common/traits")
-            limit: Maximum conflicts to return
-            include_compatch: If True, include conflicts from compatch mods
-                              (default False - compatch mods are expected to conflict)
-            playset_name: Optional playset name for display
-        
-        Returns:
-            {
-                "conflict_count": int,
-                "conflicts": [
-                    {
-                        "name": str,
-                        "symbol_type": str,
-                        "source_count": int,
-                        "sources": [{"mod": str, "file": str, "line": int}],
-                        "is_compatch_conflict": bool  # True if involves compatch mod
-                    }
-                ],
-                "compatch_conflicts_hidden": int  # Count of conflicts filtered out
-            }
         """
-        if not cvids:
+        if not visible_cvids:
             return {"conflict_count": 0, "conflicts": [], "compatch_conflicts_hidden": 0}
         
-        cv_list = ",".join(str(cv) for cv in cvids)
+        cv_filter = self._cv_filter_sql(visible_cvids, "s.content_version_id")
         
         # Build query to find symbols with multiple definitions
-        # Filter to only symbols within the provided cvids
         sql = f"""
             SELECT 
                 s.symbol_type,
@@ -1133,7 +1181,8 @@ class DBQueries:
                 COUNT(DISTINCT s.content_version_id) as source_count,
                 GROUP_CONCAT(DISTINCT s.content_version_id) as cv_ids
             FROM symbols s
-            WHERE s.content_version_id IN ({cv_list})
+            WHERE 1=1
+            {cv_filter}
         """
         params = []
         
@@ -1213,28 +1262,6 @@ class DBQueries:
             "compatch_conflicts_hidden": compatch_hidden,
             "playset": playset_name if playset_name else "ACTIVE PLAYSET"
         }
-
-    def get_conflicts(
-        self,
-        cvids: set[int],
-        folder: Optional[str] = None,
-        symbol_type: Optional[str] = None
-    ) -> dict:
-        """
-        Get conflict report for a folder.
-        
-        DEPRECATED: SQLResolver still uses playset_id which joins to empty playset_mods table.
-        Use get_symbol_conflicts() instead for now.
-        
-        TODO: Rewrite SQLResolver to take cvids directly.
-        """
-        # For now, return empty result - SQLResolver needs rewrite
-        return {
-            "error": "get_conflicts deprecated - SQLResolver needs rewrite to use cvids",
-            "use_instead": "get_symbol_conflicts(cvids=cvids, ...)",
-            "folder": folder,
-            "symbol_type": symbol_type
-        }
     
     # =========================================================================
     # HELPERS
@@ -1294,3 +1321,58 @@ class DBQueries:
     def close(self):
         """Close database connection."""
         self.conn.close()
+    
+    # =========================================================================
+    # DEPRECATED: Legacy wrapper methods for gradual migration
+    # These accept the old visibility parameter and extract cvids from it.
+    # All new code should use DbHandle from WorldAdapter instead.
+    # =========================================================================
+    
+    def _extract_cvids_from_visibility(self, visibility) -> Optional[FrozenSet[int]]:
+        """Extract visible_cvids from legacy visibility parameter.
+        
+        DEPRECATED: This exists only for backward compatibility.
+        New code should use DbHandle from WorldAdapter.db_handle().
+        """
+        if visibility is None:
+            return None
+        # Handle both old VisibilityScope and new patterns
+        if hasattr(visibility, 'visible_cvids'):
+            cvids = visibility.visible_cvids
+            return frozenset(cvids) if cvids else None
+        return None
+    
+    def search_symbols(self, query: str, *, visibility=None, **kwargs) -> dict:
+        """DEPRECATED: Use DbHandle.search_symbols() instead."""
+        cvids = self._extract_cvids_from_visibility(visibility)
+        return self._search_symbols_internal(query, visible_cvids=cvids, **kwargs)
+    
+    def search_files(self, pattern: str, *, visibility=None, **kwargs) -> list:
+        """DEPRECATED: Use DbHandle.search_files() instead."""
+        cvids = self._extract_cvids_from_visibility(visibility)
+        return self._search_files_internal(pattern, visible_cvids=cvids, **kwargs)
+    
+    def search_content(self, query: str, *, visibility=None, **kwargs) -> list:
+        """DEPRECATED: Use DbHandle.search_content() instead."""
+        cvids = self._extract_cvids_from_visibility(visibility)
+        return self._search_content_internal(query, visible_cvids=cvids, **kwargs)
+    
+    def get_file(self, *, visibility=None, relpath: str = None, file_id: int = None, include_ast: bool = False) -> Optional[dict]:
+        """DEPRECATED: Use DbHandle.get_file() instead."""
+        cvids = self._extract_cvids_from_visibility(visibility)
+        return self._get_file_internal(relpath or "", visible_cvids=cvids, file_id=file_id, include_ast=include_ast)
+    
+    def confirm_not_exists(self, query: str, symbol_type: str = None, *, visibility=None) -> dict:
+        """DEPRECATED: Use DbHandle.confirm_not_exists() instead."""
+        cvids = self._extract_cvids_from_visibility(visibility)
+        return self._confirm_not_exists_internal(query, symbol_type, visible_cvids=cvids)
+    
+    def unified_search(self, query: str, *, visibility=None, **kwargs) -> dict:
+        """DEPRECATED: Use DbHandle.unified_search() instead."""
+        cvids = self._extract_cvids_from_visibility(visibility)
+        return self._unified_search_internal(query, visible_cvids=cvids, **kwargs)
+    
+    def get_symbol_conflicts(self, *, visibility=None, **kwargs) -> dict:
+        """DEPRECATED: Use DbHandle.get_symbol_conflicts() instead."""
+        cvids = self._extract_cvids_from_visibility(visibility)
+        return self._get_symbol_conflicts_internal(visible_cvids=cvids, **kwargs)

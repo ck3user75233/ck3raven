@@ -553,8 +553,10 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
         
         for path in paths_to_check:
             if path:
+                # Extract relative path from canonical address (e.g., 'ck3raven:/tools/...' -> 'tools/...')
+                rel_path = path.split(':/', 1)[1] if ':/' in path and not path[1:3] == ':\\' else path
                 allowed, reason = validate_path_in_repo_domains(
-                    path, 
+                    rel_path, 
                     repo_domains,
                     contract.allowed_paths if contract.allowed_paths else None
                 )

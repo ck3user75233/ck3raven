@@ -21,6 +21,11 @@ Forbidden patterns:
 - Tool-local visibility logic  
 - Policy checks on unresolved paths
 - is_writable checks (enforcement.py decides)
+
+BANNED CONCEPTS (December 2025 purge):
+- lens (parameter or variable)
+- PlaysetLens (class - use mods[] instead)
+- cvids as parameter (derive at DB boundary from mods[])
 """
 from __future__ import annotations
 
@@ -31,7 +36,7 @@ from .agent_mode import get_agent_mode
 from .world_adapter import WorldAdapter, LensWorldAdapter, DevWorldAdapter
 
 if TYPE_CHECKING:
-    from .db_queries import DBQueries, PlaysetLens
+    from .db_queries import DBQueries
 
 
 class WorldRouter:
@@ -67,7 +72,6 @@ class WorldRouter:
     def get_adapter(
         self,
         db: Optional["DBQueries"] = None,
-        lens: Optional["PlaysetLens"] = None,
         local_mods_folder: Optional[Path] = None,
         mods: Optional[list] = None,
         force_mode: Optional[str] = None,
@@ -77,9 +81,9 @@ class WorldRouter:
         
         Args:
             db: Database queries instance (required for full functionality)
-            lens: PlaysetLens for DB filtering (required for ck3lens)
             local_mods_folder: Path to local mods folder (for ck3lens write enforcement)
             mods: List of mod entries from session (for ck3lens visibility)
+                  Each mod should have .name, .path, and optionally .cvid
             force_mode: Override detected mode (for testing)
         
         Returns:
@@ -105,7 +109,7 @@ class WorldRouter:
         
         # Build new adapter
         if mode == "ck3lens":
-            adapter = self._build_lens_adapter(db, lens, local_mods_folder, mods)
+            adapter = self._build_lens_adapter(db, local_mods_folder, mods)
         elif mode == "ck3raven-dev":
             adapter = self._build_dev_adapter(db)
         else:
@@ -118,19 +122,18 @@ class WorldRouter:
     def _build_lens_adapter(
         self,
         db: Optional["DBQueries"],
-        lens: Optional["PlaysetLens"],
         local_mods_folder: Optional[Path],
         mods: Optional[list],
     ) -> LensWorldAdapter:
         """Build a LensWorldAdapter for ck3lens mode."""
-        if lens is None:
-            raise RuntimeError(
-                "LensWorldAdapter requires PlaysetLens. "
-                "Ensure a playset is active."
-            )
-        
         if db is None:
             raise RuntimeError("DBQueries required for LensWorldAdapter")
+        
+        if not mods:
+            raise RuntimeError(
+                "LensWorldAdapter requires mods list. "
+                "Ensure a playset is active with session.mods populated."
+            )
         
         # Get path configurations
         vanilla_root = self._get_vanilla_root()
@@ -145,14 +148,13 @@ class WorldRouter:
         utility_roots = self._get_utility_roots()
         
         return LensWorldAdapter(
-            lens=lens,
             db=db,
+            mods=mods,
             local_mods_folder=local_mods_folder,
             vanilla_root=vanilla_root,
             ck3raven_root=ck3raven_root,
             wip_root=wip_root,
             utility_roots=utility_roots,
-            mods=mods or [],
         )
     
     def _build_dev_adapter(
@@ -271,7 +273,6 @@ class WorldRouter:
 
 def get_world(
     db: Optional["DBQueries"] = None,
-    lens: Optional["PlaysetLens"] = None,
     local_mods_folder: Optional[Path] = None,
     mods: Optional[list] = None,
     force_mode: Optional[str] = None,
@@ -281,8 +282,17 @@ def get_world(
     
     This is the canonical entry point for all MCP tools.
     
+    Args:
+        db: Database queries instance
+        local_mods_folder: Path to local mods folder
+        mods: List of mod entries from session. Each mod should have:
+              - .name: mod name
+              - .path: filesystem path
+              - .cvid: content_version_id (optional, for DB filtering)
+        force_mode: Override detected mode (for testing)
+    
     Example:
-        world = get_world(db=db, lens=lens, mods=session.mods)
+        world = get_world(db=db, mods=session.mods, local_mods_folder=session.local_mods_folder)
         result = world.resolve("mod:MSC/common/traits/test.txt")
         
         if not result.found:
@@ -293,7 +303,6 @@ def get_world(
     router = WorldRouter.get_instance()
     return router.get_adapter(
         db=db,
-        lens=lens,
         local_mods_folder=local_mods_folder,
         mods=mods,
         force_mode=force_mode,

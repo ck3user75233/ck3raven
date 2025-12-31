@@ -91,6 +91,10 @@ _trace: Optional[ToolTrace] = None
 _playset_id: Optional[int] = None
 _session_cv_ids_resolved: bool = False
 
+# World adapter cache (for session persistence)
+_cached_world_adapter = None
+_cached_world_mode: Optional[str] = None
+
 
 def _get_session() -> Session:
     global _session
@@ -139,44 +143,8 @@ def _get_playset_id() -> int:
     return _playset_id
 
 
-# No more cached lens - derive cvids directly from session.mods[]
-
-
-def _get_cvids(no_lens: bool = False) -> Optional[set[int]]:
-    """
-    Get the active playset cvids for filtering queries.
-    
-    The cvids are derived from session.mods[].cvid.
-    mods[0] is always vanilla, mods[1:] are user mods.
-    
-    Args:
-        no_lens: If True, return None to search ALL content (take glasses off)
-    
-    Returns:
-        Set of cvids or None if no_lens=True or no mods configured
-    """
-    if no_lens:
-        return None
-    
-    # Ensure DB is connected (triggers cvid resolution)
-    _get_db()
-    
-    session = _get_session()
-    if not session.mods:
-        return None
-    
-    # Derive cvids from mods[] - THE canonical way
-    cvids = {m.cvid for m in session.mods if m.cvid}
-    return cvids if cvids else None
-
-
-# Backward compatibility - _get_lens() now returns cvids set
-def _get_lens(no_lens: bool = False):
-    """
-    DEPRECATED: Returns cvids set, not PlaysetLens.
-    Use _get_cvids() directly.
-    """
-    return _get_cvids(no_lens)
+# BANNED: _get_lens, _get_cvids, _derive_search_cvids (December 2025 purge)
+# Use WorldAdapter.db_visibility() for DB visibility scoping - THE canonical way
 
 
 # Cached playset scope for path validation
@@ -207,6 +175,8 @@ def _get_playset_scope():
         return None
     
     _cached_playset_scope = build_scope_from_session(scope, session.local_mods_folder)
+
+
 def _get_world():
     """
     Get the WorldAdapter for the current agent mode.
@@ -234,14 +204,17 @@ def _get_world():
     if _cached_world_adapter is not None and _cached_world_mode == mode:
         return _cached_world_adapter
     
-    # Get dependencies
+    # Get dependencies - NO lens parameter (removed December 2025)
     db = _get_db()
-    lens = _get_lens(no_lens=False)
-    scope = _get_playset_scope()
+    session = _get_session()
     
-    # Build adapter via router
+    # Build adapter via router - mods[] is THE source, no lens
     try:
-        adapter = get_world(db=db, lens=lens, scope=scope)
+        adapter = get_world(
+            db=db,
+            local_mods_folder=session.local_mods_folder,
+            mods=session.mods
+        )
         _cached_world_adapter = adapter
         _cached_world_mode = mode
         return adapter
@@ -251,6 +224,7 @@ def _get_world():
         # This is intentional - we want graceful degradation.
         import logging
         logging.getLogger('ck3lens.world').debug(f'WorldAdapter unavailable: {e}')
+        return None
         return None
 
 
@@ -365,43 +339,8 @@ def _load_playset_from_json(playset_file: Path) -> Optional[dict]:
         return None
 
 
-def _load_legacy_playset(playset_file: Path) -> Optional[dict]:
-    """
-    Load playset from legacy active_mod_paths.json format.
-    
-    This is the FALLBACK for backward compatibility.
-    """
-    if not playset_file.exists():
-        return None
-    
-    try:
-        data = json.loads(playset_file.read_text(encoding='utf-8'))
-        
-        active_mod_ids = set()
-        active_roots = set()
-        
-        for mod in data.get("paths", []):
-            if mod.get("enabled", True):
-                steam_id = mod.get("steam_id")
-                if steam_id:
-                    active_mod_ids.add(str(steam_id))
-                path = mod.get("path")
-                if path:
-                    active_roots.add(path)
-        
-        return {
-            "playset_id": None,
-            "playset_name": data.get("playset_name", "Legacy Playset"),
-            "active_mod_ids": active_mod_ids,
-            "active_roots": active_roots,
-            "vanilla_version_id": None,
-            "vanilla_root": str(Path("C:/Program Files (x86)/Steam/steamapps/common/Crusader Kings III/game")),
-            "source": "legacy_file",
-            "file_path": str(playset_file),
-        }
-    except Exception as e:
-        print(f"Warning: Failed to load legacy playset from {playset_file}: {e}")
-        return None
+# REMOVED: _load_legacy_playset - Legacy playset format BANNED (December 2025)
+# All playsets must use the canonical mods[] format in playsets/*.json
 
 
 def _get_session_scope(force_refresh: bool = False) -> dict:
@@ -447,13 +386,7 @@ def _get_session_scope(force_refresh: bool = False) -> dict:
         except Exception as e:
             print(f"Warning: Failed to read playset manifest: {e}")
     
-    # Fall back to legacy file
-    legacy_scope = _load_legacy_playset(LEGACY_PLAYSET_FILE)
-    if legacy_scope:
-        _session_scope = legacy_scope
-        return _session_scope
-    
-    # No playset available
+    # No playset available - legacy format support REMOVED
     _session_scope = {
         "playset_id": None,
         "playset_name": None,
@@ -1689,8 +1622,10 @@ def ck3_file(
     session = _get_session()
     db = _get_db()
     trace = _get_trace()
-    lens = _get_lens(no_lens=no_lens)
     world = _get_world()  # WorldAdapter for unified path resolution
+    
+    # Get visibility from WorldAdapter - THE canonical way
+    visibility = world.db_visibility(purpose="ck3_file")
     
     return ck3_file_impl(
         command=command,
@@ -1716,7 +1651,7 @@ def ck3_file(
         session=session,
         db=db,
         trace=trace,
-        lens=lens,
+        visibility=visibility,
         world=world,
     )
 
@@ -3647,7 +3582,11 @@ def ck3_search(
     """
     db = _get_db()
     trace = _get_trace()
-    lens = _get_lens(no_lens=no_lens)
+    session = _get_session()
+    world = _get_world()
+    
+    # Get visibility from WorldAdapter - THE canonical way
+    visibility = world.db_visibility(purpose="ck3_search")
     
     # Build file_pattern from game_folder if provided
     effective_file_pattern = file_pattern
@@ -3664,7 +3603,6 @@ def ck3_search(
     include_references = not definitions_only
     
     result = db.unified_search(
-        lens=lens,
         query=query,
         file_pattern=effective_file_pattern,
         source_filter=effective_source,
@@ -3673,7 +3611,8 @@ def ck3_search(
         limit=limit,
         matches_per_file=5 if not verbose else 50,
         include_references=include_references,
-        verbose=verbose
+        verbose=verbose,
+        visibility=visibility
     )
     
     # Check if results were truncated and add guidance
@@ -3750,9 +3689,13 @@ def ck3_confirm_not_exists(
     """
     db = _get_db()
     trace = _get_trace()
-    lens = _get_lens(no_lens=no_lens)
+    session = _get_session()
+    world = _get_world()
     
-    result = db.confirm_not_exists(lens, name, symbol_type)
+    # Get visibility from WorldAdapter - THE canonical way
+    visibility = world.db_visibility(purpose="ck3_confirm_not_exists")
+    
+    result = db.confirm_not_exists(name, symbol_type, visibility=visibility)
     
     trace.log("ck3lens.confirm_not_exists", {
         "name": name,
@@ -3788,9 +3731,13 @@ def ck3_get_file(
     """
     db = _get_db()
     trace = _get_trace()
-    lens = _get_lens(no_lens=no_lens)
+    session = _get_session()
+    world = _get_world()
     
-    result = db.get_file(lens, relpath=file_path, include_ast=include_ast)
+    # Get visibility from WorldAdapter - THE canonical way
+    visibility = world.db_visibility(purpose="ck3_get_file")
+    
+    result = db.get_file(relpath=file_path, include_ast=include_ast, visibility=visibility)
     
     trace.log("ck3lens.get_file", {
         "file_path": file_path,
@@ -3801,7 +3748,7 @@ def ck3_get_file(
     })
     
     if result:
-        result["lens"] = lens.playset_name if lens else "ALL CONTENT (no lens)"
+        result["scope"] = visibility.purpose
     
     return result or {"error": f"File not found: {file_path}"}
 
@@ -3828,15 +3775,16 @@ def ck3_qr_conflicts(
     """
     db = _get_db()
     trace = _get_trace()
-    lens = _get_lens()
+    session = _get_session()
+    world = _get_world()
     
-    if not lens:
-        return {"error": "No active playset. Use ck3_set_active_playset first."}
+    # Get visibility from WorldAdapter - THE canonical way
+    visibility = world.db_visibility(purpose="ck3_qr_conflicts")
     
     conflicts = db.get_conflicts(
-        lens=lens,
         folder=path_pattern,
-        symbol_type=symbol_type
+        symbol_type=symbol_type,
+        visibility=visibility
     )
     
     trace.log("ck3lens.qr_conflicts", {
@@ -3894,17 +3842,18 @@ def ck3_get_symbol_conflicts(
     """
     db = _get_db()
     trace = _get_trace()
-    lens = _get_lens()
+    session = _get_session()
+    world = _get_world()
     
-    if not lens:
-        return {"error": "No active playset. Use ck3_set_active_playset first."}
+    # Get visibility from WorldAdapter - THE canonical way
+    visibility = world.db_visibility(purpose="ck3_get_symbol_conflicts")
     
     result = db.get_symbol_conflicts(
-        lens=lens,
         symbol_type=symbol_type,
         game_folder=game_folder,
         limit=limit,
-        include_compatch=include_compatch
+        include_compatch=include_compatch,
+        visibility=visibility
     )
     
     trace.log("ck3lens.get_symbol_conflicts", {
@@ -4334,56 +4283,51 @@ def ck3_get_scope_info() -> dict:
     """
     Get current session scope information.
     
-    Returns the active lens (playset) used for all scoped operations.
-    The lens is like wearing glasses - it filters what you see in the database.
+    Returns the active playset scope used for all filtered operations.
     
     Returns:
         {
-            "lens_active": bool,
-            "playset_id": int or None,
+            "active": bool,
             "playset_name": str,
             "mod_count": int,
             "mods": [{name, workshop_id}]
         }
     """
-    lens = _get_lens(no_lens=False)
+    session = _get_session()
     scope = _get_session_scope()
+    world = _get_world()
     
-    if not lens:
+    # Get visibility info from WorldAdapter - THE canonical way
+    visibility = world.db_visibility(purpose="ck3_get_scope_info")
+    has_scope = visibility.visible_cvids is not None and len(visibility.visible_cvids) > 0
+    
+    if not has_scope:
         return {
-            "lens_active": False,
-            "playset_id": None,
+            "active": False,
             "playset_name": scope.get("playset_name"),
             "source": scope.get("source", "none"),
-            "mod_count": len(scope.get("active_mod_ids", set())),
+            "mod_count": 0,
             "mods": [],
-            "hint": "No active playset lens. Check playset_manifest.json or use ck3_playset(command='switch')."
+            "hint": "No active playset. Check playset_manifest.json or use ck3_playset(command='switch')."
         }
     
-    # Get mod info from scope (file-based)
-    mod_list = scope.get("mod_list", [])
-    enabled_mods = [m for m in mod_list if m.get("enabled", True)]
-    
-    # Format mod info for output
+    # Get mod info from session.mods[] - THE canonical source
     mods_info = []
-    for i, m in enumerate(enabled_mods[:25]):  # Limit to first 25
+    for i, m in enumerate(session.mods[:25]):  # Limit to first 25
         mods_info.append({
-            "name": m.get("name", "Unknown"),
-            "steam_id": m.get("steam_id"),
-            "load_order": m.get("load_order", i),
-            "is_compatch": m.get("is_compatch", False),
+            "name": getattr(m, 'name', 'Unknown'),
+            "cvid": getattr(m, 'cvid', None),
+            "load_order": i,
         })
     
     return {
-        "lens_active": True,
-        "playset_id": lens.playset_id,
-        "playset_name": lens.playset_name,
+        "active": True,
+        "playset_name": scope.get("playset_name", "ACTIVE PLAYSET"),
         "source": scope.get("source", "json"),
-        "vanilla_cv_id": lens.vanilla_cv_id,
-        "mod_cv_count": len(lens.mod_cv_ids),
-        "mod_count": len(enabled_mods),
+        "cvid_count": len(cvids),
+        "mod_count": len(session.mods),
         "mods": mods_info,
-        "truncated": len(enabled_mods) > 25,
+        "truncated": len(session.mods) > 25,
     }
 
 
