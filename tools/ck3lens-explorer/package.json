@@ -89,12 +89,12 @@
           "visibility": "visible"
         },
         {
-          "id": "ck3lens.rulesView",
-          "name": "Policy Rules",
+          "id": "ck3lens.contractsView",
+          "name": "Contracts & Operations",
           "type": "tree",
-          "icon": "$(shield)",
+          "icon": "$(notebook)",
           "contextualTitle": "CK3 Lens",
-          "visibility": "collapsed"
+          "visibility": "visible"
         },
         {
           "id": "ck3lens.playsetView",
@@ -199,6 +199,26 @@
         "command": "ck3lens.showSetupStatus",
         "title": "CK3 Lens: Show Setup Status",
         "icon": "$(info)"
+      },
+      {
+        "command": "ck3lens.contracts.showOperationDetails",
+        "title": "CK3 Lens: Show Operation Details",
+        "icon": "$(info)"
+      },
+      {
+        "command": "ck3lens.contracts.viewBugReports",
+        "title": "CK3 Lens: View Bug Reports",
+        "icon": "$(bug)"
+      },
+      {
+        "command": "ck3lens.contracts.refresh",
+        "title": "CK3 Lens: Refresh Contracts View",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "ck3lens.contracts.fileBugReport",
+        "title": "CK3 Lens: File Bug Report",
+        "icon": "$(bug)"
       },
       {
         "command": "ck3lens.setPlayset",
@@ -397,6 +417,16 @@
           "command": "ck3lens.rules.refresh",
           "when": "view == ck3lens.rulesView",
           "group": "navigation@4"
+        },
+        {
+          "command": "ck3lens.contracts.refresh",
+          "when": "view == ck3lens.contractsView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ck3lens.contracts.fileBugReport",
+          "when": "view == ck3lens.contractsView",
+          "group": "navigation@2"
         }
       ],
       "view/item/context": [

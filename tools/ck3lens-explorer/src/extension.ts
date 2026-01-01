@@ -18,6 +18,7 @@ import { IssuesViewProvider } from './views/issuesView';
 import { AgentViewProvider } from './views/agentView';
 // DEPRECATED: RulesView is disabled - mode is now set via MCP ck3_get_mode_instructions()
 // import { RulesViewProvider } from './views/rulesView';
+import { ContractsViewProvider } from './views/contractsView';
 import { AstViewerPanel } from './views/astViewerPanel';
 import { StudioPanel } from './views/studioPanel';
 import { LintingProvider } from './linting/lintingProvider';
@@ -43,6 +44,51 @@ let outputChannel: vscode.OutputChannel;
 let diagnosticCollection: vscode.DiagnosticCollection;
 
 /**
+ * Clean up stale agent mode files from old instances.
+ * Files older than 24 hours are deleted.
+ */
+function cleanupStaleModeFiles(logger: Logger): void {
+    const modeDir = path.join(os.homedir(), '.ck3raven');
+    const maxAgeMs = 24 * 60 * 60 * 1000; // 24 hours
+    const cutoff = Date.now() - maxAgeMs;
+    
+    try {
+        if (!fs.existsSync(modeDir)) {
+            return;
+        }
+        
+        const files = fs.readdirSync(modeDir);
+        let deleted = 0;
+        let kept = 0;
+        
+        for (const file of files) {
+            if (!file.startsWith('agent_mode_') || !file.endsWith('.json')) {
+                continue;
+            }
+            
+            const filePath = path.join(modeDir, file);
+            try {
+                const stat = fs.statSync(filePath);
+                if (stat.mtimeMs < cutoff) {
+                    fs.unlinkSync(filePath);
+                    deleted++;
+                } else {
+                    kept++;
+                }
+            } catch {
+                // Ignore individual file errors
+            }
+        }
+        
+        if (deleted > 0) {
+            logger.info(`Cleaned up ${deleted} stale mode files (kept ${kept})`);
+        }
+    } catch (err) {
+        logger.debug('Failed to clean up stale mode files: ' + (err as Error).message);
+    }
+}
+
+/**
  * Extension activation
  */
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -50,18 +96,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     outputChannel = vscode.window.createOutputChannel('CK3 Lens');
     logger = new Logger(outputChannel);
     logger.info('CK3 Lens Explorer activating...');
-
-    // CRITICAL: Blank agent mode on extension startup
-    // This ensures each VS Code session starts fresh and the agent must explicitly
-    // initialize its mode via ck3_get_mode_instructions() before any policy-gated operations
-    const modeFile = path.join(os.homedir(), '.ck3raven', 'agent_mode.json');
-    try {
-        fs.mkdirSync(path.dirname(modeFile), { recursive: true });
-        fs.writeFileSync(modeFile, JSON.stringify({ mode: null, cleared_at: new Date().toISOString() }, null, 2));
-        logger.info('Blanked agent mode on startup - agent must call ck3_get_mode_instructions()');
-    } catch (err) {
-        logger.error('Failed to blank agent mode', err as Error);
-    }
 
     // Initialize diagnostic collection for linting
     diagnosticCollection = vscode.languages.createDiagnosticCollection('ck3lens');
@@ -71,8 +105,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // This replaces the static mcp.json approach and allows multiple VS Code windows
     // to have independent MCP server instances
     mcpServerProvider = registerMcpServerProvider(context, logger);
+    
+    // CRITICAL: Per-instance mode blanking
+    // Must happen AFTER mcpServerProvider is created so we have the instance ID
+    // Each VS Code window only blanks its own mode file, not affecting other windows
     if (mcpServerProvider) {
-        logger.info(`MCP instance ID for this window: ${mcpServerProvider.getInstanceId()}`);
+        const instanceId = mcpServerProvider.getInstanceId();
+        logger.info(`MCP instance ID for this window: ${instanceId}`);
+        
+        // Blank this instance's mode file
+        const sanitizedId = instanceId.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const instanceModeFile = path.join(os.homedir(), '.ck3raven', `agent_mode_${sanitizedId}.json`);
+        try {
+            fs.mkdirSync(path.dirname(instanceModeFile), { recursive: true });
+            fs.writeFileSync(instanceModeFile, JSON.stringify({ 
+                mode: null, 
+                instance_id: instanceId,
+                cleared_at: new Date().toISOString() 
+            }, null, 2));
+            logger.info(`Blanked agent mode for instance ${instanceId}`);
+        } catch (err) {
+            logger.error('Failed to blank agent mode', err as Error);
+        }
+        
+        // Clean up stale mode files from old instances (older than 24 hours)
+        cleanupStaleModeFiles(logger);
     }
 
     // Initialize Python bridge to ck3raven
@@ -91,6 +148,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const agentProvider = new AgentViewProvider(context, logger);
     // DEPRECATED: RulesView disabled - mode now controlled via MCP ck3_get_mode_instructions()
     // const rulesProvider = new RulesViewProvider(logger);
+    
+    // ContractsView: Shows active contracts and operation history
+    const contractsProvider = new ContractsViewProvider(logger);
 
     // Create playset tree view with drag-and-drop support
     const playsetTreeView = vscode.window.createTreeView('ck3lens.playsetView', {
@@ -113,6 +173,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.window.registerTreeDataProvider('ck3lens.liveModsView', liveModsProvider),
         playsetTreeView,
         vscode.window.registerTreeDataProvider('ck3lens.issuesView', issuesProvider),
+        vscode.window.registerTreeDataProvider('ck3lens.contractsView', contractsProvider),
         // rulesTreeView  // DEPRECATED
     );
 
@@ -162,7 +223,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Register commands
     // NOTE: rulesProvider removed - mode now controlled via MCP ck3_get_mode_instructions()
-    registerCommands(context, agentProvider, explorerProvider, conflictsProvider, liveModsProvider, playsetProvider, issuesProvider, lintingProvider);
+    registerCommands(context, agentProvider, explorerProvider, conflictsProvider, liveModsProvider, playsetProvider, issuesProvider, lintingProvider, contractsProvider);
 
     // Register file watchers for real-time linting
     if (vscode.workspace.getConfiguration('ck3lens').get('enableRealTimeLinting', true)) {
@@ -206,8 +267,8 @@ function registerCommands(
     liveModsProvider: LiveModsViewProvider,
     playsetProvider: PlaysetViewProvider,
     issuesProvider: IssuesViewProvider,
-    lintingProvider: LintingProvider
-    // rulesProvider removed - mode now controlled via MCP
+    lintingProvider: LintingProvider,
+    contractsProvider: ContractsViewProvider
 ): void {
     // Initialize session
     context.subscriptions.push(
@@ -748,6 +809,114 @@ Use the appropriate tools (ck3_add_mod_to_playset, ck3_remove_mod_from_playset) 
     context.subscriptions.push(
         vscode.commands.registerCommand('ck3lens.showSetupStatus', async () => {
             await showSetupStatus(context, logger);
+        })
+    );
+
+    // ========================================================================
+    // Contracts & Operations Commands
+    // ========================================================================
+
+    // Show operation details in output channel
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ck3lens.contracts.showOperationDetails', async (entry: unknown) => {
+            const outputChannel = vscode.window.createOutputChannel('CK3 Lens Operation Details');
+            outputChannel.clear();
+            outputChannel.appendLine('='.repeat(60));
+            outputChannel.appendLine('OPERATION DETAILS');
+            outputChannel.appendLine('='.repeat(60));
+            outputChannel.appendLine('');
+            outputChannel.appendLine(JSON.stringify(entry, null, 2));
+            outputChannel.show();
+        })
+    );
+
+    // View bug reports
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ck3lens.contracts.viewBugReports', async () => {
+            const bugReportsPath = require('path').join(
+                process.env.USERPROFILE || process.env.HOME || '',
+                '.ck3raven',
+                'bug_reports'
+            );
+            
+            const fs = require('fs');
+            if (!fs.existsSync(bugReportsPath)) {
+                vscode.window.showInformationMessage('No bug reports found.');
+                return;
+            }
+
+            // Open the bug reports folder
+            const uri = vscode.Uri.file(bugReportsPath);
+            await vscode.commands.executeCommand('revealFileInOS', uri);
+        })
+    );
+
+    // Refresh contracts view
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ck3lens.contracts.refresh', () => {
+            contractsProvider.refresh();
+        })
+    );
+
+    // File a bug report (opens bug report form)
+    context.subscriptions.push(
+        vscode.commands.registerCommand('ck3lens.contracts.fileBugReport', async () => {
+            // Show bug report input form
+            const summary = await vscode.window.showInputBox({
+                title: 'Bug Report Summary',
+                prompt: 'Brief description of the issue',
+                placeHolder: 'e.g., Parser fails on nested lists'
+            });
+
+            if (!summary) { return; }
+
+            const category = await vscode.window.showQuickPick([
+                { label: 'Parser', description: 'CK3 script parsing issues', value: 'parser' },
+                { label: 'MCP Tools', description: 'Tool behavior issues', value: 'mcp' },
+                { label: 'Extension', description: 'VS Code extension issues', value: 'extension' },
+                { label: 'Database', description: 'Database/indexing issues', value: 'database' },
+                { label: 'Other', description: 'Other issues', value: 'other' }
+            ], {
+                title: 'Bug Category',
+                placeHolder: 'Select the area affected'
+            });
+
+            if (!category) { return; }
+
+            const details = await vscode.window.showInputBox({
+                title: 'Additional Details',
+                prompt: 'Steps to reproduce, error messages, etc.',
+                placeHolder: 'Optional additional context'
+            });
+
+            // Create bug report
+            const bugReport = {
+                id: `bug-${Date.now()}`,
+                summary,
+                category: category.value,
+                details: details || '',
+                timestamp: new Date().toISOString(),
+                source: 'ck3lens-extension'
+            };
+
+            // Save to bug_reports folder
+            const fs = require('fs');
+            const path = require('path');
+            const bugReportsPath = path.join(
+                process.env.USERPROFILE || process.env.HOME || '',
+                '.ck3raven',
+                'bug_reports'
+            );
+
+            if (!fs.existsSync(bugReportsPath)) {
+                fs.mkdirSync(bugReportsPath, { recursive: true });
+            }
+
+            const reportPath = path.join(bugReportsPath, `${bugReport.id}.json`);
+            fs.writeFileSync(reportPath, JSON.stringify(bugReport, null, 2));
+
+            vscode.window.showInformationMessage(`Bug report filed: ${bugReport.id}`);
+            contractsProvider.refresh();
         })
     );
 }

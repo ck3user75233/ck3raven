@@ -1,18 +1,63 @@
-# CK3 Lens Setup Guide
+# CK3 Lens MCP Server Setup Guide
 
 Complete guide to setting up and using CK3 Lens MCP server with VS Code and GitHub Copilot.
+
+> **Last Updated:** December 31, 2025  
+> **Architecture:** Per-instance isolation with dynamic MCP registration
 
 ---
 
 ## Table of Contents
 
-1. [Prerequisites](#prerequisites)
-2. [Installation](#installation)
-3. [VS Code Configuration](#vs-code-configuration)
-4. [Verifying the Setup](#verifying-the-setup)
-5. [Using CK3 Lens](#using-ck3-lens)
-6. [Live Mods Configuration](#live-mods-configuration)
+1. [Architecture Overview](#architecture-overview)
+2. [Prerequisites](#prerequisites)
+3. [Installation](#installation)
+4. [How It Works](#how-it-works)
+5. [Agent Mode Initialization](#agent-mode-initialization)
+6. [Verifying the Setup](#verifying-the-setup)
 7. [Troubleshooting](#troubleshooting)
+
+---
+
+## Architecture Overview
+
+### Per-Instance Isolation
+
+CK3 Lens uses **per-instance isolation** to support multiple VS Code windows simultaneously:
+
+```
+┌──────────────────────┐     ┌──────────────────────┐
+│  VS Code Window A    │     │  VS Code Window B    │
+│  Instance: abc123    │     │  Instance: def456    │
+└──────────┬───────────┘     └──────────┬───────────┘
+           │                            │
+           ▼                            ▼
+┌──────────────────────┐     ┌──────────────────────┐
+│  MCP Server          │     │  MCP Server          │
+│  CK3LENS_INSTANCE_ID │     │  CK3LENS_INSTANCE_ID │
+│  = abc123            │     │  = def456            │
+└──────────┬───────────┘     └──────────┬───────────┘
+           │                            │
+           ▼                            ▼
+┌──────────────────────┐     ┌──────────────────────┐
+│  agent_mode_abc123   │     │  agent_mode_def456   │
+│  .json               │     │  .json               │
+└──────────────────────┘     └──────────────────────┘
+```
+
+Each window:
+- Gets a **unique instance ID** (random, survives window reload)
+- Runs its **own MCP server process** with that ID in environment
+- Has its **own agent mode file** (`~/.ck3raven/agent_mode_{id}.json`)
+- Does **NOT interfere** with other windows
+
+### Dynamic MCP Registration
+
+The CK3 Lens Explorer VS Code extension **automatically registers** the MCP server:
+
+- No manual `mcp.json` configuration needed
+- Extension finds ck3raven root and Python automatically
+- Server registered via VS Code's `McpServerDefinitionProvider` API
 
 ---
 
@@ -22,303 +67,188 @@ Complete guide to setting up and using CK3 Lens MCP server with VS Code and GitH
 
 | Component | Version | Purpose |
 |-----------|---------|---------|
-| Python | 3.11+ | Runtime for the MCP server |
-| VS Code | Latest | IDE with Copilot integration |
-| GitHub Copilot | Latest | AI agent that will use CK3 Lens tools |
-| Git | 2.x | For git operations on live mods |
+| Python | 3.11+ | MCP server runtime |
+| VS Code | 1.96+ | IDE with MCP support |
+| GitHub Copilot | Latest | AI agent |
+| CK3 Lens Explorer | Latest | Extension that registers MCP |
 
 ### Required Data
 
-CK3 Lens requires a populated **ck3raven SQLite database** at:
+CK3 Lens requires a populated **ck3raven SQLite database**:
 
 ```
-~/.ck3raven/ck3raven.db    (default location)
+~/.ck3raven/ck3raven.db
 ```
 
-**Status: ✅ Database is built** with 80,968 files from vanilla CK3 and 105 active mods.
-
-To rebuild the database:
+Build with:
 ```bash
-cd "C:\Users\Nathan\Documents\AI Workspace\ck3raven"
-python scripts/build_database.py
+cd ck3raven
+python builder/daemon.py start --symbols-only
 ```
 
 ---
 
 ## Installation
 
-### Step 1: Clone/Navigate to ck3raven
+### Step 1: Clone ck3raven
 
 ```bash
-cd "C:\Users\Nathan\Documents\AI Workspace\ck3raven"
+git clone <repo> ck3raven
+cd ck3raven
 ```
 
-### Step 2: Create Python Virtual Environment (if not exists)
+### Step 2: Create Python Environment
 
 ```powershell
 # Windows
 python -m venv .venv
 .\.venv\Scripts\activate
-
-# macOS/Linux
-python -m venv .venv
-source .venv/bin/activate
-```
-
-### Step 3: Install Dependencies
-
-```bash
-# Install ck3lens MCP server dependencies
+pip install -e .
 pip install -e tools/ck3lens_mcp
-
-# Or install manually
-pip install "mcp[cli]" pydantic fs structlog typer
 ```
 
-### Step 4: Verify Installation
+### Step 3: Install CK3 Lens Explorer Extension
+
+The extension is in `tools/ck3lens-explorer/`. Install in development mode:
+
+1. Open `tools/ck3lens-explorer/` in VS Code
+2. Press `F5` to launch Extension Development Host
+3. Or build VSIX: `npm run package`
+
+### Step 4: Build Database
 
 ```bash
-cd tools/ck3lens_mcp
-python -c "from server import mcp; print('CK3 Lens loaded successfully')"
+python builder/daemon.py start --symbols-only
 ```
 
 ---
 
-## VS Code Configuration
+## How It Works
 
-### Method 1: Workspace MCP Configuration (Recommended)
+### Extension Startup Flow
 
-Create or edit `.vscode/mcp.json` in your ck3raven workspace:
+When VS Code starts with CK3 Lens Explorer:
 
-```jsonc
-{
-  "servers": {
-    "ck3lens": {
-      "type": "stdio",
-      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
-      "args": ["tools/ck3lens_mcp/server.py"]
-    }
-  }
-}
+1. **Extension activates** → Creates unique `instanceId` for this window
+2. **Registers MCP server** → Passes `CK3LENS_INSTANCE_ID` in environment
+3. **Blanks mode file** → Clears `~/.ck3raven/agent_mode_{instanceId}.json`
+4. **Cleans stale files** → Deletes mode files older than 24 hours
+
+### Agent Initialization Flow
+
+When an agent starts working:
+
+1. Agent calls `ck3_get_mode_instructions(mode="ck3lens")` or `mode="ck3raven-dev"`
+2. Server writes mode to `~/.ck3raven/agent_mode_{instanceId}.json`
+3. All subsequent tool calls read mode from that file
+4. Mode is instance-specific, not shared across windows
+
+### Canonical Mode Detection
+
+**File:** `tools/ck3lens_mcp/ck3lens/agent_mode.py`
+
+```python
+# Mode stored per-instance
+MODE_DIR = Path.home() / ".ck3raven"
+
+def _get_mode_file(instance_id: Optional[str] = None) -> Path:
+    """Get instance-specific mode file path."""
+    if instance_id is None:
+        instance_id = os.environ.get("CK3LENS_INSTANCE_ID", "default")
+    safe_id = sanitize(instance_id)
+    return MODE_DIR / f"agent_mode_{safe_id}.json"
+
+def get_agent_mode(instance_id: Optional[str] = None) -> AgentMode:
+    """Read mode from instance-specific file."""
+    mode_file = _get_mode_file(instance_id)
+    if not mode_file.exists():
+        return None
+    data = json.loads(mode_file.read_text())
+    return data.get("mode")
+
+def set_agent_mode(mode: AgentMode, instance_id: Optional[str] = None) -> None:
+    """Write mode to instance-specific file."""
+    mode_file = _get_mode_file(instance_id)
+    mode_file.write_text(json.dumps({"mode": mode, ...}))
 ```
 
-**For macOS/Linux:**
+**Key points:**
+- `CK3LENS_INSTANCE_ID` environment variable is set by extension
+- All functions read this env var automatically if `instance_id` not passed
+- Each MCP server process has its own env, so isolation is guaranteed
 
-```jsonc
-{
-  "servers": {
-    "ck3lens": {
-      "type": "stdio",
-      "command": "${workspaceFolder}/.venv/bin/python",
-      "args": ["tools/ck3lens_mcp/server.py"]
-    }
-  }
-}
+---
+
+## Agent Mode Initialization
+
+### The Canonical Entry Point
+
+**CRITICAL:** Agents must call `ck3_get_mode_instructions()` FIRST.
+
+```
+ck3_get_mode_instructions(mode="ck3lens")
 ```
 
-### Method 2: User-Level MCP Configuration
+This single call:
+1. Initializes database connection
+2. Sets mode (persisted to instance file)
+3. Initializes WIP workspace
+4. Detects active playset
+5. Returns instructions + policy boundaries
 
-Add to your VS Code settings (`settings.json`):
+### Available Modes
 
-```jsonc
-{
-  "mcp.servers": {
-    "ck3lens": {
-      "type": "stdio",
-      "command": "C:\\Users\\Nathan\\Documents\\AI Workspace\\.venv\\Scripts\\python.exe",
-      "args": ["C:\\Users\\Nathan\\Documents\\AI Workspace\\ck3raven\\tools\\ck3lens_mcp\\server.py"]
-    }
-  }
-}
-```
+| Mode | Purpose | Write Access |
+|------|---------|--------------|
+| `ck3lens` | CK3 modding | Local mods only |
+| `ck3raven-dev` | Infrastructure development | ck3raven source |
 
-### Reload VS Code
+### Deprecated: ck3_init_session
 
-After configuring, reload VS Code:
-- Press `Ctrl+Shift+P` → "Developer: Reload Window"
+`ck3_init_session()` is **DEPRECATED**. Use `ck3_get_mode_instructions()` instead.
 
 ---
 
 ## Verifying the Setup
 
-### Check MCP Server Status
+### Step 1: Check Extension
 
-1. Open VS Code Command Palette (`Ctrl+Shift+P`)
-2. Run: "MCP: List Servers"
-3. You should see `ck3lens` listed as active
+1. Open Output panel (`Ctrl+Shift+U`)
+2. Select "CK3 Lens" output channel
+3. Look for: `MCP instance ID for this window: abc123`
 
-### Test Tool Availability
+### Step 2: Check Mode File
 
-Ask Copilot in chat:
-```
-@workspace What CK3 Lens tools are available?
-```
-
-Copilot should recognize and list the CK3 Lens tools.
-
-### Quick Test
-
-Ask Copilot:
-```
-Use ck3_init_session to initialize the CK3 Lens session
+After agent initialization:
+```bash
+ls ~/.ck3raven/agent_mode_*.json
+cat ~/.ck3raven/agent_mode_abc123.json  # Use your instance ID
 ```
 
-Expected response includes:
-- `mod_root` path
-- List of live mods
-- Database path confirmation
-
----
-
-## Using CK3 Lens
-
-### Session Initialization
-
-Before using other tools, initialize the session:
-
-```
-Initialize CK3 Lens with the default settings
-```
-
-This calls `ck3_init_session()` which:
-- Connects to the ck3raven SQLite database
-- Loads the live mods whitelist
-- Sets up tool tracing
-
-### Common Workflows
-
-#### 1. Searching for Symbols
-
-```
-Search for all traits related to "combat"
-```
-
-Uses `ck3_search_symbols` with adjacency expansion:
-- Finds `combat_prowess`, `good_combat_skill`, `combat_*` patterns
-
-#### 2. Confirming Something Doesn't Exist
-
-```
-Does a trait called "master_duelist" exist in any active mod?
-```
-
-Uses `ck3_confirm_not_exists` for exhaustive fuzzy search before claiming missing.
-
-#### 3. Reading File Content
-
-```
-Show me the contents of common/traits/00_traits.txt
-```
-
-Uses `ck3_get_file` to retrieve from database (with optional AST).
-
-#### 4. Checking Conflicts
-
-```
-What conflicts exist in the common/on_action folder?
-```
-
-Uses `ck3_qr_conflicts` to show load-order winners/losers.
-
-#### 5. Writing to Live Mods
-
-```
-Create a new file common/traits/zzz_my_trait.txt in Mini Super Compatch with a custom trait
-```
-
-Uses `ck3_write_file` (with syntax validation) to write to whitelisted mod.
-
-#### 6. Git Operations
-
-```
-Show git status for MSC mod
-```
-
-Uses `ck3_git_status` to check uncommitted changes.
-
----
-
-## Local Mods Configuration
-
-Local mods are user-configured mods that agents can write to. There are no hardcoded defaults - you specify which mods you want to work with in your playset configuration.
-
-### Configuring Local Mods in Playset
-
-Add a `local_mods` section to your playset JSON file (`~/.ck3raven/playsets/your_playset.json`):
-
+Should show:
 ```json
 {
-  "name": "My Playset",
-  "local_mods": [
-    {
-      "mod_id": "MyMod",
-      "name": "My Custom Mod",
-      "path": "~/Documents/Paradox Interactive/Crusader Kings III/mod/MyMod"
-    },
-    {
-      "mod_id": "PatchMod",
-      "name": "My Patch Mod",
-      "path": "~/Documents/Paradox Interactive/Crusader Kings III/mod/PatchMod"
-    }
-  ]
+  "mode": "ck3lens",
+  "instance_id": "abc123",
+  "set_at": "2025-12-31T..."
 }
 ```
 
-### Override via Session Init
+### Step 3: Test with Agent
 
-You can also override at runtime via `ck3_init_session`:
-
-```python
-ck3_init_session(
-    local_mods=["My Custom Mod", "Another Mod"]
-)
+Ask Copilot:
+```
+Initialize CK3 Lens in ck3lens mode
 ```
 
-Note: Only mods that exist on disk will be added to the session.
+Should call `ck3_get_mode_instructions(mode="ck3lens")` and return instructions.
 
----
+### Step 4: Verify Instance Isolation
 
-## Tool Reference Quick Card
-
-### Query Tools (Database Read-Only)
-
-| Tool | Purpose |
-|------|---------|
-| `ck3_search_symbols` | Search symbols with adjacency expansion |
-| `ck3_confirm_not_exists` | Exhaustive search before claiming missing |
-| `ck3_get_file` | Get file content (raw or AST) |
-| `ck3_qr_conflicts` | Quick-resolve conflict analysis |
-
-### Live Mod Tools (Sandboxed Writes)
-
-| Tool | Purpose |
-|------|---------|
-| `ck3_list_live_mods` | List writable mods |
-| `ck3_read_live_file` | Read from live mod |
-| `ck3_write_file` | Write with syntax validation |
-| `ck3_edit_file` | Search-replace edit |
-| `ck3_delete_file` | Delete file |
-| `ck3_list_live_files` | List files in mod |
-
-### Validation Tools
-
-| Tool | Purpose |
-|------|---------|
-| `ck3_parse_content` | Parse CK3 script, return AST/errors |
-| `ck3_validate_patchdraft` | Validate PatchDraft contract |
-
-### Git Tools
-
-| Tool | Purpose |
-|------|---------|
-| `ck3_git_status` | Check uncommitted changes |
-| `ck3_git_diff` | View diffs |
-| `ck3_git_add` | Stage files |
-| `ck3_git_commit` | Commit changes |
-| `ck3_git_push` / `ck3_git_pull` | Sync with remote |
-| `ck3_git_log` | View commit history |
-
-See [TOOLS.md](TOOLS.md) for complete signatures and examples.
+1. Open **two** VS Code windows with ck3raven workspace
+2. Initialize one in `ck3lens` mode
+3. Initialize other in `ck3raven-dev` mode
+4. Verify they don't interfere with each other
 
 ---
 
@@ -326,82 +256,99 @@ See [TOOLS.md](TOOLS.md) for complete signatures and examples.
 
 ### "MCP server not found"
 
-1. Check `.vscode/mcp.json` exists and has correct paths
-2. Verify Python path is correct (use absolute path if needed)
-3. Reload VS Code window
+**Cause:** Extension didn't register the MCP server.
 
-### "Module not found: ck3lens"
+**Fix:**
+1. Check that CK3 Lens Explorer is installed and activated
+2. Check Output → CK3 Lens for errors
+3. Reload window (`Ctrl+Shift+P` → "Developer: Reload Window")
 
-```bash
-cd tools/ck3lens_mcp
-pip install -e .
-```
+### "Mode not initialized"
+
+**Cause:** Agent didn't call `ck3_get_mode_instructions()`.
+
+**Fix:** Call `ck3_get_mode_instructions(mode="ck3lens")` first.
 
 ### "Database not found"
 
-Ensure ck3raven database exists at the expected location:
-- Default: `~/.ck3raven/ck3raven.db`
-- Or specify via `ck3_init_session(db_path="...")`
+**Cause:** ck3raven database doesn't exist.
 
-### "Cannot write to mod"
-
-Check that:
-1. Mod folder name is in the whitelist
-2. Mod folder exists on disk
-3. Path is correct in CK3 mod directory
-
-### "Syntax validation failed"
-
-The content has CK3 script syntax errors. Use `ck3_parse_content` to see detailed error messages with line numbers.
-
-### Check Tool Trace
-
-All tool invocations are logged to:
-```
-C:\Users\Nathan\Documents\Paradox Interactive\Crusader Kings III\mod\ck3lens_trace.jsonl
+**Fix:**
+```bash
+python builder/daemon.py start --symbols-only
 ```
 
-Review this file to see what tools were called and their results.
+### Mode Persisting Across Windows
+
+**Symptom:** Mode from another window affecting this window.
+
+**Cause:** Likely using old shared mode file.
+
+**Fix:** 
+1. Delete old file: `rm ~/.ck3raven/agent_mode.json`
+2. Reload window
+
+### Stale Mode Files Accumulating
+
+**Cause:** Normal - each window creates a file.
+
+**Fix:** Extension auto-cleans files older than 24 hours on startup.
+
+Manual cleanup:
+```bash
+# Delete all mode files older than 24 hours
+find ~/.ck3raven -name "agent_mode_*.json" -mtime +1 -delete
+```
 
 ---
 
-## Architecture Overview
+## File Locations
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    GitHub Copilot Agent                     │
-└─────────────────────────┬───────────────────────────────────┘
-                          │ MCP Protocol (stdio)
-┌─────────────────────────▼───────────────────────────────────┐
-│                   CK3 Lens MCP Server                       │
-│                                                             │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │
-│  │ Query Tools  │  │ Write Tools  │  │ Git Tools    │       │
-│  │ (DB read)    │  │ (sandbox)    │  │              │       │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘       │
-└─────────┼─────────────────┼─────────────────┼───────────────┘
-          │                 │                 │
-┌─────────▼─────────┐ ┌─────▼─────────┐ ┌─────▼──────┐
-│ ck3raven SQLite   │ │ Live Mod Dir  │ │ Git Repos  │
-│ (parsed AST)      │ │ (whitelisted) │ │            │
-│ ~/.ck3raven/      │ │ CK3/mod/MSC/  │ │            │
-└───────────────────┘ └───────────────┘ └────────────┘
-```
-
-**Key Principles:**
-
-1. **Database is source of truth** - All reads come from pre-parsed SQLite
-2. **Sandboxed writes** - Only whitelisted mods can be modified
-3. **Adjacency search** - Never claim something doesn't exist without exhaustive search
-4. **Syntax validation** - Content validated before writing
+| File | Purpose |
+|------|---------|
+| `~/.ck3raven/ck3raven.db` | Main database |
+| `~/.ck3raven/agent_mode_{id}.json` | Per-instance mode |
+| `~/.ck3raven/wip/` | WIP workspace (ck3lens mode) |
+| `ck3raven/.wip/` | WIP workspace (ck3raven-dev mode) |
+| `ck3raven/playsets/` | Playset definitions |
 
 ---
 
-## Next Steps
+## Extension Components
 
-1. ✅ Complete this setup
-2. Build the ck3raven database with your active playset
-3. Start asking Copilot to help with CK3 modding tasks
-4. Use git tools to track your changes
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| MCP Provider | `src/mcp/mcpServerProvider.ts` | Registers MCP server dynamically |
+| Mode Blanking | `src/extension.ts` | Clears mode on startup |
+| Stale Cleanup | `src/extension.ts` | Cleans old mode files |
 
-For questions or issues, check the ck3raven repository documentation.
+---
+
+## For Developers
+
+### Environment Variables
+
+| Variable | Set By | Purpose |
+|----------|--------|---------|
+| `CK3LENS_INSTANCE_ID` | Extension | Unique window identifier |
+| `PYTHONPATH` | Extension | Includes ck3raven/src |
+| `CK3LENS_CONFIG` | User (optional) | Custom config path |
+
+### Instance ID Generation
+
+The instance ID is:
+- Random: `{timestamp_base36}-{random_hex}` (e.g., `abc1-def456`)
+- Stored in `globalState` per window process (survives reload)
+- Cleaned up when VS Code process ends
+
+### Adding New Mode-Aware Tools
+
+```python
+from ck3lens.agent_mode import get_agent_mode
+
+def my_tool():
+    mode = get_agent_mode()  # Auto-reads CK3LENS_INSTANCE_ID
+    if mode is None:
+        return {"error": "Call ck3_get_mode_instructions first"}
+    # ... mode-aware logic
+```

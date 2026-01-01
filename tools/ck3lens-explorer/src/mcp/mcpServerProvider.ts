@@ -105,7 +105,7 @@ function findCk3RavenRoot(logger: Logger): string | undefined {
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (workspaceFolders) {
         for (const folder of workspaceFolders) {
-            // Direct match: folder is ck3raven
+            // Direct match: folder is ck3raven root
             const serverPath = path.join(folder.uri.fsPath, 'tools', 'ck3lens_mcp', 'server.py');
             if (fs.existsSync(serverPath)) {
                 logger.debug(`Found ck3raven at workspace folder: ${folder.uri.fsPath}`);
@@ -118,6 +118,38 @@ function findCk3RavenRoot(logger: Logger): string | undefined {
                 logger.debug(`Found ck3raven as subdirectory: ${path.join(folder.uri.fsPath, 'ck3raven')}`);
                 return path.join(folder.uri.fsPath, 'ck3raven');
             }
+            
+            // Dev mode: folder is ck3lens-explorer (tools/ck3lens-explorer), go up 2 levels to ck3raven
+            const parentPath = path.dirname(path.dirname(folder.uri.fsPath));
+            const parentServerPath = path.join(parentPath, 'tools', 'ck3lens_mcp', 'server.py');
+            if (fs.existsSync(parentServerPath)) {
+                logger.debug(`Found ck3raven as parent (dev mode): ${parentPath}`);
+                return parentPath;
+            }
+        }
+    }
+    
+    // Priority 3: Check relative to extension path (for development)
+    const extensionPath = vscode.extensions.getExtension('ck3-modding.ck3lens-explorer')?.extensionPath;
+    if (extensionPath) {
+        // If extension is at tools/ck3lens-explorer, go up 2 levels
+        const possibleRoot = path.dirname(path.dirname(extensionPath));
+        const serverPath = path.join(possibleRoot, 'tools', 'ck3lens_mcp', 'server.py');
+        if (fs.existsSync(serverPath)) {
+            logger.debug(`Found ck3raven from extension path: ${possibleRoot}`);
+            return possibleRoot;
+        }
+    }
+    
+    // Priority 4: Check for development extension path (extensionDevelopmentPath)
+    // When running "Run Extension" from ck3lens-explorer folder, the extension is there
+    // but the ck3raven root is 2 levels up
+    if (extensionPath && extensionPath.includes('ck3lens-explorer')) {
+        const devRoot = path.dirname(path.dirname(extensionPath));
+        const devServerPath = path.join(devRoot, 'tools', 'ck3lens_mcp', 'server.py');
+        if (fs.existsSync(devServerPath)) {
+            logger.debug(`Found ck3raven from dev extension path: ${devRoot}`);
+            return devRoot;
         }
     }
 

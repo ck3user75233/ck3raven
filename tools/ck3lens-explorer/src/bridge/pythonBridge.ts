@@ -58,15 +58,21 @@ export class PythonBridge implements vscode.Disposable {
             const workspaceFolders = vscode.workspace.workspaceFolders;
             if (workspaceFolders) {
                 for (const folder of workspaceFolders) {
-                    const tryPath = path.join(folder.uri.fsPath, 'tools', 'ck3lens-explorer', 'bridge', 'server.py');
+                    // Try direct path first (ck3lens-explorer folder is opened directly)
+                    let tryPath = path.join(folder.uri.fsPath, 'bridge', 'server.py');
                     if (require('fs').existsSync(tryPath)) {
                         bridgeScriptPath = tryPath;
-                        // In dev mode, derive ck3raven path from bridge location
-                        ck3ravenPath = path.join(folder.uri.fsPath, 'ck3raven');
-                        if (!require('fs').existsSync(path.join(ck3ravenPath, 'src', 'ck3raven'))) {
-                            // Maybe bridge is at tools/ck3lens-explorer, so ck3raven is parent
-                            ck3ravenPath = path.dirname(path.dirname(path.dirname(tryPath)));
-                        }
+                        // ck3raven root is 2 levels up from tools/ck3lens-explorer
+                        ck3ravenPath = path.dirname(path.dirname(folder.uri.fsPath));
+                        this.logger.info(`Dev mode: found bridge at ${tryPath}, ck3raven at ${ck3ravenPath}`);
+                        break;
+                    }
+                    // Try nested path (ck3raven repo root is opened)
+                    tryPath = path.join(folder.uri.fsPath, 'tools', 'ck3lens-explorer', 'bridge', 'server.py');
+                    if (require('fs').existsSync(tryPath)) {
+                        bridgeScriptPath = tryPath;
+                        ck3ravenPath = folder.uri.fsPath;
+                        this.logger.info(`Dev mode: found bridge at ${tryPath}, ck3raven at ${ck3ravenPath}`);
                         break;
                     }
                 }
@@ -97,6 +103,13 @@ export class PythonBridge implements vscode.Disposable {
         }
 
         // Auto-detect Python if not configured - look for venv in ck3raven repo
+        // === FIX: First validate any configured path exists ===
+        if (pythonPath && path.isAbsolute(pythonPath) && !require('fs').existsSync(pythonPath)) {
+            this.logger.warn(`Configured pythonPath does not exist: ${pythonPath}`);
+            this.logger.warn(`Falling back to auto-detection...`);
+            pythonPath = ''; // Clear to trigger auto-detection
+        }
+        
         if (!pythonPath) {
             const venvPaths = [
                 // Look relative to ck3ravenPath (the repo root)

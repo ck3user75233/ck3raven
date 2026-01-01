@@ -446,9 +446,9 @@ def ck3_conflicts_impl(
 def _conflict_scan(db, playset_id: int, folder_filter: str | None, trace) -> dict:
     """Scan for unit conflicts."""
     try:
-        from ck3raven.resolver.conflict_analyzer import scan_unit_conflicts
+        from ck3raven.resolver.conflict_analyzer import scan_playset_conflicts
         
-        result = scan_unit_conflicts(
+        result = scan_playset_conflicts(
             db.conn,
             playset_id,
             folder_filter=folder_filter,
@@ -1615,9 +1615,9 @@ def _file_delete_raw(path, token_id, trace, world=None):
         return {"success": False, "error": "token_id required for file deletion", "required_token_type": "FS_DELETE_CODE"}
     
     # Validate token
-    token_result = validate_token(token_id, capability="FS_DELETE_CODE", path=str(file_path))
-    if not token_result.get("valid"):
-        return {"success": False, "error": token_result.get("reason", "Invalid token")}
+    is_valid, reason = validate_token(token_id, required_capability="FS_DELETE_CODE", path=str(file_path))
+    if not is_valid:
+        return {"success": False, "error": reason}
     
     if not file_path.exists():
         return {"success": False, "error": f"File not found: {path}"}
@@ -2990,13 +2990,13 @@ def _validate_bundle(artifact_bundle, trace):
     from ck3lens.contracts import ArtifactBundle
     
     try:
-        bundle = ArtifactBundle.from_dict(artifact_bundle)
+        bundle = ArtifactBundle.model_validate(artifact_bundle)
         result = validate_artifact_bundle(bundle)
         
         if trace:
-            trace.log("ck3lens.validate.bundle", {}, {"valid": not result.get("errors")})
+            trace.log("ck3lens.validate.bundle", {}, {"valid": result.ok})
         
-        return result
+        return result.model_dump()
     except Exception as e:
         return {"valid": False, "error": str(e)}
 
