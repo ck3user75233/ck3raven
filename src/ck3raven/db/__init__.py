@@ -20,8 +20,7 @@ from ck3raven.db.models import (
     ASTRecord,
     Symbol,
     Reference,
-    Playset,
-    PlaysetMod,
+    # EXPUNGED: Playset, PlaysetMod models removed (now file-based JSON)
     Snapshot,
     ExemplarMod,
 )
@@ -85,23 +84,8 @@ from ck3raven.db.search import (
     find_references,
     get_search_stats,
 )
-from ck3raven.db.playsets import (
-    MAX_ACTIVE_PLAYSETS,
-    create_playset,
-    get_playset,
-    get_playset_by_name,
-    list_playsets,
-    update_playset,
-    delete_playset,
-    add_mod_to_playset,
-    remove_mod_from_playset,
-    set_mod_enabled,
-    reorder_mods,
-    get_playset_mods,
-    get_playset_load_order,
-    compute_load_order_hash,
-    clone_playset,
-)
+# EXPUNGED 2025-01-02: Database-based playset functions removed.
+# Playsets are now file-based JSON. See playsets/*.json and server.py ck3_playset.
 from ck3raven.db.cryo import (
     CryoManifest,
     create_snapshot,
@@ -131,8 +115,6 @@ __all__ = [
     "ASTRecord",
     "Symbol",
     "Reference",
-    "Playset",
-    "PlaysetMod",
     "Snapshot",
     "ExemplarMod",
     # Content
@@ -189,22 +171,7 @@ __all__ = [
     "find_definition",
     "find_references",
     "get_search_stats",
-    # Playsets
-    "MAX_ACTIVE_PLAYSETS",
-    "create_playset",
-    "get_playset",
-    "get_playset_by_name",
-    "list_playsets",
-    "update_playset",
-    "delete_playset",
-    "add_mod_to_playset",
-    "remove_mod_from_playset",
-    "set_mod_enabled",
-    "reorder_mods",
-    "get_playset_mods",
-    "get_playset_load_order",
-    "compute_load_order_hash",
-    "clone_playset",
+    # EXPUNGED: Playsets functions removed (now file-based JSON)
     # Cryo
     "CryoManifest",
     "create_snapshot",

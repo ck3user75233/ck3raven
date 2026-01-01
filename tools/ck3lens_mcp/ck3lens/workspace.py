@@ -89,7 +89,6 @@ class Session:
     - local_mods_folder: Path to folder where editable mods live
     - NO permission methods - enforcement.py handles that
     """
-    playset_id: Optional[int] = None
     playset_name: Optional[str] = None
     db_path: Optional[Path] = None
     mods: list[ModEntry] = field(default_factory=list)

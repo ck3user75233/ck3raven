@@ -1,4 +1,4 @@
-"""
+﻿"""
 CK3 Lens MCP Server
 
 An MCP server providing CK3 modding tools:
@@ -88,7 +88,6 @@ mcp = FastMCP(_server_name)
 _session: Optional[Session] = None
 _db: Optional[DBQueries] = None
 _trace: Optional[ToolTrace] = None
-_playset_id: Optional[int] = None
 _session_cv_ids_resolved: bool = False
 
 # World adapter cache (for session persistence)
@@ -124,22 +123,25 @@ def _get_db() -> DBQueries:
 
 
 def _get_playset_id() -> int:
-    """Get active playset ID, auto-detecting if needed."""
+    """DEPRECATED: Get active playset ID - BANNED ARCHITECTURE.
+    
+    EXPUNGEMENT NOTICE (2025-01-02):
+    This function queries the EXPUNGED playsets table which no longer exists.
+    It will fail at runtime. The conflict system needs to be migrated to
+    use file-based playsets and session.mods[] cvids instead.
+    
+    TODO: Replace with session-based cvid lookup:
+    - session = _get_session()
+    - cvids = [m.cvid for m in session.mods if m.cvid]
+    - Pass cvids directly to conflict functions instead of playset_id
+    """
     global _playset_id
     if _playset_id is None:
-        db = _get_db()
-        # Get the first active playset from the database
-        playsets = db.conn.execute(
-            "SELECT playset_id FROM playsets WHERE is_active = 1 ORDER BY updated_at DESC LIMIT 1"
-        ).fetchone()
-        if playsets:
-            _playset_id = playsets[0]
-        else:
-            # Fallback: get any playset
-            playsets = db.conn.execute(
-                "SELECT playset_id FROM playsets ORDER BY updated_at DESC LIMIT 1"
-            ).fetchone()
-            _playset_id = playsets[0] if playsets else 1
+        # EXPUNGED: This queries deleted playsets table
+        raise NotImplementedError(
+            "EXPUNGED: playset_id architecture removed 2025-01-02. "
+            "Use session.mods[] cvids instead. See CANONICAL_ARCHITECTURE.md."
+        )
     return _playset_id
 
 
@@ -209,23 +211,17 @@ def _get_world():
     session = _get_session()
     
     # Build adapter via router - mods[] is THE source, no lens
-    try:
-        adapter = get_world(
-            db=db,
-            local_mods_folder=session.local_mods_folder,
-            mods=session.mods
-        )
-        _cached_world_adapter = adapter
-        _cached_world_mode = mode
-        return adapter
-    except Exception as e:
-        # If any error occurs (mode not initialized, DB issues, etc.),
-        # return None to allow tools to work in degraded mode.
-        # This is intentional - we want graceful degradation.
-        import logging
-        logging.getLogger('ck3lens.world').debug(f'WorldAdapter unavailable: {e}')
-        return None
-        return None
+    # NOTE: Do NOT catch exceptions here. If mode is not initialized,
+    # the error should propagate with a clear message about calling
+    # ck3_get_mode_instructions() first.
+    adapter = get_world(
+        db=db,
+        local_mods_folder=session.local_mods_folder,
+        mods=session.mods
+    )
+    _cached_world_adapter = adapter
+    _cached_world_mode = mode
+    return adapter
 
 
 def _reset_world_cache():
@@ -1431,111 +1427,16 @@ def ck3_logs(
     return result
 
 
-@mcp.tool()
-def ck3_conflicts(
-    command: Literal["scan", "summary", "list", "detail", "resolve", "content", "high_risk", "report"] = "summary",
-    # For scan
-    folder_filter: str | None = None,
-    # For list
-    risk_filter: str | None = None,
-    domain_filter: str | None = None,
-    status_filter: str | None = None,
-    # For detail/resolve
-    conflict_id: str | None = None,
-    # For content
-    unit_key: str | None = None,
-    # For resolve
-    decision_type: Literal["winner", "defer"] | None = None,
-    winner_candidate_id: str | None = None,
-    notes: str | None = None,
-    # For content
-    source_filter: str | None = None,
-    # For report/high_risk
-    domains_include: list[str] | None = None,
-    domains_exclude: list[str] | None = None,
-    paths_filter: str | None = None,
-    min_candidates: int = 2,
-    min_risk_score: int = 60,
-    output_format: Literal["summary", "json", "full"] = "summary",
-    # Pagination
-    limit: int = 50,
-    offset: int = 0,
-) -> dict:
-    """
-    Unified conflict management tool for the active playset.
-    
-    Commands:
-    
-    command=scan        → Scan for unit-level conflicts (folder_filter optional)
-    command=summary     → Conflict summary by risk/domain/status
-    command=list        → List conflicts with filters
-    command=detail      → Get conflict details (conflict_id required)
-    command=resolve     → Record resolution (conflict_id, decision_type required)
-    command=content     → Get all contributions for unit_key (unit_key required)
-    command=high_risk   → Get highest-risk conflicts for review
-    command=report      → Generate full conflicts report
-    
-    Args:
-        command: Action to perform
-        folder_filter: Limit scan to folder (e.g., "common/on_action")
-        risk_filter: Filter by risk level (low, med, high)
-        domain_filter: Filter by domain (on_action, decision, trait, etc.)
-        status_filter: Filter by status (unresolved, resolved, deferred)
-        conflict_id: Conflict unit ID for detail/resolve
-        unit_key: Unit key for content command (e.g., "on_action:on_yearly_pulse")
-        decision_type: Resolution type (winner or defer)
-        winner_candidate_id: Winning candidate for winner decision
-        notes: Resolution notes
-        source_filter: Filter contributions by source
-        domains_include: Include only these domains in report
-        domains_exclude: Exclude these domains from report
-        paths_filter: SQL LIKE pattern for paths
-        min_candidates: Min sources for conflict (default 2)
-        min_risk_score: Min risk for high_risk (default 60)
-        output_format: Report format (summary, json, full)
-        limit: Max results
-        offset: Pagination offset
-    
-    Returns:
-        Dict with results based on command
-    """
-    from ck3lens.unified_tools import ck3_conflicts_impl
-    
-    db = _get_db()
-    playset_id = _get_playset_id()
-    trace = _get_trace()
-    
-    result = ck3_conflicts_impl(
-        command=command,
-        folder_filter=folder_filter,
-        risk_filter=risk_filter,
-        domain_filter=domain_filter,
-        status_filter=status_filter,
-        conflict_id=conflict_id,
-        unit_key=unit_key,
-        decision_type=decision_type,
-        winner_candidate_id=winner_candidate_id,
-        notes=notes,
-        source_filter=source_filter,
-        domains_include=domains_include,
-        domains_exclude=domains_exclude,
-        paths_filter=paths_filter,
-        min_candidates=min_candidates,
-        min_risk_score=min_risk_score,
-        output_format=output_format,
-        limit=limit,
-        offset=offset,
-        db=db,
-        playset_id=playset_id,
-        trace=trace,
-    )
-    
-    trace.log("ck3lens.conflicts", {
-        "command": command,
-        "domain_filter": domain_filter,
-    }, {"success": "error" not in result})
-    
-    return result
+# ============================================================================
+# ck3_conflicts - ARCHIVED 2025-01-02
+# ============================================================================
+#
+# The ck3_conflicts MCP tool was archived because it used BANNED playset_id.
+# See: archive/conflict_analysis_jan2026/
+#
+# Will be rebuilt with simple approach using session.mods[] cvids directly.
+# No playset_id needed - conflicts are between mods in the active playset.
+# ============================================================================
 
 
 # ============================================================================
@@ -1551,7 +1452,6 @@ def ck3_file(
     rel_path: str | None = None,
     # For get (from DB)
     include_ast: bool = False,
-    no_lens: bool = False,
     # For read/write
     content: str | None = None,
     start_line: int = 1,
@@ -3523,15 +3423,12 @@ def ck3_token(
 def ck3_search(
     query: str,
     file_pattern: Optional[str] = None,
-    source_filter: Optional[str] = None,
-    mod_filter: Optional[list[str]] = None,
     game_folder: Optional[str] = None,
     symbol_type: Optional[str] = None,
     adjacency: Literal["auto", "strict", "fuzzy"] = "auto",
     limit: int = 25,
     definitions_only: bool = False,
     verbose: bool = False,
-    no_lens: bool = False
 ) -> dict:
     """
     Unified search across symbols, file content, and file paths.
@@ -3553,15 +3450,12 @@ def ck3_search(
     Args:
         query: Search term(s). Space-separated = AND, "quotes" = exact phrase
         file_pattern: SQL LIKE pattern for file paths (e.g., "%traits%")
-        source_filter: Filter by source ("vanilla" or mod name)
-        mod_filter: List of mod names to search (e.g., ["vanilla", "MSC"])
         game_folder: Limit to CK3 folder (e.g., "events", "common/traits", "common/on_action")
         symbol_type: Filter symbols by type (trait, event, decision, etc.)
         adjacency: Pattern expansion ("auto", "strict", "fuzzy")
         limit: Max results per category (default 25)
         definitions_only: If True, skip references (faster but less useful)
         verbose: More detail (all matches per file, snippets)
-        no_lens: If True, search ALL content (not just active playset)
     
     Returns:
         {
@@ -3577,7 +3471,7 @@ def ck3_search(
         ck3_search("brave")  # Find all uses of 'brave'
         ck3_search("melkite localization")  # Files with BOTH terms
         ck3_search("brave", game_folder="events")  # Only in events/
-        ck3_search("brave", mod_filter=["MSC"])  # Only in MSC mod
+        ck3_search("brave", game_folder="common/traits")  # Only trait files
         ck3_search("has_trait", limit=100, verbose=True)  # More results
     """
     db = _get_db()
@@ -3592,12 +3486,11 @@ def ck3_search(
     effective_file_pattern = file_pattern
     if game_folder:
         # Normalize folder path
-        folder = game_folder.replace("\\", "/").strip("/")
+        # Use canonical path normalization via WorldAdapter
+        folder = world.normalize(game_folder)
         effective_file_pattern = f"{folder}/%"
     
     # Build source filter from mod_filter if provided
-    effective_source = source_filter
-    # Note: mod_filter is handled in the query layer
     
     # By default, include references (usages) - this is what compatch needs
     include_references = not definitions_only
@@ -3605,7 +3498,6 @@ def ck3_search(
     result = db.unified_search(
         query=query,
         file_pattern=effective_file_pattern,
-        source_filter=effective_source,
         symbol_type=symbol_type,
         adjacency=adjacency,
         limit=limit,
@@ -3634,8 +3526,6 @@ def ck3_search(
         
         if not game_folder:
             guidance_parts.append("To narrow: use game_folder (e.g., 'events', 'common/traits').")
-        if not mod_filter and not source_filter:
-            guidance_parts.append("To narrow: use mod_filter=['ModName'] or source_filter='vanilla'.")
         
         guidance = " ".join(guidance_parts)
     
@@ -3647,11 +3537,9 @@ def ck3_search(
         "query": query,
         "file_pattern": effective_file_pattern,
         "game_folder": game_folder,
-        "mod_filter": mod_filter,
         "symbol_type": symbol_type,
         "limit": limit,
         "definitions_only": definitions_only,
-        "no_lens": no_lens
     }, {
         "symbols_count": result["symbols"]["count"],
         "references_count": total_refs,
@@ -3670,7 +3558,6 @@ def ck3_search(
 def ck3_confirm_not_exists(
     name: str,
     symbol_type: Optional[str] = None,
-    no_lens: bool = False
 ) -> dict:
     """
     Confirm a symbol does NOT exist before claiming it's missing.
@@ -3681,7 +3568,6 @@ def ck3_confirm_not_exists(
     Args:
         name: Symbol name to search for
         symbol_type: Optional type filter (trait, decision, etc.)
-        no_lens: If True, search ALL content (not just active playset)
     
     Returns:
         - can_claim_not_exists: True if exhaustive search found nothing
@@ -3713,7 +3599,6 @@ def ck3_get_file(
     file_path: str,
     include_ast: bool = False,
     max_bytes: int = 200000,
-    no_lens: bool = False
 ) -> dict:
     """
     DEPRECATED: Use ck3_file(command="get", path=...) instead.
@@ -3724,7 +3609,6 @@ def ck3_get_file(
         file_path: Relative path to the file (e.g., "common/traits/00_traits.txt")
         include_ast: If True, also return parsed AST representation
         max_bytes: Maximum content bytes to return
-        no_lens: If True, search ALL content (not just active playset)
     
     Returns:
         File content (raw and/or AST)
@@ -7280,7 +7164,6 @@ def ck3_get_folder_contents(
     folder_pattern: Optional[str] = None,
     text_search: Optional[str] = None,
     symbol_search: Optional[str] = None,
-    mod_filter: Optional[list[str]] = None,
     file_type_filter: Optional[list[str]] = None
 ) -> dict:
     """

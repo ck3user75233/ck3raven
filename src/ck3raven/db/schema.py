@@ -194,49 +194,19 @@ CREATE INDEX IF NOT EXISTS idx_refs_content_version ON refs(content_version_id);
 CREATE INDEX IF NOT EXISTS idx_refs_resolution ON refs(resolution_status);
 
 -- ============================================================================
--- PLAYSETS & BUILDS
+-- PLAYSETS & BUILDS - EXPUNGED 2025-01-02
 -- ============================================================================
+-- 
+-- These tables are EXPUNGED. Playsets are now file-based JSON:
+-- - playsets/*.json - playset definitions with mod lists
+-- - server.py ck3_playset - MCP tool for playset operations
+-- 
+-- The database-based playset architecture (playset_id, playset_mods) is BANNED.
+-- See docs/CANONICAL_ARCHITECTURE.md for details.
+--
+-- REMOVED TABLES: playsets, playset_mods, builds
+-- These tables will be dropped in a future migration.
 
--- Playsets - user-defined mod collections with load order
-CREATE TABLE IF NOT EXISTS playsets (
-    playset_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    vanilla_version_id INTEGER NOT NULL,     -- FK to vanilla_versions
-    description TEXT,
-    is_active INTEGER NOT NULL DEFAULT 0,    -- Max 5 active at once (enforced in code)
-    -- Contribution lifecycle tracking
-    contributions_hash TEXT,                 -- Hash of current contribution state
-    contributions_stale INTEGER NOT NULL DEFAULT 1,  -- 1 = needs rescan, 0 = up to date
-    contributions_scanned_at TEXT,           -- When last scanned
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (vanilla_version_id) REFERENCES vanilla_versions(vanilla_version_id)
-);
-
--- Playset mod membership with load order
-CREATE TABLE IF NOT EXISTS playset_mods (
-    playset_id INTEGER NOT NULL,
-    content_version_id INTEGER NOT NULL,     -- FK to content_versions (mod version)
-    load_order_index INTEGER NOT NULL,       -- Lower = loaded first, higher = wins in OVERRIDE
-    enabled INTEGER NOT NULL DEFAULT 1,
-    PRIMARY KEY (playset_id, content_version_id),
-    FOREIGN KEY (playset_id) REFERENCES playsets(playset_id),
-    FOREIGN KEY (content_version_id) REFERENCES content_versions(content_version_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_playset_mods_order ON playset_mods(playset_id, load_order_index);
-
--- Optional: Build cache for resolved states
-CREATE TABLE IF NOT EXISTS builds (
-    build_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    playset_id INTEGER NOT NULL,
-    ruleset_version TEXT NOT NULL,           -- Version of merge rules used
-    load_order_hash TEXT NOT NULL,           -- Hash of load order for cache key
-    resolved_at TEXT NOT NULL DEFAULT (datetime('now')),
-    build_metadata_json TEXT,
-    FOREIGN KEY (playset_id) REFERENCES playsets(playset_id),
-    UNIQUE(playset_id, ruleset_version, load_order_hash)
-);
 
 -- ============================================================================
 -- SNAPSHOTS (Cryo)

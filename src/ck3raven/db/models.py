@@ -284,53 +284,11 @@ class Reference:
         return f"Reference({self.ref_type}:{self.name}, {self.resolution_status})"
 
 
-@dataclass
-class Playset:
-    """A user-defined mod collection with load order."""
-    playset_id: Optional[int] = None
-    name: str = ""
-    vanilla_version_id: int = 0
-    description: Optional[str] = None
-    is_active: bool = False
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-    
-    # Populated separately
-    mods: List["PlaysetMod"] = field(default_factory=list)
-    
-    @classmethod
-    def from_row(cls, row) -> "Playset":
-        return cls(
-            playset_id=row['playset_id'],
-            name=row['name'],
-            vanilla_version_id=row['vanilla_version_id'],
-            description=row['description'],
-            is_active=bool(row['is_active']),
-            created_at=row['created_at'],
-            updated_at=row['updated_at'],
-        )
-    
-    def __repr__(self):
-        active = " [ACTIVE]" if self.is_active else ""
-        return f"Playset({self.name}, {len(self.mods)} mods{active})"
-
-
-@dataclass
-class PlaysetMod:
-    """A mod in a playset with load order."""
-    playset_id: int = 0
-    content_version_id: int = 0
-    load_order_index: int = 0
-    enabled: bool = True
-    
-    @classmethod
-    def from_row(cls, row) -> "PlaysetMod":
-        return cls(
-            playset_id=row['playset_id'],
-            content_version_id=row['content_version_id'],
-            load_order_index=row['load_order_index'],
-            enabled=bool(row['enabled']),
-        )
+# EXPUNGED 2025-01-02: Playset and PlaysetMod models removed.
+# Playsets are now file-based JSON. See playsets/*.json and server.py ck3_playset.
+# 
+# The database-based playset models (Playset, PlaysetMod with playset_id) are BANNED.
+# See docs/CANONICAL_ARCHITECTURE.md for details.
 
 
 @dataclass
