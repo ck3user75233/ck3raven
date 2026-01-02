@@ -11,9 +11,6 @@
   "engines": {
     "vscode": "^1.96.0"
   },
-  "enabledApiProposals": [
-    "mcpServerDefinitionProvider"
-  ],
   "categories": [
     "Linters",
     "Programming Languages",
