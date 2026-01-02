@@ -26,6 +26,7 @@ BANNED CONCEPTS (December 2025 purge):
 - lens (parameter or variable)
 - PlaysetLens (class - use mods[] instead)
 - cvids as parameter (derive at DB boundary from mods[])
+- LensWorldAdapter, DevWorldAdapter, UninitiatedWorldAdapter (use single WorldAdapter)
 """
 from __future__ import annotations
 
@@ -33,7 +34,7 @@ from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 from .agent_mode import get_agent_mode
-from .world_adapter import WorldAdapter, LensWorldAdapter, DevWorldAdapter
+from .world_adapter import WorldAdapter  # Single class now handles all modes
 
 if TYPE_CHECKING:
     from .db_queries import DBQueries
@@ -49,6 +50,9 @@ class WorldRouter:
     3. Caching adapters for performance (per-session)
     
     This is the ONLY place where mode detection and adapter construction happen.
+    
+    December 2025 consolidation: Uses single WorldAdapter class with mode parameter
+    instead of separate LensWorldAdapter/DevWorldAdapter classes.
     """
     
     _instance: Optional["WorldRouter"] = None
@@ -107,7 +111,7 @@ class WorldRouter:
         ):
             return self._cached_adapter
         
-        # Build new adapter
+        # Build new adapter using single WorldAdapter class
         if mode == "ck3lens":
             adapter = self._build_lens_adapter(db, local_mods_folder, mods)
         elif mode == "ck3raven-dev":
@@ -124,14 +128,14 @@ class WorldRouter:
         db: Optional["DBQueries"],
         local_mods_folder: Optional[Path],
         mods: Optional[list],
-    ) -> LensWorldAdapter:
-        """Build a LensWorldAdapter for ck3lens mode."""
+    ) -> WorldAdapter:
+        """Build a WorldAdapter for ck3lens mode."""
         if db is None:
-            raise RuntimeError("DBQueries required for LensWorldAdapter")
+            raise RuntimeError("DBQueries required for ck3lens mode")
         
         if not mods:
             raise RuntimeError(
-                "LensWorldAdapter requires mods list. "
+                "ck3lens mode requires mods list. "
                 "Ensure a playset is active with session.mods populated."
             )
         
@@ -147,7 +151,9 @@ class WorldRouter:
         # Utility roots (logs, saves, etc.)
         utility_roots = self._get_utility_roots()
         
-        return LensWorldAdapter(
+        # Use single WorldAdapter class with mode="ck3lens"
+        return WorldAdapter(
+            mode="ck3lens",
             db=db,
             mods=mods,
             local_mods_folder=local_mods_folder,
@@ -160,10 +166,14 @@ class WorldRouter:
     def _build_dev_adapter(
         self,
         db: Optional["DBQueries"],
-    ) -> DevWorldAdapter:
-        """Build a DevWorldAdapter for ck3raven-dev mode."""
+    ) -> WorldAdapter:
+        """Build a WorldAdapter for ck3raven-dev mode.
+        
+        NOTE: ck3raven-dev mode does NOT use mod-related parameters.
+        Mods are NOT part of the execution model for dev mode.
+        """
         if db is None:
-            raise RuntimeError("DBQueries required for DevWorldAdapter")
+            raise RuntimeError("DBQueries required for ck3raven-dev mode")
         
         # ck3raven source root
         ck3raven_root = self._detect_ck3raven_root()
@@ -173,16 +183,17 @@ class WorldRouter:
         # WIP workspace for dev mode is <repo>/.wip/
         wip_root = ck3raven_root / ".wip"
         
-        # Get vanilla and mod paths for read access
+        # Get vanilla root for read access (parser testing only)
         vanilla_root = self._get_vanilla_root()
-        mod_paths = self._get_mod_paths()
         
-        return DevWorldAdapter(
+        # Use single WorldAdapter class with mode="ck3raven-dev"
+        # NOTE: No mods, mod_paths, or mods_roots - these are banned for dev mode
+        return WorldAdapter(
+            mode="ck3raven-dev",
             db=db,
             ck3raven_root=ck3raven_root,
             wip_root=wip_root,
             vanilla_root=vanilla_root,
-            mod_paths=mod_paths,
         )
     
     def _detect_ck3raven_root(self) -> Optional[Path]:
@@ -223,25 +234,9 @@ class WorldRouter:
         
         return None
     
-    def _get_mod_paths(self) -> set[Path]:
-        """Get all mod paths for read access (dev mode)."""
-        mod_paths = set()
-        
-        # CK3 mod directory
-        ck3_mods = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
-        if ck3_mods.exists():
-            for item in ck3_mods.iterdir():
-                if item.is_dir():
-                    mod_paths.add(item)
-        
-        # Steam workshop mods
-        workshop = Path("C:/Program Files (x86)/Steam/steamapps/workshop/content/1158310")
-        if workshop.exists():
-            for item in workshop.iterdir():
-                if item.is_dir():
-                    mod_paths.add(item)
-        
-        return mod_paths
+    # NOTE: _get_mod_paths() REMOVED - banned concept for ck3raven-dev mode
+    # ck3raven-dev does NOT use mod visibility filtering. Mods are not part of
+    # the execution model for dev mode. See CANONICAL_ARCHITECTURE.md Section 9.
     
     def _get_utility_roots(self) -> dict[str, Path]:
         """Get utility file roots (logs, saves, etc.)."""

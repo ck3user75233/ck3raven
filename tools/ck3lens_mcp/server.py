@@ -1,4 +1,4 @@
-﻿"""
+"""
 CK3 Lens MCP Server
 
 An MCP server providing CK3 modding tools:
@@ -603,22 +603,19 @@ def _init_session_internal(
     # Initialize trace with proper path based on mode
     _trace = ToolTrace(_get_trace_path())
 
-    # Auto-detect playset
-    playset_id = _get_playset_id()
-    playset_info = _db.conn.execute(
-        "SELECT name, is_active FROM playsets WHERE playset_id = ?",
-        (playset_id,)
-    ).fetchone()
+    # CANONICAL: Get playset info from session - no database lookup needed
+    # Vanilla is mods[0], playset name comes from session config
+    playset_name = getattr(_session, "playset_name", "Active Playset")
+    mod_count = len(_session.mods) if hasattr(_session, "mods") else 0
 
     # Check database health
     db_status = _check_db_health(_db.conn)
 
     # Return minimal session info - WorldAdapter handles visibility,
-    # enforcement.py handles write permission. No "local_mods" listing needed.
     result = {
         "db_path": str(_db.db_path) if _db.db_path else None,
-        "playset_id": playset_id,
-        "playset_name": playset_info[0] if playset_info else None,
+        "playset_name": playset_name,
+        "mod_count": mod_count,
         "db_status": db_status,
     }
 
@@ -727,9 +724,9 @@ def ck3_get_db_status() -> dict:
     status["rebuild_command"] = "python builder/daemon.py start"
     
     if status.get("needs_rebuild"):
-        status["message"] = f"âš ï¸ Database needs rebuild: {status.get('rebuild_reason')}"
+        status["message"] = f"⚠️ Database needs rebuild: {status.get('rebuild_reason')}"
     else:
-        status["message"] = f"âœ… Database ready: {status.get('symbols_extracted', 0):,} symbols, {status.get('refs_extracted', 0):,} refs"
+        status["message"] = f"✅ Database ready: {status.get('symbols_extracted', 0):,} symbols, {status.get('refs_extracted', 0):,} refs"
     
     trace.log("ck3lens.get_db_status", {}, status)
     
@@ -867,21 +864,21 @@ def ck3_get_playset_build_status(playset_name: str | None = None) -> dict:
     
     # Add guidance
     if not result["playset_valid"]:
-        result["guidance"] = "⛔ Invalid playset: All mods are missing from disk. Cannot activate."
+        result["guidance"] = "? Invalid playset: All mods are missing from disk. Cannot activate."
         result["build_command"] = None
     elif result["needs_build"]:
         pending = result["pending_mods"]
-        result["guidance"] = f"⚠️ {pending} mod(s) need processing before full functionality."
+        result["guidance"] = f"?? {pending} mod(s) need processing before full functionality."
         result["build_command"] = "python builder/daemon.py start --symbols-only"
     else:
-        result["guidance"] = "✅ All mods are fully processed and ready."
+        result["guidance"] = "? All mods are fully processed and ready."
         result["build_command"] = None
     
     if result["missing_mods"] > 0:
         names = ", ".join(result["missing_mod_names"][:5])
         if result["missing_mods"] > 5:
             names += f" and {result['missing_mods'] - 5} more"
-        result["guidance"] += f"\n⚠️ Missing mods (not on disk): {names}"
+        result["guidance"] += f"\n?? Missing mods (not on disk): {names}"
     
     trace.log("ck3lens.get_playset_build_status", {"playset_name": playset_name}, {
         "valid": result["playset_valid"],
@@ -1299,7 +1296,7 @@ def ck3_get_policy_status() -> dict:
     """
     Check if policy enforcement is working.
     
-    âš ï¸ CRITICAL: If this returns healthy=False, the agent MUST stop work
+    ⚠️ CRITICAL: If this returns healthy=False, the agent MUST stop work
     and fix the policy system before continuing.
     
     Returns:
@@ -1324,9 +1321,9 @@ def ck3_get_policy_status() -> dict:
     }
     
     if health["healthy"]:
-        result["message"] = "âœ… Policy enforcement is ACTIVE"
+        result["message"] = "✅ Policy enforcement is ACTIVE"
     else:
-        result["message"] = f"ðŸš¨ POLICY ENFORCEMENT IS DOWN: {health['error']}"
+        result["message"] = f"🚨 POLICY ENFORCEMENT IS DOWN: {health['error']}"
         result["action_required"] = "Agent must stop work. Fix policy module or restart MCP server."
     
     trace.log("ck3lens.get_policy_status", {}, result)
@@ -1363,26 +1360,26 @@ def ck3_logs(
     Source + Command combinations:
     
     source=error:
-        command=summary     → Error log summary (counts by priority/category/mod)
-        command=list        → Filtered error list (priority, category, mod_filter)
-        command=search      → Search errors (query required)
-        command=cascades    → Cascading error patterns (fix root causes first)
+        command=summary     ? Error log summary (counts by priority/category/mod)
+        command=list        ? Filtered error list (priority, category, mod_filter)
+        command=search      ? Search errors (query required)
+        command=cascades    ? Cascading error patterns (fix root causes first)
     
     source=game:
-        command=summary     → Game log summary with category breakdown
-        command=list        → Game log errors (category filter optional)
-        command=search      → Search game log (query required)
-        command=categories  → Category breakdown with descriptions
+        command=summary     ? Game log summary with category breakdown
+        command=list        ? Game log errors (category filter optional)
+        command=search      ? Search game log (query required)
+        command=categories  ? Category breakdown with descriptions
     
     source=debug:
-        command=summary     → System info, DLCs, mod list
+        command=summary     ? System info, DLCs, mod list
     
     source=crash:
-        command=summary     → Recent crash reports list
-        command=detail      → Full crash report (crash_id required)
+        command=summary     ? Recent crash reports list
+        command=detail      ? Full crash report (crash_id required)
     
     Any source:
-        command=read        → Raw log content (lines, from_end, query for search)
+        command=read        ? Raw log content (lines, from_end, query for search)
     
     Args:
         source: Log source to query
@@ -1479,15 +1476,15 @@ def ck3_file(
     
     Commands:
     
-    command=get          → Get file content from database (path required)
-    command=read         → Read file from filesystem (path or mod_name+rel_path)
-    command=write        → Write file (path for raw write, or mod_name+rel_path for mod)
-    command=edit         → Search-replace in live mod file (mod_name, rel_path, old_content, new_content)
-    command=delete       → Delete file from live mod (mod_name, rel_path required)
-    command=rename       → Rename/move file in live mod (mod_name, rel_path, new_path required)
-    command=refresh      → Re-sync file to database (mod_name, rel_path required)
-    command=list         → List files in live mod (mod_name required, path_prefix/pattern optional)
-    command=create_patch → Create override patch file (⚠️ ck3lens mode only; mod_name, source_path, patch_mode required)
+    command=get          ? Get file content from database (path required)
+    command=read         ? Read file from filesystem (path or mod_name+rel_path)
+    command=write        ? Write file (path for raw write, or mod_name+rel_path for mod)
+    command=edit         ? Search-replace in live mod file (mod_name, rel_path, old_content, new_content)
+    command=delete       ? Delete file from live mod (mod_name, rel_path required)
+    command=rename       ? Rename/move file in live mod (mod_name, rel_path, new_path required)
+    command=refresh      ? Re-sync file to database (mod_name, rel_path required)
+    command=list         ? List files in live mod (mod_name required, path_prefix/pattern optional)
+    command=create_patch ? Create override patch file (?? ck3lens mode only; mod_name, source_path, patch_mode required)
     
     For write command with raw path:
     - ck3lens mode: DENIED (must use mod_name+rel_path)
@@ -1499,7 +1496,6 @@ def ck3_file(
         mod_name: Live mod name (for write/edit/delete/rename/refresh/list)
         rel_path: Relative path within mod
         include_ast: Include parsed AST (for get)
-        no_lens: Search all content, not just active playset (for get)
         content: File content (for write)
         start_line: Start line for read (1-indexed)
         end_line: End line for read (inclusive)
@@ -1533,7 +1529,6 @@ def ck3_file(
         mod_name=mod_name,
         rel_path=rel_path,
         include_ast=include_ast,
-        no_lens=no_lens,
         content=content,
         start_line=start_line,
         end_line=end_line,
@@ -1584,10 +1579,10 @@ def ck3_folder(
     
     Commands:
     
-    command=list        → List directory contents from filesystem (path required)
-    command=contents    → Get folder contents from database (path required)
-    command=top_level   → Get top-level folders in active playset
-    command=mod_folders → Get folders in specific mod (content_version_id required)
+    command=list        ? List directory contents from filesystem (path required)
+    command=contents    ? Get folder contents from database (path required)
+    command=top_level   ? Get top-level folders in active playset
+    command=mod_folders ? Get folders in specific mod (content_version_id required)
     
     Args:
         command: Operation to perform
@@ -1606,9 +1601,12 @@ def ck3_folder(
     from ck3lens.unified_tools import ck3_folder_impl
     
     db = _get_db()
-    playset_id = _get_playset_id()
+    session = _get_session()
     trace = _get_trace()
     world = _get_world()  # WorldAdapter for visibility enforcement
+    
+    # CANONICAL: Get cvids from session.mods[] instead of using playset_id
+    cvids = [m.cvid for m in session.mods if m.cvid is not None]
     
     return ck3_folder_impl(
         command=command,
@@ -1621,7 +1619,7 @@ def ck3_folder(
         mod_filter=mod_filter,
         file_type_filter=file_type_filter,
         db=db,
-        playset_id=playset_id,
+        cvids=cvids,
         trace=trace,
         world=world,
     )
@@ -1658,15 +1656,15 @@ def ck3_playset(
     
     Commands:
     
-    command=get        → Get active playset info
-    command=list       → List all playsets
-    command=switch     → Switch to different playset (playset_name required)
-    command=mods       → Get mods in active playset
-    command=add_mod    → Add mod to playset (mod_name required)
-    command=remove_mod → Remove mod from playset (mod_name required)
-    command=reorder    → Change mod load order (mod_name, new_position required)
-    command=create     → Create new playset (name required)
-    command=import     → Import playset from CK3 launcher
+    command=get        ? Get active playset info
+    command=list       ? List all playsets
+    command=switch     ? Switch to different playset (playset_name required)
+    command=mods       ? Get mods in active playset
+    command=add_mod    ? Add mod to playset (mod_name required)
+    command=remove_mod ? Remove mod from playset (mod_name required)
+    command=reorder    ? Change mod load order (mod_name, new_position required)
+    command=create     ? Create new playset (name required)
+    command=import     ? Import playset from CK3 launcher
     
     Args:
         command: Operation to perform
@@ -1816,7 +1814,7 @@ def ck3_playset(
         if mods_missing_from_disk:
             result["mods_missing_from_disk"] = mods_missing_from_disk
             result["missing_warning"] = (
-                f"❌ {len(mods_missing_from_disk)} mod(s) are in playset but not on disk. "
+                f"? {len(mods_missing_from_disk)} mod(s) are in playset but not on disk. "
                 f"These mods will be skipped: {mods_missing_from_disk}"
             )
         
@@ -1836,12 +1834,11 @@ def ck3_playset(
                     venv_python = repo_root / ".venv" / "bin" / "python"  # Linux/Mac
                 
                 if daemon_script.exists() and venv_python.exists():
-                    # Start the builder daemon with the playset file
+                    # Start the builder daemon - it reads from playset manifest (canonical)
                     cmd = [
                         str(venv_python),
                         str(daemon_script),
                         "start",
-                        "--playset-file", str(target_file)
                     ]
                     
                     # Run detached (daemon mode)
@@ -1869,18 +1866,18 @@ def ck3_playset(
                     if mods_needing_build:
                         result["builder_started"] = True
                         result["builder_message"] = (
-                            f"🔨 Builder started for {len(mods_needing_build)} mod(s) needing processing. "
+                            f"?? Builder started for {len(mods_needing_build)} mod(s) needing processing. "
                             f"Check status with: python builder/daemon.py status"
                         )
                     else:
                         result["builder_started"] = True
                         result["builder_message"] = (
-                            "🔨 Database not available or empty. Builder started to index all playset mods. "
+                            "?? Database not available or empty. Builder started to index all playset mods. "
                             "Check status with: python builder/daemon.py status"
                         )
             except Exception as e:
                 result["builder_error"] = f"Failed to start builder: {e}"
-                result["build_command"] = f"python builder/daemon.py start --playset-file \"{target_file}\""
+                result["build_command"] = "python builder/daemon.py start"
         
         # Add build status information
         if build_status and not build_status.get("error"):
@@ -1892,7 +1889,7 @@ def ck3_playset(
             }
         
         if not mods_needing_build and not mods_missing_from_disk and db_available and build_status and not build_status.get("error"):
-            result["build_status_message"] = "✅ All mods are ready. No build needed."
+            result["build_status_message"] = "? All mods are ready. No build needed."
         
         return result
     
@@ -2077,7 +2074,7 @@ def ck3_playset(
         if build_needed:
             result["build_needed"] = True
             result["build_prompt"] = (
-                f"⚠️ Mod '{mod_name}' needs to be indexed. "
+                f"?? Mod '{mod_name}' needs to be indexed. "
                 f"Run: python builder/daemon.py start --playset-file \"{playset_path}\""
             )
         
@@ -2113,7 +2110,7 @@ def ck3_git(
     """
     Unified git operations for live mods.
     
-    ⚠️ KNOWN ISSUE: This tool may hang due to GitLens extension conflicts.
+    ?? KNOWN ISSUE: This tool may hang due to GitLens extension conflicts.
     WORKAROUND: Use ck3_exec with git commands instead:
         ck3_exec("git status", working_dir=mod_path)
         ck3_exec("git add .", working_dir=mod_path)
@@ -2125,13 +2122,13 @@ def ck3_git(
     
     Commands:
     
-    command=status → Get git status
-    command=diff   → Get git diff (file_path optional)
-    command=add    → Stage files (files or all_files required)
-    command=commit → Commit staged changes (message required)
-    command=push   → Push to remote
-    command=pull   → Pull from remote
-    command=log    → Get commit log (limit optional)
+    command=status ? Get git status
+    command=diff   ? Get git diff (file_path optional)
+    command=add    ? Stage files (files or all_files required)
+    command=commit ? Commit staged changes (message required)
+    command=push   ? Push to remote
+    command=pull   ? Pull from remote
+    command=log    ? Get commit log (limit optional)
     
     Args:
         command: Git operation to perform
@@ -2187,11 +2184,11 @@ def ck3_validate(
     
     Targets:
     
-    target=syntax     → Validate CK3 script syntax (content required)
-    target=python     → Check Python syntax (content or file_path required)
-    target=references → Validate symbol references exist (symbol_name required)
-    target=bundle     → Validate artifact bundle (artifact_bundle required)
-    target=policy     → Validate against policy rules (mode required)
+    target=syntax     ? Validate CK3 script syntax (content required)
+    target=python     ? Check Python syntax (content or file_path required)
+    target=references ? Validate symbol references exist (symbol_name required)
+    target=bundle     ? Validate artifact bundle (artifact_bundle required)
+    target=policy     ? Validate against policy rules (mode required)
     
     Args:
         target: What to validate
@@ -2248,14 +2245,14 @@ def ck3_vscode(
     
     Commands:
     
-    command=status         → Check if VS Code IPC server is available
-    command=ping           → Test connection to VS Code
-    command=diagnostics    → Get diagnostics for a file (path required)
-    command=all_diagnostics → Get diagnostics for all open files
-    command=errors_summary → Get workspace error summary
-    command=validate_file  → Trigger validation for a file (path required)
-    command=open_files     → List currently open files in VS Code
-    command=active_file    → Get active file info with diagnostics
+    command=status         ? Check if VS Code IPC server is available
+    command=ping           ? Test connection to VS Code
+    command=diagnostics    ? Get diagnostics for a file (path required)
+    command=all_diagnostics ? Get diagnostics for all open files
+    command=errors_summary ? Get workspace error summary
+    command=validate_file  ? Trigger validation for a file (path required)
+    command=open_files     ? List currently open files in VS Code
+    command=active_file    ? Get active file info with diagnostics
     
     Args:
         command: Operation to perform
@@ -2298,7 +2295,7 @@ def ck3_repair(
     """
     Repair CK3 launcher registry and cache issues.
     
-    ⚠️ MODE: ck3lens only. Not available in ck3raven-dev mode.
+    ?? MODE: ck3lens only. Not available in ck3raven-dev mode.
     
     SCOPE: Launcher domain operations only.
     - ~/.ck3raven/ directory management
@@ -2307,11 +2304,11 @@ def ck3_repair(
     
     Commands:
     
-    command=query             → Get status of repair targets (launcher registry, cache, etc.)
-    command=diagnose_launcher → Analyze launcher database for issues
-    command=repair_registry   → Fix launcher registry entries (requires dry_run=False)
-    command=delete_cache      → Clear ck3raven cache files (requires dry_run=False)
-    command=backup_launcher   → Create backup of launcher database before repair
+    command=query             ? Get status of repair targets (launcher registry, cache, etc.)
+    command=diagnose_launcher ? Analyze launcher database for issues
+    command=repair_registry   ? Fix launcher registry entries (requires dry_run=False)
+    command=delete_cache      ? Clear ck3raven cache files (requires dry_run=False)
+    command=backup_launcher   ? Create backup of launcher database before repair
     
     Args:
         command: Action to perform
@@ -2593,12 +2590,12 @@ def ck3_contract(
     
     Commands:
     
-    command=open      → Open new contract (intent, canonical_domains required)
-    command=close     → Close contract after work complete (contract_id or uses active)
-    command=cancel    → Cancel contract without completing (contract_id or uses active)
-    command=status    → Get current active contract status
-    command=list      → List contracts (status_filter, include_archived optional)
-    command=flush     → Archive old contracts from previous days
+    command=open      ? Open new contract (intent, canonical_domains required)
+    command=close     ? Close contract after work complete (contract_id or uses active)
+    command=cancel    ? Cancel contract without completing (contract_id or uses active)
+    command=status    ? Get current active contract status
+    command=list      ? List contracts (status_filter, include_archived optional)
+    command=flush     ? Archive old contracts from previous days
     
     Args:
         command: Action to perform
@@ -2806,9 +2803,9 @@ def ck3_exec(
     This is the ONLY safe way for agents to run shell commands.
     All commands are evaluated against the policy engine:
     
-    - Safe commands (cat, git status, etc.) → Allowed automatically
-    - Risky commands (rm *.py, git push) → Require approval token
-    - Blocked commands (rm -rf /) → Always denied
+    - Safe commands (cat, git status, etc.) ? Allowed automatically
+    - Risky commands (rm *.py, git push) ? Require approval token
+    - Blocked commands (rm -rf /) ? Always denied
     
     If a command requires a token, use ck3_token to request one first,
     then pass the token_id here.
@@ -3088,7 +3085,7 @@ def ck3_exec(
     # ==========================================================================
     # CANONICAL ENFORCEMENT: Route through enforcement.py for non-WIP commands
     # 
-    # Pattern: classify → map to OperationType → enforce_and_log → execute
+    # Pattern: classify ? map to OperationType ? enforce_and_log ? execute
     # ==========================================================================
     
     # Step 1: Classify the command (structural classification, not policy)
@@ -3265,10 +3262,10 @@ def ck3_token(
     
     Commands:
     
-    command=request   → Request a new approval token
-    command=list      → List active tokens
-    command=validate  → Check if a token is valid for an operation
-    command=revoke    → Revoke a token
+    command=request   ? Request a new approval token
+    command=list      ? List active tokens
+    command=validate  ? Check if a token is valid for an operation
+    command=revoke    ? Revoke a token
     
     Token Types (see TOKEN_TYPES):
     - FS_DELETE_CODE: Delete .py/.txt files (30 min TTL)
@@ -3756,14 +3753,14 @@ def ck3_get_symbol_conflicts(
 # ARCHIVED: Legacy Local Mod Operations
 # ============================================================================
 # The following tools have been DELETED (December 30, 2025):
-# - ck3_list_local_mods() → Use ck3_file(command="list", mod_name=...)
-# - ck3_read_live_file() → Use ck3_file(command="read", mod_name=..., rel_path=...)
-# - ck3_write_file() → Use ck3_file(command="write", mod_name=..., rel_path=..., content=...)
-# - ck3_edit_file() → Use ck3_file(command="edit", mod_name=..., rel_path=..., old_content=..., new_content=...)
-# - ck3_delete_file() → Use ck3_file(command="delete", mod_name=..., rel_path=...)
-# - ck3_rename_file() → Use ck3_file(command="rename", mod_name=..., rel_path=..., new_path=...)
-# - ck3_refresh_file() → Use ck3_file(command="refresh", mod_name=..., rel_path=...)
-# - ck3_create_override_patch() → Use ck3_file(command="create_patch", mod_name=..., source_path=..., patch_mode=...)
+# - ck3_list_local_mods() ? Use ck3_file(command="list", mod_name=...)
+# - ck3_read_live_file() ? Use ck3_file(command="read", mod_name=..., rel_path=...)
+# - ck3_write_file() ? Use ck3_file(command="write", mod_name=..., rel_path=..., content=...)
+# - ck3_edit_file() ? Use ck3_file(command="edit", mod_name=..., rel_path=..., old_content=..., new_content=...)
+# - ck3_delete_file() ? Use ck3_file(command="delete", mod_name=..., rel_path=...)
+# - ck3_rename_file() ? Use ck3_file(command="rename", mod_name=..., rel_path=..., new_path=...)
+# - ck3_refresh_file() ? Use ck3_file(command="refresh", mod_name=..., rel_path=...)
+# - ck3_create_override_patch() ? Use ck3_file(command="create_patch", mod_name=..., source_path=..., patch_mode=...)
 #
 # These used the BANNED "local_mods" module which has been deleted.
 # All file operations now flow through ck3_file unified tool with enforcement.
@@ -4404,7 +4401,7 @@ def ck3_validate_policy(
             "deliverable": False,
             "policy_healthy": False,
             "error": f"Policy module broken: {health['error']}",
-            "message": "âš ï¸ POLICY ENFORCEMENT IS DOWN. Agent must stop work until fixed.",
+            "message": "⚠️ POLICY ENFORCEMENT IS DOWN. Agent must stop work until fixed.",
             "violations": [{
                 "severity": "error",
                 "rule_id": "POLICY_IMPORT_FAILED",
@@ -7569,19 +7566,19 @@ def _get_mode_session_note(mode: str) -> str:
     if mode == "ck3lens":
         return (
             "CK3 Lens mode active. You can:\n"
-            "• Search symbols, files, content via database\n"
-            "• Write/edit files in active local mods (MSC, MSCRE, LRE, MRP)\n"
-            "• Draft Python scripts in WIP workspace (~/.ck3raven/wip/)\n"
-            "• Use ck3_repair for launcher/cache issues\n\n"
+            "- Search symbols, files, content via database\n"
+            "- Write/edit files in active local mods (MSC, MSCRE, LRE, MRP)\n"
+            "- Draft Python scripts in WIP workspace (~/.ck3raven/wip/)\n"
+            "- Use ck3_repair for launcher/cache issues\n\n"
             "You CANNOT write to workshop mods, vanilla, or ck3raven source."
         )
     elif mode == "ck3raven-dev":
         return (
             "CK3 Raven Dev mode active. You can:\n"
-            "• Read all source code and mods (for parser/ingestion testing)\n"
-            "• Write/edit ck3raven infrastructure code\n"
-            "• Execute commands via ck3_exec (NOT run_in_terminal)\n"
-            "• Write analysis scripts to <repo>/.wip/\n\n"
+            "- Read all source code and mods (for parser/ingestion testing)\n"
+            "- Write/edit ck3raven infrastructure code\n"
+            "- Execute commands via ck3_exec (NOT run_in_terminal)\n"
+            "- Write analysis scripts to <repo>/.wip/\n\n"
             "ABSOLUTE PROHIBITION: You CANNOT write to ANY mod files.\n"
             "Git push/rebase/amend requires explicit approval token."
         )

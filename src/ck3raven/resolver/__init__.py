@@ -31,12 +31,14 @@ from ck3raven.resolver.sql_resolver import (
     ResolutionResult,
 )
 
-# Contributions Manager (LIFECYCLE-AWARE)
-from ck3raven.resolver.manager import (
-    ContributionsManager,
-    RefreshResult,
-    ConflictSummary,
-)
+# Contributions Manager (ARCHIVED - used banned playset_id)
+# See archive/conflict_analysis_jan2026/manager.py
+# Will be rebuilt with simple cvids-based approach
+# from ck3raven.resolver.manager import (
+#     ContributionsManager,
+#     RefreshResult,
+#     ConflictSummary,
+# )
 
 # Legacy file-based resolver (DEPRECATED - for tests only)
 from ck3raven.resolver.resolver import (
@@ -74,10 +76,10 @@ __all__ = [
     "OverriddenSymbol",
     "FileOverride",
     "ResolutionResult",
-    # Contributions Manager (LIFECYCLE-AWARE)
-    "ContributionsManager",
-    "RefreshResult",
-    "ConflictSummary",
+    # Contributions Manager (ARCHIVED - will be rebuilt)
+    # "ContributionsManager",
+    # "RefreshResult",
+    # "ConflictSummary",
     # Legacy file-based (DEPRECATED)
     "SourceFile",
     "Definition",

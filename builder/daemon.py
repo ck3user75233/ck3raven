@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Standalone rebuild daemon that runs completely detached from terminals.
 
@@ -34,6 +34,8 @@ from dataclasses import dataclass, field
 # Paths
 DEFAULT_DB_PATH = Path.home() / ".ck3raven" / "ck3raven.db"
 DAEMON_DIR = Path.home() / ".ck3raven" / "daemon"
+PLAYSETS_DIR = Path(__file__).parent.parent / "playsets"
+PLAYSET_MANIFEST = PLAYSETS_DIR / "playset_manifest.json"
 PID_FILE = DAEMON_DIR / "rebuild.pid"
 LOCK_FILE = DAEMON_DIR / "rebuild.lock"
 STATUS_FILE = DAEMON_DIR / "rebuild_status.json"
@@ -554,7 +556,7 @@ def cleanup_pid():
         pass
 
 
-def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: StatusWriter, symbols_only: bool = False, vanilla_path: str = None, skip_mods: bool = False, playset_file: Path = None):
+def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: StatusWriter, symbols_only: bool = False, vanilla_path: str = None, skip_mods: bool = False, use_active_playset: bool = True):
     """Main rebuild logic - runs in the detached process."""
     
     status.update(state="starting", started_at=datetime.now().isoformat())
@@ -665,22 +667,22 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
             # Phase 2: Mod ingest - playset mods only if playset_file provided, else ALL mods
             if not skip_mods:
                 build_tracker.start_step("mod_ingest")
-                if playset_file:
+                if use_active_playset:
                     status.update(
                         phase="mod_ingest",
                         phase_number=2,
-                        message="Ingesting playset mod files..."
+                        message="Ingesting active playset mods..."
                     )
                 else:
                     status.update(
                         phase="mod_ingest",
                         phase_number=2,
-                        message="Ingesting all mod files..."
+                        message="Ingesting all discovered mods..."
                     )
                 write_heartbeat()
                 build_tracker.update_lock_heartbeat()
 
-                mod_files = ingest_all_mods(conn, logger, status, playset_file=playset_file)
+                mod_files = ingest_all_mods(conn, logger, status, use_active_playset=use_active_playset)
                 build_counts['files'] += mod_files if isinstance(mod_files, int) else 0
                 build_tracker.end_step("mod_ingest", StepStats(rows_out=mod_files if isinstance(mod_files, int) else 0))
                 db_wrapper.checkpoint()
@@ -833,28 +835,54 @@ def ingest_vanilla_chunked(conn, vanilla_path: Path, version: str, logger: Daemo
 # MOD DISCOVERY AND INGESTION
 # =============================================================================
 
-def discover_playset_mods(playset_file: Path, logger: DaemonLogger) -> List[Dict]:
+def load_mods_from_active_playset(logger: DaemonLogger) -> List[Dict]:
     """
-    Load mod list from an active_mod_paths.json file (exported from launcher).
+    Load mod list from the ACTIVE playset (canonical source).
     
-    Returns list of dicts in same format as discover_all_mods(): {name, path, workshop_id}
-    Respects load_order from the file.
+    Reads from playsets/playset_manifest.json to get active playset name,
+    then loads mods[] from playsets/{active}.json.
+    
+    Returns list of dicts: {name, path, workshop_id, load_order}
     """
     import json
     
-    if not playset_file.exists():
-        logger.error(f"Playset file not found: {playset_file}")
+    # Step 1: Read manifest to get active playset
+    if not PLAYSET_MANIFEST.exists():
+        logger.error(f"Playset manifest not found: {PLAYSET_MANIFEST}")
+        logger.info("Run 'ck3_playset switch' to set an active playset")
         return []
     
     try:
-        data = json.loads(playset_file.read_text(encoding='utf-8'))
+        manifest = json.loads(PLAYSET_MANIFEST.read_text(encoding='utf-8'))
     except Exception as e:
-        logger.error(f"Failed to parse playset file: {e}")
+        logger.error(f"Failed to parse manifest: {e}")
+        return []
+    
+    active_filename = manifest.get('active')
+    if not active_filename:
+        logger.error("No active playset set in manifest")
+        logger.info("Run 'ck3_playset switch' to set an active playset")
+        return []
+    
+    # Step 2: Load the active playset file
+    playset_path = PLAYSETS_DIR / active_filename
+    if not playset_path.exists():
+        logger.error(f"Active playset file not found: {playset_path}")
+        return []
+    
+    try:
+        data = json.loads(playset_path.read_text(encoding='utf-8'))
+    except Exception as e:
+        logger.error(f"Failed to parse playset: {e}")
         return []
     
     playset_name = data.get('playset_name', 'Unknown')
-    # CANONICAL: Use 'mods' key. Fallback to 'paths' only for legacy files.
-    mod_entries = data.get('mods', []) or data.get('paths', [])
+    
+    # CANONICAL: Use 'mods' key only. Legacy 'paths' format is BANNED.
+    mod_entries = data.get('mods', [])
+    if not mod_entries:
+        logger.warning(f"Playset '{playset_name}' has no mods")
+        return []
     
     mods = []
     for entry in mod_entries:
@@ -869,7 +897,7 @@ def discover_playset_mods(playset_file: Path, logger: DaemonLogger) -> List[Dict
         mods.append({
             "name": entry.get('name', mod_path.name),
             "path": mod_path,
-            "workshop_id": entry.get('steam_id') or None,  # Empty string -> None
+            "workshop_id": entry.get('steam_id') or None,
             "load_order": entry.get('load_order', 999)
         })
     
@@ -878,7 +906,7 @@ def discover_playset_mods(playset_file: Path, logger: DaemonLogger) -> List[Dict
     
     workshop_count = sum(1 for m in mods if m['workshop_id'])
     local_count = len(mods) - workshop_count
-    logger.info(f"Loaded playset '{playset_name}' with {len(mods)} mods ({workshop_count} workshop, {local_count} local)")
+    logger.info(f"Active playset: '{playset_name}' with {len(mods)} mods ({workshop_count} workshop, {local_count} local)")
     
     return mods
 
@@ -957,16 +985,16 @@ def discover_all_mods(logger: DaemonLogger) -> List[Dict]:
     return mods
 
 
-def ingest_all_mods(conn, logger: DaemonLogger, status: StatusWriter, playset_file: Path = None):
+def ingest_all_mods(conn, logger: DaemonLogger, status: StatusWriter, use_active_playset: bool = True):
     """Ingest mods with progress tracking.
     
-    If playset_file is provided, only ingest mods from that playset.
-    Otherwise, discover and ingest all mods.
+    If use_active_playset is True (default), ingest mods from active playset.
+    Otherwise, discover and ingest ALL mods from workshop + local.
     """
     from ck3raven.db.ingest import ingest_mod
     
-    if playset_file:
-        mods = discover_playset_mods(playset_file, logger)
+    if use_active_playset:
+        mods = load_mods_from_active_playset(logger)
     else:
         mods = discover_all_mods(logger)
     
@@ -2379,7 +2407,7 @@ def _write_debug_output(output: dict):
     DEBUG_OUTPUT_FILE.write_text(json.dumps(output, indent=2))
 
 
-def start_detached(db_path: Path, force: bool, symbols_only: bool = False, playset_file: Path = None):
+def start_detached(db_path: Path, force: bool, symbols_only: bool = False, ingest_all: bool = False):
     """Launch the rebuild as a completely detached process."""
     
     # Create the command to run ourselves in daemon mode
@@ -2401,8 +2429,8 @@ def start_detached(db_path: Path, force: bool, symbols_only: bool = False, plays
         args.append("--force")
     if symbols_only:
         args.append("--symbols-only")
-    if playset_file:
-        args.extend(["--playset-file", str(playset_file)])
+    if ingest_all:
+        args.append("--ingest-all")
     
     # Launch completely detached
     # DETACHED_PROCESS = 0x00000008
@@ -2544,8 +2572,8 @@ def main():
                         help="Custom vanilla path (for testing with fixtures)")
     parser.add_argument("--skip-mods", action="store_true",
                         help="Skip mod ingestion (for vanilla-only testing)")
-    parser.add_argument("--playset-file", type=Path,
-                        help="Path to active_mod_paths.json to build only active playset mods")
+    parser.add_argument("--ingest-all", action="store_true",
+                        help="Ingest ALL mods (workshop + local) instead of just active playset")
     
     args = parser.parse_args()
     
@@ -2599,14 +2627,14 @@ def main():
             print(f"  Database: {args.db}")
             print(f"  Vanilla: {args.vanilla_path or 'default'}")
             print(f"  Skip mods: {args.skip_mods}")
-            print(f"  Playset file: {args.playset_file or 'all mods'}")
+            print(f"  Ingest all mods: {args.ingest_all}")
             logger = DaemonLogger(LOG_FILE, also_print=True)
             status = StatusWriter(STATUS_FILE)
             run_rebuild(
                 args.db, args.force, logger, status, args.symbols_only,
                 vanilla_path=args.vanilla_path,
                 skip_mods=args.skip_mods,
-                playset_file=args.playset_file
+                use_active_playset=not args.ingest_all
             )
             sys.exit(0)
         
@@ -2615,7 +2643,7 @@ def main():
             print("Daemon is already running (PID check). Use 'stop' first.")
             sys.exit(1)
         
-        start_detached(args.db, args.force, args.symbols_only, playset_file=args.playset_file)
+        start_detached(args.db, args.force, args.symbols_only, ingest_all=args.ingest_all)
     
     elif args.command == "status":
         show_status()
@@ -2638,7 +2666,7 @@ def main():
         status = StatusWriter(STATUS_FILE)
         
         try:
-            run_rebuild(args.db, args.force, logger, status, args.symbols_only, playset_file=args.playset_file)
+            run_rebuild(args.db, args.force, logger, status, args.symbols_only, use_active_playset=not args.ingest_all)
         except Exception as e:
             logger.error(f"Daemon crashed: {e}")
             logger.error(traceback.format_exc())

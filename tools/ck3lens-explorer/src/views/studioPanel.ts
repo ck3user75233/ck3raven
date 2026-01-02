@@ -451,9 +451,11 @@ export class StudioPanel {
      */
     private async handleMessage(message: { command: string; [key: string]: unknown }): Promise<void> {
         switch (message.command) {
-            case 'getLiveMods':
-                const mods = await this.session.getLiveMods();
-                this.panel.webview.postMessage({ command: 'liveMods', mods });
+            case 'getPlaysetMods':
+                // Get local (editable) mods from playset
+                const allMods = await this.session.getPlaysetMods();
+                const localMods = allMods.filter(m => m.kind === 'local');
+                this.panel.webview.postMessage({ command: 'playsetMods', mods: localMods });
                 break;
 
             case 'getTemplates':
@@ -549,11 +551,11 @@ export class StudioPanel {
                     relPath
                 });
 
-                // Open the file in editor
-                const liveMods = await this.session.getLiveMods();
-                const mod = liveMods.find(m => m.name === modName);
-                if (mod) {
-                    const uri = vscode.Uri.file(`${mod.path}/${relPath}`);
+                // Open the file in editor - get path from playset mods
+                const playsetMods = await this.session.getPlaysetMods();
+                const mod = playsetMods.find(m => m.name === modName);
+                if (mod?.sourcePath) {
+                    const uri = vscode.Uri.file(`${mod.sourcePath}/${relPath}`);
                     await vscode.window.showTextDocument(uri);
                 }
             } else {
@@ -926,7 +928,7 @@ export class StudioPanel {
         const vscode = acquireVsCodeApi();
         
         let selectedTemplate = 'empty';
-        let liveMods = [];
+        let playsetMods = [];
         let templates = [];
 
         // Tab switching
@@ -940,7 +942,7 @@ export class StudioPanel {
         });
 
         // Request initial data
-        vscode.postMessage({ command: 'getLiveMods' });
+        vscode.postMessage({ command: 'getPlaysetMods' });
         vscode.postMessage({ command: 'getTemplates' });
 
         // Handle messages from extension
@@ -948,8 +950,8 @@ export class StudioPanel {
             const message = event.data;
             
             switch (message.command) {
-                case 'liveMods':
-                    liveMods = message.mods || [];
+                case 'playsetMods':
+                    playsetMods = message.mods || [];
                     updateModSelects();
                     break;
 
@@ -977,10 +979,10 @@ export class StudioPanel {
         });
 
         function updateModSelects() {
-            const html = liveMods.length === 0 
-                ? '<option value="">No live mods configured</option>'
-                : liveMods.map(m => 
-                    '<option value="' + m.name + '">' + m.name + (m.exists ? '' : ' (not found)') + '</option>'
+            const html = playsetMods.length === 0 
+                ? '<option value="">No local mods in playset</option>'
+                : playsetMods.map(m => 
+                    '<option value="' + m.name + '">' + m.name + '</option>'
                 ).join('');
             
             document.getElementById('modSelect').innerHTML = html;

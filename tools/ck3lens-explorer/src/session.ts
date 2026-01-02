@@ -8,17 +8,8 @@ import { Logger } from './utils/logger';
 
 export interface SessionInfo {
     modRoot: string;
-    liveMods: LiveModInfo[];
     dbPath: string;
-    playsetId: number;
     playsetName: string | null;
-}
-
-export interface LiveModInfo {
-    modId: string;
-    name: string;
-    path: string;
-    exists: boolean;
 }
 
 export interface SymbolResult {
@@ -119,24 +110,19 @@ export class CK3LensSession implements vscode.Disposable {
         try {
             const config = vscode.workspace.getConfiguration('ck3lens');
             const dbPath = config.get<string>('databasePath') || undefined;
-            const liveMods = config.get<string[]>('liveMods') || undefined;
 
             const result = await this.pythonBridge.call('init_session', {
-                db_path: dbPath,
-                live_mods: liveMods
+                db_path: dbPath
             });
 
             this._sessionInfo = {
                 modRoot: result.mod_root,
-                liveMods: result.live_mods?.mods || [],
                 dbPath: result.db_path,
-                playsetId: result.playset_id,
                 playsetName: result.playset_name
             };
 
             this._initialized = true;
             this.logger.info(`Session initialized: ${this._sessionInfo.dbPath}`);
-            this.logger.info(`Live mods: ${this._sessionInfo.liveMods.map(m => m.name).join(', ')}`);
 
         } catch (error) {
             this._initialized = false;
@@ -344,24 +330,7 @@ export class CK3LensSession implements vscode.Disposable {
     }
 
     /**
-     * Get list of live (writable) mods
-     */
-    async getLiveMods(): Promise<LiveModInfo[]> {
-        if (!this._initialized) {
-            await this.initialize();
-        }
-
-        try {
-            const result = await this.pythonBridge.call('list_live_mods', {});
-            return result.live_mods?.mods || [];
-        } catch (error) {
-            this.logger.error('Get live mods failed', error);
-            return [];
-        }
-    }
-
-    /**
-     * Read file from live mod (current disk state)
+     * Read file from mod (current disk state)
      */
     async readLiveFile(modName: string, relPath: string): Promise<string | null> {
         try {

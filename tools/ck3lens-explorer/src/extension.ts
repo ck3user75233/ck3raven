@@ -12,7 +12,6 @@ import * as os from 'os';
 import { CK3LensSession } from './session';
 import { ExplorerViewProvider } from './views/explorerView';
 import { ConflictsViewProvider } from './views/conflictsView';
-import { LiveModsViewProvider } from './views/liveModsView';
 import { PlaysetViewProvider } from './views/playsetView';
 import { IssuesViewProvider } from './views/issuesView';
 import { AgentViewProvider } from './views/agentView';
@@ -142,7 +141,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Register view providers
     const explorerProvider = new ExplorerViewProvider(session, logger);
     const conflictsProvider = new ConflictsViewProvider(session, logger);
-    const liveModsProvider = new LiveModsViewProvider(session, logger);
     const playsetProvider = new PlaysetViewProvider(session, logger);
     const issuesProvider = new IssuesViewProvider(session, logger);
     const agentProvider = new AgentViewProvider(context, logger);
@@ -170,7 +168,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.window.registerTreeDataProvider('ck3lens.agentView', agentProvider),
         vscode.window.registerTreeDataProvider('ck3lens.explorerView', explorerProvider),
         vscode.window.registerTreeDataProvider('ck3lens.conflictsView', conflictsProvider),
-        vscode.window.registerTreeDataProvider('ck3lens.liveModsView', liveModsProvider),
         playsetTreeView,
         vscode.window.registerTreeDataProvider('ck3lens.issuesView', issuesProvider),
         vscode.window.registerTreeDataProvider('ck3lens.contractsView', contractsProvider),
@@ -223,7 +220,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Register commands
     // NOTE: rulesProvider removed - mode now controlled via MCP ck3_get_mode_instructions()
-    registerCommands(context, agentProvider, explorerProvider, conflictsProvider, liveModsProvider, playsetProvider, issuesProvider, lintingProvider, contractsProvider);
+    registerCommands(context, agentProvider, explorerProvider, conflictsProvider, playsetProvider, issuesProvider, lintingProvider, contractsProvider);
 
     // Register file watchers for real-time linting
     if (vscode.workspace.getConfiguration('ck3lens').get('enableRealTimeLinting', true)) {
@@ -264,7 +261,6 @@ function registerCommands(
     agentProvider: AgentViewProvider,
     explorerProvider: ExplorerViewProvider,
     conflictsProvider: ConflictsViewProvider,
-    liveModsProvider: LiveModsViewProvider,
     playsetProvider: PlaysetViewProvider,
     issuesProvider: IssuesViewProvider,
     lintingProvider: LintingProvider,
@@ -287,7 +283,6 @@ function registerCommands(
                 // Refresh all views
                 explorerProvider.refresh();
                 conflictsProvider.refresh();
-                liveModsProvider.refresh();
                 playsetProvider.refresh();
             } catch (error) {
                 logger.error('Failed to initialize session', error);
@@ -308,7 +303,6 @@ function registerCommands(
         vscode.commands.registerCommand('ck3lens.refreshViews', async () => {
             explorerProvider.refresh();
             conflictsProvider.refresh();
-            liveModsProvider.refresh();
             playsetProvider.refresh();
             // Also re-check MCP server status
             await agentProvider.recheckMcpStatus();
@@ -754,12 +748,13 @@ Use the appropriate tools (ck3_add_mod_to_playset, ck3_remove_mod_from_playset) 
                 return;
             }
 
-            // Ask for target mod
-            const liveMods = await session.getLiveMods();
-            const modItems = liveMods.map(m => ({
+            // Ask for target mod - use playset mods, filter to local (editable)
+            const allMods = await session.getPlaysetMods();
+            const localMods = allMods.filter(m => m.kind === 'local');
+            const modItems = localMods.map(m => ({
                 label: m.name,
-                description: m.modId,
-                modId: m.modId
+                description: `Load order: ${m.loadOrder}`,
+                modName: m.name
             }));
 
             const selectedMod = await vscode.window.showQuickPick(modItems, {
@@ -781,7 +776,7 @@ Use the appropriate tools (ck3_add_mod_to_playset, ck3_remove_mod_from_playset) 
             if (!mode) {return;}
 
             // Create the patch
-            const result = await session.createOverridePatch(sourcePath, selectedMod.modId, mode.value);
+            const result = await session.createOverridePatch(sourcePath, selectedMod.modName, mode.value);
 
             if (result.success && result.full_path) {
                 const doc = await vscode.workspace.openTextDocument(result.full_path);

@@ -1,4 +1,4 @@
-# CK3Raven / CK3Lens — Canonical Architecture
+# CK3Raven / CK3Lens Ã¢â‚¬â€ Canonical Architecture
 
 > **Status:** AUTHORITATIVE  
 > **Last Updated:** December 30, 2025  
@@ -23,11 +23,11 @@ Every agent working on this codebase MUST understand these 5 rules:
 
 | # | Rule | Violation Example |
 |---|------|-------------------|
-| 1 | **ONE enforcement boundary** — only `enforcement.py` may deny operations | Adding `if not can_write(path)` anywhere else |
-| 2 | **NO permission oracles** — never ask "am I allowed?" outside enforcement | Creating `is_path_writable()` helper |
-| 3 | **mods[] is THE mod list** — no parallel lists | Creating `local_mods[]` or `editable_mods[]` |
-| 4 | **WorldAdapter = resolution** — it resolves paths to canonical addresses, NOT permission decisions | Using `adapter.resolve()` result to gate writes |
-| 5 | **Enforcement = decisions** — it decides allow/deny at execution time | Pre-checking permissions before calling enforcement |
+| 1 | **ONE enforcement boundary** Ã¢â‚¬â€ only `enforcement.py` may deny operations | Adding `if not can_write(path)` anywhere else |
+| 2 | **NO permission oracles** Ã¢â‚¬â€ never ask "am I allowed?" outside enforcement | Creating `is_path_writable()` helper |
+| 3 | **mods[] is THE mod list** Ã¢â‚¬â€ no parallel lists | Creating `local_mods[]` or `editable_mods[]` |
+| 4 | **WorldAdapter = resolution** Ã¢â‚¬â€ it resolves paths to canonical addresses, NOT permission decisions | Using `adapter.resolve()` result to gate writes |
+| 5 | **Enforcement = decisions** Ã¢â‚¬â€ it decides allow/deny at execution time | Pre-checking permissions before calling enforcement |
 
 ---
 
@@ -35,13 +35,18 @@ Every agent working on this codebase MUST understand these 5 rules:
 
 | Section | Summary | Link |
 |---------|---------|------|
-| **1. Enforcement** | Single gate for all policy decisions | [→ Details](#1-enforcement-architecture) |
-| **2. Resolution** | WorldAdapter resolves paths to canonical addresses | [→ Details](#2-resolution-architecture) |
-| **3. Playsets** | How mods are grouped and filtered | [→ Details](#3-playset-architecture) |
-| **4. Path Resolution** | Canonical path normalization pipeline | [→ Details](#4-path-resolution) |
-| **5. MCP Tools** | Canonical pattern for all MCP tool implementations | [→ Details](#5-mcp-tool-architecture) |
-| **6. Banned Terms** | Hard-banned naming patterns | [→ Details](#6-banned-terms) |
-| **7. File Locations** | Where canonical implementations live | [→ Details](#7-file-locations) |
+| **1. Enforcement** | Single gate for all policy decisions | [Ã¢â€ â€™ Details](#1-enforcement-architecture) |
+| **2. Resolution** | WorldAdapter resolves paths to canonical addresses | [Ã¢â€ â€™ Details](#2-resolution-architecture) |
+| **3. Playsets** | How mods are grouped and filtered | [Ã¢â€ â€™ Details](#3-playset-architecture) |
+| **4. Path Resolution** | Canonical path normalization pipeline | [Ã¢â€ â€™ Details](#4-path-resolution) |
+| **5. MCP Tools** | Canonical pattern for all MCP tool implementations | [Ã¢â€ â€™ Details](#5-mcp-tool-architecture) |
+| **6. Banned Terms** | Hard-banned naming patterns | [Ã¢â€ â€™ Details](#6-banned-terms) |
+| **7. File Locations** | Where canonical implementations live | [â†’ Details](#7-file-locations) |
+| **8. Capability Handles** | DbHandle/FsHandle + _CAP_TOKEN pattern | [â†’ Details](#8-capability-handles-pattern-december-2025) |
+| **9. Mode-Aware Addressing** | ck3lens vs ck3raven-dev addressing | [â†’ Details](#9-mode-aware-addressing) |
+| **10. Single WorldAdapter** | One class with mode-specific behavior | [â†’ Details](#10-single-worldadapter-architecture) |
+| **11. arch_lint v2.2** | Automated architecture linter | [â†’ Details](#11-arch_lint-v22) |
+| **12. _*_internal Convention** | Internal method naming pattern | [â†’ Details](#12-_internal-method-naming-convention) |
 
 ---
 
@@ -52,7 +57,7 @@ Every agent working on this codebase MUST understand these 5 rules:
 ### Key Points
 
 - **ALL** "can I do X?" questions go through `enforce_policy()` or `_enforce_ck3lens_write()`
-- Returns `ALLOW`, `DENY`, or `REQUIRE_TOKEN` — never throws for policy denial
+- Returns `ALLOW`, `DENY`, or `REQUIRE_TOKEN` Ã¢â‚¬â€ never throws for policy denial
 - Enforcement happens at **execution time**, not at planning/validation time
 - No pre-checks, no early denials, no "fail fast" permission logic
 
@@ -100,22 +105,22 @@ if result.decision != Decision.ALLOW:
 ### Key Points
 
 - **ALL** "does X exist?" and "where is X?" questions go through `WorldAdapter.resolve()`
-- Resolution is **structural identity**, not permission — it answers what/where, never allowed/denied
+- Resolution is **structural identity**, not permission Ã¢â‚¬â€ it answers what/where, never allowed/denied
 - Returns `ResolutionResult` with `found`, `address`, `absolute_path`, `domain`, etc.
-- The `ui_hint_potentially_editable` field is for **display only** — **NEVER use in control flow**
+- The `ui_hint_potentially_editable` field is for **display only** Ã¢â‚¬â€ **NEVER use in control flow**
 
 ### What Resolution Does
 
 | Responsibility | Yes/No |
 |----------------|--------|
-| Parse user input into canonical address | ✅ |
-| Determine domain (WIP, LOCAL_MOD, VANILLA, WORKSHOP, LAUNCHER_REGISTRY) | ✅ |
-| Compute absolute filesystem path | ✅ |
-| Fail for invalid address format | ✅ |
-| Fail for path not found (for reads) | ✅ |
-| Decide "allowed" or "denied" | ❌ |
-| Pre-check writability | ❌ |
-| Branch on domain to deny mutation | ❌ |
+| Parse user input into canonical address | Ã¢Å“â€¦ |
+| Determine domain (WIP, LOCAL_MOD, VANILLA, WORKSHOP, LAUNCHER_REGISTRY) | Ã¢Å“â€¦ |
+| Compute absolute filesystem path | Ã¢Å“â€¦ |
+| Fail for invalid address format | Ã¢Å“â€¦ |
+| Fail for path not found (for reads) | Ã¢Å“â€¦ |
+| Decide "allowed" or "denied" | Ã¢ÂÅ’ |
+| Pre-check writability | Ã¢ÂÅ’ |
+| Branch on domain to deny mutation | Ã¢ÂÅ’ |
 
 ### Usage Pattern
 
@@ -146,13 +151,13 @@ if not result.found:
 
 - A **Playset** is a named collection of mods with load order
 - `PlaysetLens` is the runtime filter that scopes all DB queries to one playset
-- `Session.mods[]` is THE authoritative list of mods — no parallel lists
+- `Session.mods[]` is THE authoritative list of mods Ã¢â‚¬â€ no parallel lists
 - `Session.local_mods_folder` is a single `Path` for containment checks
 
 ### Data Flow
 
 ```
-Launcher Playset → playsets/*.json → PlaysetLens → DB Queries (filtered)
+Launcher Playset Ã¢â€ â€™ playsets/*.json Ã¢â€ â€™ PlaysetLens Ã¢â€ â€™ DB Queries (filtered)
 ```
 
 ### Mod Types
@@ -217,7 +222,7 @@ Its responsibilities are limited to:
 ### Resolution Flow
 
 ```
-user_input → WorldAdapter.resolve() → ResolutionResult {
+user_input Ã¢â€ â€™ WorldAdapter.resolve() Ã¢â€ â€™ ResolutionResult {
     found: bool,
     address: CanonicalAddress,  # sole identity
     absolute_path: Path,        # for execution only
@@ -230,7 +235,7 @@ user_input → WorldAdapter.resolve() → ResolutionResult {
 
 ## 5. MCP Tool Architecture
 
-**⚠️ CRITICAL: Any new MCP tool MUST follow this canonical pattern.**
+**Ã¢Å¡Â Ã¯Â¸Â CRITICAL: Any new MCP tool MUST follow this canonical pattern.**
 
 ### Required Components
 
@@ -293,19 +298,19 @@ def ck3_example_tool(
 **FORBIDDEN in MCP tools:**
 
 ```python
-# ❌ NEVER pre-check writability
+# Ã¢ÂÅ’ NEVER pre-check writability
 if not is_path_writable(path):
     return {"error": "Not writable"}
 
-# ❌ NEVER use ResolutionResult for permission
+# Ã¢ÂÅ’ NEVER use ResolutionResult for permission
 if not result.ui_hint_potentially_editable:
     return {"error": "Cannot edit"}
 
-# ❌ NEVER create local permission helpers
+# Ã¢ÂÅ’ NEVER create local permission helpers
 def can_write_to_mod(mod_name: str) -> bool:
     ...
 
-# ❌ NEVER gate on visibility metadata
+# Ã¢ÂÅ’ NEVER gate on visibility metadata
 if result.source == "vanilla":
     return {"error": "Cannot write to vanilla"}
 ```
@@ -313,7 +318,7 @@ if result.source == "vanilla":
 **REQUIRED pattern:**
 
 ```python
-# ✅ ALWAYS call enforcement.py for write operations
+# Ã¢Å“â€¦ ALWAYS call enforcement.py for write operations
 result = enforce_policy(EnforcementRequest(...))
 if result.decision != Decision.ALLOW:
     return {"error": result.reason}
@@ -328,7 +333,7 @@ Helper functions using `is_*`, `can_*`, or capability-style naming are not permi
 ### Canonical Tool Flow
 
 ```
-1. Resolve via WorldAdapter (identity only — structural errors only)
+1. Resolve via WorldAdapter (identity only Ã¢â‚¬â€ structural errors only)
 2. Enforce at boundary (ALLOW / DENY / REQUIRE_TOKEN)
 3. Execute (impl functions: syntax validation + filesystem mutation)
 ```
@@ -402,6 +407,19 @@ editable_mods
 writable_mods
 local_mods (as derived or filtered lists)
 live_mods
+list_live_mods
+getLiveMods
+LiveModInfo
+no_lens
+editable_mods
+list_live_mods
+list_live_mods
+getLiveMods
+LiveModInfo
+no_lens
+editable_mods
+getLiveMods
+LiveModInfo
 mod_whitelist
 whitelist
 blacklist
@@ -434,13 +452,13 @@ active_mod_paths.json (deprecated format)
 
 ### Required Replacements
 
-| ❌ Banned | ✅ Replacement | Reason |
+| Ã¢ÂÅ’ Banned | Ã¢Å“â€¦ Replacement | Reason |
 |-----------|----------------|--------|
 | `mod_roots` | `mod_paths` | "roots" implies authority |
 | `is_writable` | `ui_hint_potentially_editable` | explicit non-authority |
 | `local_mods[]` | `mods[]` + containment check | no parallel lists |
-| `can_write_to_mod()` | N/A — delete entirely | oracle function |
-| `is_path_allowed()` | N/A — delete entirely | oracle function |
+| `can_write_to_mod()` | N/A Ã¢â‚¬â€ delete entirely | oracle function |
+| `is_path_allowed()` | N/A Ã¢â‚¬â€ delete entirely | oracle function |
 
 **Full Details:** [CANONICAL REFACTOR INSTRUCTIONS.md](CANONICAL%20REFACTOR%20INSTRUCTIONS.md)
 
@@ -493,6 +511,309 @@ Before submitting any code, verify:
 - [ ] WorldAdapter used for resolution only, not permission
 - [ ] Enforcement called at execution time, not planning time
 - [ ] `mods[]` is the only mod list referenced
-- [ ] All mutations flow: resolve → enforce → execute
+- [ ] All mutations flow: resolve Ã¢â€ â€™ enforce Ã¢â€ â€™ execute
 - [ ] Launcher registry treated only as a path domain
 - [ ] No section treats mods as permission objects
+
+---
+
+## 8. Capability Handles Pattern (December 2025)
+
+### Overview
+
+**Capability handles** are unforgeable tokens that grant specific, scoped access to resources. They replace the oracle pattern where code would ask "am I allowed?" before acting.
+
+Instead of:
+```python
+# Ã¢ÂÅ’ BANNED - oracle pattern
+if can_write_to_db():
+    conn.execute("INSERT ...")
+```
+
+We use:
+```python
+# Ã¢Å“â€¦ REQUIRED - capability handle pattern
+handle = world.db_handle()  # Handle mints access or raises
+handle.execute("INSERT ...")  # Access already validated
+```
+
+### DbHandle
+
+**Purpose:** Scoped database access with built-in visibility filtering.
+
+```python
+@dataclass
+class DbHandle:
+    """Unforgeable database access handle."""
+    _conn: sqlite3.Connection
+    _cvid_filter: Optional[set[int]]  # None = no filter (ck3raven-dev)
+    _cap_token: object  # Unforgeable identity token
+    
+    def execute(self, sql: str, params=()) -> sqlite3.Cursor:
+        """Execute with automatic CVID filtering."""
+        if self._cvid_filter is not None:
+            # ck3lens mode: filter to active playset
+            sql = self._apply_cvid_filter(sql)
+        return self._conn.execute(sql, params)
+```
+
+**Key Properties:**
+- `_cap_token` is an unforgeable object (created once at module load)
+- `_cvid_filter` is `None` for ck3raven-dev (no restrictions), set for ck3lens
+- Handles are minted by WorldAdapter, not constructed directly
+
+### FsHandle
+
+**Purpose:** Scoped filesystem access for specific paths.
+
+```python
+@dataclass
+class FsHandle:
+    """Unforgeable filesystem access handle."""
+    _root: Path
+    _writable: bool
+    _cap_token: object
+    
+    def read(self, rel_path: str) -> str:
+        """Read file under this handle's root."""
+        full = self._root / rel_path
+        return full.read_text()
+    
+    def write(self, rel_path: str, content: str) -> None:
+        """Write file (only if handle is writable)."""
+        if not self._writable:
+            raise CapabilityError("Handle is read-only")
+        full = self._root / rel_path
+        full.write_text(content)
+```
+
+### _CAP_TOKEN Pattern
+
+The `_CAP_TOKEN` is an unforgeable identity token that prevents handle spoofing:
+
+```python
+# At module level - created once, never exported
+_CAP_TOKEN = object()
+
+class DbHandle:
+    def __init__(self, ..., _cap_token: object):
+        if _cap_token is not _CAP_TOKEN:
+            raise CapabilityError("Handles must be minted by WorldAdapter")
+        self._cap_token = _cap_token
+```
+
+**Why this matters:**
+- Only code with access to `_CAP_TOKEN` can create handles
+- The token is never exported from the module
+- External code cannot forge handles
+- This is the Python equivalent of capability-based security
+
+### Handle Minting
+
+Only `WorldAdapter` may mint handles:
+
+```python
+class WorldAdapter:
+    def db_handle(self) -> DbHandle:
+        """Mint a database handle for current mode."""
+        if self._mode == "ck3lens":
+            cvid_filter = self._get_playset_cvids()
+        else:
+            cvid_filter = None  # ck3raven-dev: no filter
+        
+        return DbHandle(
+            _conn=self._conn,
+            _cvid_filter=cvid_filter,
+            _cap_token=_CAP_TOKEN,
+        )
+```
+
+---
+
+## 9. Mode-Aware Addressing
+
+### ck3lens Mode
+
+Uses **mod_name + rel_path** addressing:
+
+```python
+# Tool receives:
+ck3_file(command="write", mod_name="MSC", rel_path="common/traits/fix.txt", content="...")
+
+# WorldAdapter resolves to:
+CanonicalAddress(
+    address_type=AddressType.MOD,
+    identifier="MSC",  # mod_name
+    relative_path="common/traits/fix.txt",
+)
+```
+
+**Visibility:** Filtered to active playset (vanilla + enabled mods)
+
+### ck3raven-dev Mode
+
+Uses **raw path** addressing:
+
+```python
+# Tool receives:
+ck3_file(command="write", path="tools/ck3lens_mcp/ck3lens/foo.py", content="...")
+
+# WorldAdapter resolves to:
+CanonicalAddress(
+    address_type=AddressType.CK3RAVEN,
+    identifier=None,
+    relative_path="tools/ck3lens_mcp/ck3lens/foo.py",
+)
+```
+
+**Visibility:** ck3raven source + WIP workspace (mods NOT part of execution model)
+
+### Addressing Summary
+
+| Mode | Primary Addressing | mods[] Used? | Visibility Filter |
+|------|-------------------|--------------|-------------------|
+| `ck3lens` | `mod_name` + `rel_path` | Yes | Active playset CVIDs |
+| `ck3raven-dev` | Raw `path` | No | None (full access) |
+
+---
+
+## 10. Single WorldAdapter Architecture
+
+**CRITICAL: There is ONE WorldAdapter class with mode-aware behavior.**
+
+Previously, there were separate `LensWorldAdapter` and `DevWorldAdapter` classes. These have been consolidated into a single `WorldAdapter` that changes behavior based on mode.
+
+### Why Single Class?
+
+1. **Prevents calling wrong adapter** - No risk of using dev adapter in lens mode
+2. **Mode is runtime state** - The adapter checks `session.mode` at resolution time
+3. **Simpler testing** - One class to test, not two
+4. **No banned term leakage** - "Lens" prefix was a banned concept
+
+### Mode-Specific Behavior
+
+```python
+class WorldAdapter:
+    def resolve(self, path_or_address: str) -> ResolutionResult:
+        if self._mode == "ck3lens":
+            return self._resolve_lens(path_or_address)
+        elif self._mode == "ck3raven-dev":
+            return self._resolve_dev(path_or_address)
+    
+    def _resolve_lens(self, path_or_address: str) -> ResolutionResult:
+        # Filter to active playset
+        # Use mod_name + rel_path canonical form
+        # Check mods[] from session
+        ...
+    
+    def _resolve_dev(self, path_or_address: str) -> ResolutionResult:
+        # No playset filter
+        # Use raw path form
+        # Check ck3raven source, WIP only
+        ...
+```
+
+### Banned Patterns
+
+```
+# Ã¢ÂÅ’ BANNED - separate adapter classes
+LensWorldAdapter(...)
+DevWorldAdapter(...)
+
+# Ã¢ÂÅ’ BANNED - mod-related params in dev mode
+WorldAdapter(mod_paths=..., mods_roots=...)
+
+# Ã¢Å“â€¦ CORRECT - single adapter, mode from session
+adapter = WorldAdapter(db=db, mode=session.mode)
+```
+
+---
+
+## 11. arch_lint v2.2
+
+**Location:** `scripts/arch_lint/`
+
+### Purpose
+
+Automated linter that detects architectural violations:
+
+- **ORACLE-01**: Oracle-style function/variable names (`can_write`, `is_allowed`)
+- **ORACLE-02**: Permission branching in if-conditions
+- **TRUTH-01**: Parallel truth symbols (`local_mods`, `editable_mods`)
+- **CONCEPT-03**: Lens concept explosion (`PlaysetLens`, `LensWorldAdapter`)
+- **IO-01**: Raw IO calls outside handle modules
+- **MUTATOR-01/02/03**: SQL/file/subprocess mutations outside builder
+
+### Usage
+
+```bash
+# Run on entire codebase
+python -m scripts.arch_lint
+
+# JSON output
+python -m scripts.arch_lint --json
+
+# Errors only
+python -m scripts.arch_lint --errors-only
+
+# Skip unused symbol detection
+python -m scripts.arch_lint --no-unused
+```
+
+### Configuration
+
+Allowlists are in `scripts/arch_lint/config.py`:
+
+```python
+@dataclass(frozen=True)
+class LintConfig:
+    # Modules where raw IO is allowed
+    allow_raw_io_in: tuple[str, ...] = (
+        "world_adapter.py",
+        "handles/",
+        "fs_handle",
+    )
+    
+    # Modules where mutators are allowed
+    allow_mutators_in: tuple[str, ...] = (
+        "builder",
+        "write_handle",
+    )
+```
+
+### Integration
+
+arch_lint is intended to run in pre-commit hooks to prevent architectural drift.
+
+---
+
+## 12. _*_internal Method Naming Convention
+
+Methods prefixed with `_*_internal` are implementation details that:
+
+1. **Must not be called directly by MCP tools**
+2. **May bypass normal validation** for performance
+3. **Assume caller has already validated permissions**
+4. **Are subject to change without notice**
+
+### Example
+
+```python
+class WorldAdapter:
+    def resolve(self, path: str) -> ResolutionResult:
+        """Public API - validates input, handles errors."""
+        if not path:
+            return ResolutionResult.not_found("<empty>")
+        return self._resolve_internal(path)
+    
+    def _resolve_internal(self, path: str) -> ResolutionResult:
+        """Internal - assumes path is non-empty, may raise."""
+        ...
+```
+
+### Why This Matters
+
+- Public methods do validation, internal methods assume valid input
+- Separating concerns makes code easier to test
+- Internal methods can be optimized without changing public API
+

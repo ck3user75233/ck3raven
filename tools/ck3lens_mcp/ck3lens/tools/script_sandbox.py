@@ -272,8 +272,8 @@ def run_script_sandboxed(
         }
     """
     # Validate script is in WIP via WorldAdapter
-    from .world_router import get_world
-    from .world_adapter import PathDomain
+    from ..world_router import get_world
+    from ..world_adapter import PathDomain
     
     adapter = get_world(session=session)
     if not adapter:

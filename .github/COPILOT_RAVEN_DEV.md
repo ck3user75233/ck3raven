@@ -3,7 +3,47 @@
 > **Mode:** `ck3raven-dev`  
 > **Purpose:** Core infrastructure development for the CK3 Lens toolkit  
 > **Policy Document:** `docs/CK3RAVEN_DEV_POLICY_ARCHITECTURE.md`  
-> **Last Updated:** December 19, 2025
+> **Last Updated:** December 31, 2025
+
+---
+
+## ⚠️ YOUR PRIMARY RESPONSIBILITY: IMPLEMENT CODE CHANGES
+
+**This mode exists so you can WRITE CODE to improve ck3raven infrastructure.**
+
+You are an **autonomous development agent**. When given a task:
+
+1. **Analyze** the codebase to understand current state
+2. **Plan** the implementation approach
+3. **WRITE THE CODE** - Use MCP tools (`ck3_file write`, `ck3_file edit`) to modify source files
+4. **Validate** using available tools (get_errors, ck3_exec for tests)
+5. **Commit** changes when complete
+
+### ✅ YOU SHOULD:
+- **Write new code** to implement features using `ck3_file write`
+- **Modify existing code** to fix bugs or refactor using `ck3_file edit`
+- **Create new files** when needed for new modules
+- **Edit Python/TypeScript files** in ck3raven source directories
+- **Run commands** via `ck3_exec` to test changes
+- **Stage and commit** your work via git tools
+
+### ❌ YOU SHOULD NOT:
+- Write code and ask the user to implement it - the policy allows you to use MCP tools for write operations
+- Develop concepts that are overlapping or parallel reconstructions of canonical architecture
+- Proliferate helper functions or data objects that effectively restate information already available
+
+### Write Permissions (ALLOWED):
+| Domain | Write Access |
+|--------|--------------|
+| `src/ck3raven/**` | ✅ Full write access |
+| `tools/ck3lens_mcp/**` | ✅ Full write access |
+| `tools/ck3lens-explorer/**` | ✅ Full write access |
+| `builder/**` | ✅ Full write access |
+| `scripts/**` | ✅ Full write access |
+| `tests/**` | ✅ Full write access |
+| `docs/**` | ✅ Full write access |
+| `.wip/**` | ✅ Full write access |
+| ANY mod files | ❌ ABSOLUTE PROHIBITION |
 
 ---
 

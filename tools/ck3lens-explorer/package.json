@@ -118,13 +118,6 @@
           "contextualTitle": "CK3 Lens"
         },
         {
-          "id": "ck3lens.liveModsView",
-          "name": "Live Mods",
-          "type": "tree",
-          "icon": "$(file-code)",
-          "contextualTitle": "CK3 Lens"
-        },
-        {
           "id": "ck3lens.issuesView",
           "name": "Issues",
           "type": "tree",
@@ -536,14 +529,6 @@
           "type": "boolean",
           "default": true,
           "description": "Show inline hints for symbol definitions"
-        },
-        "ck3lens.liveMods": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "description": "List of mod folder names that can be edited (whitelist)"
         },
         "ck3lens.traceLevel": {
           "type": "string",
