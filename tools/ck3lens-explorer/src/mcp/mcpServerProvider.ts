@@ -273,15 +273,35 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
  * 
  * Note: As of VS Code 1.96, McpServerDefinitionProvider is a proposed API.
  * The extension must declare "mcpServerDefinitionProvider" in enabledApiProposals.
+ * 
+ * CRITICAL: This is REQUIRED for per-instance isolation. Without it, all VS Code
+ * windows share a single MCP server and mode state gets corrupted across windows.
+ * We do NOT fall back to static mcp.json - that breaks the architecture.
  */
 export function registerMcpServerProvider(
     context: vscode.ExtensionContext,
     logger: Logger
 ): CK3LensMcpServerProvider | undefined {
-    // Check if the API is available
+    // Check if the API is available - REQUIRED, not optional
     if (!vscode.lm || typeof vscode.lm.registerMcpServerDefinitionProvider !== 'function') {
-        logger.info('MCP Server Definition Provider API not available (requires VS Code 1.96+)');
-        logger.info('Falling back to static mcp.json configuration');
+        const errorMsg = 'CRITICAL: MCP Server Definition Provider API not available. ' +
+            'This requires VS Code 1.96+ with mcpServerDefinitionProvider proposed API. ' +
+            'Without this, per-instance isolation is broken and mode state corrupts across windows. ' +
+            'Delete any static mcp.json and ensure VS Code is updated.';
+        logger.error(errorMsg);
+        
+        // Show prominent error to user
+        vscode.window.showErrorMessage(
+            'CK3 Lens: MCP per-instance isolation unavailable. ' +
+            'Requires VS Code 1.96+. See Output panel for details.',
+            'Show Output'
+        ).then(selection => {
+            if (selection === 'Show Output') {
+                logger.show();
+            }
+        });
+        
+        // Return undefined but DO NOT silently fall back to static mcp.json
         return undefined;
     }
 
@@ -297,9 +317,18 @@ export function registerMcpServerProvider(
         context.subscriptions.push(provider);
         
         logger.info('MCP Server Definition Provider registered successfully');
+        logger.info(`Per-instance isolation enabled with instance ID: ${provider.getInstanceId()}`);
         return provider;
     } catch (error) {
         logger.error('Failed to register MCP Server Definition Provider:', error);
+        vscode.window.showErrorMessage(
+            'CK3 Lens: Failed to register MCP server provider. Per-instance isolation unavailable.',
+            'Show Output'
+        ).then(selection => {
+            if (selection === 'Show Output') {
+                logger.show();
+            }
+        });
         return undefined;
     }
 }

@@ -9,8 +9,11 @@
     "url": "https://github.com/ck3user75233/ck3raven"
   },
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.96.0"
   },
+  "enabledApiProposals": [
+    "mcpServerDefinitionProvider"
+  ],
   "categories": [
     "Linters",
     "Programming Languages",
@@ -30,6 +33,12 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "ck3lens",
+        "label": "CK3 Lens MCP Server"
+      }
+    ],
     "languages": [
       {
         "id": "paradox-script",
