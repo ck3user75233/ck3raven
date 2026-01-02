@@ -4,7 +4,7 @@ CK3 Lens MCP Server
 An MCP server providing CK3 modding tools:
 - Symbol search (from ck3raven SQLite DB)
 - Conflict detection
-- Live mod file operations (sandboxed)
+- Mod file operations (writes sandboxed to local_mods_folder)
 - Git operations
 - Validation
 
@@ -579,7 +579,7 @@ def _init_session_internal(
     - Session is loaded from active playset via load_config()
     - mods[] contains all mods from playset
     - local_mods_folder is the folder boundary for editable mods
-    - "Local mods" are derived at runtime, not stored
+    - "mods under local_mods_folder" are derived at runtime, not stored
 
     Returns session info dict.
     """
@@ -1425,15 +1425,240 @@ def ck3_logs(
 
 
 # ============================================================================
-# ck3_conflicts - ARCHIVED 2025-01-02
+# ck3_conflicts - Unified Conflict Detection
 # ============================================================================
-#
-# The ck3_conflicts MCP tool was archived because it used BANNED playset_id.
-# See: archive/conflict_analysis_jan2026/
-#
-# Will be rebuilt with simple approach using session.mods[] cvids directly.
-# No playset_id needed - conflicts are between mods in the active playset.
-# ============================================================================
+
+ConflictCommand = Literal["symbols", "files", "summary"]
+
+@mcp.tool()
+def ck3_conflicts(
+    command: ConflictCommand = "symbols",
+    # Filters
+    symbol_type: str | None = None,
+    symbol_names: list[str] | None = None,
+    game_folder: str | None = None,
+    # Options
+    include_compatch: bool = False,
+    limit: int = 100,
+) -> dict:
+    """
+    Unified conflict detection for the active playset.
+    
+    Commands:
+    
+    command=symbols  → Find symbols defined by multiple mods (default)
+    command=files    → Find files that multiple mods override
+    command=summary  → Get conflict statistics
+    
+    Args:
+        command: Operation to perform
+        symbol_type: Filter by symbol type (trait, event, decision, on_action, etc.)
+        symbol_names: Filter to specific symbols (for detailed analysis)
+        game_folder: Filter by CK3 folder (e.g., "common/traits", "events")
+        include_compatch: Include conflicts from compatch mods (default False)
+        limit: Max conflicts to return (default 100)
+    
+    Returns:
+        command=symbols:
+            {
+                "conflict_count": int,
+                "conflicts": [
+                    {
+                        "name": str,
+                        "symbol_type": str,
+                        "source_count": int,
+                        "sources": [{"mod": str, "file": str, "line": int}],
+                    }
+                ],
+                "compatch_conflicts_hidden": int
+            }
+        
+        command=files:
+            {
+                "conflicts": [
+                    {
+                        "relpath": str,
+                        "mods": [str],
+                        "has_zzz_prefix": bool  # True if any mod uses zzz_ prefix
+                    }
+                ]
+            }
+        
+        command=summary:
+            {
+                "total_symbol_conflicts": int,
+                "total_file_conflicts": int,
+                "by_type": {"trait": 5, "event": 3, ...},
+                "by_folder": {"common/traits": 10, ...}
+            }
+    
+    Examples:
+        ck3_conflicts()  # All symbol conflicts
+        ck3_conflicts(symbol_type="on_action")  # Only on_action conflicts
+        ck3_conflicts(symbol_names=["brave", "craven"])  # Specific symbols
+        ck3_conflicts(command="files", game_folder="common/on_action")  # File conflicts
+        ck3_conflicts(command="summary")  # Overview statistics
+    """
+    db = _get_db()
+    trace = _get_trace()
+    world = _get_world()
+    
+    # Get visibility scoped to active playset
+    visibility = world.db_visibility(purpose="ck3_conflicts")
+    
+    if command == "symbols":
+        # Use the internal method that was powering the deleted tools
+        result = db._get_symbol_conflicts_internal(
+            visible_cvids=visibility.cvids,
+            symbol_type=symbol_type,
+            game_folder=game_folder,
+            limit=limit,
+            include_compatch=include_compatch,
+        )
+        
+        # Apply symbol_names filter if provided
+        if symbol_names and result.get("conflicts"):
+            names_lower = {n.lower() for n in symbol_names}
+            result["conflicts"] = [
+                c for c in result["conflicts"]
+                if c["name"].lower() in names_lower
+            ]
+            result["conflict_count"] = len(result["conflicts"])
+        
+        trace.log("ck3lens.conflicts.symbols", {
+            "symbol_type": symbol_type,
+            "symbol_names": symbol_names,
+            "game_folder": game_folder,
+            "include_compatch": include_compatch,
+        }, {
+            "conflict_count": result.get("conflict_count", 0)
+        })
+        
+        return result
+    
+    elif command == "files":
+        # File-level conflict detection
+        cvids = visibility.cvids
+        if not cvids:
+            return {"conflicts": [], "count": 0}
+        
+        cv_filter = ",".join(str(cv) for cv in cvids)
+        
+        sql = f"""
+            SELECT 
+                f.relpath,
+                GROUP_CONCAT(DISTINCT COALESCE(mp.name, 'vanilla')) as mods,
+                COUNT(DISTINCT f.content_version_id) as mod_count
+            FROM files f
+            JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            WHERE f.content_version_id IN ({cv_filter})
+        """
+        params = []
+        
+        if game_folder:
+            sql += " AND f.relpath LIKE ?"
+            params.append(f"{game_folder}%")
+        
+        sql += """
+            GROUP BY f.relpath
+            HAVING mod_count > 1
+            ORDER BY mod_count DESC
+            LIMIT ?
+        """
+        params.append(limit)
+        
+        rows = db.conn.execute(sql, params).fetchall()
+        
+        conflicts = []
+        for row in rows:
+            relpath = row["relpath"]
+            mods = row["mods"].split(",")
+            has_zzz = any("zzz_" in relpath for _ in [1])  # Check prefix
+            
+            conflicts.append({
+                "relpath": relpath,
+                "mods": mods,
+                "mod_count": row["mod_count"],
+                "has_zzz_prefix": has_zzz,
+            })
+        
+        trace.log("ck3lens.conflicts.files", {
+            "game_folder": game_folder,
+        }, {
+            "conflict_count": len(conflicts)
+        })
+        
+        return {"conflicts": conflicts, "count": len(conflicts)}
+    
+    elif command == "summary":
+        # Summary statistics
+        cvids = visibility.cvids
+        if not cvids:
+            return {
+                "total_symbol_conflicts": 0,
+                "total_file_conflicts": 0,
+                "by_type": {},
+                "by_folder": {},
+            }
+        
+        cv_filter = ",".join(str(cv) for cv in cvids)
+        
+        # Count symbol conflicts by type
+        type_sql = f"""
+            SELECT 
+                s.symbol_type,
+                COUNT(DISTINCT s.name) as conflict_count
+            FROM (
+                SELECT symbol_type, name
+                FROM symbols
+                WHERE content_version_id IN ({cv_filter})
+                GROUP BY symbol_type, name
+                HAVING COUNT(DISTINCT content_version_id) > 1
+            ) s
+            GROUP BY s.symbol_type
+        """
+        type_rows = db.conn.execute(type_sql).fetchall()
+        by_type = {row["symbol_type"]: row["conflict_count"] for row in type_rows}
+        
+        # Count file conflicts by folder
+        folder_sql = f"""
+            SELECT 
+                SUBSTR(f.relpath, 1, INSTR(f.relpath || '/', '/') - 1) || '/' ||
+                SUBSTR(SUBSTR(f.relpath, INSTR(f.relpath, '/') + 1), 1, 
+                       INSTR(SUBSTR(f.relpath, INSTR(f.relpath, '/') + 1) || '/', '/') - 1) as folder,
+                COUNT(*) as conflict_count
+            FROM (
+                SELECT relpath
+                FROM files
+                WHERE content_version_id IN ({cv_filter})
+                GROUP BY relpath
+                HAVING COUNT(DISTINCT content_version_id) > 1
+            ) f
+            GROUP BY folder
+            ORDER BY conflict_count DESC
+            LIMIT 20
+        """
+        folder_rows = db.conn.execute(folder_sql).fetchall()
+        by_folder = {row["folder"]: row["conflict_count"] for row in folder_rows}
+        
+        total_symbols = sum(by_type.values())
+        total_files = sum(by_folder.values())
+        
+        trace.log("ck3lens.conflicts.summary", {}, {
+            "total_symbols": total_symbols,
+            "total_files": total_files,
+        })
+        
+        return {
+            "total_symbol_conflicts": total_symbols,
+            "total_file_conflicts": total_files,
+            "by_type": by_type,
+            "by_folder": by_folder,
+        }
+    
+    else:
+        return {"error": f"Unknown command: {command}"}
 
 
 # ============================================================================
@@ -1479,11 +1704,11 @@ def ck3_file(
     command=get          ? Get file content from database (path required)
     command=read         ? Read file from filesystem (path or mod_name+rel_path)
     command=write        ? Write file (path for raw write, or mod_name+rel_path for mod)
-    command=edit         ? Search-replace in live mod file (mod_name, rel_path, old_content, new_content)
-    command=delete       ? Delete file from live mod (mod_name, rel_path required)
-    command=rename       ? Rename/move file in live mod (mod_name, rel_path, new_path required)
+    command=edit         ? Search-replace in mod file (mod_name, rel_path, old_content, new_content)
+    command=delete       ? Delete file from mod (mod_name, rel_path required)
+    command=rename       ? Rename/move file in mod (mod_name, rel_path, new_path required)
     command=refresh      ? Re-sync file to database (mod_name, rel_path required)
-    command=list         ? List files in live mod (mod_name required, path_prefix/pattern optional)
+    command=list         ? List files in mod (mod_name required, path_prefix/pattern optional)
     command=create_patch ? Create override patch file (?? ck3lens mode only; mod_name, source_path, patch_mode required)
     
     For write command with raw path:
@@ -1493,7 +1718,7 @@ def ck3_file(
     Args:
         command: Operation to perform
         path: File path (for get/read from filesystem)
-        mod_name: Live mod name (for write/edit/delete/rename/refresh/list)
+        mod_name: mod name (for write/edit/delete/rename/refresh/list)
         rel_path: Relative path within mod
         include_ast: Include parsed AST (for get)
         content: File content (for write)
@@ -1932,7 +2157,7 @@ def ck3_playset(
         }
     
     elif command == "add_mod":
-        # Add a local mod to the active playset's local_mods array
+        # Add a mod to the active playset's local_mods array
         if not mod_name:
             return {"success": False, "error": "mod_name required for add_mod"}
         
@@ -2108,7 +2333,7 @@ def ck3_git(
     limit: int = 10,
 ) -> dict:
     """
-    Unified git operations for live mods.
+    Unified git operations for mods.
     
     ?? KNOWN ISSUE: This tool may hang due to GitLens extension conflicts.
     WORKAROUND: Use ck3_exec with git commands instead:
@@ -2118,7 +2343,7 @@ def ck3_git(
     
     Mode-aware behavior:
     - ck3raven-dev mode: Operates on ck3raven repo (mod_name ignored)
-    - ck3lens mode: Operates on live mods (mod_name required)
+    - ck3lens mode: Operates on mods (mod_name required)
     
     Commands:
     
@@ -2132,7 +2357,7 @@ def ck3_git(
     
     Args:
         command: Git operation to perform
-        mod_name: Live mod name (required in ck3lens mode, ignored in ck3raven-dev mode)
+        mod_name: mod name (required in ck3lens mode, ignored in ck3raven-dev mode)
         file_path: Specific file for diff
         files: List of files to stage
         all_files: Stage all changes
@@ -2632,7 +2857,7 @@ def ck3_contract(
             "error": "Agent mode not initialized",
             "guidance": "Ask the user which mode to use, then call ck3_get_mode_instructions() with their choice.",
             "modes": {
-                "ck3lens": "CK3 modding - search database, edit live mods, resolve conflicts",
+                "ck3lens": "CK3 modding - search database, edit mods, resolve conflicts",
                 "ck3raven-dev": "Infrastructure development - modify ck3raven source code",
             },
             "example_prompt": "Which mode should I operate in? 'ck3lens' for CK3 modding or 'ck3raven-dev' for infrastructure work?",
@@ -3548,47 +3773,15 @@ def ck3_search(
 
 
 # ============================================================================
-# Symbol Tools (from ck3raven DB)
+# Symbol Tools - ARCHIVED January 2, 2026
 # ============================================================================
-
-@mcp.tool()
-def ck3_confirm_not_exists(
-    name: str,
-    symbol_type: Optional[str] = None,
-) -> dict:
-    """
-    Confirm a symbol does NOT exist before claiming it's missing.
-    
-    This performs an exhaustive fuzzy search to prevent false negatives.
-    ALWAYS call this before writing code that assumes something doesn't exist.
-    
-    Args:
-        name: Symbol name to search for
-        symbol_type: Optional type filter (trait, decision, etc.)
-    
-    Returns:
-        - can_claim_not_exists: True if exhaustive search found nothing
-        - similar_matches: Any similar symbols found (might be what you meant)
-    """
-    db = _get_db()
-    trace = _get_trace()
-    session = _get_session()
-    world = _get_world()
-    
-    # Get visibility from WorldAdapter - THE canonical way
-    visibility = world.db_visibility(purpose="ck3_confirm_not_exists")
-    
-    result = db.confirm_not_exists(name, symbol_type, visibility=visibility)
-    
-    trace.log("ck3lens.confirm_not_exists", {
-        "name": name,
-        "symbol_type": symbol_type
-    }, {
-        "can_claim": result["can_claim_not_exists"],
-        "adjacencies_count": len(result.get("adjacencies", []))
-    })
-    
-    return result
+# The following tools have been DELETED:
+# - ck3_confirm_not_exists() → Functionality moved to ck3_search with exhaustive mode
+# - ck3_qr_conflicts() → Use ck3_conflicts(command="symbols") when implemented
+# - ck3_get_symbol_conflicts() → Use ck3_conflicts(command="symbols") when implemented
+#
+# The unified ck3_conflicts tool will replace all conflict detection functionality.
+# ============================================================================
 
 
 # @mcp.tool()  # DEPRECATED - use ck3_file(command="get")
@@ -3634,123 +3827,8 @@ def ck3_get_file(
     return result or {"error": f"File not found: {file_path}"}
 
 
-@mcp.tool()
-def ck3_qr_conflicts(
-    path_pattern: Optional[str] = None,
-    symbol_name: Optional[str] = None,
-    symbol_type: Optional[str] = None
-) -> dict:
-    """
-    Quick-resolve conflicts using load order (SQLResolver).
-    
-    Shows what "wins" for each conflicting symbol based on CK3's
-    merge rules and mod load order.
-    
-    Args:
-        path_pattern: Filter by file path pattern (glob-style)
-        symbol_name: Filter by specific symbol name
-        symbol_type: Filter by symbol type
-    
-    Returns:
-        List of conflicts with winner/loser mods and resolution type
-    """
-    db = _get_db()
-    trace = _get_trace()
-    session = _get_session()
-    world = _get_world()
-    
-    # Get visibility from WorldAdapter - THE canonical way
-    visibility = world.db_visibility(purpose="ck3_qr_conflicts")
-    
-    conflicts = db.get_conflicts(
-        folder=path_pattern,
-        symbol_type=symbol_type,
-        visibility=visibility
-    )
-    
-    trace.log("ck3lens.qr_conflicts", {
-        "path_pattern": path_pattern,
-        "symbol_name": symbol_name,
-        "symbol_type": symbol_type
-    }, {"conflicts_count": len(conflicts)})
-    
-    return {"conflicts": conflicts}
-
-
-@mcp.tool()
-def ck3_get_symbol_conflicts(
-    symbol_type: Optional[str] = None,
-    game_folder: Optional[str] = None,
-    limit: int = 100,
-    include_compatch: bool = False
-) -> dict:
-    """
-    Fast ID-level conflict detection using the symbols table.
-    
-    This is INSTANT compared to the slow contribution_units analysis.
-    Finds symbols (traits, events, decisions, etc.) defined by multiple mods.
-    
-    By default, filters out conflicts involving compatibility patches (compatch mods)
-    since they are DESIGNED to conflict - that's their purpose.
-    
-    Args:
-        symbol_type: Filter by type (trait, event, decision, on_action, etc.)
-        game_folder: Filter by CK3 folder (e.g., "common/traits", "events")
-        limit: Maximum conflicts to return (default 100)
-        include_compatch: If True, include conflicts from compatch mods
-                          (default False - compatch conflicts are expected)
-    
-    Returns:
-        {
-            "conflict_count": int,
-            "conflicts": [
-                {
-                    "name": str,
-                    "symbol_type": str,
-                    "source_count": int,  # How many mods define this
-                    "sources": [{"mod": str, "file": str, "line": int}],
-                    "is_compatch_conflict": bool
-                }
-            ],
-            "compatch_conflicts_hidden": int  # Conflicts filtered out
-        }
-    
-    Examples:
-        ck3_get_symbol_conflicts()  # All non-compatch conflicts
-        ck3_get_symbol_conflicts(symbol_type="trait")  # Only trait conflicts
-        ck3_get_symbol_conflicts(game_folder="common/on_action")  # Only on_action conflicts
-        ck3_get_symbol_conflicts(include_compatch=True)  # Include compatch conflicts
-    """
-    db = _get_db()
-    trace = _get_trace()
-    session = _get_session()
-    world = _get_world()
-    
-    # Get visibility from WorldAdapter - THE canonical way
-    visibility = world.db_visibility(purpose="ck3_get_symbol_conflicts")
-    
-    result = db.get_symbol_conflicts(
-        symbol_type=symbol_type,
-        game_folder=game_folder,
-        limit=limit,
-        include_compatch=include_compatch,
-        visibility=visibility
-    )
-    
-    trace.log("ck3lens.get_symbol_conflicts", {
-        "symbol_type": symbol_type,
-        "game_folder": game_folder,
-        "include_compatch": include_compatch
-    }, {
-        "conflict_count": result["conflict_count"],
-        "compatch_hidden": result["compatch_conflicts_hidden"]
-    })
-    
-    return result
-
-
 # ============================================================================
-# ARCHIVED: Legacy Local Mod Operations
+# ARCHIVED: Legacy mod Operations
 # ============================================================================
 # The following tools have been DELETED (December 30, 2025):
 # - ck3_list_local_mods() ? Use ck3_file(command="list", mod_name=...)
@@ -4869,10 +4947,10 @@ def ck3_git_status(mod_name: str) -> dict:
     """
     DEPRECATED: Use ck3_git(command="status", mod_name=...) instead.
     
-    Get git status for a live mod.
+    Get git status for a mod.
     
     Args:
-        mod_name: Name of the live mod
+        mod_name: Name of the mod
     
     Returns:
         Git status (staged, unstaged, untracked files)
@@ -4896,10 +4974,10 @@ def ck3_git_diff(
     """
     DEPRECATED: Use ck3_git(command="diff", mod_name=..., file_path=...) instead.
     
-    Get git diff for a live mod.
+    Get git diff for a mod.
     
     Args:
-        mod_name: Name of the live mod
+        mod_name: Name of the mod
         file_path: Optional specific file to diff
         staged: If True, show staged changes
     
@@ -4925,10 +5003,10 @@ def ck3_git_add(
     """
     DEPRECATED: Use ck3_git(command="add", mod_name=..., files=..., all_files=...) instead.
     
-    Stage files for commit in a live mod.
+    Stage files for commit in a mod.
     
     Args:
-        mod_name: Name of the live mod
+        mod_name: Name of the mod
         paths: List of paths to stage (default: all if all_files=True)
         all_files: If True, stage all changes (git add -A)
     Returns:
@@ -4951,10 +5029,10 @@ def ck3_git_commit(
     """
     DEPRECATED: Use ck3_git(command="commit", mod_name=..., message=...) instead.
     
-    Commit staged changes in a live mod.
+    Commit staged changes in a mod.
     
     Args:
-        mod_name: Name of the live mod
+        mod_name: Name of the mod
         message: Commit message
     
     Returns:
@@ -4975,10 +5053,10 @@ def ck3_git_push(mod_name: str) -> dict:
     """
     DEPRECATED: Use ck3_git(command="push", mod_name=...) instead.
     
-    Push commits to remote for a live mod.
+    Push commits to remote for a mod.
     
     Args:
-        mod_name: Name of the live mod
+        mod_name: Name of the mod
     
     Returns:
         Push result
@@ -4998,10 +5076,10 @@ def ck3_git_pull(mod_name: str) -> dict:
     """
     DEPRECATED: Use ck3_git(command="pull", mod_name=...) instead.
     
-    Pull latest changes from remote for a live mod.
+    Pull latest changes from remote for a mod.
     
     Args:
-        mod_name: Name of the live mod
+        mod_name: Name of the mod
     
     Returns:
         Pull result
@@ -5025,10 +5103,10 @@ def ck3_git_log(
     """
     DEPRECATED: Use ck3_git(command="log", mod_name=..., limit=...) instead.
     
-    Get git log for a live mod.
+    Get git log for a mod.
     
     Args:
-        mod_name: Name of the live mod
+        mod_name: Name of the mod
         limit: Max commits to return
         file_path: Optional path to filter commits
     
@@ -5061,7 +5139,7 @@ def ck3_get_active_playset() -> dict:
     This returns the active playset's configuration including:
     - Mod list with load order
     - Agent briefing notes
-    - Live mods (writable)
+    - mods (writable)
     
     Returns:
         Playset details including name, mods, and agent_briefing
@@ -5111,7 +5189,7 @@ def ck3_list_playsets() -> dict:
     Playsets are JSON files that define:
     - Which mods are in the playset
     - Agent briefing notes for error analysis
-    - Live mods the agent can edit
+    - mods the agent can edit
     
     Returns:
         List of available playsets
@@ -5762,7 +5840,7 @@ def ck3_create_playset_from_indexed(
                     ORDER BY cv.ingested_at DESC LIMIT 1
                 """, (steam_id,)).fetchone()
             
-            # If not found by steam_id, try by source_path (for local mods)
+            # If not found by steam_id, try by source_path (for mods under local_mods_folder)
             if not cv_row and mod_path:
                 cv_row = db.conn.execute("""
                     SELECT cv.content_version_id, mp.name
@@ -5857,7 +5935,7 @@ def ck3_import_playset_from_launcher(
         launcher_json_path: Path to the launcher JSON file
         launcher_json_content: Raw JSON content (alternative to path)
         playset_name: Override name (default: from JSON or "Imported Playset")
-        local_mod_paths: Additional local mod paths to add at end of load order
+        local_mod_paths: Additional mod paths to add at end of load order
         set_active: Whether to make this the active playset (default: True)
     
     Returns:
@@ -5946,7 +6024,7 @@ def ck3_import_playset_from_launcher(
         linked_count += 1
         load_order += 1
     
-    # Add local mods at end
+    # Add mods under local_mods_folder at end
     local_linked = 0
     if local_mod_paths:
         for local_path in local_mod_paths:
@@ -7324,7 +7402,7 @@ def ck3_get_mode_instructions(
     
     Args:
         mode: The mode to initialize:
-            - "ck3lens": CK3 modding with database search and live mod editing
+            - "ck3lens": CK3 modding with database search and mod editing
             - "ck3raven-dev": Full development mode for infrastructure
     
     Returns:
@@ -7459,7 +7537,7 @@ def _get_mode_policy_context(mode: str) -> dict:
     if mode == "ck3lens":
         return {
             "mode": "ck3lens",
-            "description": "CK3 modding: Database search + live mod file editing",
+            "description": "CK3 modding: Database search + mod file editing",
             "scope_domains": {
                 "read_allowed": [
                     ScopeDomain.ACTIVE_PLAYSET_DB.value,
@@ -7492,7 +7570,7 @@ def _get_mode_policy_context(mode: str) -> dict:
             "available_tokens": [tt.value for tt in CK3LensTokenType],
             "hard_rules": [
                 "Intent type required for all operations",
-                "Write only to active local mods (MSC, MSCRE, LRE, MRP)",
+                "Write only to active mods under local_mods_folder (MSC, MSCRE, LRE, MRP)",
                 "Python files only allowed in WIP workspace",
                 "Delete requires explicit token with user prompt evidence",
                 "Inactive mod access requires user prompt + token",
@@ -7567,7 +7645,7 @@ def _get_mode_session_note(mode: str) -> str:
         return (
             "CK3 Lens mode active. You can:\n"
             "- Search symbols, files, content via database\n"
-            "- Write/edit files in active local mods (MSC, MSCRE, LRE, MRP)\n"
+            "- Write/edit files in active mods under local_mods_folder (MSC, MSCRE, LRE, MRP)\n"
             "- Draft Python scripts in WIP workspace (~/.ck3raven/wip/)\n"
             "- Use ck3_repair for launcher/cache issues\n\n"
             "You CANNOT write to workshop mods, vanilla, or ck3raven source."
@@ -7694,7 +7772,7 @@ def ck3_get_workspace_config() -> dict:
         "available_modes": [
             {
                 "name": "ck3lens",
-                "description": "CK3 modding - database search, conflict detection, live mod editing",
+                "description": "CK3 modding - database search, conflict detection, mod editing",
                 "use_case": "Fixing mod errors, compatibility patching, mod development",
             },
             {

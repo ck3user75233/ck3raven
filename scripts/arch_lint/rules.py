@@ -272,7 +272,13 @@ def run_doc_rules(cfg: LintConfig, src: SourceFile, reporter: Reporter) -> None:
     if not cfg.report_doc_banned_term_mentions:
         return
     p = str(src.path)
-    tokens = ("playsetlens","getlens","get.lens","lensworld","editable_mods","live_mods","is_writable","can_write")
+    # Banned terms - both underscore and space-separated versions
+    tokens = (
+        "playsetlens", "getlens", "get.lens", "lensworld",
+        "editable_mods", "live_mods", "local_mods",  # underscore versions
+        "live mod", "local mod",  # space versions (catch docstrings)
+        "is_writable", "can_write",
+    )
     for i, line in enumerate(src.lines, start=1):
         lc = line.lower()
         if any(t in lc for t in tokens):

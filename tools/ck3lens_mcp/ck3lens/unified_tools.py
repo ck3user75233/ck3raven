@@ -1,4 +1,4 @@
-﻿"""
+"""
 Unified MCP Tool Implementations
 
 Consolidates multiple granular tools into parameterized commands to reduce
@@ -423,15 +423,15 @@ def ck3_file_impl(
     
     command=get          -> Get file content from database (path required)
     command=read         -> Read file from filesystem (path or mod_name+rel_path)
-    command=write        -> Write file to live mod (mod_name, rel_path, content required)
-    command=edit         -> Search-replace in live mod file (mod_name, rel_path, old_content, new_content)
-    command=delete       -> Delete file from live mod (mod_name, rel_path required)
-    command=rename       -> Rename/move file in live mod (mod_name, rel_path, new_path required)
+    command=write        -> Write file to mod (mod_name, rel_path, content required)
+    command=edit         -> Search-replace in mod file (mod_name, rel_path, old_content, new_content)
+    command=delete       -> Delete file from mod (mod_name, rel_path required)
+    command=rename       -> Rename/move file in mod (mod_name, rel_path, new_path required)
     command=refresh      -> Re-sync file to database (mod_name, rel_path required)
-    command=list         -> List files in live mod (mod_name required, path_prefix/pattern optional)
+    command=list         -> List files in mod (mod_name required, path_prefix/pattern optional)
     command=create_patch -> Create override patch file (ck3lens only; mod_name, source_path, patch_mode required; source_mod optional)
     
-    WARNING: create_patch is ck3lens mode only. Creates override patch files in live mods.
+    WARNING: create_patch is ck3lens mode only. Creates override patch files in mods.
     
     The world parameter provides WorldAdapter for unified path resolution:
     - Resolves raw paths to canonical addresses
@@ -731,7 +731,7 @@ def _file_read_raw(path, justification, start_line, end_line, trace, world=None)
 
 
 def _file_read_live(mod_name, rel_path, max_bytes, session, trace):
-    """Read file from live mod."""
+    """Read file from mod."""
     from ck3lens.workspace import validate_relpath
     
     mod = session.get_mod(mod_name)
@@ -770,7 +770,7 @@ def _file_read_live(mod_name, rel_path, max_bytes, session, trace):
 
 def _file_write(mod_name, rel_path, content, validate_syntax, session, trace):
     """
-    Write file to live mod.
+    Write file to mod.
     
     NOTE: Enforcement already happened in ck3_file dispatcher.
     This function only does the actual write + syntax validation.
@@ -952,7 +952,7 @@ def _file_edit_raw(path, old_content, new_content, validate_syntax, token_id, tr
 
 def _file_edit(mod_name, rel_path, old_content, new_content, validate_syntax, session, trace):
     """
-    Edit file in live mod.
+    Edit file in mod.
     
     NOTE: Enforcement already happened in ck3_file dispatcher.
     This function only does the actual edit + syntax validation.
@@ -1017,7 +1017,7 @@ def _file_edit(mod_name, rel_path, old_content, new_content, validate_syntax, se
 
 def _file_delete(mod_name, rel_path, session, trace):
     """
-    Delete file from live mod.
+    Delete file from mod.
     
     NOTE: Enforcement already happened in ck3_file dispatcher.
     This function only does the actual delete.
@@ -1054,7 +1054,7 @@ def _file_delete(mod_name, rel_path, session, trace):
 
 
 def _file_rename(mod_name, old_path, new_path, session, trace):
-    """Rename file in live mod."""
+    """Rename file in mod."""
     from ck3lens.workspace import validate_relpath
     
     mod = session.get_mod(mod_name)
@@ -1135,7 +1135,7 @@ def _file_refresh(mod_name, rel_path, session, trace):
 
 
 def _file_list(mod_name, path_prefix, pattern, session, trace):
-    """List files in live mod."""
+    """List files in mod."""
     from .world_router import get_world
     
     mod = session.get_mod(mod_name)
@@ -1288,7 +1288,7 @@ def _file_list_raw(path, pattern, trace, world=None):
 
 def _file_create_patch(mod_name, source_mod, source_path, patch_mode, initial_content, validate_syntax, session, trace, mode):
     """
-    Create an override patch file in a live mod.
+    Create an override patch file in a mod.
     
     MODE: ck3lens only. Not available in ck3raven-dev mode.
     
@@ -1913,7 +1913,7 @@ def ck3_git_impl(
     
     Mode-aware behavior:
     - ck3raven-dev mode: Operates on ck3raven repo by default (mod_name ignored)
-    - ck3lens mode: Operates on live mods (mod_name required)
+    - ck3lens mode: Operates on mods (mod_name required)
     
     Commands:
     
@@ -2090,7 +2090,7 @@ def ck3_git_impl(
                       {"success": result.get("success", "error" not in result)})
         return result
 
-    # ck3lens mode: require mod_name for live mod operations
+    # ck3lens mode: require mod_name for mod operations
     if not mod_name:
         return {
             "error": "mod_name required for git operations in ck3lens mode",
