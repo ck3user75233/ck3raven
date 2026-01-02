@@ -660,45 +660,28 @@ def _file_read_raw(path, justification, start_line, end_line, trace, world=None)
     
     file_path = P(path)
     
-    # WorldAdapter visibility check (preferred)
-    if world is not None:
-        resolution = world.resolve(str(file_path))
-        if not resolution.found:
-            return {
-                "success": False,
-                "error": resolution.error_message or f"Path not visible in {world.mode} mode: {path}",
-                "mode": world.mode,
-                "hint": "This path is outside the visibility scope for the current agent mode",
-            }
-        # Use resolved absolute path
-        file_path = resolution.absolute_path
-    else:
-        # Fallback: Lens enforcement for ck3lens mode (legacy path)
-        mode = get_agent_mode()
-        if mode == "ck3lens":
-            # Import here to avoid circular import
-            from ck3lens.playset_scope import PlaysetScope
-            try:
-                # Try to get scope from server module
-                import sys
-                server_module = sys.modules.get('__main__')
-                if server_module and hasattr(server_module, '_get_playset_scope'):
-                    playset_scope = server_module._get_playset_scope()
-                else:
-                    # Fallback: try to import from server
-                    from tools.ck3lens_mcp.server import _get_playset_scope
-                    playset_scope = _get_playset_scope()
-                
-                if playset_scope and not playset_scope.is_path_in_scope(file_path):
-                    location_type, _ = playset_scope.get_path_location(file_path)
-                    return {
-                        "success": False,
-                        "error": f"Path outside active playset scope: {path}",
-                        "location_type": location_type,
-                        "hint": "ck3lens mode restricts filesystem access to paths within the active playset",
-                    }
-            except Exception:
-                pass  # If scope check fails, allow read (fail open for reads)
+    # WorldAdapter visibility - THE canonical way
+    # world parameter is REQUIRED - no fallback to banned playset_scope
+    if world is None:
+        return {
+            "success": False,
+            "error": "WorldAdapter not provided - cannot resolve path visibility",
+            "hint": "Caller must pass world parameter from _get_world()",
+        }
+    
+    resolution = world.resolve(str(file_path))
+    if not resolution.found:
+        return {
+            "success": False,
+            "error": resolution.error_message or f"Path not visible in {world.mode} mode: {path}",
+            "mode": world.mode,
+            "hint": "This path is outside the visibility scope for the current agent mode",
+        }
+    
+    # Use resolved absolute path (always set when resolution.found is True)
+    if resolution.absolute_path is None:
+        return {"success": False, "error": f"Resolution returned no path for: {path}"}
+    file_path = resolution.absolute_path
     
     if trace:
         trace.log("ck3lens.file.read", {"path": str(file_path), "justification": justification}, {})

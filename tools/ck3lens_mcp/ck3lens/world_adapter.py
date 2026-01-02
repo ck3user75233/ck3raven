@@ -1052,20 +1052,6 @@ class WorldAdapter:
             return str(resolved).lower().replace("\\", "/").rstrip("/")
         except Exception:
             return path.lower().replace("\\", "/").rstrip("/")
-    
-    def db_visibility(self, purpose: str = "db_read"):
-        """
-        DEPRECATED: Returns a legacy visibility wrapper for backward compatibility.
-        
-        New code MUST use db_handle() instead.
-        """
-        dbh = self.db_handle(purpose=purpose)
-        
-        class _LegacyVisibility:
-            def __init__(self, cvids):
-                self.visible_cvids = cvids
-        
-        return _LegacyVisibility(dbh.visible_cvids)
 
 
 # =============================================================================

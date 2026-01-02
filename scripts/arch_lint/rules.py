@@ -10,19 +10,45 @@ from .analysis import ModuleIndex
 # - Treat Path.resolve / relative_to as PATH-ARITH (not IO), and ban outside WorldAdapter/handles.
 # - Add explicit MUTATOR detection for SQL write keywords + file write APIs + subprocess.
 
+# === 2.3 Updates (January 2026) ===
+# - Added "legacy" and "fallback" concepts to banned terms
+# - Fallbacks are often used to retain BANNED IDEAS during refactor - warn on else-fallback patterns
+
 _RX_ORACLE_NAME = [
     re.compile(r"^can_", re.IGNORECASE),
     re.compile(r"^may_", re.IGNORECASE),
     re.compile(r"^allowed_", re.IGNORECASE),
     re.compile(r"is_.*(writable|editable|allowed|permitted|authorized|mutable|write_ok|writeable)", re.IGNORECASE),
 ]
-_RX_PARALLEL_TRUTH = re.compile(r"(editable_mods_list|active_mods|enabled_mods|local_mods|live_mods|write_mods|allowed_mods|mutable_mods)", re.IGNORECASE)
+_RX_PARALLEL_TRUTH = re.compile(r"(editable_mods_list|active_mods|enabled_mods|local_mods|live_mods|write_mods|allowed_mods|mutable_mods|visible_cvids|db_visibility)", re.IGNORECASE)
 
 CONCEPT_TOKENS = (
     "playsetlens","lensworld","lensscope","lenssession","getlens","get_lens",
     "lensprovider","lensfactory","lensservice","lensadapter","lensresolver",
     "lenscontext","lensmanager","playsetworld","playscope","scopeworld","worldscope",
+    # December 2025 additions - banned concepts
+    "legacyvisibility", "legacy_visibility", "lens_enforcement", "legacy_enforcement",
+    # January 2026 additions - "legacy" is context-dependent, these are specifically banned
+    "invalidate_lens_cache",
 )
+
+# Banned phrases that indicate retention of deprecated concepts
+BANNED_PHRASES = (
+    "backward compat", "backwards compat", "legacy playset", "legacy format",
+    "active_mod_paths", "legacy_file", "legacy visibility", "lens enforcement",
+)
+
+# Patterns that suggest fallback-to-banned-concept (ADVISORY)
+# "Fallbacks are often used to retain BANNED IDEAS during refactor"
+_FALLBACK_PATTERNS = [
+    # else branch with visibility/scope/lens/legacy
+    re.compile(r"else\s*:\s*.*(?:visibility|visible_cvids|lens|legacy|scope)", re.IGNORECASE),
+    # or-fallback with banned concepts
+    re.compile(r"\s+or\s+.*(?:visibility|visible_cvids|legacy)", re.IGNORECASE),
+    # getattr fallback with banned concepts  
+    re.compile(r"getattr\s*\(.*(?:visibility|visible_cvids|legacy)", re.IGNORECASE),
+]
+
 _RX_LENS_CTOR = re.compile(r"\b([A-Za-z_]*Lens[A-Za-z_]*|PlaysetLens|Lens)\s*\(", re.IGNORECASE)
 
 # Name() calls we consider raw IO
@@ -52,7 +78,7 @@ _FS_WRITE_RX = re.compile(r"\b(Path\.write_text|Path\.write_bytes|Path\.open|ope
 
 INLINE_PATH_PATTERNS = [
     re.compile(r"os\.path\.(normpath|abspath|realpath)\(", re.IGNORECASE),
-    re.compile(r"\.replace\(\s*[\'\"]\\\\[\'\"]\s*,\s*[\'\"]/+[\'\"]\s*\)"),
+    re.compile(r"\.replace\(\s*[\'\"]\\\\\[\'\"]\\s*,\s*[\'\"]//+[\'\"]\s*\)"),
 ]
 
 def _sev(cfg: LintConfig, suppressed: bool, default: str) -> str:
@@ -141,6 +167,21 @@ def run_python_rules(cfg: LintConfig, src: SourceFile, idx: ModuleIndex, reporte
                 evidence=line.strip(),
                 suggested_fix="Remove permission pre-checks; use canonical boundary gates (handles/policy) at mutation sites.",
             ))
+
+    # === FALLBACK-01 (2.3): Fallbacks often retain banned ideas ===
+    for i, line in enumerate(src.lines, start=1):
+        for pattern in _FALLBACK_PATTERNS:
+            if pattern.search(line):
+                suppressed = cfg.suppress_in_banned_context and in_banned_context(line, cfg.banned_context_keywords)
+                reporter.add(Finding(
+                    rule_id="FALLBACK-01",
+                    severity=_sev(cfg, suppressed, "WARN"),
+                    path=p, line=i, col=0,
+                    message="Fallback pattern detected - fallbacks often retain BANNED IDEAS during refactor.",
+                    evidence=line.strip(),
+                    suggested_fix="Review: if this is a fallback to deprecated visibility/scope patterns, delete it.",
+                ))
+                break  # Only one per line
 
     # === IO-01 (2.2): explicit only, avoids false positives on resolve()/WorldAdapter.resolve() ===
     if not allow_raw_io:
@@ -278,6 +319,13 @@ def run_doc_rules(cfg: LintConfig, src: SourceFile, reporter: Reporter) -> None:
         "editable_mods", "live_mods", "local_mods",  # underscore versions
         "live mod", "local mod",  # space versions (catch docstrings)
         "is_writable", "can_write",
+        # December 2025 additions
+        "legacyvisibility", "legacy_visibility", "lens_enforcement", "legacy_enforcement",
+        "visible_cvids", "db_visibility",
+        "backward compat", "backwards compat", "legacy playset",
+        "active_mod_paths", "legacy_file",
+        # January 2026 additions
+        "invalidate_lens_cache",
     )
     for i, line in enumerate(src.lines, start=1):
         lc = line.lower()
