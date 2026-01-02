@@ -1,12 +1,12 @@
-"""
+﻿"""
 Unified MCP Tool Implementations
 
 Consolidates multiple granular tools into parameterized commands to reduce
 tool count while maintaining full functionality.
 
 Consolidated tools:
-- ck3_logs: 11 log/error/crash tools → 1 unified tool
-- ck3_conflicts: 7 conflict tools → 1 unified tool
+- ck3_logs: 11 log/error/crash tools -> 1 unified tool
+- ck3_conflicts: 7 conflict tools -> 1 unified tool
 """
 from __future__ import annotations
 
@@ -45,22 +45,22 @@ def ck3_logs_impl(
     
     Source + Command combinations:
     
-    error + summary     → Error log summary with counts by priority/category/mod
-    error + list        → Filtered list of errors with fix hints  
-    error + search      → Search errors by message/path
-    error + cascades    → Get cascading error patterns (root causes)
+    error + summary     -> Error log summary with counts by priority/category/mod
+    error + list        -> Filtered list of errors with fix hints  
+    error + search      -> Search errors by message/path
+    error + cascades    -> Get cascading error patterns (root causes)
     
-    game + summary      → Game log summary with category breakdown
-    game + list         → Filtered list of game log errors
-    game + search       → Search game log by message/path
-    game + categories   → Category breakdown with descriptions
+    game + summary      -> Game log summary with category breakdown
+    game + list         -> Filtered list of game log errors
+    game + search       -> Search game log by message/path
+    game + categories   -> Category breakdown with descriptions
     
-    debug + summary     → System info, DLCs, mod list from debug.log
+    debug + summary     -> System info, DLCs, mod list from debug.log
     
-    crash + summary     → Recent crash reports list
-    crash + detail      → Full crash report (requires crash_id)
+    crash + summary     -> Recent crash reports list
+    crash + detail      -> Full crash report (requires crash_id)
     
-    Any source + read   → Raw log content (tail/head with optional search)
+    Any source + read   -> Raw log content (tail/head with optional search)
     """
     
     # Route based on source and command
@@ -407,6 +407,7 @@ def ck3_file_impl(
     pattern: str | None = None,
     # For create_patch (ck3lens mode only)
     source_path: str | None = None,
+    source_mod: str | None = None,  # Source mod containing the file to patch
     patch_mode: str | None = None,  # "partial_patch" or "full_replace"
     # Dependencies (injected)
     session=None,
@@ -420,17 +421,17 @@ def ck3_file_impl(
     
     Commands:
     
-    command=get          → Get file content from database (path required)
-    command=read         → Read file from filesystem (path or mod_name+rel_path)
-    command=write        → Write file to live mod (mod_name, rel_path, content required)
-    command=edit         → Search-replace in live mod file (mod_name, rel_path, old_content, new_content)
-    command=delete       → Delete file from live mod (mod_name, rel_path required)
-    command=rename       → Rename/move file in live mod (mod_name, rel_path, new_path required)
-    command=refresh      → Re-sync file to database (mod_name, rel_path required)
-    command=list         → List files in live mod (mod_name required, path_prefix/pattern optional)
-    command=create_patch → Create override patch file (ck3lens only; mod_name, source_path, patch_mode required)
+    command=get          -> Get file content from database (path required)
+    command=read         -> Read file from filesystem (path or mod_name+rel_path)
+    command=write        -> Write file to live mod (mod_name, rel_path, content required)
+    command=edit         -> Search-replace in live mod file (mod_name, rel_path, old_content, new_content)
+    command=delete       -> Delete file from live mod (mod_name, rel_path required)
+    command=rename       -> Rename/move file in live mod (mod_name, rel_path, new_path required)
+    command=refresh      -> Re-sync file to database (mod_name, rel_path required)
+    command=list         -> List files in live mod (mod_name required, path_prefix/pattern optional)
+    command=create_patch -> Create override patch file (ck3lens only; mod_name, source_path, patch_mode required; source_mod optional)
     
-    ⚠️ create_patch is ck3lens mode only. Creates override patch files in live mods.
+    WARNING: create_patch is ck3lens mode only. Creates override patch files in live mods.
     
     The world parameter provides WorldAdapter for unified path resolution:
     - Resolves raw paths to canonical addresses
@@ -622,6 +623,7 @@ def ck3_file_impl(
         # ck3lens mode only - creates override patch file
         return _file_create_patch(
             mod_name=mod_name,
+            source_mod=source_mod,
             source_path=source_path,
             patch_mode=patch_mode,
             initial_content=content,
@@ -1158,7 +1160,7 @@ def _file_list(mod_name, path_prefix, pattern, session, trace):
                     try:
                         # Use WorldAdapter.resolve() to get canonical address
                         resolution = adapter.resolve(str(f)) if adapter else None
-                        if resolution and resolution.found:
+                        if resolution and resolution.found and resolution.address:
                             rel = resolution.address.relative_path
                         else:
                             # Fallback: just use filename
@@ -1284,11 +1286,18 @@ def _file_list_raw(path, pattern, trace, world=None):
     return {"path": path, "pattern": glob_pattern, "files": sorted(files, key=lambda x: x.get("relpath", ""))}
 
 
-def _file_create_patch(mod_name, source_path, patch_mode, initial_content, validate_syntax, session, trace, mode):
+def _file_create_patch(mod_name, source_mod, source_path, patch_mode, initial_content, validate_syntax, session, trace, mode):
     """
     Create an override patch file in a live mod.
     
-    ⚠️ MODE: ck3lens only. Not available in ck3raven-dev mode.
+    MODE: ck3lens only. Not available in ck3raven-dev mode.
+    
+    Parameters:
+    - mod_name: Destination mod where the patch file goes (must be local/editable)
+    - source_mod: Source mod containing the file to patch (optional - if provided, reads content)
+    - source_path: Relative path of the file being overridden (e.g., "common/decisions/foo.txt")
+    - patch_mode: "partial_patch" (zzz_ prefix) or "full_replace" (same name)
+    - initial_content: Content for the patch (if None and source_mod provided, reads from source)
     
     Modes:
     - partial_patch: Creates zzz_[mod]_[original_name].txt (for adding/modifying specific units)
@@ -1310,7 +1319,7 @@ def _file_create_patch(mod_name, source_path, patch_mode, initial_content, valid
     
     # Validate required parameters
     if not mod_name:
-        return {"success": False, "error": "mod_name required for create_patch"}
+        return {"success": False, "error": "mod_name required for create_patch (destination mod)"}
     if not source_path:
         return {"success": False, "error": "source_path required for create_patch (the file being overridden)"}
     if not patch_mode:
@@ -1322,6 +1331,52 @@ def _file_create_patch(mod_name, source_path, patch_mode, initial_content, valid
     source = P(source_path)
     if source.is_absolute() or ".." in source.parts:
         return {"success": False, "error": "source_path must be relative without '..'"}
+    
+    # If source_mod provided and no initial_content, read from source mod
+    if source_mod and initial_content is None:
+        source_mod_entry = session.get_mod(source_mod)
+        if not source_mod_entry:
+            return {
+                "success": False, 
+                "error": f"Source mod not found in active playset: {source_mod}",
+                "hint": "Use the mod's display name as shown in the playset"
+            }
+        
+        source_file_path = source_mod_entry.path / source_path
+        if not source_file_path.exists():
+            return {
+                "success": False,
+                "error": f"Source file not found: {source_path} in {source_mod}",
+                "searched_path": str(source_file_path)
+            }
+        
+        try:
+            initial_content = source_file_path.read_text(encoding='utf-8-sig')
+            # Add header comment
+            header = f"""# Override patch for: {source_mod}/{source_path}
+# Created: {datetime.now().strftime("%Y-%m-%d %H:%M")}
+# Patch mode: {patch_mode}
+# Source mod: {source_mod}
+# Target mod: {mod_name}
+# 
+# This file was copied from the source mod. Edit as needed.
+
+"""
+            initial_content = header + initial_content
+        except Exception as e:
+            return {"success": False, "error": f"Failed to read source file: {e}"}
+    
+    # If no source_mod and no content, generate template
+    elif initial_content is None:
+        initial_content = f"""# Override patch for: {source_path}
+# Created: {datetime.now().strftime("%Y-%m-%d %H:%M")}
+# Patch mode: {patch_mode}
+# Target mod: {mod_name}
+# 
+# For 'partial_patch' mode: Add only the specific units you want to override/add.
+# For 'full_replace' mode: This file completely replaces the original.
+
+"""
     
     # Compute output filename based on patch mode
     if patch_mode == "partial_patch":
@@ -1335,24 +1390,13 @@ def _file_create_patch(mod_name, source_path, patch_mode, initial_content, valid
     # Build target relative path (same directory structure)
     target_rel_path = str(source.parent / new_name)
     
-    # Generate default content if not provided
-    if initial_content is None:
-        initial_content = f"""# Override patch for: {source_path}
-# Created: {datetime.now().strftime("%Y-%m-%d %H:%M")}
-# Patch mode: {patch_mode}
-# Target mod: {mod_name}
-# 
-# For 'partial_patch' mode: Add only the specific units you want to override/add.
-# For 'full_replace' mode: This file completely replaces the original.
-
-"""
-    
     # Delegate to existing _file_write (handles folder creation, syntax validation)
     write_result = _file_write(mod_name, target_rel_path, initial_content, validate_syntax, session, trace)
     
     if write_result.get("success"):
         # Enhance result with patch-specific info
         write_result["patch_info"] = {
+            "source_mod": source_mod,
             "source_path": source_path,
             "patch_mode": patch_mode,
             "created_path": target_rel_path,
@@ -1362,6 +1406,7 @@ def _file_create_patch(mod_name, source_path, patch_mode, initial_content, valid
         if trace:
             trace.log("ck3lens.file.create_patch", {
                 "mod_name": mod_name,
+                "source_mod": source_mod,
                 "source_path": source_path,
                 "patch_mode": patch_mode,
             }, {"success": True, "created_path": target_rel_path})
@@ -1422,10 +1467,10 @@ def ck3_folder_impl(
     
     Commands:
     
-    command=list        → List directory contents from filesystem (path required)
-    command=contents    → Get folder contents from database (path required)
-    command=top_level   → Get top-level folders in active playset
-    command=mod_folders → Get folders in specific mod (content_version_id required)
+    command=list        -> List directory contents from filesystem (path required)
+    command=contents    -> Get folder contents from database (path required)
+    command=top_level   -> Get top-level folders in active playset
+    command=mod_folders -> Get folders in specific mod (content_version_id required)
     
     CANONICAL: Uses cvids (list of content_version_ids from session.mods[]) instead of playset_id.
     The caller should pass cvids=[m.cvid for m in session.mods if m.cvid].
@@ -1872,13 +1917,13 @@ def ck3_git_impl(
     
     Commands:
     
-    command=status → Get git status
-    command=diff   → Get git diff (file_path optional)
-    command=add    → Stage files (files or all_files required)
-    command=commit → Commit staged changes (message required)
-    command=push   → Push to remote
-    command=pull   → Pull from remote
-    command=log    → Get commit log (limit optional)
+    command=status -> Get git status
+    command=diff   -> Get git diff (file_path optional)
+    command=add    -> Stage files (files or all_files required)
+    command=commit -> Commit staged changes (message required)
+    command=push   -> Push to remote
+    command=pull   -> Pull from remote
+    command=log    -> Get commit log (limit optional)
     """
     from ck3lens import git_ops
     from ck3lens.agent_mode import get_agent_mode
@@ -2128,11 +2173,11 @@ def ck3_validate_impl(
     
     Targets:
     
-    target=syntax     → Validate CK3 script syntax (content required)
-    target=python     → Check Python syntax (content or file_path required)
-    target=references → Validate symbol references (symbol_name required)
-    target=bundle     → Validate artifact bundle (artifact_bundle required)
-    target=policy     → Validate against policy rules (mode required)
+    target=syntax     -> Validate CK3 script syntax (content required)
+    target=python     -> Check Python syntax (content or file_path required)
+    target=references -> Validate symbol references (symbol_name required)
+    target=bundle     -> Validate artifact bundle (artifact_bundle required)
+    target=policy     -> Validate against policy rules (mode required)
     """
     
     if target == "syntax":
@@ -2291,18 +2336,22 @@ def _validate_bundle(artifact_bundle, trace):
 
 def _validate_policy(mode, trace_path, trace_obj):
     """Validate against policy rules."""
+    from typing import Any
     from ck3lens.policy import validate_for_mode
     from pathlib import Path as P
     
+    trace_list: list[dict[str, Any]] | None = None
     if trace_path:
         path = P(trace_path)
         if not path.exists():
             return {"error": f"Trace file not found: {trace_path}"}
-        trace_data = path.read_text()
-    else:
-        trace_data = ""
+        import json
+        try:
+            trace_list = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            return {"error": f"Trace file is not valid JSON: {trace_path}"}
     
-    result = validate_for_mode(mode, trace_data)
+    result = validate_for_mode(mode, trace=trace_list)
     
     if trace_obj:
         trace_obj.log("ck3lens.validate.policy", {"mode": mode},
@@ -2346,14 +2395,14 @@ def ck3_vscode_impl(
     
     Commands:
     
-    command=ping           → Test connection to VS Code
-    command=diagnostics    → Get diagnostics for a file (path required)
-    command=all_diagnostics → Get diagnostics for all files
-    command=errors_summary → Get workspace error summary
-    command=validate_file  → Trigger validation for a file (path required)
-    command=open_files     → List currently open files
-    command=active_file    → Get active file info with diagnostics
-    command=status         → Check IPC server status
+    command=ping           -> Test connection to VS Code
+    command=diagnostics    -> Get diagnostics for a file (path required)
+    command=all_diagnostics -> Get diagnostics for all files
+    command=errors_summary -> Get workspace error summary
+    command=validate_file  -> Trigger validation for a file (path required)
+    command=open_files     -> List currently open files
+    command=active_file    -> Get active file info with diagnostics
+    command=status         -> Check IPC server status
     
     Args:
         command: Operation to perform
