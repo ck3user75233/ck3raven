@@ -5,7 +5,7 @@
 import * as vscode from 'vscode';
 import { Logger } from '../utils/logger';
 
-export type LensMode = 'ck3lens' | 'ck3raven-dev' | 'ck3creator' | 'none';
+export type LensMode = 'ck3lens' | 'ck3raven-dev' | 'none';
 export type ConnectionStatus = 'connected' | 'disconnected';
 
 export interface AgentInstance {
@@ -39,9 +39,9 @@ export const MODE_DEFINITIONS: Record<string, {
     'ck3lens': {
         displayName: 'CK3 Lens',
         shortName: 'Lens',
-        description: 'Full CK3 modding - conflict detection, live file editing',
+        description: 'Full CK3 modding - conflict detection, local mod editing',
         icon: 'merge',
-        initPrompt: `You have access to the ck3lens MCP server tools (prefixed with ck3_). Initialize as CK3 Lens agent by calling the ck3_get_mode_instructions tool with mode "ck3lens-live". Follow the instructions returned to complete initialization.`
+        initPrompt: `You have access to the ck3lens MCP server tools (prefixed with ck3_). Initialize as CK3 Lens agent by calling the ck3_get_mode_instructions tool with mode "ck3lens". Follow the instructions returned to complete initialization.`
     },
     'ck3raven-dev': {
         displayName: 'CK3 Raven Dev',
@@ -49,13 +49,6 @@ export const MODE_DEFINITIONS: Record<string, {
         description: 'Infrastructure development - Python, MCP server',
         icon: 'beaker',
         initPrompt: `You have access to the ck3lens MCP server tools (prefixed with ck3_). Initialize as CK3 Raven Dev agent by calling the ck3_get_mode_instructions tool with mode "ck3raven-dev". Follow the instructions returned to complete initialization.`
-    },
-    'ck3creator': {
-        displayName: 'CK3 Creator',
-        shortName: 'Creator',
-        description: 'New content creation - experimental',
-        icon: 'lightbulb',
-        initPrompt: `You have access to the ck3lens MCP server tools (prefixed with ck3_). Initialize as CK3 Creator agent by calling the ck3_get_mode_instructions tool with mode "ck3creator". Follow the instructions returned to complete initialization.`
     }
 };
 
@@ -117,13 +110,26 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
     private state: AgentState;
     private disposables: vscode.Disposable[] = [];
     private mcpMonitorInterval: NodeJS.Timeout | undefined;
+    private modeFilePath: string | undefined;
+    private modeFileWatcher: vscode.FileSystemWatcher | undefined;
+    private traceFileWatcher: vscode.FileSystemWatcher | undefined;
 
     constructor(
         private readonly context: vscode.ExtensionContext,
-        private readonly logger: Logger
+        private readonly logger: Logger,
+        private readonly instanceId?: string
     ) {
-        this.state = this.loadState();
+        // Always start fresh - don't persist mode across sessions
+        this.state = this.createFreshState();
         this.registerCommands();
+        
+        // Set up mode file watching if we have an instance ID
+        if (this.instanceId) {
+            this.setupModeFileWatcher();
+        }
+        
+        // Also watch trace file as fallback for mode detection
+        this.setupTraceFileWatcher();
         
         // Check MCP configuration on startup
         this.checkMcpConfiguration();
@@ -323,6 +329,162 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
 
     private persistState(): void {
         this.context.globalState.update('ck3lens.agentState', this.state);
+    }
+
+    /**
+     * Create fresh state - always starts with mode 'none'
+     * We don't persist mode across sessions because the agent needs to re-initialize
+     */
+    private createFreshState(): AgentState {
+        return {
+            pythonBridge: { status: 'disconnected' },
+            mcpServer: { status: 'disconnected' },
+            policyEnforcement: { status: 'disconnected' },
+            agents: [{
+                id: this.generateId(),
+                mode: 'none' as LensMode,
+                initializedAt: new Date().toISOString(),
+                label: 'Agent',
+                isLocal: true
+            }],
+            session: { id: this.generateId(), startedAt: new Date().toISOString() }
+        };
+    }
+
+    /**
+     * Watch the instance-specific mode file for real-time updates
+     */
+    private setupModeFileWatcher(): void {
+        const os = require('os');
+        const path = require('path');
+        const fs = require('fs');
+        
+        const sanitizedId = this.instanceId!.replace(/[^a-zA-Z0-9_-]/g, '_');
+        this.modeFilePath = path.join(os.homedir(), '.ck3raven', `agent_mode_${sanitizedId}.json`);
+        
+        const modeDir = path.dirname(this.modeFilePath);
+        
+        // Create directory if needed
+        if (!fs.existsSync(modeDir)) {
+            fs.mkdirSync(modeDir, { recursive: true });
+        }
+        
+        // Watch for changes to the mode file
+        const pattern = new vscode.RelativePattern(modeDir, `agent_mode_${sanitizedId}.json`);
+        this.modeFileWatcher = vscode.workspace.createFileSystemWatcher(pattern);
+        
+        this.modeFileWatcher.onDidChange(() => {
+            this.loadModeFromFile();
+        });
+        
+        this.modeFileWatcher.onDidCreate(() => {
+            this.loadModeFromFile();
+        });
+        
+        this.disposables.push(this.modeFileWatcher);
+        this.logger.info(`Watching mode file: ${this.modeFilePath}`);
+    }
+    
+    /**
+     * Load agent mode from the instance-specific file
+     */
+    private loadModeFromFile(): void {
+        const fs = require('fs');
+        
+        if (!this.modeFilePath || !fs.existsSync(this.modeFilePath)) {
+            return;
+        }
+        
+        try {
+            const content = fs.readFileSync(this.modeFilePath, 'utf-8');
+            const data = JSON.parse(content);
+            const mode = data.mode as LensMode;
+            
+            if (mode && mode !== 'none') {
+                this.updateAgentMode(mode);
+            } else if (mode === null) {
+                // Mode was cleared (extension startup or session end)
+                this.updateAgentMode('none');
+            }
+        } catch (error) {
+            this.logger.error('Failed to load mode file:', error);
+        }
+    }
+
+    /**
+     * Watch trace file as fallback for mode detection
+     * This catches cases where agents "fall out" of initialization
+     */
+    private setupTraceFileWatcher(): void {
+        const os = require('os');
+        const path = require('path');
+        const fs = require('fs');
+        
+        const tracePath = path.join(os.homedir(), '.ck3raven', 'traces', 'ck3lens_trace.jsonl');
+        const traceDir = path.dirname(tracePath);
+        
+        // Create directory if needed
+        if (!fs.existsSync(traceDir)) {
+            try {
+                fs.mkdirSync(traceDir, { recursive: true });
+            } catch (e) {
+                this.logger.error('Failed to create trace directory', e);
+                return;
+            }
+        }
+        
+        // Watch trace file for mode_initialized events
+        const pattern = new vscode.RelativePattern(traceDir, '*.jsonl');
+        this.traceFileWatcher = vscode.workspace.createFileSystemWatcher(pattern);
+        
+        this.traceFileWatcher.onDidChange(() => {
+            this.checkTraceForMode();
+        });
+        
+        this.disposables.push(this.traceFileWatcher);
+        this.logger.info(`Watching trace file in: ${traceDir}`);
+        
+        // Initial check
+        this.checkTraceForMode();
+    }
+    
+    /**
+     * Check trace file for recent mode_initialized events
+     */
+    private checkTraceForMode(): void {
+        const os = require('os');
+        const path = require('path');
+        const fs = require('fs');
+        
+        const tracePath = path.join(os.homedir(), '.ck3raven', 'traces', 'ck3lens_trace.jsonl');
+        
+        if (!fs.existsSync(tracePath)) {
+            return;
+        }
+        
+        try {
+            const content = fs.readFileSync(tracePath, 'utf-8');
+            const lines = content.trim().split('\n').filter((l: string) => l.trim());
+            
+            // Look for most recent mode_initialized event (check last 50 lines)
+            const recentLines = lines.slice(-50);
+            for (let i = recentLines.length - 1; i >= 0; i--) {
+                try {
+                    const event = JSON.parse(recentLines[i]);
+                    if (event.tool === 'ck3lens.mode_initialized') {
+                        const mode = event.result?.mode || event.args?.mode;
+                        if (mode && (mode === 'ck3lens' || mode === 'ck3raven-dev')) {
+                            this.updateAgentMode(mode as LensMode);
+                            return;
+                        }
+                    }
+                } catch (e) {
+                    // Skip malformed lines
+                }
+            }
+        } catch (error) {
+            // Trace file may not exist yet
+        }
     }
 
     private generateId(): string {
@@ -654,16 +816,32 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
     }
 
     /**
-     * Update agent mode (called when mode is detected from trace)
+     * Update agent mode (called when mode is detected from MCP server or trace)
+     * Always updates mode - allows switching between modes
      */
     public updateAgentMode(mode: LensMode): void {
         const primaryAgent = this.state.agents.find(a => !a.label.startsWith('Sub-'));
-        if (primaryAgent && primaryAgent.mode === 'none') {
-            primaryAgent.mode = mode;
-            primaryAgent.initializedAt = new Date().toISOString();
+        if (primaryAgent) {
+            if (primaryAgent.mode !== mode) {
+                this.logger.info(`Agent mode changed: ${primaryAgent.mode} -> ${mode}`);
+                primaryAgent.mode = mode;
+                primaryAgent.initializedAt = new Date().toISOString();
+                this.persistState();
+                this.refresh();
+            }
+        } else {
+            // No agent exists, create one
+            const newAgent: AgentInstance = {
+                id: this.generateId(),
+                mode: mode,
+                initializedAt: new Date().toISOString(),
+                label: 'Agent',
+                isLocal: true
+            };
+            this.state.agents.unshift(newAgent);
             this.persistState();
             this.refresh();
-            this.logger.info(`Agent mode updated to: ${mode}`);
+            this.logger.info(`Agent created with mode: ${mode}`);
         }
     }
 
