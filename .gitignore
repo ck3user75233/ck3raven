@@ -125,3 +125,14 @@ ck3lens_config.json
 
 # Runtime databases
 *.sqlite
+
+# Generated/exported files
+ck3lens_validation_issues.jsonl
+ck3lens_trace.jsonl
+exports/
+
+# User playset data (runtime config)
+playsets/
+
+# Temp fix scripts
+tools/ck3lens_mcp/fix_*.py
