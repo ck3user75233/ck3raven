@@ -556,8 +556,22 @@ def cleanup_pid():
         pass
 
 
-def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: StatusWriter, symbols_only: bool = False, vanilla_path: str = None, skip_mods: bool = False, use_active_playset: bool = True):
-    """Main rebuild logic - runs in the detached process."""
+def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: StatusWriter, symbols_only: bool = False, vanilla_path: str = None, skip_mods: bool = False, use_active_playset: bool = True, incremental: bool = True, dry_run: bool = False, check_file_changes: bool = False):
+    """Main rebuild logic - runs in the detached process.
+    
+    Args:
+        db_path: Path to the SQLite database
+        force: If True, clear all data and rebuild from scratch
+        logger: DaemonLogger instance
+        status: StatusWriter instance
+        symbols_only: If True, skip ingest and only re-extract symbols/refs
+        vanilla_path: Optional custom path to vanilla CK3 files
+        skip_mods: If True, skip mod ingestion (vanilla only)
+        use_active_playset: If True, only ingest mods from active playset
+        incremental: If True, only process mods/files that need updating (default)
+        dry_run: If True, only report what would be done without making changes
+        check_file_changes: If True, check for changed files in already-indexed mods
+    """
     
     status.update(state="starting", started_at=datetime.now().isoformat())
     write_heartbeat()
@@ -682,7 +696,14 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
                 write_heartbeat()
                 build_tracker.update_lock_heartbeat()
 
-                mod_files = ingest_all_mods(conn, logger, status, use_active_playset=use_active_playset)
+                # Use incremental mode unless force or full-rebuild is set
+                use_incremental = incremental and not force
+                mod_files = ingest_all_mods(
+                    conn, logger, status, 
+                    use_active_playset=use_active_playset,
+                    incremental=use_incremental,
+                    dry_run=dry_run
+                )
                 build_counts['files'] += mod_files if isinstance(mod_files, int) else 0
                 build_tracker.end_step("mod_ingest", StepStats(rows_out=mod_files if isinstance(mod_files, int) else 0))
                 db_wrapper.checkpoint()
@@ -985,13 +1006,17 @@ def discover_all_mods(logger: DaemonLogger) -> List[Dict]:
     return mods
 
 
-def ingest_all_mods(conn, logger: DaemonLogger, status: StatusWriter, use_active_playset: bool = True):
+def ingest_all_mods(conn, logger: DaemonLogger, status: StatusWriter, use_active_playset: bool = True, incremental: bool = True, dry_run: bool = False):
     """Ingest mods with progress tracking.
     
     If use_active_playset is True (default), ingest mods from active playset.
     Otherwise, discover and ingest ALL mods from workshop + local.
+    
+    If incremental is True (default), only ingest mods that need processing.
+    If dry_run is True, only report what would be done without making changes.
     """
     from ck3raven.db.ingest import ingest_mod
+    from builder.incremental import get_mods_needing_rebuild
     
     if use_active_playset:
         mods = load_mods_from_active_playset(logger)
@@ -1002,27 +1027,75 @@ def ingest_all_mods(conn, logger: DaemonLogger, status: StatusWriter, use_active
         logger.warning("No mods found to ingest")
         return
     
-    total = len(mods)
+    # Check which mods need processing (incremental mode)
+    if incremental:
+        rebuild_info = get_mods_needing_rebuild(conn, mods, check_file_changes=False)
+        
+        logger.info(f"Incremental check: {rebuild_info['summary']}")
+        logger.info(f"  - New mods: {len(rebuild_info['mods_needing_ingest'])}")
+        logger.info(f"  - Need symbols: {len(rebuild_info['mods_needing_symbols'])}")
+        logger.info(f"  - Already ready: {len(rebuild_info['mods_ready'])}")
+        
+        if rebuild_info['mods_missing']:
+            for m in rebuild_info['mods_missing']:
+                logger.warning(f"  - Missing on disk: {m['name']} ({m['path']})")
+        
+        if dry_run:
+            logger.info("DRY RUN: Would ingest the following mods:")
+            for m in rebuild_info['mods_needing_ingest']:
+                logger.info(f"  - {m['name']} (new mod)")
+            for m in rebuild_info['mods_needing_symbols']:
+                logger.info(f"  - {m['name']} (needs symbols)")
+            return
+        
+        if not rebuild_info['needs_rebuild']:
+            logger.info("All mods already processed - nothing to do")
+            return
+        
+        # Only ingest mods that need it
+        mods_to_ingest = rebuild_info['mods_needing_ingest']
+        mods_for_symbols = rebuild_info['mods_needing_symbols']
+        
+        # Store mods_for_symbols for symbol extraction phase
+        status.update(progress=0, message=f"Incremental: {len(mods_to_ingest)} mods to ingest")
+    else:
+        # Full rebuild - ingest all mods
+        mods_to_ingest = mods
+        mods_for_symbols = []
+    
+    total = len(mods_to_ingest)
+    if total == 0:
+        logger.info("No new mods to ingest (some may need symbol extraction only)")
+        return
+    
     ingested = 0
     skipped = 0
     errors = 0
     total_files = 0
     
-    for i, mod in enumerate(mods):
+    for i, mod in enumerate(mods_to_ingest):
         write_heartbeat()
+        
+        # Handle mod dict format from get_mods_needing_rebuild
+        if 'path' in mod and isinstance(mod['path'], str):
+            mod_path = Path(mod['path'])
+        else:
+            mod_path = mod.get('path', mod)
+        mod_name = mod.get('name', 'Unknown')
+        workshop_id = mod.get('workshop_id')
         
         pct = ((i + 1) / total) * 100
         status.update(
             progress=pct,
-            message=f"Mod ingest: {i+1}/{total} - {mod['name'][:30]}"
+            message=f"Mod ingest: {i+1}/{total} - {mod_name[:30]}"
         )
         
         try:
             mod_package, result = ingest_mod(
                 conn=conn,
-                mod_path=mod['path'],
-                name=mod['name'],
-                workshop_id=mod['workshop_id'],
+                mod_path=mod_path,
+                name=mod_name,
+                workshop_id=workshop_id,
                 force=False  # Rely on content hash for dedup
             )
             
@@ -1031,12 +1104,12 @@ def ingest_all_mods(conn, logger: DaemonLogger, status: StatusWriter, use_active
             ingested += 1
             
             if i % 20 == 0:
-                logger.info(f"Mod {i+1}/{total}: {mod['name']} - {files_added} files")
+                logger.info(f"Mod {i+1}/{total}: {mod_name} - {files_added} files")
                 conn.commit()  # Commit every 20 mods
             
         except Exception as e:
             errors += 1
-            logger.warning(f"Failed to ingest mod {mod['name']}: {e}")
+            logger.warning(f"Failed to ingest mod {mod_name}: {e}")
     
     conn.commit()
     logger.info(f"Mod ingest complete: {ingested} mods, {total_files} files, {errors} errors")
@@ -2407,7 +2480,7 @@ def _write_debug_output(output: dict):
     DEBUG_OUTPUT_FILE.write_text(json.dumps(output, indent=2))
 
 
-def start_detached(db_path: Path, force: bool, symbols_only: bool = False, ingest_all: bool = False):
+def start_detached(db_path: Path, force: bool, symbols_only: bool = False, ingest_all: bool = False, full_rebuild: bool = False, dry_run: bool = False, check_files: bool = False):
     """Launch the rebuild as a completely detached process."""
     
     # Create the command to run ourselves in daemon mode
@@ -2431,6 +2504,12 @@ def start_detached(db_path: Path, force: bool, symbols_only: bool = False, inges
         args.append("--symbols-only")
     if ingest_all:
         args.append("--ingest-all")
+    if full_rebuild:
+        args.append("--full-rebuild")
+    if dry_run:
+        args.append("--dry-run")
+    if check_files:
+        args.append("--check-files")
     
     # Launch completely detached
     # DETACHED_PROCESS = 0x00000008
@@ -2575,6 +2654,14 @@ def main():
     parser.add_argument("--ingest-all", action="store_true",
                         help="Ingest ALL mods (workshop + local) instead of just active playset")
     
+    # Incremental rebuild options
+    parser.add_argument("--full-rebuild", action="store_true",
+                        help="Force full rebuild of all mods (overrides incremental)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Show what would be rebuilt without making changes")
+    parser.add_argument("--check-files", action="store_true",
+                        help="Check for changed files in already-indexed mods (slower)")
+    
     args = parser.parse_args()
     
     if args.command == "start":
@@ -2628,13 +2715,18 @@ def main():
             print(f"  Vanilla: {args.vanilla_path or 'default'}")
             print(f"  Skip mods: {args.skip_mods}")
             print(f"  Ingest all mods: {args.ingest_all}")
+            print(f"  Incremental: {not args.full_rebuild}")
+            print(f"  Dry run: {args.dry_run}")
             logger = DaemonLogger(LOG_FILE, also_print=True)
             status = StatusWriter(STATUS_FILE)
             run_rebuild(
                 args.db, args.force, logger, status, args.symbols_only,
                 vanilla_path=args.vanilla_path,
                 skip_mods=args.skip_mods,
-                use_active_playset=not args.ingest_all
+                use_active_playset=not args.ingest_all,
+                incremental=not args.full_rebuild,
+                dry_run=args.dry_run,
+                check_file_changes=args.check_files
             )
             sys.exit(0)
         
@@ -2643,7 +2735,13 @@ def main():
             print("Daemon is already running (PID check). Use 'stop' first.")
             sys.exit(1)
         
-        start_detached(args.db, args.force, args.symbols_only, ingest_all=args.ingest_all)
+        start_detached(
+            args.db, args.force, args.symbols_only, 
+            ingest_all=args.ingest_all,
+            full_rebuild=args.full_rebuild,
+            dry_run=args.dry_run,
+            check_files=args.check_files
+        )
     
     elif args.command == "status":
         show_status()
@@ -2666,7 +2764,13 @@ def main():
         status = StatusWriter(STATUS_FILE)
         
         try:
-            run_rebuild(args.db, args.force, logger, status, args.symbols_only, use_active_playset=not args.ingest_all)
+            run_rebuild(
+                args.db, args.force, logger, status, args.symbols_only, 
+                use_active_playset=not args.ingest_all,
+                incremental=not args.full_rebuild,
+                dry_run=args.dry_run,
+                check_file_changes=args.check_files
+            )
         except Exception as e:
             logger.error(f"Daemon crashed: {e}")
             logger.error(traceback.format_exc())
