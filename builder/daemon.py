@@ -43,6 +43,20 @@ LOG_FILE = DAEMON_DIR / "rebuild.log"
 HEARTBEAT_FILE = DAEMON_DIR / "heartbeat"
 DEBUG_OUTPUT_FILE = DAEMON_DIR / "debug_output.json"
 
+# Folders that are pure data structures with no script references
+# These have large AST node counts but yield 0 refs - skip for performance
+# Based on analysis: landed_titles has 100k nodes but 0 refs, etc.
+REF_EXTRACTION_SKIP_FOLDERS = (
+    'common/landed_titles',      # 100k+ nodes, 0 refs - title hierarchy
+    'common/bookmark_portraits', # 600k+ nodes - portrait definitions
+    'common/genes',              # 200k+ nodes - gene definitions
+    'common/culture/name_equivalency',  # Pure name mappings
+    'common/event_backgrounds',  # Background definitions
+    'map_data',                  # Map terrain data
+    'gfx',                       # Graphics definitions
+    'fonts',                     # Font definitions
+)
+
 # Ensure daemon directory exists
 DAEMON_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -1803,13 +1817,19 @@ def extract_refs_from_stored_asts(conn, logger: DaemonLogger, status: StatusWrit
         cv_lookup[file_id] = cv_id
     logger.info(f"Cached {len(cv_lookup)} file -> content_version mappings")
     
-    # Query files that have ASTs
-    total_count = conn.execute("""
+    # Build skip clause for data-only folders (no script refs)
+    skip_clauses = " AND ".join([f"f.relpath NOT LIKE '{folder}/%'" for folder in REF_EXTRACTION_SKIP_FOLDERS])
+    logger.info(f"Skipping {len(REF_EXTRACTION_SKIP_FOLDERS)} data-only folders for ref extraction")
+    
+    # Query files that have ASTs (excluding data-only folders)
+    count_sql = f"""
         SELECT COUNT(*) FROM files f
         JOIN asts a ON f.content_hash = a.content_hash
         WHERE f.deleted = 0 AND a.parse_ok = 1
         AND f.relpath LIKE '%.txt'
-    """).fetchone()[0]
+        AND {skip_clauses}
+    """
+    total_count = conn.execute(count_sql).fetchone()[0]
     
     logger.info(f"Processing {total_count} files for refs")
     
@@ -1819,18 +1839,22 @@ def extract_refs_from_stored_asts(conn, logger: DaemonLogger, status: StatusWrit
     errors = 0
     batch_refs = []  # Accumulate refs for batch insert
     
+    # Pre-build the main query with skip clauses
+    main_query = f"""
+        SELECT f.file_id, f.relpath, f.content_hash, a.ast_id, a.ast_blob
+        FROM files f
+        JOIN asts a ON f.content_hash = a.content_hash
+        WHERE f.deleted = 0 AND a.parse_ok = 1
+        AND f.relpath LIKE '%.txt'
+        AND {skip_clauses}
+        ORDER BY f.file_id
+        LIMIT ? OFFSET ?
+    """
+    
     while offset < total_count:
         write_heartbeat()
         
-        rows = conn.execute("""
-            SELECT f.file_id, f.relpath, f.content_hash, a.ast_id, a.ast_blob
-            FROM files f
-            JOIN asts a ON f.content_hash = a.content_hash
-            WHERE f.deleted = 0 AND a.parse_ok = 1
-            AND f.relpath LIKE '%.txt'
-            ORDER BY f.file_id
-            LIMIT ? OFFSET ?
-        """, (chunk_size, offset)).fetchall()
+        rows = conn.execute(main_query, (chunk_size, offset)).fetchall()
         
         if not rows:
             break
