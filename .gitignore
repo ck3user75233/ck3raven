@@ -125,3 +125,6 @@ ck3lens_config.json
 
 # Runtime databases
 *.sqlite
+
+# VS Code workspace files (machine-specific)
+*.code-workspace
