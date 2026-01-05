@@ -13,6 +13,17 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal, Optional
 
+from .world_adapter import PathDomain
+
+
+# ============================================================================
+# Domain Categories for Routing
+# ============================================================================
+# Domains that use raw filesystem paths (resolution.absolute_path)
+RAW_PATH_DOMAINS = {PathDomain.WIP, PathDomain.CK3RAVEN, PathDomain.VANILLA, PathDomain.UTILITY}
+# Domains that use mod addressing (mod_name + rel_path via session.get_mod())
+MOD_PATH_DOMAINS = {PathDomain.LOCAL_MOD, PathDomain.WORKSHOP_MOD}
+
 
 # ============================================================================
 # ck3_logs - Unified Logging Tool
@@ -560,29 +571,41 @@ def ck3_file_impl(
             return {"error": "Either 'path' or 'mod_name'+'rel_path' required for read"}
     
     elif command == "write":
-        if path:
-            # Raw filesystem write - policy-gated with WorldAdapter
-            if content is None:
-                return {"error": "content required for write"}
+        if content is None:
+            return {"error": "content required for write"}
+        
+        # Route based on resolution.domain (the canonical way)
+        if resolution and resolution.domain in RAW_PATH_DOMAINS and resolution.absolute_path:
+            # WIP, vanilla, ck3raven, utility - use raw filesystem write
+            return _file_write_raw(str(resolution.absolute_path), content, validate_syntax, token_id, trace, world)
+        elif resolution and resolution.domain in MOD_PATH_DOMAINS and mod_name and rel_path:
+            # Local or workshop mod - use sandboxed mod write
+            return _file_write(mod_name, rel_path, content, validate_syntax, session, trace)
+        elif path and not resolution:
+            # Fallback for raw path when no resolution available
             return _file_write_raw(path, content, validate_syntax, token_id, trace, world)
-        elif mod_name and rel_path:
-            # Sandboxed mod write
-            if content is None:
-                return {"error": "content required for write"}
+        elif mod_name and rel_path and not resolution:
+            # Fallback for mod addressing when no resolution available
             return _file_write(mod_name, rel_path, content, validate_syntax, session, trace)
         else:
             return {"error": "Either 'path' or 'mod_name'+'rel_path' required for write"}
     
     elif command == "edit":
-        if path:
-            # Raw filesystem edit - policy-gated with WorldAdapter
-            if old_content is None or new_content is None:
-                return {"error": "old_content and new_content required for edit"}
+        if old_content is None or new_content is None:
+            return {"error": "old_content and new_content required for edit"}
+        
+        # Route based on resolution.domain (the canonical way)
+        if resolution and resolution.domain in RAW_PATH_DOMAINS and resolution.absolute_path:
+            # WIP, vanilla, ck3raven, utility - use raw filesystem edit
+            return _file_edit_raw(str(resolution.absolute_path), old_content, new_content, validate_syntax, token_id, trace, world)
+        elif resolution and resolution.domain in MOD_PATH_DOMAINS and mod_name and rel_path:
+            # Local or workshop mod - use sandboxed mod edit
+            return _file_edit(mod_name, rel_path, old_content, new_content, validate_syntax, session, trace)
+        elif path and not resolution:
+            # Fallback for raw path when no resolution available
             return _file_edit_raw(path, old_content, new_content, validate_syntax, token_id, trace, world)
-        elif mod_name and rel_path:
-            # Sandboxed mod edit
-            if old_content is None or new_content is None:
-                return {"error": "old_content and new_content required for edit"}
+        elif mod_name and rel_path and not resolution:
+            # Fallback for mod addressing when no resolution available
             return _file_edit(mod_name, rel_path, old_content, new_content, validate_syntax, session, trace)
         else:
             return {"error": "Either 'path' or 'mod_name'+'rel_path' required for edit"}
@@ -1398,13 +1421,31 @@ def _file_create_patch(mod_name, source_mod, source_path, patch_mode, initial_co
 
 
 def _refresh_file_in_db_internal(mod_name, rel_path, content=None, deleted=False):
-    """Internal helper to refresh file in database."""
+    """Internal helper to refresh file in database.
+    
+    If builder daemon is running, appends to pending_refresh.log instead of
+    blocking on DB lock. The daemon processes pending entries after build completes.
+    """
     try:
         import sys
         from pathlib import Path as P
         project_root = P(__file__).parent.parent.parent.parent
         if str(project_root) not in sys.path:
-            sys.path.insert(0, str(project_root))
+            sys.path.insert(0, str(project_root))\
+        
+        # Check if builder daemon is running - defer to pending log
+        from builder.daemon import is_daemon_running
+        if is_daemon_running():
+            from builder.pending_refresh import append_pending_write, append_pending_delete
+            if deleted:
+                success = append_pending_delete(mod_name, rel_path)
+            else:
+                success = append_pending_write(mod_name, rel_path)
+            return {
+                "success": success,
+                "deferred": True,
+                "reason": "Builder daemon running - queued for processing after build"
+            }
         
         from builder.incremental import refresh_single_file, mark_file_deleted
         from ck3raven.db.schema import get_connection, DEFAULT_DB_PATH
@@ -1415,6 +1456,8 @@ def _refresh_file_in_db_internal(mod_name, rel_path, content=None, deleted=False
             return mark_file_deleted(conn, mod_name, rel_path)
         else:
             return refresh_single_file(conn, mod_name, rel_path, content=content)
+    except Exception as e:
+        return {"success": False, "error": str(e)}
     except Exception as e:
         return {"success": False, "error": str(e)}
 

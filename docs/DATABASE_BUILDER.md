@@ -1,70 +1,79 @@
-﻿# Database Builder Architecture
+# Database Builder Architecture
+
+> **Last Updated:** January 2026  
+> **Status:** AUTHORITATIVE
 
 ## Overview
 
-The ck3raven database stores parsed CK3 content for fast querying by the MCP tools. This document covers the build system, incremental updates, and the library functions that power intelligent rebuilds.
+The ck3raven database stores parsed CK3 content for fast querying by the MCP tools. The builder (`builder/daemon.py`) runs as a detached daemon, processing files through 7 phases with full incremental support.
+
+---
+
+## Quick Reference
+
+```bash
+# Start rebuild (file change detection ON by default)
+python builder/daemon.py start
+
+# Check status
+python builder/daemon.py status
+
+# View logs (follow mode)
+python builder/daemon.py logs -f
+
+# Stop daemon
+python builder/daemon.py stop
+```
 
 ---
 
 ## Directory Structure
 
-`
-ck3raven/
- builder/                      # THE database builder (detached daemon)
-    daemon.py                 # Main daemon script
-    migrations/               # Schema migration scripts
-        create_loc_tables.py
-        init_conflict_tables.py
-        migrate_add_staleness_columns.py
-        migrate_contribution_lifecycle.py
+```
+builder/                          # THE database builder (detached daemon)
+   daemon.py                      # Main daemon script (~2800 lines)
+   incremental.py                 # Single-file refresh for MCP writes
+   pending_refresh.py             # Deferred refresh queue (MCP → daemon)
+   config.py                      # Configuration (paths, etc.)
+   migrations/                    # Schema migration scripts
 
- src/ck3raven/db/              # Database library functions (used by daemon)
-    schema.py                 # Schema definition + SCHEMA_VERSION constant
-    ingest.py                 # Directory/mod ingestion + incremental update
-    work_detection.py         # Detect what work needs to be done
-    skip_rules.py             # Centralized skip patterns for all phases
-    symbols.py                # Symbol extraction logic
-    references.py             # Reference extraction logic
-    content.py                # File record/content storage helpers
-    asts.py                   # AST generation logic
-│    queries.py                # Read-only query helpers
-    db_setup.py               # Connection helpers
-
- tests/                        # Test suite
-    unit/                     # Unit tests (fast, isolated)
-    integration/              # Integration tests (use real DB)
-    fixtures/                 # Test data files
-
- scripts/                      # Utility scripts (NOT for building)
-     convert_launcher_playset.py
-     create_playset.py
-     ingest_localization.py
-     resolve_traditions.py
-`
+src/ck3raven/db/                  # Database library functions
+   schema.py                      # Schema definition + SCHEMA_VERSION
+   ingest.py                      # Directory/mod ingestion
+   symbols.py                     # Symbol extraction logic
+   references.py                  # Reference extraction logic
+   asts.py                        # AST generation logic
+   file_routes.py                 # File classification (script/loc/lookup/skip)
+```
 
 ---
 
 ## Daemon Usage
 
-The daemon runs completely detached from terminals (avoids Ctrl+C injection issues).
+### Commands
 
-`ash
-# Start a full rebuild
-python builder/daemon.py start --db ~/.ck3raven/ck3raven.db
+| Command | Description |
+|---------|-------------|
+| `start` | Start rebuild daemon (detaches to background) |
+| `status` | Show current phase, progress, heartbeat |
+| `logs` | View daemon log output |
+| `logs -f` | Follow log output (tail -f style) |
+| `stop` | Stop running daemon |
 
-# Force restart (kills existing daemon)
-python builder/daemon.py start --force
+### Flags
 
-# Check status
-python builder/daemon.py status
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--force` | Off | Clear all data and rebuild from scratch |
+| `--symbols-only` | Off | Skip ingest, only re-extract symbols/refs |
+| `--ingest-all` | Off | Ingest ALL mods (not just active playset) |
+| `--full-rebuild` | Off | Force full rebuild of all mods |
+| `--dry-run` | Off | Show what would be done without making changes |
+| `--skip-file-check` | Off | Skip file change detection (faster but may miss changes) |
+| `--debug PHASE` | Off | Debug specific phase with detailed timing |
+| `--test` | Off | Run synchronously with verbose output |
 
-# View logs
-python builder/daemon.py logs
-python builder/daemon.py logs -f  # Follow mode
-
-# Stop daemon
-python builder/daemon.py stop
-`
+**Note:** File change detection is ON by default. Use `--skip-file-check` to disable it for faster builds when you know nothing has changed.
 
 ### Daemon Files
 
@@ -76,221 +85,193 @@ Located in `~/.ck3raven/daemon/`:
 | `rebuild_status.json` | Current phase, progress, counts |
 | `rebuild.log` | Full log output |
 | `heartbeat` | Timestamp updated every 30s |
-
-### Build Phases
-
-The daemon processes files through distinct phases. File routing is determined at ingest time by `file_routes.py` which sets `file_type` on each file.
-
-| Phase | Name | Description |
-|-------|------|-------------|
-| 1 | **Vanilla Ingest** | Scan vanilla game files, store content, tag with `file_type` |
-| 2 | **Mod Ingest** | Scan all Steam Workshop + local mods, same tagging |
-| 3 | **Parsing** | Multi-route based on `file_type`: |
-|   | - script → | Parse to AST, store in `asts` table |
-|   | - localization → | Parse to `localization_entries` table (TODO) |
-|   | - reference → | Parse province/character IDs to ref tables (TODO) |
-|   | - skip → | No parsing (images, binary, docs) |
-| 4 | **Symbol Extraction** | Extract definitions (traits, events, decisions) from ASTs |
-| 5 | **Reference Extraction** | Extract symbol USAGES from ASTs (enables dependency analysis) |
-| 6 | **Done** | Build complete |
-
-**File Routing**: The canonical file classification is in `src/ck3raven/db/file_routes.py`. This single file determines where each file goes. No scattered skip logic.
+| `pending_refresh.log` | Deferred file refreshes from MCP |
 
 ---
 
-## Library Functions: Work Detection
+## Build Phases
 
-The `src/ck3raven/db/work_detection.py` module contains functions that detect what work needs to be done **without performing it**. These enable intelligent, incremental rebuilds.
+The daemon processes files through 7 phases. Each phase is **self-skipping** - it queries the database to find work and does nothing if there's none.
 
-### Key Classes
+| # | Phase | Description |
+|---|-------|-------------|
+| 1 | **vanilla_ingest** | Scan vanilla game files → `files` table |
+| 2 | **mod_ingest** | Scan Workshop + local mods → `files` table |
+| 3 | **ast_generation** | Parse script files → `asts` table |
+| 4 | **symbol_extraction** | Extract definitions → `symbols` table |
+| 5 | **ref_extraction** | Extract usages → `refs` table |
+| 6 | **localization_parsing** | Parse .yml files → `localization` table |
+| 7 | **lookup_extraction** | Extract lookup tables (provinces, etc.) |
 
-| Class | Purpose |
-|-------|---------|
-| `WorkSummary` | Comprehensive summary of pending work across all phases |
-| `SlowParseInfo` | Information about slow parses (statistical outliers) |
-| `RebuildRecommendation` | Result of full rebuild checks with severity levels |
+### Phase Self-Skip Behavior
 
-### Key Functions
+Each phase function checks database state internally:
 
-| Function | Purpose |
-|----------|---------|
-| `get_files_needing_ingest()` | Compare filesystem to DB, returns (new, deleted, changed) files |
-| `get_files_needing_ast()` | Files with content but no AST |
-| `get_files_with_failed_ast()` | Files that failed parsing |
-| `get_asts_needing_symbols()` | ASTs without extracted symbols |
-| `get_orphan_counts()` | Count orphaned entries needing cleanup |
-| `get_slow_parses()` | Identify statistical outliers in parse times |
-| `should_full_rebuild()` | Check if full rebuild warranted (**NEVER auto-approves**) |
-| `get_build_status()` | Main function - comprehensive work summary |
+- **vanilla_ingest**: Checks if vanilla content_version exists
+- **mod_ingest**: Compares filesystem mods to database, detects changes via mtime/hash
+- **ast_generation**: Queries for files without ASTs (`generate_missing_asts`)
+- **symbol_extraction**: Queries for ASTs without extracted symbols
+- **ref_extraction**: Queries for ASTs without extracted refs
+- **localization_parsing**: Queries for .yml files not yet parsed
+- **lookup_extraction**: Queries for lookup files not yet extracted
 
-### Full Rebuild Detection
-
-The `should_full_rebuild()` function **NEVER auto-approves** a full rebuild. It returns a `RebuildRecommendation` dataclass with:
-
-- `requires_user_approval` - Always True
-- `severity` - 'required' | 'recommended' | 'optional'
-- `reason` - Human-readable explanation
-- `details` - Dict with specifics (e.g., schema versions)
-
-**Why?** Full rebuilds take hours and destroy existing data. The user must explicitly confirm.
-
-**Schema detection:** Compares `SCHEMA_VERSION` constant (in code) against `db_metadata.schema_version` (in DB).
+**Key insight:** The database IS the source of truth for what work needs doing. No separate "resume state" tracking needed.
 
 ---
 
-## Library Functions: Skip Rules
+## Incremental Updates
 
-The `src/ck3raven/db/skip_rules.py` module provides **centralized skip patterns** for all processing phases.
+### Core Principle
 
-### Skip Categories
+**Don't rebuild what hasn't changed.** The builder tracks changes at multiple levels:
 
-| Category | Pattern Examples | Reason |
-|----------|------------------|--------|
-| `NEVER_PARSE` | gfx/, fonts/, sounds/, #backup/ | Not CK3 scripts |
-| `USE_LOCALIZATION_PARSER` | localization/*.yml | Different parser |
-| `SKIP_SYMBOL_EXTRACTION` | names/, coat_of_arms/, gui/ | No meaningful symbols |
-| `SKIP_REF_EXTRACTION` | history/ | Historical data, not refs |
+1. **File level** - `mtime` for fast filtering, `content_hash` for definitive change detection
+2. **AST level** - Keyed by `content_hash` (content-addressable, deduped)
+3. **Symbol/Ref level** - Keyed by `file_id` (needs mod context for conflicts)
 
-### Key Functions
+### File Change Detection (Default ON)
 
-| Function | Returns |
-|----------|---------|
-| `should_skip_ast(relpath)` | bool - Skip AST generation |
-| `should_skip_symbols(relpath)` | bool - Skip symbol extraction |
-| `should_skip_refs(relpath)` | bool - Skip reference extraction |
-| `is_localization_file(relpath)` | bool - Use localization parser |
-| `get_ast_eligible_sql_condition()` | SQL WHERE clause for AST-eligible files |
-| `get_symbol_eligible_sql_condition()` | SQL WHERE clause for symbol-eligible files |
+When running normally, the daemon:
 
-### Why Centralized?
+1. Scans filesystem for all mod files
+2. Compares stored `files.mtime` vs actual mtime
+3. For changed files: reads content, computes hash
+4. Categorizes as: `added`, `removed`, `changed`, `unchanged`
+5. Processes only affected files
 
-- **Single source of truth** - All phases use the same logic
-- **Consistency** - No divergence between daemon and library
-- **Testability** - Easy to test and verify patterns
-- **Documentation** - Patterns explained inline with rationale
+Use `--skip-file-check` to bypass this (trusts database is current).
 
----
+### MCP Write Integration
 
-## Symbol Extraction Return Values
+When MCP tools write files to local mods:
 
-The `extract_symbols_for_file()` function in `symbols.py` returns a dict with clear terminology:
+1. **If daemon is stopped**: `refresh_single_file()` updates DB immediately
+2. **If daemon is running**: Write is queued to `pending_refresh.log`
+3. **After build completes**: Daemon processes pending queue
 
-`python
-{
-    'symbols_extracted': 15,   # Total symbols found in AST
-    'symbols_inserted': 3,     # Actually inserted (new to DB)
-    'duplicates': 12,          # Ignored (INSERT OR IGNORE - already exist)
-    'files_skipped': 0         # Files skipped due to skip rules
-}
-`
+This prevents MCP from blocking on DB locks during builds.
 
-**Note:** `duplicates` are expected! Due to content-addressing (files share content by hash), the same symbols may be extracted multiple times. `INSERT OR IGNORE` correctly deduplicates them.
+### Pending Refresh Queue
+
+Format (`~/.ck3raven/daemon/pending_refresh.log`):
+```
+WRITE|mod_name|rel_path
+DELETE|mod_name|rel_path
+```
+
+The daemon atomically reads and clears this file after Phase 7, processing each entry via `refresh_single_file()` or `mark_file_deleted()`.
 
 ---
 
-## Incremental Update Strategy
+## BuildTracker (Audit Log)
 
-### Core Principle: Don't Rebuild What Hasn't Changed
+The `BuildTracker` class records build progress to `builder_runs` and `builder_steps` tables. This is an **audit log only** - it does NOT drive resume behavior.
 
-The builder tracks changes at multiple levels:
+### Tables
 
-1. **File level** - mtime for fast filtering, content_hash for definitive change detection
-2. **AST level** - Keyed by `content_hash` (content-addressable, deduped across mods)
-3. **Symbol level** - Keyed by `file_id` (needs mod/version context for conflicts)
+**builder_runs:**
+| Column | Description |
+|--------|-------------|
+| `build_id` | Unique ID (UUID) |
+| `started_at` | Build start timestamp |
+| `completed_at` | Build completion timestamp |
+| `state` | running / complete / failed |
+| `error_message` | Error if failed |
 
-### Why Different Keys?
+**builder_steps:**
+| Column | Description |
+|--------|-------------|
+| `build_id` | Parent build |
+| `step_name` | Phase name |
+| `started_at` | Step start |
+| `completed_at` | Step completion |
+| `state` | running / complete / failed / skipped |
+| `rows_out` | Rows produced |
+| `rows_skipped` | Rows skipped |
+| `rows_errored` | Rows with errors |
 
-| Data Type | Primary Key | Reason |
-|-----------|-------------|--------|
-| `file_contents` | `content_hash` | Same content = same bytes, dedup across mods |
-| `asts` | `(content_hash, parser_version)` | Same content parsed by same parser = same AST |
-| `symbols` | `symbol_id`, indexed by `defining_file_id` | Same trait in mod A vs mod B has different conflict/priority context |
-| `refs` | `ref_id`, indexed by `file_id` | References need file context |
+### Why Not Resume From Audit Log?
 
-### Incremental Update Process (`incremental_update()` in `ingest.py`)
+The audit log records what happened, but the **database state** is what matters:
 
-When a mod is updated (e.g., Steam Workshop update):
-
-1. **Fast mtime scan** - Compare stored `files.mtime` vs filesystem mtime
-2. **Hash check for changed** - Only read files where mtime differs, compute hash
-3. **Categorize** - Files are `added`, `removed`, `changed`, or `unchanged`
-4. **Clean up replaced/removed files**:
-   - Delete `symbols` (keyed by file_id)
-   - Delete `refs` (keyed by file_id)
-   - Delete `asts` (by content_hash, only if no other files reference it)
-   - Delete `file_contents` (by content_hash, only if orphaned)
-5. **Store new content** - Insert new file_contents and file records with mtime
-6. **Clear extraction timestamps** - Set `symbols_extracted_at=NULL` on content_version
-7. **Daemon routing** - Existing daemon file routing regenerates ASTs/symbols
-
-> **Note on `is_stale` column**: The `content_versions.is_stale` column is **deprecated** and 
-> scheduled for removal. Change detection happens at the **file level** via `files.mtime`, not
-> via this flag. The column is always set to 1 and not used for decisions.
-
-### Key Implementation Details
-
-- **First run after mtime fix**: All files will be hash-checked (stored mtime was NULL)
-- **Subsequent runs**: Only files with changed mtime are read
-- **Content deduplication**: ASTs and file_contents are only deleted if no other files reference them
-- **Daemon handles regeneration**: By clearing `symbols_extracted_at`, the daemon's normal file routing kicks in
-
-### Rebuild Modes
-
-| Mode | Behavior | When to Use |
-|------|----------|-------------|
-| Default | Check mtime, only read changed files | Normal operation, Steam updates |
-| `--rescan` | Scan all files, compare content_hash | Force check everything |
-| `--full` | Drop all data, rebuild from scratch | Schema changes, corrupted DB |
-
-### When Full Rebuild is Required
-
-- `SCHEMA_VERSION` changed in code
-- Parser version changed
-- User explicitly requests `--force`
-
-### When Full Rebuild is NOT Required
-
-- New nullable columns (add via migration)
-- New tables (add via migration)
-- New indexes (add via migration)
-- Mod added or removed (incremental)
+- A file without an AST needs an AST (regardless of what the audit log says)
+- An AST without symbols needs symbol extraction
+- The audit log is for debugging, not control flow
 
 ---
 
-## Migration Scripts
+## Configuration
 
-Migrations live in `builder/migrations/` and follow this pattern:
+The daemon uses `builder/config.py` for paths:
 
-`python
-def migrate(conn):
-    # 1. Check if migration already applied
-    if column_exists(conn, 'files', 'new_column'):
-        return "Already migrated"
+```python
+@dataclass
+class Config:
+    vanilla_path: Path      # CK3 game installation
+    workshop_path: Path     # Steam Workshop mods
+    local_mods_path: Path   # Local mods folder
+    db_path: Path           # SQLite database
+```
 
-    # 2. Add column with safe default
-    conn.execute("ALTER TABLE files ADD COLUMN new_column TEXT DEFAULT NULL")
-
-    # 3. Backfill if needed (incremental, resumable)
-    # ...
-
-    conn.commit()
-    return "Migration complete"
-`
+Default locations (Windows):
+- Vanilla: `C:/Program Files (x86)/Steam/steamapps/common/Crusader Kings III/game`
+- Workshop: `C:/Program Files (x86)/Steam/steamapps/workshop/content/1158310`
+- Local mods: `~/Documents/Paradox Interactive/Crusader Kings III/mod`
+- Database: `~/.ck3raven/ck3raven.db`
 
 ---
 
-## Performance Targets
+## Performance
 
-| Operation | Current | Target |
-|-----------|---------|--------|
-| Full rebuild (vanilla + 648 mods) | ~4 hours | 2-3 hours |
-| Incremental (10 files changed) | N/A | 10 seconds |
-| Single file rebuild | N/A | <1 second |
-| Watch mode latency | N/A | <3 seconds |
+| Operation | Typical Time |
+|-----------|--------------|
+| Full rebuild (vanilla + 648 mods) | ~2-4 hours |
+| Incremental (10 files changed) | ~10-30 seconds |
+| Single file refresh (MCP write) | <1 second |
+
+### Optimizations
+
+- **WAL mode**: SQLite write-ahead logging for concurrent reads
+- **Checkpointing**: After each phase
+- **Content deduplication**: Same content = same hash = shared storage
+- **mtime filtering**: Skip unchanged files without reading
+
+---
+
+## Debugging
+
+### Debug Mode
+
+```bash
+# Debug specific phase
+python builder/daemon.py start --debug ast_generation --debug-limit 10
+
+# Debug all phases  
+python builder/daemon.py start --debug all
+```
+
+Output goes to `~/.ck3raven/daemon/debug_output.json`.
+
+### Test Mode
+
+```bash
+# Run synchronously with verbose output
+python builder/daemon.py start --test --vanilla-path /path/to/fixture
+```
+
+### Common Issues
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| "Daemon already running" | Stale PID file | `daemon.py stop` or delete `rebuild.pid` |
+| Hangs at phase start | DB lock contention | Stop other DB connections |
+| MCP writes hang | Daemon holding DB lock | Fixed: MCP now queues to pending_refresh |
+| Phases re-run unnecessarily | `--force` flag | Remove `--force`, use incremental |
 
 ---
 
 ## Related Documentation
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) - Overall system architecture
-- [tools/ck3lens_mcp/docs/SETUP.md](../tools/ck3lens_mcp/docs/SETUP.md) - MCP server setup
+- [02_BUILDER_DESIGN_CURRENT_STATE.md](02_BUILDER_DESIGN_CURRENT_STATE.md) - Design notes and open questions
+- [CANONICAL_ARCHITECTURE.md](CANONICAL_ARCHITECTURE.md) - Architectural principles
