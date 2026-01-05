@@ -108,15 +108,13 @@ def classify_path_domain(
     local_mods_folder: Path | None = None,
     vanilla_root: str | None = None,
     ck3raven_root: Path | None = None,
-) -> ScopeDomain:
+) -> ScopeDomain | None:
     """
     Classify a path into its scope domain.
     
-    Returns the ScopeDomain for the path to determine access permissions.
+    Returns the ScopeDomain for structural classification only (NOT permissions).
     
-    Local vs Workshop determination:
-    - Path under local_mods_folder → ACTIVE_LOCAL_MODS (editable)
-    - Other mod paths → ACTIVE_WORKSHOP_MODS (read-only)
+    For mod paths, returns None - enforcement.py decides based on local_mods_folder.
     """
     if isinstance(path, str):
         path = Path(path)
@@ -144,15 +142,16 @@ def classify_path_domain(
     if local_mods_folder:
         local_str = str(local_mods_folder.resolve()).replace("\\", "/").lower()
         if path_str.startswith(local_str):
-            return ScopeDomain.ACTIVE_LOCAL_MODS
+            # Mod paths handled by enforcement.py
+            return None
     
     # If it looks like a mod path but not under local_mods_folder, it's workshop
     # Workshop mods are in Steam workshop folder or other locations
     if _looks_like_mod_path(path_str):
-        return ScopeDomain.ACTIVE_WORKSHOP_MODS
+        return None
     
     # Unknown - treat as potentially inactive
-    return ScopeDomain.INACTIVE_LOCAL_MODS
+    return None
 
 
 def _looks_like_mod_path(path_str: str) -> bool:

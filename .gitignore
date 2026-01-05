@@ -1,4 +1,4 @@
-# Byte-compiled / optimized / DLL files
+﻿# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
@@ -128,3 +128,14 @@ ck3lens_config.json
 
 # VS Code workspace files (machine-specific)
 *.code-workspace
+
+# Generated/exported files
+ck3lens_validation_issues.jsonl
+ck3lens_trace.jsonl
+exports/
+
+# User playset data (runtime config)
+playsets/
+
+# Temp fix scripts
+tools/ck3lens_mcp/fix_*.py

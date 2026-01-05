@@ -143,7 +143,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const conflictsProvider = new ConflictsViewProvider(session, logger);
     const playsetProvider = new PlaysetViewProvider(session, logger);
     const issuesProvider = new IssuesViewProvider(session, logger);
-    const agentProvider = new AgentViewProvider(context, logger);
+    
+    // Get instance ID for agentProvider (enables mode file watching)
+    const instanceId = mcpServerProvider?.getInstanceId();
+    const agentProvider = new AgentViewProvider(context, logger, instanceId);
     // DEPRECATED: RulesView disabled - mode now controlled via MCP ck3_get_mode_instructions()
     // const rulesProvider = new RulesViewProvider(logger);
     

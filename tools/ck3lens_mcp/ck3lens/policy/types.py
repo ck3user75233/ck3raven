@@ -29,25 +29,19 @@ class AgentMode(str, Enum):
 
 class ScopeDomain(str, Enum):
     """
-    Scope domains for ck3lens mode access control.
+    Structural domains for ck3lens mode.
     
-    Each domain has specific visibility, read, write, and delete permissions.
+    These are purely structural classifications - NOT permission decisions.
+    Enforcement.py makes all allow/deny decisions at execution time.
+    
+    For mod files, there is just mods[] - no categories or qualifiers.
     """
-    # Always visible, DB-search enabled
-    ACTIVE_PLAYSET_DB = "active_playset_db"      # Read only (DB view)
-    ACTIVE_LOCAL_MODS = "active_local_mods"      # Read + Write (contract) + Delete (approval)
-    ACTIVE_WORKSHOP_MODS = "active_workshop_mods"  # Read only
-    VANILLA_GAME = "vanilla_game"                # Read only
-    
-    # Invisible by default, require explicit user request
-    INACTIVE_WORKSHOP_MODS = "inactive_workshop_mods"  # User-prompt + token for read
-    INACTIVE_LOCAL_MODS = "inactive_local_mods"        # User-prompt + token for read
-    
-    # Special domains
-    CK3_UTILITY_FILES = "ck3_utility_files"      # Logs, saves, debug files (read only)
-    CK3RAVEN_SOURCE = "ck3raven_source"          # Read-only, never writable
-    WIP_WORKSPACE = "wip_workspace"              # Session-local, full access
-    LAUNCHER_REGISTRY = "launcher_registry"      # Via ck3_repair only
+    PLAYSET_DB = "playset_db"  # Indexed content from active playset
+    VANILLA_GAME = "vanilla_game"
+    CK3_UTILITY_FILES = "ck3_utility_files"
+    CK3RAVEN_SOURCE = "ck3raven_source"
+    WIP_WORKSPACE = "wip_workspace"
+    LAUNCHER_REGISTRY = "launcher_registry"
 
 
 class IntentType(str, Enum):

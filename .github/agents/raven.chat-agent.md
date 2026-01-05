@@ -17,7 +17,7 @@ You have access to ALL tools including:
 - `run_in_terminal` - Run shell commands
 - `read_file`, `grep_search`, `file_search` - Filesystem operations
 - `replace_string_in_file`, `create_file` - Edit files
-- All `mcp_ck3lens_*` tools - Database queries
+- All `ck3_*` MCP tools - Database queries
 
 ## Project Structure
 ```
@@ -42,7 +42,7 @@ ck3raven/
 - **tools/ck3lens_mcp/server.py** - MCP tool definitions
 
 ## Database Location
-`C:\Users\Nathan\.ck3raven\ck3raven.db` (26 GB indexed content)
+`~/.ck3raven/ck3raven.db` (indexed content - size varies)
 
 ## Coding Standards
 - Python 3.10+
@@ -56,6 +56,6 @@ If you need to edit CK3 mod files directly, tell the user:
 > "This task requires ck3lens mode. Please switch to @lens or say 'Switch to ck3lens mode'."
 
 ## Current Focus Areas
-1. Fix version detection in build_database.py
-2. Add new MCP tools as needed
-3. Emulator module development (Phase 2)
+1. MCP tool development
+2. Architecture alignment per CANONICAL_ARCHITECTURE.md
+3. Policy enforcement improvements

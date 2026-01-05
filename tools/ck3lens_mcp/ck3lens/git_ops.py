@@ -49,7 +49,7 @@ def _run_git(mod_path: Path, *args: str, timeout: int = 60) -> tuple[bool, str, 
 
 
 def git_status(session: Session, mod_id: str) -> dict:
-    """Git status for a live mod."""
+    """Git status for a mod."""
     mod = session.get_local_mod(mod_id)
     if not mod:
         return {"error": f"Unknown mod_id: {mod_id}"}

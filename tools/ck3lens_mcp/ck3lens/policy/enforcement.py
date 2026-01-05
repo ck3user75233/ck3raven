@@ -6,24 +6,28 @@ ALL write-capable MCP tools MUST call enforce_policy() at the tool boundary
 before performing any mutation.
 
 Architecture:
-- LensWorld handles visibility (FOUND vs NOT_FOUND)
+- WorldAdapter handles visibility + domain classification (FOUND vs NOT_FOUND, WIP vs LOCAL_MOD etc.)
 - This module handles policy (ALLOW vs DENY vs REQUIRE_TOKEN)
-- Policy only applies AFTER a reference is resolved inside LensWorld
+- Policy only applies AFTER a reference is resolved by WorldAdapter
 
 Key Principles:
 1. Centralized: All enforcement flows through enforce_policy()
 2. Tool-boundary: Called at MCP tool entry, not in implementation helpers
 3. Mode-aware: Different rules for ck3lens vs ck3raven-dev
-4. Logged: Every decision is traced for analytics
+4. Domain-aware: Decisions based on PathDomain from resolution (no re-checking paths)
+5. Logged: Every decision is traced for analytics
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import Optional, List, Any
+from typing import Optional, List, Any, TYPE_CHECKING
 import fnmatch
 import re
+
+if TYPE_CHECKING:
+    from ..world_adapter import PathDomain
 
 
 # =============================================================================
@@ -289,17 +293,32 @@ class Decision(Enum):
 
 @dataclass
 class EnforcementRequest:
-    """Request to validate an operation."""
+    """Request to validate an operation.
+    
+    The `domain` field is the resolved PathDomain from WorldAdapter.
+    Enforcement uses this to make decisions - it does NOT re-check paths.
+    
+    Domain classification happens in WorldAdapter.resolve():
+    - WIP → always allowed
+    - LOCAL_MOD → requires contract
+    - WORKSHOP_MOD → denied
+    - VANILLA → denied
+    - LAUNCHER_REGISTRY → requires token
+    - CK3RAVEN → ck3raven-dev mode only
+    """
     
     operation: OperationType
     mode: str  # "ck3lens" or "ck3raven-dev"
     tool_name: str  # The MCP tool making the request
     
+    # Domain from WorldAdapter resolution (THE source of truth for path classification)
+    domain: Optional[str] = None  # PathDomain value as string (WIP, LOCAL_MOD, etc.)
+    
     # Context (varies by operation type)
-    target_path: Optional[str] = None      # For file/git ops (relative to repo)
+    target_path: Optional[str] = None      # Canonical address (e.g., "wip:/test.py", "mod:MyMod/file.txt")
     target_paths: List[str] = field(default_factory=list)  # Multiple paths
-    mod_name: Optional[str] = None         # For ck3lens mod ops
-    rel_path: Optional[str] = None         # For ck3lens mod ops
+    mod_name: Optional[str] = None         # For ck3lens mod ops (from resolution)
+    rel_path: Optional[str] = None         # For ck3lens mod ops (from resolution)
     command: Optional[str] = None          # For shell ops
     
     # Scope domains from contract
@@ -909,52 +928,42 @@ def _enforce_ck3lens_write(
     """
     Enforce write operations for ck3lens mode.
     
-    ck3lens can write to:
-    1. WIP workspace (~/.ck3raven/wip/) - always allowed, no contract
-    2. Local mods (via mod_name + rel_path) - requires contract
-    3. Launcher registry - requires token (repair operations)
+    Uses request.domain (from WorldAdapter resolution) to make decisions.
+    Enforcement does NOT re-check paths - domain classification is WorldAdapter's job.
     
-    ck3lens CANNOT write to:
-    - ck3raven source
-    - Workshop mods
-    - Vanilla game files
-    - Arbitrary filesystem paths
+    Domain → Decision:
+    - WIP → always ALLOW (no contract needed)
+    - LOCAL_MOD → ALLOW with contract
+    - WORKSHOP_MOD → DENY
+    - VANILLA → DENY
+    - LAUNCHER_REGISTRY → REQUIRE_TOKEN
+    - CK3RAVEN → DENY (wrong mode)
+    - UNKNOWN → DENY
     """
-    from .wip_workspace import get_wip_workspace_path, is_wip_path
-    from .types import AgentMode
-    
-    target_path = request.target_path
+    domain = request.domain
     mod_name = request.mod_name
     rel_path = request.rel_path
+    target_path = request.target_path
     
-    # Case 1: WIP workspace - always allowed
-    if target_path:
-        try:
-            wip_root = get_wip_workspace_path(AgentMode.CK3LENS)
-            if is_wip_path(target_path, wip_root):
-                return EnforcementResult(
-                    decision=Decision.ALLOW,
-                    reason="Write to WIP workspace allowed",
-                )
-        except Exception:
-            pass
+    # Case 1: WIP domain - always allowed (no contract needed)
+    if domain == "wip":
+        return EnforcementResult(
+            decision=Decision.ALLOW,
+            reason="Write to WIP workspace allowed",
+        )
     
-    # Case 2: Local mod via mod_name + rel_path
-    if mod_name and rel_path:
-        # Contract required for mod writes
+    # Case 2: Local mod domain - requires contract
+    if domain == "local_mod":
         if contract is None:
             return EnforcementResult(
                 decision=Decision.REQUIRE_CONTRACT,
-                reason=f"Write to mod '{mod_name}' requires active contract",
+                reason=f"Write to local mod requires active contract",
                 required_contract=True,
             )
         
-        # Validate mod is a local mod (not workshop)
-        # This is done by checking if it's under local_mods_folder
-        # The actual resolution happens in the tool layer
         return EnforcementResult(
             decision=Decision.ALLOW,
-            reason=f"Write to local mod '{mod_name}' allowed with contract",
+            reason=f"Write to local mod allowed with contract",
             contract_id=contract.contract_id,
             scope_check_details={
                 "mod_name": mod_name,
@@ -962,46 +971,83 @@ def _enforce_ck3lens_write(
             },
         )
     
-    # Case 3: Raw path - check if it's a valid ck3lens write target
-    if target_path:
-        # Check if it's launcher registry (special case for ck3_repair)
-        if _is_launcher_registry_path(target_path):
-            if not request.token_id:
-                return EnforcementResult(
-                    decision=Decision.REQUIRE_TOKEN,
-                    reason="Launcher registry writes require REGISTRY_REPAIR token",
-                    required_token_tier=TokenTier.TIER_B,
-                    required_token_type="REGISTRY_REPAIR",
-                )
-            
-            # Validate the provided token
-            is_valid, reason = _validate_token_for_operation(
-                token_id=request.token_id,
-                required_type="REGISTRY_REPAIR",
-                target_path=target_path,
-            )
-            if not is_valid:
-                return EnforcementResult(
-                    decision=Decision.DENY,
-                    reason=f"Token validation failed: {reason}",
-                )
-            
+    # Case 3: Launcher registry - requires token
+    if domain == "launcher_registry":
+        if not request.token_id:
             return EnforcementResult(
-                decision=Decision.ALLOW,
-                reason="Launcher registry write allowed with valid token",
-                token_id=request.token_id,
+                decision=Decision.REQUIRE_TOKEN,
+                reason="Launcher registry writes require REGISTRY_REPAIR token",
+                required_token_tier=TokenTier.TIER_B,
+                required_token_type="REGISTRY_REPAIR",
             )
         
-        # Deny other raw paths in ck3lens mode
+        # Validate the provided token
+        is_valid, reason = _validate_token_for_operation(
+            token_id=request.token_id,
+            required_type="REGISTRY_REPAIR",
+            target_path=target_path,
+        )
+        if not is_valid:
+            return EnforcementResult(
+                decision=Decision.DENY,
+                reason=f"Token validation failed: {reason}",
+            )
+        
         return EnforcementResult(
-            decision=Decision.DENY,
-            reason=f"ck3lens cannot write to raw path: {target_path}. Use mod_name + rel_path for mod files.",
+            decision=Decision.ALLOW,
+            reason="Launcher registry write allowed with valid token",
+            token_id=request.token_id,
         )
     
-    # No path info at all
+    # Case 4: Workshop mod - denied
+    if domain == "workshop_mod":
+        return EnforcementResult(
+            decision=Decision.DENY,
+            reason="Cannot write to workshop mods (Steam-managed)",
+        )
+    
+    # Case 5: Vanilla game files - denied
+    if domain == "vanilla":
+        return EnforcementResult(
+            decision=Decision.DENY,
+            reason="Cannot write to vanilla game files",
+        )
+    
+    # Case 6: ck3raven source - wrong mode
+    if domain == "ck3raven":
+        return EnforcementResult(
+            decision=Decision.DENY,
+            reason="Cannot write to ck3raven source in ck3lens mode (use ck3raven-dev mode)",
+        )
+    
+    # Case 7: No domain or unknown - fallback checks
+    # This handles legacy callers that haven't been updated to pass domain
+    if not domain:
+        # Legacy fallback: check target_path format
+        if target_path and target_path.startswith("wip:/"):
+            return EnforcementResult(
+                decision=Decision.ALLOW,
+                reason="Write to WIP workspace allowed",
+            )
+        
+        # Legacy fallback: mod_name + rel_path implies local mod
+        if mod_name and rel_path:
+            if contract is None:
+                return EnforcementResult(
+                    decision=Decision.REQUIRE_CONTRACT,
+                    reason=f"Write to mod '{mod_name}' requires active contract",
+                    required_contract=True,
+                )
+            return EnforcementResult(
+                decision=Decision.ALLOW,
+                reason=f"Write to local mod '{mod_name}' allowed with contract",
+                contract_id=contract.contract_id,
+            )
+    
+    # Default deny
     return EnforcementResult(
         decision=Decision.DENY,
-        reason="Write target not specified (need target_path or mod_name + rel_path)",
+        reason=f"Write target not allowed in ck3lens mode (domain={domain})",
     )
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 import argparse
+import sys
 from pathlib import Path
 from .config import LintConfig
 from .reporting import Reporter
@@ -29,6 +30,11 @@ def run(root: Path, cfg: LintConfig | None = None, reporter: Reporter | None = N
     return reporter
 
 def main() -> int:
+    # Fix unicode output on Windows console
+    if sys.platform == "win32":
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    
     parser = argparse.ArgumentParser(description="arch_lint v2.2 - CK3Raven canonical architecture linter")
     parser.add_argument("root", nargs="?", default=".", help="Root directory to scan (default: .)")
     parser.add_argument("--json", action="store_true", help="Output as JSON")

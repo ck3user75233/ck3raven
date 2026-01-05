@@ -626,3 +626,333 @@ def check_playset_build_status(
             result["playset_valid"] = True
     
     return result
+
+
+# =============================================================================
+# Incremental Rebuild Detection
+# =============================================================================
+
+def get_mods_needing_rebuild(
+    conn: sqlite3.Connection,
+    playset_mods: list[Dict[str, Any]],
+    check_file_changes: bool = False
+) -> Dict[str, Any]:
+    """
+    Determine which mods need processing for an incremental rebuild.
+    
+    This is the key function for incremental builds - it checks each mod in
+    the playset and determines if it needs any processing.
+    
+    A mod needs processing if:
+    1. Not in database at all (new mod)
+    2. Ingested but symbols not extracted (interrupted build)
+    3. Files changed on disk since last ingest (if check_file_changes=True)
+    
+    Args:
+        conn: Database connection
+        playset_mods: List of mods from playset, each with:
+            - name: str
+            - path: str
+            - workshop_id: str or None
+            - load_order: int
+        check_file_changes: If True, also check for changed files (slower)
+    
+    Returns:
+        {
+            "needs_rebuild": bool,
+            "total_mods": int,
+            "mods_needing_ingest": list,    # New mods not in DB
+            "mods_needing_symbols": list,   # Ingested but no symbols
+            "mods_with_changes": list,      # Files changed on disk
+            "mods_ready": list,             # Fully processed
+            "mods_missing": list,           # Path doesn't exist
+            "summary": str,
+        }
+    """
+    result = {
+        "needs_rebuild": False,
+        "total_mods": len(playset_mods),
+        "mods_needing_ingest": [],
+        "mods_needing_symbols": [],
+        "mods_with_changes": [],
+        "mods_ready": [],
+        "mods_missing": [],
+        "summary": "",
+    }
+    
+    for mod in playset_mods:
+        mod_name = mod.get("name", "Unknown")
+        mod_path = mod.get("path")
+        workshop_id = mod.get("workshop_id")
+        
+        # Check if mod exists on disk
+        if not mod_path or not Path(mod_path).exists():
+            result["mods_missing"].append({"name": mod_name, "path": mod_path})
+            continue
+        
+        # Look up mod in database by path or workshop_id
+        cv_row = None
+        if workshop_id:
+            cv_row = conn.execute("""
+                SELECT cv.content_version_id, cv.ingested_at, cv.symbols_extracted_at,
+                       mp.name, mp.mod_package_id
+                FROM content_versions cv
+                JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                WHERE mp.workshop_id = ?
+                ORDER BY cv.ingested_at DESC
+                LIMIT 1
+            """, (workshop_id,)).fetchone()
+        
+        if cv_row is None:
+            # Try by path
+            cv_row = conn.execute("""
+                SELECT cv.content_version_id, cv.ingested_at, cv.symbols_extracted_at,
+                       mp.name, mp.mod_package_id
+                FROM content_versions cv
+                JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                WHERE mp.source_path = ?
+                ORDER BY cv.ingested_at DESC
+                LIMIT 1
+            """, (str(mod_path),)).fetchone()
+        
+        if cv_row is None:
+            # Mod not in database - needs full ingest
+            result["mods_needing_ingest"].append({
+                "name": mod_name,
+                "path": mod_path,
+                "workshop_id": workshop_id,
+                "reason": "new_mod"
+            })
+            result["needs_rebuild"] = True
+            continue
+        
+        # Mod is in database - check processing state
+        ingested_at = cv_row["ingested_at"]
+        symbols_at = cv_row["symbols_extracted_at"]
+        cv_id = cv_row["content_version_id"]
+        
+        if symbols_at is None:
+            # Symbols not extracted - interrupted build
+            result["mods_needing_symbols"].append({
+                "name": mod_name,
+                "path": mod_path,
+                "content_version_id": cv_id,
+                "reason": "pending_symbols"
+            })
+            result["needs_rebuild"] = True
+            continue
+        
+        # Check for file changes if requested
+        if check_file_changes:
+            changes = _detect_mod_file_changes(conn, cv_id, Path(mod_path))
+            if changes["has_changes"]:
+                result["mods_with_changes"].append({
+                    "name": mod_name,
+                    "path": mod_path,
+                    "content_version_id": cv_id,
+                    "changes": changes,
+                    "reason": "files_changed"
+                })
+                result["needs_rebuild"] = True
+                continue
+        
+        # Mod is fully processed
+        result["mods_ready"].append({
+            "name": mod_name,
+            "path": mod_path,
+            "content_version_id": cv_id
+        })
+    
+    # Generate summary
+    parts = []
+    if result["mods_needing_ingest"]:
+        parts.append(f"{len(result['mods_needing_ingest'])} new")
+    if result["mods_needing_symbols"]:
+        parts.append(f"{len(result['mods_needing_symbols'])} need symbols")
+    if result["mods_with_changes"]:
+        parts.append(f"{len(result['mods_with_changes'])} changed")
+    if result["mods_missing"]:
+        parts.append(f"{len(result['mods_missing'])} missing")
+    
+    if parts:
+        result["summary"] = f"Need rebuild: {', '.join(parts)}"
+    else:
+        result["summary"] = f"All {len(result['mods_ready'])} mods ready"
+    
+    return result
+
+
+def _detect_mod_file_changes(
+    conn: sqlite3.Connection,
+    content_version_id: int,
+    mod_path: Path
+) -> Dict[str, Any]:
+    """
+    Detect file changes in a mod by comparing disk to database.
+    
+    Compares file hashes between database and disk to detect:
+    - New files (on disk, not in database)
+    - Deleted files (in database, not on disk)
+    - Modified files (hash mismatch)
+    
+    Args:
+        conn: Database connection
+        content_version_id: The content_version_id for this mod
+        mod_path: Path to mod on disk
+    
+    Returns:
+        {
+            "has_changes": bool,
+            "new_files": list,
+            "deleted_files": list,
+            "modified_files": list,
+        }
+    """
+    from ck3raven.db.content import compute_content_hash
+    
+    result = {
+        "has_changes": False,
+        "new_files": [],
+        "deleted_files": [],
+        "modified_files": [],
+    }
+    
+    # Get all files for this content_version from database
+    db_files = {}
+    rows = conn.execute("""
+        SELECT file_id, relpath, content_hash
+        FROM files
+        WHERE content_version_id = ? AND deleted = 0
+    """, (content_version_id,)).fetchall()
+    
+    for row in rows:
+        db_files[row["relpath"]] = {
+            "file_id": row["file_id"],
+            "content_hash": row["content_hash"]
+        }
+    
+    # Scan disk files
+    disk_files = set()
+    script_extensions = {'.txt', '.yml', '.mod', '.info'}
+    
+    for file_path in mod_path.rglob("*"):
+        if not file_path.is_file():
+            continue
+        if file_path.suffix.lower() not in script_extensions:
+            continue
+        
+        rel_path = str(file_path.relative_to(mod_path)).replace("\\", "/")
+        disk_files.add(rel_path)
+        
+        if rel_path not in db_files:
+            # New file
+            result["new_files"].append(rel_path)
+            result["has_changes"] = True
+        else:
+            # Check if content changed (sample first 100 files only for speed)
+            if len(result["modified_files"]) < 100:
+                try:
+                    content = file_path.read_bytes()
+                    disk_hash = compute_content_hash(content)
+                    if disk_hash != db_files[rel_path]["content_hash"]:
+                        result["modified_files"].append(rel_path)
+                        result["has_changes"] = True
+                except Exception:
+                    pass  # Skip unreadable files
+    
+    # Check for deleted files
+    for rel_path in db_files:
+        if rel_path not in disk_files:
+            result["deleted_files"].append(rel_path)
+            result["has_changes"] = True
+    
+    return result
+
+
+def get_files_needing_processing(
+    conn: sqlite3.Connection,
+    content_version_id: int
+) -> Dict[str, Any]:
+    """
+    Get files that need processing for a specific mod.
+    
+    Checks which files have:
+    - No AST (needs parsing)
+    - No symbols extracted (needs symbol extraction)
+    - No refs extracted (needs ref extraction)
+    
+    Args:
+        conn: Database connection
+        content_version_id: Mod's content_version_id
+    
+    Returns:
+        {
+            "needs_parsing": list of file_ids,
+            "needs_symbols": list of file_ids,
+            "needs_refs": list of file_ids,
+            "total_files": int,
+        }
+    """
+    result = {
+        "needs_parsing": [],
+        "needs_symbols": [],
+        "needs_refs": [],
+        "total_files": 0,
+    }
+    
+    # Get parser version
+    parser_row = conn.execute(
+        "SELECT parser_version_id FROM parsers ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    parser_version_id = parser_row[0] if parser_row else 1
+    
+    # Files needing AST
+    rows = conn.execute("""
+        SELECT f.file_id, f.relpath
+        FROM files f
+        LEFT JOIN asts a ON f.content_hash = a.content_hash 
+            AND a.parser_version_id = ?
+        WHERE f.content_version_id = ?
+        AND f.deleted = 0
+        AND f.relpath LIKE '%.txt'
+        AND a.ast_id IS NULL
+    """, (parser_version_id, content_version_id)).fetchall()
+    
+    result["needs_parsing"] = [r["file_id"] for r in rows]
+    
+    # Files needing symbol extraction (have AST but no symbols)
+    rows = conn.execute("""
+        SELECT DISTINCT f.file_id
+        FROM files f
+        JOIN asts a ON f.content_hash = a.content_hash
+        LEFT JOIN symbols s ON s.defining_file_id = f.file_id
+        WHERE f.content_version_id = ?
+        AND f.deleted = 0
+        AND a.parser_version_id = ?
+        AND s.symbol_id IS NULL
+    """, (content_version_id, parser_version_id)).fetchall()
+    
+    result["needs_symbols"] = [r["file_id"] for r in rows]
+    
+    # Files needing ref extraction
+    rows = conn.execute("""
+        SELECT DISTINCT f.file_id
+        FROM files f
+        JOIN asts a ON f.content_hash = a.content_hash
+        LEFT JOIN refs r ON r.using_file_id = f.file_id
+        WHERE f.content_version_id = ?
+        AND f.deleted = 0
+        AND a.parser_version_id = ?
+        AND r.ref_id IS NULL
+    """, (content_version_id, parser_version_id)).fetchall()
+    
+    result["needs_refs"] = [r["file_id"] for r in rows]
+    
+    # Total files
+    total_row = conn.execute("""
+        SELECT COUNT(*) FROM files 
+        WHERE content_version_id = ? AND deleted = 0
+    """, (content_version_id,)).fetchone()
+    result["total_files"] = total_row[0] if total_row else 0
+    
+    return result

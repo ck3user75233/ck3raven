@@ -22,6 +22,43 @@ Key rules (violations will be rejected):
 
 ---
 
+## ⛔ CRITICAL: MCP Configuration Prohibition
+
+**NEVER create or modify `.vscode/mcp.json` in this workspace.**
+
+The MCP server is provided **dynamically** by the CK3 Lens Explorer extension via `mcpServerProvider.ts`. Static configuration files conflict with this architecture and cause duplicate server instances.
+
+### HARD BAN - Files Agents Must NEVER Create:
+
+| Prohibited File | Why |
+|-----------------|-----|
+| `.vscode/mcp.json` | Creates duplicate MCP server with instance `default` |
+| `mcp.json` (workspace root) | Same problem |
+| Any `mcp.servers` block in settings | Deprecated - VS Code warns against this |
+
+### If MCP appears disconnected:
+
+1. **Check User Settings** - ensure `"chat.mcp.discovery.enabled": true`
+2. **Reload VS Code window** - extension may need to re-register
+3. **Check extension is running** - CK3 Lens Explorer must be active
+4. **NEVER "fix" by creating mcp.json** - this makes it worse
+
+### Architecture (READ THIS):
+
+```
+Extension (mcpServerProvider.ts)
+    ↓ registers via vscode.lm.registerMcpServerDefinitionProvider()
+    ↓ each window gets unique instance ID (e.g., f9hf-719e4f)
+VS Code Copilot
+    ↓ discovers servers via chat.mcp.discovery.enabled
+    ↓ connects to extension-provided server
+MCP Tools Available (mcp_ck3_lens_XXXX_*)
+```
+
+**If you see `mcp_ck3lens_*` with instance `default`, something is wrong** - that's from a static config file that should not exist.
+
+---
+
 ## Project Architecture
 
 This workspace contains the **CK3 Lens** ecosystem - a complete AI-powered toolkit for Crusader Kings III modding:
@@ -88,23 +125,11 @@ This single call handles:
 
 ---
 
-## Write Operations - When Approval is Needed
+## Write Operations
 
-### Writing to Local Mods
+### File Operations
 
-The agent can write to mods located under `local_mods_folder`:
-`C:\Users\nateb\Documents\Paradox Interactive\Crusader Kings III\mod\`
-
-**Current local mods in the playset:**
-
-| Mod Name (from descriptor) | Purpose |
-|---------------------------|---------|
-| Mini Super Compatch | Multi-mod compatibility patches |
-| MSC Religion Expanded | Religion expansion compatch |
-| Lowborn Rise Expanded | Lowborn character expansion |
-| More Raiding and Prisoners (1.18+) | Enhanced raiding and prisoner mechanics |
-
-**Tools for writing:**
+Use these tools to write to mods. Enforcement policy determines at execution time whether a write is allowed based on the mod's location (local_mods_folder vs workshop/vanilla).
 
 | Tool | Purpose |
 |------|---------|
@@ -115,6 +140,18 @@ The agent can write to mods located under `local_mods_folder`:
 ### WIP Workspace
 
 For Python scripts and analysis, use the WIP workspace at `~/.ck3raven/wip/`
+
+**How to write to WIP:**
+```python
+# Use mod_name="wip" + rel_path for WIP workspace files
+ck3_file(command="write", mod_name="wip", rel_path="analysis.py", content="...")
+ck3_file(command="read", mod_name="wip", rel_path="analysis.py")
+```
+
+**Note:** `mod_name` accepts these special values:
+- `"wip"` → WIP workspace (always writable, no contract needed)
+- `"vanilla"` → Vanilla game files (read-only)
+- Otherwise interpreted as mod name from active playset
 
 **Intent types for WIP:**
 - `script_wip` - Draft/run Python scripts

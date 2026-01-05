@@ -5,7 +5,7 @@
 import * as vscode from 'vscode';
 import { Logger } from '../utils/logger';
 
-export type LensMode = 'ck3lens' | 'ck3raven-dev' | 'ck3creator' | 'none';
+export type LensMode = 'ck3lens' | 'ck3raven-dev' | 'none';
 export type ConnectionStatus = 'connected' | 'disconnected';
 
 export interface AgentInstance {
@@ -39,9 +39,9 @@ export const MODE_DEFINITIONS: Record<string, {
     'ck3lens': {
         displayName: 'CK3 Lens',
         shortName: 'Lens',
-        description: 'Full CK3 modding - conflict detection, live file editing',
+        description: 'Full CK3 modding - conflict detection, local mod editing',
         icon: 'merge',
-        initPrompt: `You have access to the ck3lens MCP server tools (prefixed with ck3_). Initialize as CK3 Lens agent by calling the ck3_get_mode_instructions tool with mode "ck3lens-live". Follow the instructions returned to complete initialization.`
+        initPrompt: `You have access to the ck3lens MCP server tools (prefixed with ck3_). Initialize as CK3 Lens agent by calling the ck3_get_mode_instructions tool with mode "ck3lens". Follow the instructions returned to complete initialization.`
     },
     'ck3raven-dev': {
         displayName: 'CK3 Raven Dev',
@@ -49,13 +49,6 @@ export const MODE_DEFINITIONS: Record<string, {
         description: 'Infrastructure development - Python, MCP server',
         icon: 'beaker',
         initPrompt: `You have access to the ck3lens MCP server tools (prefixed with ck3_). Initialize as CK3 Raven Dev agent by calling the ck3_get_mode_instructions tool with mode "ck3raven-dev". Follow the instructions returned to complete initialization.`
-    },
-    'ck3creator': {
-        displayName: 'CK3 Creator',
-        shortName: 'Creator',
-        description: 'New content creation - experimental',
-        icon: 'lightbulb',
-        initPrompt: `You have access to the ck3lens MCP server tools (prefixed with ck3_). Initialize as CK3 Creator agent by calling the ck3_get_mode_instructions tool with mode "ck3creator". Follow the instructions returned to complete initialization.`
     }
 };
 
@@ -117,13 +110,31 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
     private state: AgentState;
     private disposables: vscode.Disposable[] = [];
     private mcpMonitorInterval: NodeJS.Timeout | undefined;
+    private modeFilePath: string | undefined;
+    private modeFileWatcher: vscode.FileSystemWatcher | undefined;
+    private traceFileWatcher: vscode.FileSystemWatcher | undefined;
+    private startupTime: number = Date.now();
+    private readonly TRACE_STARTUP_DELAY_MS = 5000; // Don't read stale trace events for 5 seconds
 
     constructor(
         private readonly context: vscode.ExtensionContext,
-        private readonly logger: Logger
+        private readonly logger: Logger,
+        private readonly instanceId?: string
     ) {
-        this.state = this.loadState();
+        // Always start fresh - don't persist mode across sessions
+        this.state = this.createFreshState();
         this.registerCommands();
+        
+        // Set up mode file watching if we have an instance ID
+        if (this.instanceId) {
+            this.setupModeFileWatcher();
+        }
+        
+        // Watch trace file for mode changes (with instance_id filtering)
+        // Delay initial check to avoid reading stale events from previous sessions
+        if (this.instanceId) {
+            this.setupTraceFileWatcher();
+        }
         
         // Check MCP configuration on startup
         this.checkMcpConfiguration();
@@ -170,7 +181,11 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
         try {
             // Check if ck3lens tools are currently listed
             const allTools = vscode.lm.tools;
-            const ck3Tools = allTools.filter(tool => tool.name.startsWith('mcp_ck3lens_ck3_'));
+            // Tool names use format: mcp_ck3_lens_{instanceId}_ck3_{toolname}
+            // Match pattern: starts with mcp_ck3 and contains _ck3_ (our tool prefix)
+            const ck3Tools = allTools.filter(tool => 
+                tool.name.startsWith('mcp_ck3') && tool.name.includes('_ck3_')
+            );
             const now = Date.now();
             
             if (ck3Tools.length === 0) {
@@ -188,12 +203,8 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
                 this.logger.info(`MCP tools refreshed: ${ck3Tools.length} tools detected`);
             }
 
-            // Also verify the MCP config file exists and is configured
-            const configValid = await this.verifyMcpConfigFile();
-            if (!configValid) {
-                await this.markMcpDisconnected('config missing');
-                return;
-            }
+            // Dynamic provider: if tools are registered, MCP is working
+            // No need to check static config file - tool presence IS the proof
 
             // If we haven't seen a tool count change in a while, be cautious
             // But still mark as connected if tools exist (VS Code manages the lifecycle)
@@ -241,50 +252,11 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
     }
 
     /**
-     * Verify that the MCP config file exists and has ck3lens configured
-     */
-    private async verifyMcpConfigFile(): Promise<boolean> {
-        const fs = require('fs');
-        const path = require('path');
-        const os = require('os');
-        
-        const possiblePaths = [
-            process.env.APPDATA ? path.join(process.env.APPDATA, 'Code', 'User', 'mcp.json') : null,
-            path.join(os.homedir(), 'AppData', 'Roaming', 'Code', 'User', 'mcp.json'),
-        ].filter(Boolean);
-
-        for (const mcpConfigPath of possiblePaths) {
-            try {
-                if (mcpConfigPath && fs.existsSync(mcpConfigPath)) {
-                    let content = fs.readFileSync(mcpConfigPath, 'utf-8');
-                    if (content.charCodeAt(0) === 0xFEFF) {
-                        content = content.slice(1);
-                    }
-                    const config = JSON.parse(content);
-                    if (config.servers?.ck3lens) {
-                        return true;
-                    }
-                }
-            } catch (error) {
-                this.logger.debug(`MCP config check failed: ${error}`);
-            }
-        }
-        return false;
-    }
-
-    /**
      * Mark MCP as disconnected with a reason
      */
     private async markMcpDisconnected(reason: string): Promise<void> {
-        const configExists = await this.verifyMcpConfigFile();
-
-        if (configExists) {
-            this.state.mcpServer = { status: 'disconnected', serverName: reason };
-            this.logger.info(`MCP server configured but: ${reason}`);
-        } else {
-            this.state.mcpServer = { status: 'disconnected', serverName: 'not configured' };
-            this.logger.info('No MCP configuration found');
-        }
+        this.state.mcpServer = { status: 'disconnected', serverName: reason };
+        this.logger.info(`MCP disconnected: ${reason}`);
         this.state.policyEnforcement = { status: 'disconnected', message: 'MCP offline - policies not enforced!' };
     }
 
@@ -323,6 +295,187 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
 
     private persistState(): void {
         this.context.globalState.update('ck3lens.agentState', this.state);
+    }
+
+    /**
+     * Create fresh state - always starts with mode 'none'
+     * We don't persist mode across sessions because the agent needs to re-initialize
+     */
+    private createFreshState(): AgentState {
+        return {
+            pythonBridge: { status: 'disconnected' },
+            mcpServer: { status: 'disconnected' },
+            policyEnforcement: { status: 'disconnected' },
+            agents: [{
+                id: this.generateId(),
+                mode: 'none' as LensMode,
+                initializedAt: new Date().toISOString(),
+                label: 'Agent',
+                isLocal: true
+            }],
+            session: { id: this.generateId(), startedAt: new Date().toISOString() }
+        };
+    }
+
+    /**
+     * Watch the instance-specific mode file for real-time updates
+     */
+    private setupModeFileWatcher(): void {
+        const os = require('os');
+        const path = require('path');
+        const fs = require('fs');
+        
+        const sanitizedId = this.instanceId!.replace(/[^a-zA-Z0-9_-]/g, '_');
+        this.modeFilePath = path.join(os.homedir(), '.ck3raven', `agent_mode_${sanitizedId}.json`);
+        
+        const modeDir = path.dirname(this.modeFilePath);
+        
+        // Create directory if needed
+        if (!fs.existsSync(modeDir)) {
+            fs.mkdirSync(modeDir, { recursive: true });
+        }
+        
+        // Watch for changes to the mode file
+        const pattern = new vscode.RelativePattern(modeDir, `agent_mode_${sanitizedId}.json`);
+        this.modeFileWatcher = vscode.workspace.createFileSystemWatcher(pattern);
+        
+        this.modeFileWatcher.onDidChange(() => {
+            this.loadModeFromFile();
+        });
+        
+        this.modeFileWatcher.onDidCreate(() => {
+            this.loadModeFromFile();
+        });
+        
+        this.disposables.push(this.modeFileWatcher);
+        this.logger.info(`Watching mode file: ${this.modeFilePath}`);
+    }
+    
+    /**
+     * Load agent mode from the instance-specific file
+     */
+    private loadModeFromFile(): void {
+        const fs = require('fs');
+        
+        if (!this.modeFilePath || !fs.existsSync(this.modeFilePath)) {
+            return;
+        }
+        
+        try {
+            const content = fs.readFileSync(this.modeFilePath, 'utf-8');
+            const data = JSON.parse(content);
+            const mode = data.mode as LensMode;
+            
+            if (mode && mode !== 'none') {
+                this.updateAgentMode(mode);
+            } else if (mode === null) {
+                // Mode was cleared (extension startup or session end)
+                this.updateAgentMode('none');
+            }
+        } catch (error) {
+            this.logger.error('Failed to load mode file:', error);
+        }
+    }
+
+    /**
+     * Watch trace file for mode detection.
+     * Uses instance_id filtering to only see events from this VS Code window.
+     * Delays initial check to avoid reading stale events from previous sessions.
+     */
+    private setupTraceFileWatcher(): void {
+        const os = require('os');
+        const path = require('path');
+        const fs = require('fs');
+        
+        const tracePath = path.join(os.homedir(), '.ck3raven', 'traces', 'ck3lens_trace.jsonl');
+        const traceDir = path.dirname(tracePath);
+        
+        // Create directory if needed
+        if (!fs.existsSync(traceDir)) {
+            try {
+                fs.mkdirSync(traceDir, { recursive: true });
+            } catch (e) {
+                this.logger.error('Failed to create trace directory', e);
+                return;
+            }
+        }
+        
+        // Watch trace file for mode_initialized events
+        const pattern = new vscode.RelativePattern(traceDir, '*.jsonl');
+        this.traceFileWatcher = vscode.workspace.createFileSystemWatcher(pattern);
+        
+        this.traceFileWatcher.onDidChange(() => {
+            this.checkTraceForMode();
+        });
+        
+        this.disposables.push(this.traceFileWatcher);
+        this.logger.info(`Watching trace file in: ${traceDir}`);
+        
+        // NO initial check - wait for trace events from this session only
+        // The mode file watcher handles the authoritative state
+    }
+    
+    /**
+     * Check trace file for recent mode_initialized events from THIS instance only.
+     * Filters by instance_id and ignores events from before startup.
+     */
+    private checkTraceForMode(): void {
+        // Skip if within startup delay - don't read stale events
+        const elapsed = Date.now() - this.startupTime;
+        if (elapsed < this.TRACE_STARTUP_DELAY_MS) {
+            this.logger.debug(`Skipping trace check - within startup delay (${elapsed}ms < ${this.TRACE_STARTUP_DELAY_MS}ms)`);
+            return;
+        }
+        
+        if (!this.instanceId) {
+            return; // Can't filter without instance ID
+        }
+        
+        const os = require('os');
+        const path = require('path');
+        const fs = require('fs');
+        
+        const tracePath = path.join(os.homedir(), '.ck3raven', 'traces', 'ck3lens_trace.jsonl');
+        
+        if (!fs.existsSync(tracePath)) {
+            return;
+        }
+        
+        try {
+            const content = fs.readFileSync(tracePath, 'utf-8');
+            const lines = content.trim().split('\n').filter((l: string) => l.trim());
+            
+            // Look for most recent mode_initialized event FROM THIS INSTANCE (check last 50 lines)
+            const recentLines = lines.slice(-50);
+            for (let i = recentLines.length - 1; i >= 0; i--) {
+                try {
+                    const event = JSON.parse(recentLines[i]);
+                    
+                    // CRITICAL: Only process events from this instance
+                    if (event.instance_id !== this.instanceId) {
+                        continue;
+                    }
+                    
+                    // Also check timestamp - event must be after our startup
+                    const eventTime = (event.ts || 0) * 1000; // Convert to ms
+                    if (eventTime < this.startupTime) {
+                        continue; // Stale event from before this session
+                    }
+                    
+                    if (event.tool === 'ck3lens.mode_initialized') {
+                        const mode = event.result?.mode || event.args?.mode;
+                        if (mode && (mode === 'ck3lens' || mode === 'ck3raven-dev')) {
+                            this.updateAgentMode(mode as LensMode);
+                            return;
+                        }
+                    }
+                } catch (e) {
+                    // Skip malformed lines
+                }
+            }
+        } catch (error) {
+            // Trace file may not exist yet
+        }
     }
 
     private generateId(): string {
@@ -654,16 +807,32 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
     }
 
     /**
-     * Update agent mode (called when mode is detected from trace)
+     * Update agent mode (called when mode is detected from MCP server or trace)
+     * Always updates mode - allows switching between modes
      */
     public updateAgentMode(mode: LensMode): void {
         const primaryAgent = this.state.agents.find(a => !a.label.startsWith('Sub-'));
-        if (primaryAgent && primaryAgent.mode === 'none') {
-            primaryAgent.mode = mode;
-            primaryAgent.initializedAt = new Date().toISOString();
+        if (primaryAgent) {
+            if (primaryAgent.mode !== mode) {
+                this.logger.info(`Agent mode changed: ${primaryAgent.mode} -> ${mode}`);
+                primaryAgent.mode = mode;
+                primaryAgent.initializedAt = new Date().toISOString();
+                this.persistState();
+                this.refresh();
+            }
+        } else {
+            // No agent exists, create one
+            const newAgent: AgentInstance = {
+                id: this.generateId(),
+                mode: mode,
+                initializedAt: new Date().toISOString(),
+                label: 'Agent',
+                isLocal: true
+            };
+            this.state.agents.unshift(newAgent);
             this.persistState();
             this.refresh();
-            this.logger.info(`Agent mode updated to: ${mode}`);
+            this.logger.info(`Agent created with mode: ${mode}`);
         }
     }
 

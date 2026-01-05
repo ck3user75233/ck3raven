@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any, Iterator
@@ -10,11 +11,14 @@ class ToolTrace:
     Tool trace logger and reader for policy validation.
     
     Logs MCP tool calls to a JSONL file for later analysis by the policy validator.
+    Each event includes the instance_id to allow filtering by VS Code window.
     """
     
-    def __init__(self, trace_path: Path) -> None:
+    def __init__(self, trace_path: Path, instance_id: str | None = None) -> None:
         self.trace_path = trace_path
         self.trace_path.parent.mkdir(parents=True, exist_ok=True)
+        # Get instance_id from parameter, env var, or default
+        self.instance_id = instance_id or os.environ.get("CK3LENS_INSTANCE_ID", "default")
 
     def log(self, tool: str, args: dict[str, Any], result_summary: dict[str, Any]) -> None:
         """
@@ -27,6 +31,7 @@ class ToolTrace:
         """
         event = {
             "ts": time.time(),
+            "instance_id": self.instance_id,
             "tool": tool,
             "args": args,
             "result": result_summary,

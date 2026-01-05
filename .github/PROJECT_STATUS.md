@@ -26,10 +26,14 @@ To:
 
 **Result:** Symbols now extract correctly (~130,000+ from 4,400+ files before hang).
 
-### 2. ✅ MCP Server Config Bug (FIXED)
-**Root Cause:** `.vscode/mcp.json` pointed to `.venv\\Scripts\\python.exe` but no venv existed.
+### 2. ✅ MCP Server Config Bug (FIXED - Architecture Changed Jan 2026)
+**Original Issue:** `.vscode/mcp.json` pointed to `.venv\\Scripts\\python.exe` but no venv existed.
 
-**Fix:** Updated to use system Python with cwd:
+**Resolution (Jan 2026):** Static `.vscode/mcp.json` is now **DEPRECATED**. The MCP server is provided dynamically by the CK3 Lens Explorer extension via `tools/ck3lens-explorer/src/mcp/mcpServerProvider.ts`. Each VS Code window gets a unique instance ID (e.g., `f9hf-719e4f`).
+
+**If MCP disconnects:** Check `"chat.mcp.discovery.enabled": true` in User Settings. NEVER create mcp.json to "fix" it.
+
+**Old Fix (deprecated):** Updated to use system Python with cwd:
 ```json
 {
   "servers": {
@@ -88,7 +92,7 @@ Use "Add Folder to Workspace" instead of "Open Folder".
 ### 1. ✅ VS Code Tool Sets Configuration
 **Files Created/Updated:**
 - `.vscode/toolSets.json` - Two tool sets: `ck3lens`, `ck3raven-dev`
-- `.vscode/mcp.json` - MCP server configuration
+- ~~`.vscode/mcp.json`~~ - **DEPRECATED** - MCP is now provided dynamically by the CK3 Lens Explorer extension via `mcpServerProvider.ts`. Static mcp.json causes duplicate servers.
 
 **Tool Sets:**
 | Tool Set | Tools | Purpose |
