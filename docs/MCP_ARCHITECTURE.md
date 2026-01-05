@@ -142,13 +142,28 @@ When user selects a mode, the extension:
 
 ## BANNED: Static mcp.json
 
-**Location of banned file:** `%APPDATA%\Code\User\mcp.json`
+**ALL of these locations are banned:**
 
-If this file exists and contains a ck3lens server definition:
-- **DELETE IT** or rename to `mcp.json.disabled`
-- It will override the dynamic provider
+| Banned File | Why |
+|-------------|-----|
+| `.vscode/mcp.json` (in workspace) | Creates duplicate server with instance `default` |
+| `%APPDATA%\Code\User\mcp.json` | Same problem, affects all workspaces |
+| `mcp.servers` block in User Settings | Deprecated - VS Code warns against this |
+
+**How to identify the problem:** If you see `mcp_ck3lens_*` tools with instance `default`, a static config exists somewhere.
+
+If any of these exist with a ck3lens server definition:
+- **DELETE IT** immediately
+- It overrides the dynamic provider
 - All windows will share one server definition
 - Instance isolation will be broken
+
+**Required User Setting:**
+```json
+"chat.mcp.discovery.enabled": true
+```
+
+This setting enables VS Code to discover extension-provided MCP servers.
 
 ### How to Check
 

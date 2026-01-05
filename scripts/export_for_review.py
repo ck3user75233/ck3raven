@@ -30,6 +30,7 @@ EXCLUDE_DIRS = {
     "*.egg-info",
     "exports",  # Don't include previous exports in new exports
     ".wip",     # Agent workspace - transient
+    "archive",  # Deprecated/archived code
 }
 
 EXCLUDE_FILES = {

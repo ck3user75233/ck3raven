@@ -248,7 +248,7 @@ Common mistakes:
 ## Part 5: Strengthening ck3lens Guardrails
 
 ### Current Guardrails
-- Live mod whitelist (only MSC, MSCRE, LRE, MRP, PVP2 writable)
+- Enforcement policy determines write access at execution time (not pre-announced)
 - Syntax validation before writes
 - Adjacency search prevents false "not found"
 

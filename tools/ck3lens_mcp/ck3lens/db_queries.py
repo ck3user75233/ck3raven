@@ -1,4 +1,4 @@
-"""
+﻿"""
 Database Query Layer
 
 Provides query wrappers around ck3raven's SQLite database.
@@ -19,6 +19,7 @@ BANNED (December 2025 purge):
 - VisibilityScope (replaced by visible_cvids parameter to internal methods)
 """
 from __future__ import annotations
+import re
 import sqlite3
 import sys
 from dataclasses import dataclass, field
@@ -959,14 +960,20 @@ class DBQueries:
             "results": content_result
         }
         
-        # 3. File path search (if file_pattern provided or query looks like a path)
-        if file_pattern or '/' in query or '\\\\' in query or query.endswith('.txt'):
-            search_pattern = file_pattern if file_pattern else f"%{query}%"
-            files = self._search_files_internal(search_pattern, visible_cvids=visible_cvids, source_filter=source_filter, limit=limit)
-            result["files"] = {
-                "count": len(files),
-                "results": files
-            }
+        # 3. File path search - ALWAYS search file paths
+        # Normalize separators: _ - . : all match each other via wildcard
+        # Auto-add wildcards to catch partial matches
+        file_search_pattern = file_pattern
+        if not file_search_pattern:
+            # Normalize the query: replace common separators with % to match any separator
+            normalized_query = re.sub(r'[-_.:]+', '%', query)
+            file_search_pattern = f"%{normalized_query}%"
+        
+        files = self._search_files_internal(file_search_pattern, visible_cvids=visible_cvids, source_filter=source_filter, limit=limit)
+        result["files"] = {
+            "count": len(files),
+            "results": files
+        }
         
         return result
     

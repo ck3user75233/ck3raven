@@ -269,6 +269,11 @@ class CK3ErrorParser:
         """
         Parse the error log file.
         
+        Handles multiline error entries where continuation lines start with
+        whitespace and contain additional context like:
+          Error: <actual error message>
+          Script location: file: <path> line: <number>
+        
         Args:
             log_path: Path to error.log (default: logs_dir/error.log)
         
@@ -280,17 +285,94 @@ class CK3ErrorParser:
         self.errors = []
         
         with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
+            current_error_line = None
+            continuation_lines: List[str] = []
+            
             for line in f:
-                line = line.strip()
-                if not line or '[E]' not in line:
-                    continue
+                raw = line.rstrip('\n\r')
                 
-                error = self.parse_error_line(line)
+                # Check if this is a new error line (starts with timestamp + [E])
+                if raw.startswith('[') and '[E]' in raw:
+                    # Process previous error if exists
+                    if current_error_line:
+                        error = self._parse_multiline_error(current_error_line, continuation_lines)
+                        if error:
+                            self.errors.append(error)
+                    
+                    # Start new error
+                    current_error_line = raw
+                    continuation_lines = []
+                elif current_error_line and (raw.startswith('  ') or raw.startswith('\t')):
+                    # This is a continuation line (indented)
+                    continuation_lines.append(raw.strip())
+                # Skip blank lines and non-continuation, non-error lines
+            
+            # Don't forget the last error
+            if current_error_line:
+                error = self._parse_multiline_error(current_error_line, continuation_lines)
                 if error:
                     self.errors.append(error)
         
         self._update_statistics()
         return len(self.errors)
+    
+    def _parse_multiline_error(self, error_line: str, continuation_lines: List[str]) -> Optional[CK3Error]:
+        """
+        Parse a multiline error entry.
+        
+        CK3 error format for script errors:
+            [timestamp][E][source.cpp:line]: Script system error!
+              Error: <actual error message>
+              Script location: file: <path> line: <number> (<context>)
+        
+        Args:
+            error_line: The main error line starting with [timestamp][E]
+            continuation_lines: Any indented continuation lines
+        
+        Returns:
+            Parsed CK3Error with full context, or None if unparseable
+        """
+        # Parse the base error line
+        error = self.parse_error_line(error_line)
+        if not error:
+            return None
+        
+        # If no continuation lines, return as-is
+        if not continuation_lines:
+            return error
+        
+        # Parse continuation lines for additional context
+        actual_error = None
+        script_location_file = None
+        script_location_line = None
+        
+        for cont in continuation_lines:
+            # "Error: <message>"
+            if cont.startswith("Error:"):
+                actual_error = cont[6:].strip()
+            
+            # "Script location: file: <path> line: <number>"
+            script_loc_match = re.search(r'Script location:\s*file:\s*([^\s]+)\s+line:\s*(\d+)', cont)
+            if script_loc_match:
+                script_location_file = script_loc_match.group(1)
+                script_location_line = int(script_loc_match.group(2))
+        
+        # Enhance the error with continuation info
+        if actual_error:
+            # Prepend the actual error to the generic message
+            error.message = f"{actual_error} ({error.message})"
+        
+        if script_location_file and not error.file_path:
+            error.file_path = script_location_file
+        
+        if script_location_line and not error.game_line:
+            error.game_line = script_location_line
+        
+        # Re-extract mod info with the new file path
+        if script_location_file:
+            error.mod_id, error.mod_name = self.extract_mod_from_path(script_location_file)
+        
+        return error
     
     def parse_log_content(self, content: str) -> int:
         """

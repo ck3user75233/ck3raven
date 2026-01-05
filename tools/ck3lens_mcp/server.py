@@ -1,4 +1,4 @@
-"""
+﻿"""
 CK3 Lens MCP Server
 
 An MCP server providing CK3 modding tools:
@@ -541,6 +541,7 @@ def _init_session_internal(
         "playset_name": playset_name,
         "mod_count": mod_count,
         "db_status": db_status,
+        "local_mods_folder": str(_session.local_mods_folder) if _session.local_mods_folder else None,
     }
 
     # Add warning if database needs attention
@@ -648,9 +649,9 @@ def ck3_get_db_status() -> dict:
     status["rebuild_command"] = "python builder/daemon.py start"
     
     if status.get("needs_rebuild"):
-        status["message"] = f"⚠️ Database needs rebuild: {status.get('rebuild_reason')}"
+        status["message"] = f"âš ï¸ Database needs rebuild: {status.get('rebuild_reason')}"
     else:
-        status["message"] = f"✅ Database ready: {status.get('symbols_extracted', 0):,} symbols, {status.get('refs_extracted', 0):,} refs"
+        status["message"] = f"âœ… Database ready: {status.get('symbols_extracted', 0):,} symbols, {status.get('refs_extracted', 0):,} refs"
     
     trace.log("ck3lens.get_db_status", {}, status)
     
@@ -1220,7 +1221,7 @@ def ck3_get_policy_status() -> dict:
     """
     Check if policy enforcement is working.
     
-    ⚠️ CRITICAL: If this returns healthy=False, the agent MUST stop work
+    âš ï¸ CRITICAL: If this returns healthy=False, the agent MUST stop work
     and fix the policy system before continuing.
     
     Returns:
@@ -1245,9 +1246,9 @@ def ck3_get_policy_status() -> dict:
     }
     
     if health["healthy"]:
-        result["message"] = "✅ Policy enforcement is ACTIVE"
+        result["message"] = "âœ… Policy enforcement is ACTIVE"
     else:
-        result["message"] = f"🚨 POLICY ENFORCEMENT IS DOWN: {health['error']}"
+        result["message"] = f"ðŸš¨ POLICY ENFORCEMENT IS DOWN: {health['error']}"
         result["action_required"] = "Agent must stop work. Fix policy module or restart MCP server."
     
     trace.log("ck3lens.get_policy_status", {}, result)
@@ -1370,9 +1371,9 @@ def ck3_conflicts(
     
     Commands:
     
-    command=symbols  → Find symbols defined by multiple mods (default)
-    command=files    → Find files that multiple mods override
-    command=summary  → Get conflict statistics
+    command=symbols  â†’ Find symbols defined by multiple mods (default)
+    command=files    â†’ Find files that multiple mods override
+    command=summary  â†’ Get conflict statistics
     
     Args:
         command: Operation to perform
@@ -1590,7 +1591,7 @@ def ck3_file(
     command: Literal["get", "read", "write", "edit", "delete", "rename", "refresh", "list", "create_patch"],
     # Path identification
     path: str | None = None,
-    mod_name: str | None = None,
+    mod_name: str | None = None,  # Mod name OR domain ("wip", "vanilla")
     rel_path: str | None = None,
     # For get (from DB)
     include_ast: bool = False,
@@ -1621,25 +1622,28 @@ def ck3_file(
     
     Commands:
     
-    command=get          ? Get file content from database (path required)
-    command=read         ? Read file from filesystem (path or mod_name+rel_path)
-    command=write        ? Write file (path for raw write, or mod_name+rel_path for mod)
-    command=edit         ? Search-replace in mod file (mod_name, rel_path, old_content, new_content)
-    command=delete       ? Delete file from mod (mod_name, rel_path required)
-    command=rename       ? Rename/move file in mod (mod_name, rel_path, new_path required)
-    command=refresh      ? Re-sync file to database (mod_name, rel_path required)
-    command=list         ? List files in mod (mod_name required, path_prefix/pattern optional)
-    command=create_patch ? Create override patch file (?? ck3lens mode only; mod_name, source_path, patch_mode required)
+    command=get          â†’ Get file content from database (path required)
+    command=read         â†’ Read file from filesystem (path or target+rel_path)
+    command=write        â†’ Write file (path for raw write, or target+rel_path)
+    command=edit         â†’ Search-replace edit (target, rel_path, old_content, new_content)
+    command=delete       â†’ Delete file (target, rel_path required)
+    command=rename       â†’ Rename/move file (target, rel_path, new_path required)
+    command=refresh      â†’ Re-sync file to database (target, rel_path required)
+    command=list         â†’ List files (target required, path_prefix/pattern optional)
+    command=create_patch â†’ Create override patch file (ck3lens mode only)
     
     For write command with raw path:
-    - ck3lens mode: DENIED (must use mod_name+rel_path)
+    - ck3lens mode: DENIED (must use target+rel_path)
     - ck3raven-dev mode: Allowed with active contract or token
     
     Args:
         command: Operation to perform
         path: File path (for get/read from filesystem)
-        mod_name: mod name (for write/edit/delete/rename/refresh/list)
-        rel_path: Relative path within mod
+        mod_name: Target for file operations. Can be:
+            - "wip" â†’ WIP workspace (~/.ck3raven/wip/) - always writable
+            - "vanilla" â†’ Vanilla game files (read-only)
+            - Mod name â†’ Mod from active playset (writable if under local_mods_folder)
+        rel_path: Relative path within target
         include_ast: Include parsed AST (for get)
         content: File content (for write)
         start_line: Start line for read (1-indexed)
@@ -1652,8 +1656,8 @@ def ck3_file(
         validate_syntax: Validate CK3 syntax before write/edit
         path_prefix: Filter by path prefix (for list)
         pattern: Glob pattern (for list)
-        source_path: Path being overridden (for create_patch, e.g., "common/traits/00_traits.txt")
-        patch_mode: "partial_patch" (zzz_ prefix, loads last) or "full_replace" (same name)
+        source_path: Path being overridden (for create_patch)
+        patch_mode: "partial_patch" (zzz_ prefix) or "full_replace" (same name)
     
     Returns:
         Dict with results based on command
@@ -3690,9 +3694,9 @@ def ck3_search(
 # Symbol Tools - ARCHIVED January 2, 2026
 # ============================================================================
 # The following tools have been DELETED:
-# - ck3_confirm_not_exists() → Functionality moved to ck3_search with exhaustive mode
-# - ck3_qr_conflicts() → Use ck3_conflicts(command="symbols") when implemented
-# - ck3_get_symbol_conflicts() → Use ck3_conflicts(command="symbols") when implemented
+# - ck3_confirm_not_exists() â†’ Functionality moved to ck3_search with exhaustive mode
+# - ck3_qr_conflicts() â†’ Use ck3_conflicts(command="symbols") when implemented
+# - ck3_get_symbol_conflicts() â†’ Use ck3_conflicts(command="symbols") when implemented
 #
 # The unified ck3_conflicts tool will replace all conflict detection functionality.
 # ============================================================================
@@ -4357,40 +4361,32 @@ def _get_mode_policy_context(mode: str) -> dict:
             "description": "CK3 modding: Database search + mod file editing",
             "scope_domains": {
                 "read_allowed": [
-                    ScopeDomain.ACTIVE_PLAYSET_DB.value,
-                    ScopeDomain.ACTIVE_LOCAL_MODS.value,
-                    ScopeDomain.ACTIVE_WORKSHOP_MODS.value,
+                    ScopeDomain.PLAYSET_DB.value,  # Indexed playset content
+                    "mods[]",  # All mods in active playset
                     ScopeDomain.VANILLA_GAME.value,
                     ScopeDomain.CK3_UTILITY_FILES.value,
                     ScopeDomain.CK3RAVEN_SOURCE.value,  # Read OK for error context
                     ScopeDomain.WIP_WORKSPACE.value,
                 ],
                 "write_allowed": [
-                    ScopeDomain.ACTIVE_LOCAL_MODS.value,
+                    "mods[] under local_mods_folder",  # Enforcement decides at execution time
                     ScopeDomain.WIP_WORKSPACE.value,
                 ],
                 "delete_requires_token": [
-                    ScopeDomain.ACTIVE_LOCAL_MODS.value,
-                ],
-                "hidden_require_token": [
-                    ScopeDomain.INACTIVE_WORKSHOP_MODS.value,
-                    ScopeDomain.INACTIVE_LOCAL_MODS.value,
+                    "mods[] under local_mods_folder",
                 ],
                 "always_denied": [
-                    "write to WORKSHOP_MODS",
+                    "write to mods[] NOT under local_mods_folder",
                     "write to VANILLA_GAME",
                     "write to CK3RAVEN_SOURCE",
-                    "delete from WORKSHOP_MODS",
                 ],
             },
             "intent_types": [it.value for it in IntentType],
             "available_tokens": [tt.value for tt in CK3LensTokenType],
             "hard_rules": [
                 "Intent type required for all operations",
-                "Write only to active mods under local_mods_folder (MSC, MSCRE, LRE, MRP)",
                 "Python files only allowed in WIP workspace",
                 "Delete requires explicit token with user prompt evidence",
-                "Inactive mod access requires user prompt + token",
             ],
         }
     elif mode == "ck3raven-dev":
@@ -4462,7 +4458,6 @@ def _get_mode_session_note(mode: str) -> str:
         return (
             "CK3 Lens mode active. You can:\n"
             "- Search symbols, files, content via database\n"
-            "- Write/edit files in active mods under local_mods_folder (MSC, MSCRE, LRE, MRP)\n"
             "- Draft Python scripts in WIP workspace (~/.ck3raven/wip/)\n"
             "- Use ck3_repair for launcher/cache issues\n\n"
             "You CANNOT write to workshop mods, vanilla, or ck3raven source."
@@ -4587,8 +4582,7 @@ def ck3_get_workspace_config() -> dict:
             "exists": db_exists,
         },
         "playset_name": session.playset_name,
-        "tool_sets": None,
-        "mcp_config": None,
+        "local_mods_folder": str(session.local_mods_folder) if session.local_mods_folder else None,
         "available_modes": [
             {
                 "name": "ck3lens",
@@ -4601,38 +4595,9 @@ def ck3_get_workspace_config() -> dict:
                 "use_case": "Python development, MCP server changes, database schema",
             },
         ],
+        # NOTE: mcp.json is BANNED - MCP server is provided dynamically by CK3 Lens Explorer extension
+        # NOTE: toolSets.json reading removed - hard-coded paths are not portable
     }
-
-    # Try to read toolSets.json
-    ai_workspace = Path(__file__).parent.parent.parent.parent
-    tool_sets_path = ai_workspace / ".vscode" / "toolSets.json"
-
-    if tool_sets_path.exists():
-        try:
-            result["tool_sets"] = json.loads(tool_sets_path.read_text(encoding="utf-8"))
-            result["tool_sets_path"] = str(tool_sets_path)
-        except Exception as e:
-            result["tool_sets_error"] = str(e)
-    
-    # Try to read mcp.json
-    mcp_paths = [
-        ai_workspace / ".vscode" / "mcp.json",
-        ai_workspace / "ck3raven" / ".vscode" / "mcp.json",
-    ]
-    
-    for mcp_path in mcp_paths:
-        if mcp_path.exists():
-            try:
-                # Read as text and strip comments for JSONC
-                content = mcp_path.read_text(encoding="utf-8")
-                # Simple JSONC handling: remove // comments
-                lines = [l for l in content.splitlines() if not l.strip().startswith("//")]
-                clean_json = "\n".join(lines)
-                result["mcp_config"] = json.loads(clean_json)
-                result["mcp_config_path"] = str(mcp_path)
-                break
-            except Exception as e:
-                result["mcp_config_error"] = str(e)
     
     return result
 
@@ -4916,4 +4881,5 @@ def _get_table_stats() -> dict:
 
 if __name__ == "__main__":
     mcp.run()
+
 

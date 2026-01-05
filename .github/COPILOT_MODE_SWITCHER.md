@@ -89,7 +89,6 @@ The agent should auto-detect mode based on:
 ### ck3lens Mode  
 - **Language:** CK3/Paradox script (.txt, .yml)
 - **Tools:** CK3 Lens MCP (20 tools for search, validate, write)
-- **Key Mods:** MSC, MSCRE, LRE, MRP
 - **Current Focus:** Compatibility patches, error fixes
 - **Don't:** Write Python infrastructure code
 

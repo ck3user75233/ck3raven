@@ -448,13 +448,29 @@ def normalize_path_input(
     CANONICAL PATH NORMALIZATION UTILITY
     
     This is THE single entry point for path resolution in MCP tools.
+    
+    Special handling:
+    - mod_name="wip" -> routes to WIP workspace (wip:/<rel_path>)
+    - mod_name="vanilla" -> routes to vanilla game (vanilla:/<rel_path>)
+    - Other mod_name values -> routes to mod files (mod:<mod_name>/<rel_path>)
     """
     if path:
         address_to_resolve = path
     elif mod_name and rel_path:
-        address_to_resolve = f"mod:{mod_name}/{rel_path}"
+        # Handle special pseudo-mod names that map to other domains
+        if mod_name.lower() == "wip":
+            address_to_resolve = f"wip:/{rel_path}"
+        elif mod_name.lower() == "vanilla":
+            address_to_resolve = f"vanilla:/{rel_path}"
+        else:
+            address_to_resolve = f"mod:{mod_name}/{rel_path}"
     elif mod_name:
-        address_to_resolve = f"mod:{mod_name}/"
+        if mod_name.lower() == "wip":
+            address_to_resolve = "wip:/"
+        elif mod_name.lower() == "vanilla":
+            address_to_resolve = "vanilla:/"
+        else:
+            address_to_resolve = f"mod:{mod_name}/"
     else:
         return ResolutionResult.not_found(
             "<no input>",

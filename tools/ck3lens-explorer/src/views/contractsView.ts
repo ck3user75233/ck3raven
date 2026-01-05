@@ -36,8 +36,7 @@ export class ContractsViewProvider implements vscode.TreeDataProvider<ContractsT
     private operations: TraceEntry[] = [];
     private activeContract: ContractInfo | null = null;
     private agentMode: string = 'none';
-    private mcpConnected: boolean = false;
-    private mcpCheckInterval: NodeJS.Timeout | undefined;
+    // NOTE: MCP status indicator removed - agentView already shows this
     private bugReportCount: number = 0;
     
     private readonly MAX_OPERATIONS = 20; // Show last 20 operations
@@ -53,10 +52,6 @@ export class ContractsViewProvider implements vscode.TreeDataProvider<ContractsT
         
         // Watch for trace file changes
         this.setupFileWatcher();
-        
-        // Check MCP status periodically
-        this.checkMcpStatus();
-        this.mcpCheckInterval = setInterval(() => this.checkMcpStatus(), 15000);
     }
     
     /**
@@ -173,28 +168,6 @@ export class ContractsViewProvider implements vscode.TreeDataProvider<ContractsT
         }
     }
     
-    /**
-     * Check MCP server connectivity
-     */
-    private checkMcpStatus(): void {
-        try {
-            const allTools = vscode.lm.tools;
-            const ck3Tools = allTools.filter(tool => tool.name.startsWith('mcp_ck3lens_ck3_'));
-            const wasConnected = this.mcpConnected;
-            this.mcpConnected = ck3Tools.length > 0;
-            
-            if (wasConnected !== this.mcpConnected) {
-                this.logger?.info(`MCP status changed: ${this.mcpConnected ? 'connected' : 'disconnected'}`);
-                this._onDidChangeTreeData.fire(undefined);
-            }
-        } catch (error) {
-            if (this.mcpConnected) {
-                this.mcpConnected = false;
-                this._onDidChangeTreeData.fire(undefined);
-            }
-        }
-    }
-    
     refresh(): void {
         this.loadTraceFile();
         this.loadAgentStatus();
@@ -212,14 +185,7 @@ export class ContractsViewProvider implements vscode.TreeDataProvider<ContractsT
         
         const items: ContractsTreeItem[] = [];
         
-        // MCP Status warning if disconnected
-        if (!this.mcpConnected) {
-            items.push(new InfoItem(
-                '⚠️ MCP Server Offline',
-                'Operations are not being tracked',
-                'warning'
-            ));
-        }
+        // NOTE: MCP status indicator removed - agentView already shows this
         
         // Active Contract section
         items.push(new HeaderItem('Active Contract'));
@@ -265,9 +231,6 @@ export class ContractsViewProvider implements vscode.TreeDataProvider<ContractsT
     dispose(): void {
         if (this.fileWatcher) {
             this.fileWatcher.dispose();
-        }
-        if (this.mcpCheckInterval) {
-            clearInterval(this.mcpCheckInterval);
         }
     }
 }

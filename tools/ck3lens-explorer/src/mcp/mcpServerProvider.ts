@@ -235,17 +235,18 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
         this.logger.debug(`  Python: ${pythonPath}`);
         this.logger.debug(`  Server: ${serverPath}`);
         this.logger.debug(`  Instance ID: ${this.instanceId}`);
+        this.logger.debug(`  CK3RAVEN_ROOT: ${ck3ravenRoot}`);
 
-        // Use McpStdioServerDefinition if available (VS Code 1.96+)
-        // Falls back gracefully if the API isn't available
+        // McpStdioServerDefinition constructor: (label, command, args?, env?, version?)
+        // NOTE: There is no cwd parameter - server must handle paths internally
         try {
             return [
                 new vscode.McpStdioServerDefinition(
                     serverName,           // label
                     pythonPath,           // command
                     [serverPath],         // args
-                    env,                  // environment variables
-                    '1.0.0'              // version
+                    env,                  // env
+                    '1.0.0'               // version
                 )
             ];
         } catch (error) {

@@ -27,9 +27,15 @@ BANNED CONCEPTS (December 2025 purge):
 - PlaysetLens (class - use mods[] instead)
 - cvids as parameter (derive at DB boundary from mods[])
 - LensWorldAdapter, DevWorldAdapter, UninitiatedWorldAdapter (use single WorldAdapter)
+
+January 2026 update:
+- mods[] is NEVER empty - vanilla is always mods[0]
+- Removed hard check for empty mods[] - graceful degradation instead
+- Empty playset = vanilla only visibility (not total failure)
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
@@ -38,6 +44,9 @@ from .world_adapter import WorldAdapter  # Single class now handles all modes
 
 if TYPE_CHECKING:
     from .db_queries import DBQueries
+
+
+_logger = logging.getLogger(__name__)
 
 
 class WorldRouter:
@@ -53,6 +62,9 @@ class WorldRouter:
     
     December 2025 consolidation: Uses single WorldAdapter class with mode parameter
     instead of separate LensWorldAdapter/DevWorldAdapter classes.
+    
+    January 2026: Removed hard mods[] check. If mods[] is empty or only contains
+    vanilla, the adapter still works - searches will just return fewer/no results.
     """
     
     _instance: Optional["WorldRouter"] = None
@@ -88,6 +100,7 @@ class WorldRouter:
             local_mods_folder: Path to local mods folder (for ck3lens write enforcement)
             mods: List of mod entries from session (for ck3lens visibility)
                   Each mod should have .name, .path, and optionally .cvid
+                  mods[0] is always vanilla (never empty in normal operation)
             force_mode: Override detected mode (for testing)
         
         Returns:
@@ -129,14 +142,27 @@ class WorldRouter:
         local_mods_folder: Optional[Path],
         mods: Optional[list],
     ) -> WorldAdapter:
-        """Build a WorldAdapter for ck3lens mode."""
+        """Build a WorldAdapter for ck3lens mode.
+        
+        Note: mods[] should always contain at least vanilla as mods[0].
+        If mods is empty or None, we proceed with empty visibility
+        (searches return nothing, but tools still work).
+        """
         if db is None:
             raise RuntimeError("DBQueries required for ck3lens mode")
         
+        # Graceful handling of empty mods - just log a warning
+        # mods[] should always have vanilla, but if not, tools still work
         if not mods:
-            raise RuntimeError(
-                "ck3lens mode requires mods list. "
-                "Ensure a playset is active with session.mods populated."
+            _logger.warning(
+                "mods[] is empty - searches will return no results. "
+                "Use ck3_playset(command='list') to see available playsets."
+            )
+            mods = []  # Empty list, not None
+        elif len(mods) == 1 and mods[0].mod_id == "vanilla":
+            _logger.info(
+                "Only vanilla in mods[] - no playset mods loaded. "
+                "Use ck3_playset(command='switch', playset_name='...') to load a playset."
             )
         
         # Get path configurations
@@ -284,6 +310,7 @@ def get_world(
               - .name: mod name
               - .path: filesystem path
               - .cvid: content_version_id (optional, for DB filtering)
+              mods[0] should always be vanilla.
         force_mode: Override detected mode (for testing)
     
     Example:

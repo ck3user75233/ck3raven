@@ -3,10 +3,11 @@ Workspace and Session Configuration
 
 Manages session state for the MCP server.
 
-CANONICAL MODEL (December 2025):
+CANONICAL MODEL (January 2026):
 - Session contains: playset info, db_path, local_mods_folder, mods[]
 - mods[0] is ALWAYS vanilla (injected automatically, load_order=0)
 - mods[1:] are user mods from playset
+- mods[] is NEVER empty - vanilla is always present even if playset fails to load
 - Each mod has .cvid resolved from database
 - DB filtering = {m.cvid for m in mods if m.cvid}
 - local_mods_folder is a path - mods under it are potentially editable
@@ -29,9 +30,11 @@ CONFLICT ANALYSIS MODEL:
   - Only blocks/symbols with IDENTICAL names conflict
 - Use mods[] load order to determine winners (higher index = later load = wins)
 - Agent can derive all conflict info from mods[].cvid + relpath + block names
+
 """
 from __future__ import annotations
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -46,6 +49,10 @@ try:
     HAS_YAML = True
 except ImportError:
     HAS_YAML = False
+
+
+# Module logger
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -85,6 +92,7 @@ class Session:
     CANONICAL MODEL:
     - mods[0] = vanilla (always present, injected automatically)
     - mods[1:] = user mods from playset in load order
+    - mods[] is NEVER empty - vanilla is always present
     - DB filtering = {m.cvid for m in mods if m.cvid}
     - local_mods_folder: Path to folder where editable mods live
     - NO permission methods - enforcement.py handles that
@@ -103,7 +111,7 @@ class Session:
     
     @property
     def vanilla(self) -> Optional[ModEntry]:
-        """Get vanilla (mods[0]). Returns None if mods[] empty."""
+        """Get vanilla (mods[0]). Always returns a value since vanilla is always present."""
         return self.mods[0] if self.mods else None
     
     def get_unresolved_mods(self) -> list[ModEntry]:
@@ -151,25 +159,65 @@ LEGACY_PLAYSETS_DIR = Path.home() / ".ck3raven" / "playsets"
 # Default config file location (portable - uses standard user data location)
 DEFAULT_CONFIG_PATH = Path.home() / ".ck3raven" / "ck3lens_config.yaml"
 
+# Default vanilla path
+DEFAULT_VANILLA_PATH = Path("C:/Program Files (x86)/Steam/steamapps/common/Crusader Kings III/game")
+
 
 def _expand_path(path_str: str) -> Path:
     """Expand ~ and return Path."""
     return Path(path_str).expanduser()
 
 
+def _load_json_robust(path: Path) -> Optional[dict]:
+    """Load JSON file, handling UTF-8 BOM if present.
+    
+    Windows tools (especially PowerShell) often write UTF-8 with BOM.
+    This function strips the BOM if present and continues.
+    """
+    try:
+        content = path.read_text(encoding="utf-8")
+        # Strip BOM if present (common from Windows/PowerShell)
+        if content.startswith('\ufeff'):
+            content = content[1:]
+        return json.loads(content)
+    except json.JSONDecodeError as e:
+        _logger.warning(f"Failed to parse JSON from {path}: {e}")
+        return None
+    except Exception as e:
+        _logger.warning(f"Failed to load {path}: {e}")
+        return None
+
+
+def _create_vanilla_entry(vanilla_path: Optional[Path] = None) -> ModEntry:
+    """Create the vanilla ModEntry (always mods[0])."""
+    if vanilla_path is None:
+        vanilla_path = DEFAULT_VANILLA_PATH
+    
+    return ModEntry(
+        mod_id="vanilla",
+        name="vanilla",
+        path=vanilla_path,
+        load_order=0,
+    )
+
+
 def load_config(config_path: Optional[Path] = None) -> Session:
     """
     Load configuration from playset or config file.
+    
+    IMPORTANT: mods[] is NEVER empty. Vanilla is always mods[0].
+    If playset loading fails, session still has vanilla as mods[0].
     
     Searches for config in this order:
     1. Active playset (from ck3raven/playsets/playset_manifest.json)
     2. Explicit config_path if provided
     3. ck3lens_config.yaml in ~/.ck3raven/
-    4. Empty defaults (read-only mode)
+    4. Defaults with vanilla as mods[0]
     """
+    # Start with vanilla as mods[0] - ALWAYS present
     session = Session(
         db_path=DEFAULT_DB_PATH,
-        mods=[]
+        mods=[_create_vanilla_entry()]
     )
     
     # Try to load active playset first
@@ -190,6 +238,9 @@ def load_config(config_path: Optional[Path] = None) -> Session:
     if config_path and config_path.exists():
         try:
             content = config_path.read_text(encoding="utf-8")
+            # Strip BOM if present
+            if content.startswith('\ufeff'):
+                content = content[1:]
             
             # Parse YAML or JSON
             if config_path.suffix in ('.yaml', '.yml') and HAS_YAML:
@@ -201,33 +252,38 @@ def load_config(config_path: Optional[Path] = None) -> Session:
                 _apply_config(session, data)
                 
         except Exception as e:
-            print(f"Warning: Failed to load config from {config_path}: {e}")
+            _logger.warning(f"Failed to load config from {config_path}: {e}")
+            # Session still has vanilla as mods[0]
     
     return session
 
 
 def _load_active_playset() -> Optional[dict]:
-    """Load the active playset configuration if one exists."""
+    """Load the active playset configuration if one exists.
+    
+    Handles UTF-8 BOM gracefully (common from Windows/PowerShell tools).
+    Returns None if no active playset or if loading fails.
+    """
     manifest_file = REPO_PLAYSETS_DIR / "playset_manifest.json"
     
     if not manifest_file.exists():
         return None
     
-    try:
-        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
-        active_filename = manifest.get("active")
-        
-        if not active_filename:
-            return None
-        
-        playset_file = REPO_PLAYSETS_DIR / active_filename
-        
-        if playset_file.exists():
-            return json.loads(playset_file.read_text(encoding="utf-8"))
-    except Exception:
-        pass
+    manifest = _load_json_robust(manifest_file)
+    if manifest is None:
+        return None
     
-    return None
+    active_filename = manifest.get("active")
+    if not active_filename:
+        return None
+    
+    playset_file = REPO_PLAYSETS_DIR / active_filename
+    
+    if not playset_file.exists():
+        _logger.warning(f"Active playset file not found: {playset_file}")
+        return None
+    
+    return _load_json_robust(playset_file)
 
 
 def _apply_playset(session: Session, data: dict) -> None:
@@ -236,27 +292,21 @@ def _apply_playset(session: Session, data: dict) -> None:
     Injects vanilla as mods[0] automatically.
     cvids are NOT resolved here - call session.resolve_cvids(db) after DB connection.
     """
-    session.playset_name = data.get("name")
+    session.playset_name = data.get("playset_name", data.get("name"))
     
     if "local_mods_folder" in data:
         session.local_mods_folder = _expand_path(data["local_mods_folder"])
     
-    # Start with vanilla as mods[0]
-    vanilla_path = data.get("vanilla_path")
-    if vanilla_path:
-        vanilla_path = _expand_path(vanilla_path)
+    # Get vanilla path from playset or data
+    vanilla_data = data.get("vanilla", {})
+    vanilla_path_str = vanilla_data.get("path") if isinstance(vanilla_data, dict) else data.get("vanilla_path")
+    if vanilla_path_str:
+        vanilla_path = _expand_path(vanilla_path_str)
     else:
-        # Default Steam path on Windows
-        vanilla_path = Path("C:/Program Files (x86)/Steam/steamapps/common/Crusader Kings III/game")
+        vanilla_path = DEFAULT_VANILLA_PATH
     
-    session.mods = [
-        ModEntry(
-            mod_id="vanilla",
-            name="vanilla",
-            path=vanilla_path,
-            load_order=0,
-        )
-    ]
+    # Start with vanilla as mods[0]
+    session.mods = [_create_vanilla_entry(vanilla_path)]
     
     # Add user mods from playset mods[] array
     for i, m in enumerate(data.get("mods", [])):
@@ -272,8 +322,8 @@ def _apply_playset(session: Session, data: dict) -> None:
             mod_id=m.get("mod_id", m.get("name", "")),
             name=m.get("name", m.get("mod_id", "")),
             path=path,
-            load_order=i + 1,  # +1 because vanilla is 0
-            workshop_id=m.get("workshop_id"),
+            load_order=m.get("load_order", i + 1),  # Use explicit load_order if present, else i+1
+            workshop_id=m.get("steam_id", m.get("workshop_id")),
         )
         session.mods.append(mod)
 
@@ -290,21 +340,15 @@ def _apply_config(session: Session, data: dict[str, Any]) -> None:
     mods_data = data.get("mods", [])
     
     if mods_data:
-        # Start with vanilla as mods[0]
+        # Get vanilla path
         vanilla_path = data.get("vanilla_path")
         if vanilla_path:
             vanilla_path = _expand_path(vanilla_path)
         else:
-            vanilla_path = Path("C:/Program Files (x86)/Steam/steamapps/common/Crusader Kings III/game")
+            vanilla_path = DEFAULT_VANILLA_PATH
         
-        session.mods = [
-            ModEntry(
-                mod_id="vanilla",
-                name="vanilla",
-                path=vanilla_path,
-                load_order=0,
-            )
-        ]
+        # Start with vanilla as mods[0]
+        session.mods = [_create_vanilla_entry(vanilla_path)]
         
         for i, m in enumerate(mods_data):
             path = _expand_path(m["path"]) if "path" in m else session.local_mods_folder / m["mod_id"]
@@ -328,6 +372,10 @@ def get_validation_rules_config(config_path: Optional[Path] = None) -> dict[str,
     
     try:
         content = config_path.read_text(encoding="utf-8")
+        # Strip BOM if present
+        if content.startswith('\ufeff'):
+            content = content[1:]
+            
         if config_path.suffix in ('.yaml', '.yml') and HAS_YAML:
             data = yaml.safe_load(content)
         else:
@@ -384,5 +432,4 @@ def is_under_local_mods_folder(file_path: Path, local_mods_folder: Path) -> bool
 
 # LocalMod is now ModEntry
 LocalMod = ModEntry
-
 

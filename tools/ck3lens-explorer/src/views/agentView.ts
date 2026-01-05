@@ -113,6 +113,8 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
     private modeFilePath: string | undefined;
     private modeFileWatcher: vscode.FileSystemWatcher | undefined;
     private traceFileWatcher: vscode.FileSystemWatcher | undefined;
+    private startupTime: number = Date.now();
+    private readonly TRACE_STARTUP_DELAY_MS = 5000; // Don't read stale trace events for 5 seconds
 
     constructor(
         private readonly context: vscode.ExtensionContext,
@@ -128,8 +130,11 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
             this.setupModeFileWatcher();
         }
         
-        // Also watch trace file as fallback for mode detection
-        this.setupTraceFileWatcher();
+        // Watch trace file for mode changes (with instance_id filtering)
+        // Delay initial check to avoid reading stale events from previous sessions
+        if (this.instanceId) {
+            this.setupTraceFileWatcher();
+        }
         
         // Check MCP configuration on startup
         this.checkMcpConfiguration();
@@ -176,7 +181,11 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
         try {
             // Check if ck3lens tools are currently listed
             const allTools = vscode.lm.tools;
-            const ck3Tools = allTools.filter(tool => tool.name.startsWith('mcp_ck3lens_ck3_'));
+            // Tool names use format: mcp_ck3_lens_{instanceId}_ck3_{toolname}
+            // Match pattern: starts with mcp_ck3 and contains _ck3_ (our tool prefix)
+            const ck3Tools = allTools.filter(tool => 
+                tool.name.startsWith('mcp_ck3') && tool.name.includes('_ck3_')
+            );
             const now = Date.now();
             
             if (ck3Tools.length === 0) {
@@ -194,12 +203,8 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
                 this.logger.info(`MCP tools refreshed: ${ck3Tools.length} tools detected`);
             }
 
-            // Also verify the MCP config file exists and is configured
-            const configValid = await this.verifyMcpConfigFile();
-            if (!configValid) {
-                await this.markMcpDisconnected('config missing');
-                return;
-            }
+            // Dynamic provider: if tools are registered, MCP is working
+            // No need to check static config file - tool presence IS the proof
 
             // If we haven't seen a tool count change in a while, be cautious
             // But still mark as connected if tools exist (VS Code manages the lifecycle)
@@ -247,50 +252,11 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
     }
 
     /**
-     * Verify that the MCP config file exists and has ck3lens configured
-     */
-    private async verifyMcpConfigFile(): Promise<boolean> {
-        const fs = require('fs');
-        const path = require('path');
-        const os = require('os');
-        
-        const possiblePaths = [
-            process.env.APPDATA ? path.join(process.env.APPDATA, 'Code', 'User', 'mcp.json') : null,
-            path.join(os.homedir(), 'AppData', 'Roaming', 'Code', 'User', 'mcp.json'),
-        ].filter(Boolean);
-
-        for (const mcpConfigPath of possiblePaths) {
-            try {
-                if (mcpConfigPath && fs.existsSync(mcpConfigPath)) {
-                    let content = fs.readFileSync(mcpConfigPath, 'utf-8');
-                    if (content.charCodeAt(0) === 0xFEFF) {
-                        content = content.slice(1);
-                    }
-                    const config = JSON.parse(content);
-                    if (config.servers?.ck3lens) {
-                        return true;
-                    }
-                }
-            } catch (error) {
-                this.logger.debug(`MCP config check failed: ${error}`);
-            }
-        }
-        return false;
-    }
-
-    /**
      * Mark MCP as disconnected with a reason
      */
     private async markMcpDisconnected(reason: string): Promise<void> {
-        const configExists = await this.verifyMcpConfigFile();
-
-        if (configExists) {
-            this.state.mcpServer = { status: 'disconnected', serverName: reason };
-            this.logger.info(`MCP server configured but: ${reason}`);
-        } else {
-            this.state.mcpServer = { status: 'disconnected', serverName: 'not configured' };
-            this.logger.info('No MCP configuration found');
-        }
+        this.state.mcpServer = { status: 'disconnected', serverName: reason };
+        this.logger.info(`MCP disconnected: ${reason}`);
         this.state.policyEnforcement = { status: 'disconnected', message: 'MCP offline - policies not enforced!' };
     }
 
@@ -412,8 +378,9 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
     }
 
     /**
-     * Watch trace file as fallback for mode detection
-     * This catches cases where agents "fall out" of initialization
+     * Watch trace file for mode detection.
+     * Uses instance_id filtering to only see events from this VS Code window.
+     * Delays initial check to avoid reading stale events from previous sessions.
      */
     private setupTraceFileWatcher(): void {
         const os = require('os');
@@ -444,14 +411,26 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
         this.disposables.push(this.traceFileWatcher);
         this.logger.info(`Watching trace file in: ${traceDir}`);
         
-        // Initial check
-        this.checkTraceForMode();
+        // NO initial check - wait for trace events from this session only
+        // The mode file watcher handles the authoritative state
     }
     
     /**
-     * Check trace file for recent mode_initialized events
+     * Check trace file for recent mode_initialized events from THIS instance only.
+     * Filters by instance_id and ignores events from before startup.
      */
     private checkTraceForMode(): void {
+        // Skip if within startup delay - don't read stale events
+        const elapsed = Date.now() - this.startupTime;
+        if (elapsed < this.TRACE_STARTUP_DELAY_MS) {
+            this.logger.debug(`Skipping trace check - within startup delay (${elapsed}ms < ${this.TRACE_STARTUP_DELAY_MS}ms)`);
+            return;
+        }
+        
+        if (!this.instanceId) {
+            return; // Can't filter without instance ID
+        }
+        
         const os = require('os');
         const path = require('path');
         const fs = require('fs');
@@ -466,11 +445,23 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
             const content = fs.readFileSync(tracePath, 'utf-8');
             const lines = content.trim().split('\n').filter((l: string) => l.trim());
             
-            // Look for most recent mode_initialized event (check last 50 lines)
+            // Look for most recent mode_initialized event FROM THIS INSTANCE (check last 50 lines)
             const recentLines = lines.slice(-50);
             for (let i = recentLines.length - 1; i >= 0; i--) {
                 try {
                     const event = JSON.parse(recentLines[i]);
+                    
+                    // CRITICAL: Only process events from this instance
+                    if (event.instance_id !== this.instanceId) {
+                        continue;
+                    }
+                    
+                    // Also check timestamp - event must be after our startup
+                    const eventTime = (event.ts || 0) * 1000; // Convert to ms
+                    if (eventTime < this.startupTime) {
+                        continue; // Stale event from before this session
+                    }
+                    
                     if (event.tool === 'ck3lens.mode_initialized') {
                         const mode = event.result?.mode || event.args?.mode;
                         if (mode && (mode === 'ck3lens' || mode === 'ck3raven-dev')) {
