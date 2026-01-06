@@ -209,6 +209,7 @@ CK3LENS_DOMAINS = frozenset({
     "ROOT_GAME",        # steamapps/common/Crusader Kings III/ (read-only)
     "ROOT_WIP",         # ~/.ck3raven/wip/ (scratchpad)
     "ROOT_LAUNCHER",    # Paradox Launcher data directory
+    "ROOT_REPO",        # ck3raven repository (read-only for bug reports/research)
 })
 
 # Combined for validation (all possible domains)
