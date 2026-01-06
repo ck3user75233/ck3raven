@@ -1402,7 +1402,7 @@ def load_mods_from_active_playset(logger: DaemonLogger) -> List[Dict]:
         return []
     
     try:
-        manifest = json.loads(PLAYSET_MANIFEST.read_text(encoding='utf-8'))
+        manifest = json.loads(PLAYSET_MANIFEST.read_text(encoding='utf-8-sig'))
     except Exception as e:
         logger.error(f"Failed to parse manifest: {e}")
         return []
@@ -1420,7 +1420,7 @@ def load_mods_from_active_playset(logger: DaemonLogger) -> List[Dict]:
         return []
     
     try:
-        data = json.loads(playset_path.read_text(encoding='utf-8'))
+        data = json.loads(playset_path.read_text(encoding='utf-8-sig'))
     except Exception as e:
         logger.error(f"Failed to parse playset: {e}")
         return []

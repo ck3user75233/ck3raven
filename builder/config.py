@@ -62,7 +62,7 @@ class BuilderConfig:
         for config_path in search_paths:
             if config_path and config_path.exists():
                 try:
-                    with open(config_path, 'r', encoding='utf-8') as f:
+                    with open(config_path, 'r', encoding='utf-8-sig') as f:
                         user_config = yaml.safe_load(f) or {}
                     self._config.update(user_config)
                     self._config_path = config_path
