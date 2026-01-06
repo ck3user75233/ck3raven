@@ -1,261 +1,166 @@
 # LensWorld Architecture
 
-> **Status:** CANONICAL  
-> **Last Updated:** December 28, 2025  
-> **Scope:** Visibility layer for CK3 Lens agent modes
+> **Status:** CANONICAL
+> **Last Updated:** January 5, 2026
+> **Scope:** Visibility layer (Resolution & Identity)
+> **Compliance:** Strict alignment with `CANONICAL_ARCHITECTURE.md`
 
 ---
 
 ## 1. What LensWorld Is
 
-**LensWorld is a hard visibility guardrail that defines the complete and only world an agent is capable of perceiving.**
+**LensWorld is a structural resolution layer.** It answers:
 
-LensWorld determines:
-- What files exist
-- What mods exist
-- What paths can be referenced
-- What search results may appear
+1. "Does this path exist in the current context?"
+2. "What is its canonical address?"
+3. "Which physical filesystem root contains it?"
 
-**If something is outside the lens, it does not exist.**
+LensWorld creates the **Database-Projected View** of the file system. If `WorldAdapter` cannot resolve a path, that path effectively **does not exist** for the agent.
 
 ---
 
-## 2. What LensWorld Is Not
+## 2. What LensWorld Is Not (CRITICAL)
 
-LensWorld is **not**:
-- A permission system
-- A mutation gate
-- A substitute for policy
+LensWorld is **NOT** a permission system.
 
-**LensWorld never decides whether an action is allowed.**
+* It **NEVER** answers "Can I write this?"
+* It **NEVER** returns `is_writable` or `is_allowed`.
+* It **NEVER** categorizes mods into "writable" or "read-only" buckets.
 
----
-
-## 3. Lens vs Policy: Orthogonal Layers
-
-LensWorld and Policy are **orthogonal layers**:
-
-| Layer | Question Answered | Enforcement |
-|-------|-------------------|-------------|
-| **LensWorld** | What exists and can be referenced? | Visibility filtering |
-| **Policy** | What actions are permitted on those references? | Mutation control |
-
-LensWorld is a **hard guardrail on visibility**.  
-Policy is a **hard gate on mutation and risk**.
-
-Both apply in ck3lens, but to **different dimensions** of behavior.
-
-### Semantic Separation
-
-| Failure Type | Cause | Result |
-|--------------|-------|--------|
-| Visibility failure | Reference not in LensWorld | `NOT_FOUND` |
-| Mutation failure | Action violates policy | `POLICY_VIOLATION` |
-
-**These cases must never be conflated.**
+**The output of LensWorld is Identity (`CanonicalAddress`) and Geography (`RootCategory`), not Permission.**
 
 ---
 
-## 4. Architecture
+## 3. The Single Adapter Architecture
 
-### 4.1 WorldAdapter Interface
+There is exactly **ONE** `WorldAdapter` class. It changes behavior based on `session.mode`.
 
-`WorldAdapter` is a **FACADE**, not a replacement for existing systems.
+**Forbidden Patterns (Do Not Use):**
 
-It composes:
-- `PlaysetLens` - Database query filtering by content_version_id
-- `PlaysetScope` - Filesystem path validation
-- `DBQueries` - Database access layer
-- Utility roots - CK3 logs, saves, crash dumps
+* `LensWorldAdapter` (Banned class)
+* `DevWorldAdapter` (Banned class)
+* `get_world(mode=...)` (Mode is intrinsic to Session)
 
-It enforces **visibility filtering only**.
+### Mode-Aware Resolution
 
-**Rule:**
-> WorldAdapter decides **what exists**.  
-> Policy decides **what may be done** to what exists.
+The `WorldAdapter` inspects `session.mode` to determine visibility rules:
 
-### 4.2 WorldRouter
-
-`WorldRouter` is the **single canonical injection point** for obtaining WorldAdapters.
-
-All MCP tools must:
-1. Call `get_world()` to obtain the adapter
-2. Resolve references through the adapter
-3. Apply policy **only after** reference resolution
-
-**Forbidden patterns:**
-- Tool-local agent mode checks
-- Tool-local visibility logic
-- Policy checks on unresolved paths
-
-### 4.3 Two Implementations
-
-| Adapter | Mode | Visibility | Writability |
-|---------|------|------------|-------------|
-| `LensWorldAdapter` | ck3lens | Active playset only | Local mods + WIP |
-| `DevWorldAdapter` | ck3raven-dev | Full ck3raven source | Source + WIP |
+| Mode | Visibility Scope | Address Style |
+| --- | --- | --- |
+| **ck3lens** | Active Playset (Vanilla + Enabled Mods in `mods[]`) | `mod_name` + `rel_path` |
+| **ck3raven-dev** | CK3Raven Source + WIP + Raw Reads | Raw `path` |
 
 ---
 
-## 5. Address Scheme
+## 4. Resolution Flow
 
-### 5.1 Canonical Addresses
+### 4.1 Input
 
-All references are translated to canonical addresses:
+Users or Tools provide a string: `common/traits/00_traits.txt` or `mod:MyMod/descriptor.mod`.
 
-| Prefix | Description | Example |
-|--------|-------------|---------|
-| `mod:<id>/` | Mod file by mod identifier | `mod:MSC/common/traits/fix.txt` |
-| `vanilla:/` | Vanilla game file | `vanilla:/common/traits/00_traits.txt` |
-| `utility:/` | CK3 utility file | `utility:/logs/error.log` |
-| `ck3raven:/` | ck3raven source | `ck3raven:/src/parser/lexer.py` |
-| `wip:/` | WIP workspace | `wip:/analysis.py` |
+### 4.2 The Process
 
-### 5.2 Raw Path Translation
+1. `WorldAdapter.resolve(path)` is called.
+2. Adapter normalizes the path based on `session.mode`.
+3. Adapter checks existence in the DB (ck3lens) or FS (ck3raven-dev).
 
-**Decision:** Addresses are **optional**. Raw paths are allowed as input.
+### 4.3 Output (`ResolutionResult`)
 
-- Raw paths are immediately translated into canonical forms
-- If translation fails → `NOT_FOUND`
-- No breaking change required
+The *only* data returned for logic flow:
 
-**Rule:**
-> Agents may provide raw paths.  
-> Tools must never operate on raw paths directly.
-
----
-
-## 6. Visibility by Mode
-
-### 6.1 ck3lens Mode (LensWorldAdapter)
-
-| Domain | Visible | Writable |
-|--------|---------|----------|
-| Active playset mods (DB) | ✅ | ❌ |
-| Active local mods (FS) | ✅ | ✅ (with contract) |
-| Active workshop mods (FS) | ✅ | ❌ |
-| Vanilla game | ✅ | ❌ |
-| CK3 utility files | ✅ | ❌ |
-| ck3raven source | ✅ (bug reports) | ❌ |
-| WIP workspace | ✅ | ✅ |
-| Inactive mods | ❌ | ❌ |
-| Arbitrary filesystem | ❌ | ❌ |
-
-### 6.2 ck3raven-dev Mode (DevWorldAdapter)
-
-| Domain | Visible | Writable |
-|--------|---------|----------|
-| ck3raven source | ✅ | ✅ (with contract) |
-| WIP workspace | ✅ | ✅ |
-| Vanilla game | ✅ | ❌ |
-| All mod content | ✅ (read-only) | ❌ (absolute prohibition) |
-| CK3 utility files | ✅ | ❌ |
-
-**Absolute Prohibition:** ck3raven-dev can **never** write to any mod files.
-
----
-
-## 7. Policy Interaction
-
-### 7.1 Policy Applies After Resolution
-
-Policy enforcement runs **only after** LensWorld resolution succeeds.
-
-```
-Reference → LensWorld.resolve() → Found? → Policy.evaluate() → Action
-                                    ↓
-                               NOT_FOUND
-                           (policy never runs)
+```python
+@dataclass
+class ResolutionResult:
+    found: bool                  # Does it exist?
+    address: CanonicalAddress    # The sole Identity
+    absolute_path: Path          # For execution ONLY
+    
+    # GEOGRAPHY ONLY - NO SEMANTIC MEANING
+    root_category: str           # ROOT_USER_DOCS, ROOT_STEAM, ROOT_GAME, ROOT_REPO
+    
+    # DISPLAY ONLY - NEVER USE FOR LOGIC
+    ui_hint_potentially_editable: bool 
 ```
 
-### 7.2 Examples
+---
 
-| Scenario | LensWorld | Policy | Result |
-|----------|-----------|--------|--------|
-| Search inactive mod | NOT_FOUND | N/A | Reference not found |
-| Read active workshop mod | Found | Read allowed | Success |
-| Write to workshop mod | Found | Write denied | Policy violation |
-| Write to local mod (no contract) | Found | Write denied | Policy violation |
-| Write to local mod (with contract) | Found | Write allowed | Success |
+## 5. Canonical Geography (Root Categories)
+
+We do not classify files by "Type" (e.g., Local Mod). We classify them by "Location" (e.g., User Documents).
+
+| Root Category | Physical Location |
+| --- | --- |
+| `ROOT_USER_DOCS` | `Documents/Paradox Interactive/Crusader Kings III/mod/` |
+| `ROOT_STEAM` | `steamapps/workshop/content/...` |
+| `ROOT_GAME` | `steamapps/common/Crusader Kings III/` |
+| `ROOT_REPO` | The `ck3raven` repository root |
+| `ROOT_WIP` | `~/.ck3raven/wip/` |
+| `ROOT_LAUNCHER` | Paradox Launcher data directory |
+
+### Raw Path Handling
+
+Agents may provide raw paths. `WorldAdapter` immediately translates them to `CanonicalAddress`. If translation fails (e.g., path is outside the lens), resolution fails (`found=False`).
+
+---
+
+## 6. Usage in MCP Tools (The Canonical Pattern)
+
+This is the **only** allowed pattern for using LensWorld.
+
+```python
+from ck3lens.world_router import get_world
+from ck3lens.policy.enforcement import enforce_policy, EnforcementRequest
+
+def ck3_example_tool(path: str, content: str = None):
+    # 1. GET WORLD (Identity)
+    world = get_world() 
+    
+    # 2. RESOLVE (Structure)
+    # Returns ResolutionResult. Does NOT check permission.
+    result = world.resolve(path)
+    
+    if not result.found:
+        return {"error": "Path not found in current lens"}
+        
+    # 3. ENFORCE (Policy) - IF writing
+    # This is the ONLY place permissions are checked.
+    if content is not None:
+        policy_result = enforce_policy(EnforcementRequest(
+            operation="file_write",
+            mode=world.session.mode,
+            target=result.address,
+            root_category=result.root_category # Pass Geography
+        ))
+        
+        if policy_result.decision != "ALLOW":
+            return {"error": policy_result.reason}
+
+    # 4. EXECUTE (Filesystem)
+    # Use the absolute_path resolved in step 2
+    if content:
+        result.absolute_path.write_text(content)
+```
+
+---
+
+## 7. Anti-Patterns (BANNED)
+
+| Banned Concept | Why? | Correct Replacement |
+| --- | --- | --- |
+| `is_writable` | Oracle pattern | `enforce_policy()` |
+| `local_mods` (list) | Parallel truth | `mods[]` + `ROOT_USER_DOCS` check |
+| `live_mods` | Parallel truth | `mods[]` + `ROOT_USER_DOCS` check |
+| `LOCAL_MOD` (Enum) | Implies subset list | `ROOT_USER_DOCS` |
+| `WORKSHOP` (Enum) | Implies type | `ROOT_STEAM` |
 
 ---
 
 ## 8. Implementation Files
 
-| File | Purpose |
-|------|---------|
-| `ck3lens/world_adapter.py` | WorldAdapter interface, LensWorldAdapter, DevWorldAdapter |
-| `ck3lens/world_router.py` | WorldRouter, get_world() |
-| `ck3lens/playset_scope.py` | PlaysetScope - filesystem path validation |
-| `ck3lens/db_queries.py` | PlaysetLens - database query filtering |
-| `ck3lens/agent_mode.py` | Agent mode detection and persistence |
+| Responsibility | File |
+| --- | --- |
+| Interface & Logic | `tools/ck3lens_mcp/ck3lens/world_adapter.py` |
+| Factory | `tools/ck3lens_mcp/ck3lens/world_router.py` |
+| Addresses | `tools/ck3lens_mcp/ck3lens/address.py` |
 
----
-
-## 9. Usage in MCP Tools
-
-### 9.1 Correct Pattern
-
-```python
-from ck3lens.world_router import get_world
-
-@mcp_tool()
-async def ck3_example_tool(path: str):
-    # 1. Get world adapter
-    world = get_world(db=db, lens=lens, scope=scope)
-    
-    # 2. Resolve reference
-    result = world.resolve(path)
-    
-    # 3. Handle NOT_FOUND
-    if not result.found:
-        return {"error": result.error_message}  # NOT DENY!
-    
-    # 4. For mutations, check writability (policy)
-    if wants_to_write and not result.is_writable:
-        return {"error": "Policy violation: target is not writable"}
-    
-    # 5. Proceed with operation using result.absolute_path
-    ...
-```
-
-### 9.2 Anti-Patterns (Forbidden)
-
-```python
-# ❌ WRONG: Tool-local mode check
-mode = get_agent_mode()
-if mode == "ck3lens":
-    # custom visibility logic
-    
-# ❌ WRONG: Policy check before resolution
-if not policy.allows(path):
-    return {"error": "Access denied"}
-
-# ❌ WRONG: Operating on raw paths
-with open(raw_path) as f:  # Should use result.absolute_path
-```
-
----
-
-## 10. Design Goals
-
-LensWorld ensures ck3lens:
-- Cannot accidentally reason about out-of-scope content
-- Cannot see unsafe or irrelevant parts of the system
-- Does not rely on denials for safety
-
-Policy ensures ck3lens:
-- Cannot mutate without explicit intent, scope, and approval
-- Leaves an auditable trail for all risk-bearing actions
-
-**The world ends at the lens boundary.**  
-**Control begins at the policy boundary.**
-
----
-
-## 11. Future Work
-
-- [ ] Full VFS abstraction (aspirational, not required for v1)
-- [ ] Address autocomplete in tools
-- [ ] Lens-aware error messages throughout
-- [ ] Tool migration to WorldRouter pattern
+**There are no other valid files for visibility logic.**

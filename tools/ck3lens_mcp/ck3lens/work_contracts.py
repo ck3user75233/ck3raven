@@ -199,14 +199,16 @@ def validate_path_in_repo_domains(
 CANONICAL_DOMAINS = PRODUCT_DOMAINS | REPO_DOMAINS
 
 # Valid domains for ck3lens mode (CK3 modding)
-# NOTE: These map to playset's mods[] via local_mods_folder (editable) vs Steam workshop (read-only)
-# Not parallel mod lists - just categorizing write permissions within the single canonical playset
+# These are GEOGRAPHICAL DOMAINS based on physical filesystem location.
+# They describe WHERE files live, not WHAT they are (no mod categorization).
+# Permission is determined by enforcement.py based on path containment,
+# not by domain membership. See LENSWORLD.md for canonical architecture.
 CK3LENS_DOMAINS = frozenset({
-    "playset_mods",        # All mods from active playset (read access)
-    "editable_mods",       # Mods in local_mods_folder (write access)
-    "vanilla",             # Read-only vanilla game
-    "wip_workspace",       # ~/.ck3raven/wip/ for scripts
-    "launcher",            # Launcher registry repair (via ck3_repair)
+    "ROOT_USER_DOCS",   # Documents/Paradox Interactive/Crusader Kings III/mod/
+    "ROOT_STEAM",       # steamapps/workshop/content/... (read-only)
+    "ROOT_GAME",        # steamapps/common/Crusader Kings III/ (read-only)
+    "ROOT_WIP",         # ~/.ck3raven/wip/ (scratchpad)
+    "ROOT_LAUNCHER",    # Paradox Launcher data directory
 })
 
 # Combined for validation (all possible domains)
