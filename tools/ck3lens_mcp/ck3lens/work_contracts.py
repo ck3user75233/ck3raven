@@ -199,9 +199,11 @@ def validate_path_in_repo_domains(
 CANONICAL_DOMAINS = PRODUCT_DOMAINS | REPO_DOMAINS
 
 # Valid domains for ck3lens mode (CK3 modding)
+# NOTE: These map to playset's mods[] via local_mods_folder (editable) vs Steam workshop (read-only)
+# Not parallel mod lists - just categorizing write permissions within the single canonical playset
 CK3LENS_DOMAINS = frozenset({
-    "active_local_mods",   # Editable local mods
-    "active_workshop_mods",  # Read-only workshop mods
+    "playset_mods",        # All mods from active playset (read access)
+    "editable_mods",       # Mods in local_mods_folder (write access)
     "vanilla",             # Read-only vanilla game
     "wip_workspace",       # ~/.ck3raven/wip/ for scripts
     "launcher",            # Launcher registry repair (via ck3_repair)

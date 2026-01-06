@@ -15,11 +15,17 @@ Exit codes:
     1 = Validation failed, commit blocked
 """
 from __future__ import annotations
+import io
 import json
 import os
 import sys
 from pathlib import Path
 from typing import Any
+
+# Configure stdout for UTF-8 on Windows (fixes emoji encoding errors)
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # Determine mode from environment or default
 MODE = os.environ.get("CK3LENS_MODE", "ck3raven-dev")
@@ -80,12 +86,12 @@ def main() -> int:
         0 if validation passed
         1 if validation failed
     """
-    print(f"🔍 Policy validation ({MODE} mode)...")
+    print(f"[POLICY] Validation ({MODE} mode)...")
     
     # Read trace
     trace_events = read_trace()
     if not trace_events:
-        print("⚠️  No trace events found. Skipping validation.")
+        print("[WARN] No trace events found. Skipping validation.")
         print("   (If you're not using MCP tools, this is expected)")
         return 0
     
@@ -95,11 +101,11 @@ def main() -> int:
     try:
         result = validate_session(MODE, trace_events)
     except ImportError as e:
-        print(f"❌ Failed to import policy module: {e}")
+        print(f"[ERROR] Failed to import policy module: {e}")
         print("   Run from ck3raven virtualenv or install dependencies")
         return 1
     except Exception as e:
-        print(f"❌ Validation error: {e}")
+        print(f"[ERROR] Validation error: {e}")
         return 1
     
     # Check result
@@ -112,20 +118,20 @@ def main() -> int:
     
     if deliverable:
         if warning_count > 0:
-            print(f"✅ Validation passed with {warning_count} warning(s)")
+            print(f"[OK] Validation passed with {warning_count} warning(s)")
             for v in violations:
                 if v.get("severity") == "warning":
-                    print(f"   ⚠️  {v.get('code')}: {v.get('message')}")
+                    print(f"   [WARN] {v.get('code')}: {v.get('message')}")
         else:
-            print("✅ Validation passed")
+            print("[OK] Validation passed")
         return 0
     else:
-        print(f"❌ Validation FAILED: {error_count} error(s), {warning_count} warning(s)")
+        print(f"[FAIL] Validation FAILED: {error_count} error(s), {warning_count} warning(s)")
         print()
         for v in violations:
             severity = v.get("severity", "error")
-            icon = "🔴" if severity == "error" else "🟡"
-            print(f"   {icon} [{v.get('code')}] {v.get('message')}")
+            tag = "[ERR]" if severity == "error" else "[WARN]"
+            print(f"   {tag} [{v.get('code')}] {v.get('message')}")
         print()
         print("Commit blocked. Fix violations and try again.")
         return 1

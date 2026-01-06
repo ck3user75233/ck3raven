@@ -2762,7 +2762,7 @@ def ck3_contract(
     from ck3lens.work_contracts import (
         open_contract, close_contract, cancel_contract,
         get_active_contract, list_contracts, flush_old_contracts,
-        CANONICAL_DOMAINS, CAPABILITIES,
+        CANONICAL_DOMAINS, CK3LENS_DOMAINS, CAPABILITIES,
     )
     from ck3lens.agent_mode import get_agent_mode
     
@@ -2787,12 +2787,22 @@ def ck3_contract(
         if not canonical_domains:
             return {"error": "canonical_domains required for open command"}
         
-        # Validate domains
-        invalid = set(canonical_domains) - CANONICAL_DOMAINS
+        # Validate domains - MODE-AWARE (Bug #1 fix)
+        # Use appropriate domain set based on current agent mode
+        if agent_mode == "ck3lens":
+            valid_domains = CK3LENS_DOMAINS
+        elif agent_mode == "ck3raven-dev":
+            valid_domains = CANONICAL_DOMAINS
+        else:
+            # Fallback - allow both for uninitialized mode
+            valid_domains = CANONICAL_DOMAINS | CK3LENS_DOMAINS
+        
+        invalid = set(canonical_domains) - valid_domains
         if invalid:
             return {
-                "error": f"Invalid canonical domains: {invalid}",
-                "valid_domains": list(CANONICAL_DOMAINS),
+                "error": f"Invalid canonical domains for {agent_mode or 'unknown'} mode: {invalid}",
+                "valid_domains": sorted(valid_domains),
+                "current_mode": agent_mode,
             }
         
         try:
@@ -3838,13 +3848,21 @@ def ck3_file_search(
     USE THIS instead of VS Code's file_search when you need to find files
     outside the ck3raven database. Every search is logged for policy validation.
     
-    In ck3lens mode: Only paths within the active playset (vanilla + mods) are searchable.
-    In ck3raven-dev mode: Broader access for infrastructure testing.
+    Path defaults:
+    - ck3raven-dev mode: Defaults to ck3raven repo root (for infrastructure work)
+    - ck3lens mode: Defaults to vanilla game path
+    
+    IMPORTANT: In ck3lens mode, while the default is vanilla, you can explicitly 
+    set base_path to search other allowed paths including ck3raven source 
+    (which is in read_allowed for research purposes). The WorldAdapter validates 
+    all paths against mode visibility rules.
     
     Args:
         pattern: Glob pattern to match (e.g., "**/*.txt", "common/traits/*.txt")
         justification: Why this search is needed (for audit trail)
-        base_path: Base directory to search in (defaults to vanilla game path)
+        base_path: Base directory to search in. If not provided:
+                   - ck3raven-dev: repo root
+                   - ck3lens: vanilla game path
     
     Returns:
         {"success": bool, "files": [str], "count": int}
