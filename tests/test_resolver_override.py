@@ -252,7 +252,7 @@ class TestOverrideLoadOrder:
     
     def test_zzz_prefix_loads_last(self):
         """In real CK3, zzz_ prefix ensures loading last."""
-        # This is why MSC uses zzz_ prefixes
+        # This is why compatibility patches use zzz_ prefixes
         files = ["00_vanilla.txt", "mod_stuff.txt", "zzz_override.txt"]
         sorted_files = sorted(files)
         assert sorted_files[-1] == "zzz_override.txt"

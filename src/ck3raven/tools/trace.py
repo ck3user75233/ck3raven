@@ -6,7 +6,7 @@ Shows exactly what happens from playset loading → parsing → resolution.
 
 Usage:
     python -m ck3raven.tools.trace <key> --type traditions
-    python -m ck3raven.tools.trace <key> --mods "MSC,VanillaPatch"
+    python -m ck3raven.tools.trace <key> --mods "ModA,ModB"
 """
 
 import argparse

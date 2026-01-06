@@ -76,10 +76,15 @@ class DaemonLogger:
     def log(self, level: str, message: str):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         line = f"[{timestamp}] [{level}] {message}\n"
+        # Always write to file first (primary output)
         with open(self.log_path, "a", encoding="utf-8") as f:
             f.write(line)
+        # Console output is optional - may fail if terminal closed/redirected
         if self.also_print:
-            print(line.rstrip())
+            try:
+                print(line.rstrip())
+            except OSError:
+                pass  # Console unavailable, continue silently
     
     def info(self, message: str):
         self.log("INFO", message)

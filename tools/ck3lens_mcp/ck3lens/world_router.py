@@ -315,7 +315,7 @@ def get_world(
     
     Example:
         world = get_world(db=db, mods=session.mods, local_mods_folder=session.local_mods_folder)
-        result = world.resolve("mod:MSC/common/traits/test.txt")
+        result = world.resolve("mod:MyCompatch/common/traits/test.txt")
         
         if not result.found:
             return {"error": result.error_message}

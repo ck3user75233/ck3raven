@@ -156,7 +156,7 @@ class TestModeWritePermissions:
             operation=OperationType.FILE_WRITE,
             mode="ck3raven-dev",
             tool_name="test",
-            mod_name="MSC",  # Any mod
+            mod_name="SomeMod",  # Any mod
             rel_path="common/traits/test.txt",
         )
         # Result MUST be DENY - no exceptions

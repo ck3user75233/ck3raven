@@ -151,7 +151,7 @@ class TestModeHardGates:
             operation=OperationType.FILE_WRITE,
             mode="ck3raven-dev",
             tool_name="ck3_file",
-            mod_name="MSC",  # Trying to touch a mod
+            mod_name="SomeMod",  # Trying to touch a mod
         )
         
         result = enforce_policy(req)
@@ -487,7 +487,7 @@ class TestEnforcementDecisionMappings:
             operation=OperationType.FILE_WRITE,
             mode="ck3raven-dev",
             tool_name="ck3_file",
-            mod_name="MSC",  # ck3raven-dev can't touch mods
+            mod_name="SomeMod",  # ck3raven-dev can't touch mods
         )
         
         result = enforce_policy(req)

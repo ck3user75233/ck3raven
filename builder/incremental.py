@@ -13,7 +13,7 @@ Operations (all < 500ms for typical files):
 Usage:
     from builder.incremental import refresh_single_file
     
-    result = refresh_single_file(conn, mod_name="MSC", rel_path="common/traits/zzz_msc_traits.txt")
+    result = refresh_single_file(conn, mod_name="MyMod", rel_path="common/traits/zzz_mymod_traits.txt")
     # Returns: {"success": True, "ingested": True, "parsed": True, "symbols": 42, "refs": 18}
 """
 
