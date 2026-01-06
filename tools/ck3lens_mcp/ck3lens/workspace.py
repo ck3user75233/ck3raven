@@ -412,20 +412,6 @@ def validate_relpath(relpath: str) -> tuple[bool, str]:
     return True, ""
 
 
-def is_under_local_mods_folder(file_path: Path, local_mods_folder: Path) -> bool:
-    """
-    Check if a path is under the local mods folder.
-    
-    This is a STRUCTURAL FACT, not a permission oracle.
-    Used by enforcement.py at the write boundary.
-    """
-    try:
-        file_path.resolve().relative_to(local_mods_folder.resolve())
-        return True
-    except ValueError:
-        return False
-
-
 # =============================================================================
 # DEPRECATED ALIASES - kept for backwards compatibility
 # =============================================================================

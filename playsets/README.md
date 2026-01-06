@@ -5,10 +5,12 @@ This folder contains playset configuration files for CK3 modding work.
 ## What is a Playset?
 
 A playset defines:
-- Which mods are included (in load order)
-- Which mods the agent can write to (live_mods)
+- Which mods are included (in load order) via the `mods[]` array
 - Agent briefing notes for error analysis and conflict resolution
 - Sub-agent configuration for automated review
+
+**Note:** Writability is NOT stored in the playset. It is DERIVED at enforcement time
+from whether a mod's path is under `local_mods_folder`.
 
 ## Files
 
@@ -32,8 +34,7 @@ This creates a playset from a CK3 launcher export.
 
 1. Copy `example_playset.json` to a new file
 2. Edit the mods list (in load order)
-3. Add live_mods for mods the agent can write to
-4. Fill in agent_briefing notes
+3. Fill in agent_briefing notes
 
 ## Switching Playsets
 
@@ -129,9 +130,21 @@ Playsets are validated against `playset.schema.json`. Required fields:
 |-------|------|-------------|
 | `name` | string | Unique playset identifier |
 | `mods` | array | Ordered list of mod definitions |
-| `live_mods` | array | Names of mods the agent can write to |
 
 Optional fields: `description`, `created_at`, `agent_briefing`, `sub_agent_config`
+
+## Writability Model
+
+**IMPORTANT:** There is no `live_mods[]` or `editable_mods[]` list.
+
+Writability is determined at **enforcement time** by checking if a mod's path
+is under `local_mods_folder` (set in workspace config):
+
+- Mods under `local_mods_folder` → potentially writable (enforcement allows)
+- Workshop mods → never writable
+- Vanilla → never writable
+
+This is derived dynamically, not stored in the playset.
 
 ## Migration from Database
 

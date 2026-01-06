@@ -21,15 +21,15 @@
       "enabled": true,
       "is_compatch": false,
       "notes": "Main content mod"
-    }
-  ],
-  
-  "live_mods": [
+    },
     {
-      "mod_id": "MSC",
       "name": "Mini Super Compatch",
+      "mod_id": "MSC",
       "path": "~/Documents/Paradox Interactive/Crusader Kings III/mod/Mini Super Compatch",
-      "description": "Compatibility patch being developed"
+      "load_order": 2,
+      "enabled": true,
+      "is_compatch": true,
+      "notes": "Compatibility patch - path under local_mods_folder makes it writable"
     }
   ],
   
