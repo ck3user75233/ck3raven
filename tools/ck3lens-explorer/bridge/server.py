@@ -66,13 +66,16 @@ except ImportError as e:
 
 
 class CK3LensBridge:
-    """Bridge server providing JSON-RPC interface to ck3raven."""
+    """Bridge server providing JSON-RPC interface to ck3raven.
+    
+    Playset operations delegate to MCP tools (ck3_playset) to avoid
+    duplicating logic. This bridge handles JSON-RPC transport only.
+    """
     
     def __init__(self):
         self.db_path = None
-        self.db_conn = None  # SQLite connection
+        self.db_conn = None  # SQLite connection for search/parse operations
         self.session = None
-        self.playset_id = None
         self.search_engine = None
         self.initialized = False
         
@@ -132,7 +135,10 @@ class CK3LensBridge:
         return handler(params)
     
     def init_session(self, params: dict) -> dict:
-        """Initialize session with database."""
+        """Initialize session with database connection.
+        
+        Gets active playset info from MCP tool (ck3_playset).
+        """
         if not CKRAVEN_AVAILABLE:
             return {
                 "error": f"ck3raven not available: {IMPORT_ERROR}",
@@ -155,35 +161,27 @@ class CK3LensBridge:
             self.db_conn = sqlite3.connect(str(self.db_path))
             self.db_conn.row_factory = sqlite3.Row
             
-            # Get active playset
-            row = self.db_conn.execute(
-                "SELECT playset_id, name FROM playsets WHERE is_active = 1 LIMIT 1"
-            ).fetchone()
-            
-            if row:
-                self.playset_id = row[0]
-                playset_name = row[1]
-            else:
-                # Use first playset if none active
-                row = self.db_conn.execute(
-                    "SELECT playset_id, name FROM playsets LIMIT 1"
-                ).fetchone()
-                self.playset_id = row[0] if row else None
-                playset_name = row[1] if row else None
+            # Get active playset info from MCP tool
+            playset_name = None
+            try:
+                from server import ck3_playset
+                result = ck3_playset(command="get")
+                if result.get("success"):
+                    playset_name = result.get("name")
+            except Exception:
+                pass
             
             self.initialized = True
             
             # Return mod root and local_mods_folder for the UI to derive editability
-            # Following canonical architecture: mods[] is THE list, editability derived from path
             mod_root = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
-            local_mods_folder = str(mod_root)  # The folder that contains writable mods
+            local_mods_folder = str(mod_root)
             
             return {
                 "initialized": True,
                 "db_path": str(self.db_path),
                 "mod_root": str(mod_root),
-                "local_mods_folder": local_mods_folder,  # For editability checks by UI
-                "playset_id": self.playset_id,
+                "local_mods_folder": local_mods_folder,
                 "playset_name": playset_name,
             }
         except Exception as e:
@@ -757,36 +755,35 @@ class CK3LensBridge:
             return {"error": str(e), "conflicts": []}
     
     def get_playset_mods(self, params: dict) -> dict:
-        """Get mods in the active playset with load order."""
-        if not self.initialized or not self.db_conn:
-            return {"error": "Session not initialized", "mods": []}
+        """Get mods in the active playset - thin wrapper around MCP tool.
         
+        Delegates to ck3_playset(command="mods") from the MCP server.
+        """
         try:
-            # Get mods in playset with load order
-            mods = self.db_conn.execute("""
-                SELECT pm.load_order_index, mp.name, mp.workshop_id, 
-                       cv.file_count, cv.content_version_id, mp.source_path
-                FROM playset_mods pm
-                JOIN content_versions cv ON pm.content_version_id = cv.content_version_id
-                JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-                WHERE pm.playset_id = ? AND pm.enabled = 1
-                ORDER BY pm.load_order_index
-            """, (self.playset_id,)).fetchall()
+            # Import and call the MCP tool directly
+            from server import ck3_playset
+            result = ck3_playset(command="mods")
             
-            return {
-                "mods": [
-                    {
-                        "loadOrder": m[0],
-                        "name": m[1],
-                        "workshopId": m[2],
-                        "fileCount": m[3],
-                        "contentVersionId": m[4],
-                        "sourcePath": m[5],
-                        "kind": "steam" if m[2] else "local"
-                    }
-                    for m in mods
-                ]
-            }
+            if not result.get("success"):
+                return {"error": result.get("error", "Unknown error"), "mods": []}
+            
+            # Transform to expected format for extension
+            mods_list = []
+            for idx, mod in enumerate(result.get("mods", [])):
+                mods_list.append({
+                    "loadOrder": idx,
+                    "name": mod.get("name", "Unknown"),
+                    "workshopId": mod.get("workshop_id"),
+                    "fileCount": mod.get("file_count", 0),
+                    "contentVersionId": mod.get("content_version_id"),
+                    "sourcePath": mod.get("source_path", ""),
+                    "kind": "steam" if mod.get("workshop_id") else "local"
+                })
+            
+            return {"mods": mods_list}
+            
+        except ImportError:
+            return {"error": "MCP server not available", "mods": []}
         except Exception as e:
             return {"error": str(e), "mods": []}
     
@@ -1186,39 +1183,35 @@ class CK3LensBridge:
             return {"success": False, "error": str(e)}
 
     def list_playsets(self, params: dict) -> dict:
-        """List all playsets in the launcher database."""
+        """List all playsets - thin wrapper around MCP tool.
+        
+        Delegates to ck3_playset(command="list") from the MCP server.
+        """
         try:
-            if not self.db:
-                return {"error": "Database not initialized", "playsets": []}
+            # Import and call the MCP tool directly
+            from server import ck3_playset
+            result = ck3_playset(command="list")
             
-            # Query playsets from the launcher database
-            # This uses the same connection the MCP server uses
+            if not result.get("success"):
+                return {"error": result.get("error", "Unknown error"), "playsets": []}
+            
+            # Transform to expected format for extension
             playsets = []
-            
-            # Try to use the MCP tool if available
-            if CKRAVEN_AVAILABLE:
-                from ck3lens_mcp.server import ck3_list_playsets
-                result = ck3_list_playsets()
-                return result
-            
-            # Fallback: Direct database query
-            cursor = self.db.conn.execute("""
-                SELECT 
-                    id,
-                    name,
-                    CASE WHEN id = (SELECT value FROM metadata WHERE key = 'active_playset_id') THEN 1 ELSE 0 END as is_active
-                FROM playsets
-                ORDER BY name
-            """)
-            
-            for row in cursor.fetchall():
+            for p in result.get("playsets", []):
                 playsets.append({
-                    "id": row[0],
-                    "name": row[1],
-                    "is_active": bool(row[2])
+                    "id": p.get("filename", "").replace(".json", ""),
+                    "name": p.get("name", "Unknown"),
+                    "filename": p.get("filename", ""),
+                    "is_active": p.get("is_active", False),
+                    "mod_count": p.get("mod_count", 0)
                 })
             
+            # Sort with active first, then alphabetically
+            playsets.sort(key=lambda p: (not p['is_active'], p['name'].lower()))
             return {"playsets": playsets}
+            
+        except ImportError:
+            return {"error": "MCP server not available", "playsets": []}
         except Exception as e:
             return {"error": str(e), "playsets": []}
 

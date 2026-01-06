@@ -450,6 +450,34 @@ paths[] key in playsets (use mods[] only)
 active_mod_paths.json (deprecated format)
 ```
 
+### Bridge Playset Duplication (HARD BAN - January 2026)
+
+The VS Code extension bridge (`bridge/server.py`) MUST delegate playset operations to MCP tools.
+It MUST NOT duplicate playset logic or cache playset data.
+
+**Banned patterns:**
+```
+active_playset_data         # Cached playset data = duplicate source of truth
+active_playset_file         # Cached file reference = duplicate source of truth  
+FROM playset_mods           # SQL against deprecated playset_mods table
+playset_id = ?              # Database-based playset queries (use MCP tools)
+self.playset_id             # Stored playset ID from deprecated DB queries
+```
+
+**Required pattern for bridge methods:**
+```python
+# ✓ CORRECT - thin wrapper that delegates to MCP tool
+def get_playset_mods(self, params: dict) -> dict:
+    from server import ck3_playset
+    result = ck3_playset(command="mods")
+    # Transform to extension format and return
+    
+# ✗ BANNED - duplicating playset file reading logic
+def get_playset_mods(self, params: dict) -> dict:
+    manifest = json.loads(manifest_path.read_text())  # Duplicating MCP logic!
+    playset_data = json.loads(playset_path.read_text())  # Duplicating!
+```
+
 ### Required Replacements
 
 | Ã¢ÂÅ’ Banned | Ã¢Å“â€¦ Replacement | Reason |

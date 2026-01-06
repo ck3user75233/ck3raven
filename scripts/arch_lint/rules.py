@@ -326,6 +326,12 @@ def run_doc_rules(cfg: LintConfig, src: SourceFile, reporter: Reporter) -> None:
         "active_mod_paths", "legacy_file",
         # January 2026 additions
         "invalidate_lens_cache",
+        # January 7, 2026 additions - bridge must delegate to MCP tools, not duplicate
+        "active_playset_data",  # cached playset in bridge = duplicate source of truth
+        "active_playset_file",  # cached file ref in bridge = duplicate source of truth
+        "playset_mods pm join",  # SQL against deprecated playset_mods table
+        "from playset_mods",  # SQL against deprecated playset_mods table
+        "playset_id = ?",  # database-based playset queries (use file-based via MCP)
     )
     for i, line in enumerate(src.lines, start=1):
         lc = line.lower()
