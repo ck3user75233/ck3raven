@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Standalone rebuild daemon that runs completely detached from terminals.
 
@@ -474,6 +474,279 @@ class BuildTracker:
             self.logger.info(f"Manifest written: {MANIFEST_FILE}")
         except Exception as e:
             self.logger.warning(f"Failed to write manifest: {e}")
+    
+    # =========================================================================
+    # INGEST LOGGING - Per-file logging with block reconstruction
+    # =========================================================================
+    
+    def log_file(
+        self,
+        phase: str,
+        relpath: str,
+        status: str,
+        file_id: int = None,
+        content_version_id: int = None,
+        size_raw: int = None,
+        size_stored: int = None,
+        content_hash: str = None,
+        error_type: str = None,
+        error_msg: str = None
+    ) -> None:
+        """Log a file operation in the ingest_log table.
+        
+        Args:
+            phase: Phase name (e.g., "ingest", "ast_generation")
+            relpath: Relative path of the file
+            status: One of 'processed', 'skipped_routing', 'skipped_uptodate', 'error'
+            file_id: FK to files table (if file is in DB)
+            content_version_id: FK to content_versions
+            size_raw: Original file size in bytes
+            size_stored: Bytes written to DB
+            content_hash: SHA256 of file content
+            error_type: Error class name if status='error'
+            error_msg: Error message (truncated) if status='error'
+        """
+        try:
+            self.conn.execute("""
+                INSERT INTO ingest_log 
+                (build_id, phase, timestamp, file_id, relpath, content_version_id,
+                 status, size_raw, size_stored, content_hash, error_type, error_msg)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                self.build_id, phase, time.time(), file_id, relpath, content_version_id,
+                status, size_raw, size_stored, content_hash, 
+                error_type, error_msg[:500] if error_msg else None
+            ))
+        except Exception as e:
+            # Don't let logging failures break the build
+            self.logger.debug(f"Failed to log file: {e}")
+    
+    def log_files_bulk(self, phase: str, entries: list) -> None:
+        """Bulk insert file log entries for efficiency.
+        
+        Args:
+            phase: Phase name
+            entries: List of dicts with keys matching log_file() parameters
+        """
+        if not entries:
+            return
+            
+        try:
+            self.conn.executemany("""
+                INSERT INTO ingest_log 
+                (build_id, phase, timestamp, file_id, relpath, content_version_id,
+                 status, size_raw, size_stored, content_hash, error_type, error_msg)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, [
+                (
+                    self.build_id, phase, time.time(), 
+                    e.get('file_id'), e.get('relpath', ''), e.get('content_version_id'),
+                    e.get('status', 'processed'), e.get('size_raw'), e.get('size_stored'),
+                    e.get('content_hash'), e.get('error_type'), 
+                    (e.get('error_msg') or '')[:500] or None
+                )
+                for e in entries
+            ])
+        except Exception as e:
+            self.logger.debug(f"Failed to bulk log files: {e}")
+    
+    def reconstruct_blocks(self, phase: str, file_threshold: int = 500, byte_threshold: int = 50_000_000) -> int:
+        """Reconstruct blocks from ingest_log entries for a completed phase.
+        
+        Called automatically after log_phase_delta_*() to create ingest_blocks records.
+        Only processes log entries not yet assigned to a block.
+        
+        Args:
+            phase: Phase to process
+            file_threshold: Max files per block (default 500)
+            byte_threshold: Max bytes per block (default 50MB)
+            
+        Returns:
+            Number of blocks created
+        """
+        import hashlib
+        
+        # Find the highest block number for this phase (to continue numbering)
+        cursor = self.conn.execute("""
+            SELECT COALESCE(MAX(block_number), 0) as max_block,
+                   COALESCE(MAX(log_id_end), 0) as last_log_id
+            FROM ingest_blocks
+            WHERE build_id = ? AND phase = ?
+        """, (self.build_id, phase))
+        row = cursor.fetchone()
+        start_block_number = (row['max_block'] or 0) + 1
+        last_processed_log_id = row['last_log_id'] or 0
+        
+        # Fetch only NEW log entries (after the last processed log_id)
+        cursor = self.conn.execute("""
+            SELECT log_id, timestamp, relpath, status, size_raw, size_stored, content_hash
+            FROM ingest_log
+            WHERE build_id = ? AND phase = ? AND log_id > ?
+            ORDER BY log_id
+        """, (self.build_id, phase, last_processed_log_id))
+        
+        logs = cursor.fetchall()
+        if not logs:
+            return 0
+        
+        # Chunk into blocks
+        blocks = []
+        current_block = []
+        current_bytes = 0
+        
+        for log in logs:
+            current_block.append(log)
+            current_bytes += log['size_raw'] or 0
+            
+            if len(current_block) >= file_threshold or current_bytes >= byte_threshold:
+                blocks.append(current_block)
+                current_block = []
+                current_bytes = 0
+        
+        # Don't forget the last partial block
+        if current_block:
+            blocks.append(current_block)
+        
+        # Create block records
+        for i, block_logs in enumerate(blocks):
+            block_number = start_block_number + i
+            # Compute Merkle root from content hashes
+            hashes = [log['content_hash'] for log in block_logs if log['content_hash']]
+            if hashes:
+                # Simple Merkle: hash of concatenated hashes
+                combined = ''.join(sorted(hashes))
+                block_hash = hashlib.sha256(combined.encode()).hexdigest()[:32]
+            else:
+                block_hash = None
+            
+            # Aggregate stats
+            files_processed = sum(1 for l in block_logs if l['status'] == 'processed')
+            files_skipped = sum(1 for l in block_logs if l['status'].startswith('skipped'))
+            files_errored = sum(1 for l in block_logs if l['status'] == 'error')
+            bytes_scanned = sum(l['size_raw'] or 0 for l in block_logs)
+            bytes_stored = sum(l['size_stored'] or 0 for l in block_logs)
+            
+            # Timing
+            started_at = block_logs[0]['timestamp']
+            ended_at = block_logs[-1]['timestamp']
+            duration_sec = ended_at - started_at
+            
+            block_id = f"blk-{self.build_id[:8]}-{phase[:4]}-{block_number:03d}"
+            
+            try:
+                self.conn.execute("""
+                    INSERT INTO ingest_blocks
+                    (block_id, build_id, phase, block_number, started_at, ended_at, duration_sec,
+                     files_processed, files_skipped, files_errored, bytes_scanned, bytes_stored,
+                     block_hash, log_id_start, log_id_end)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    block_id, self.build_id, phase, block_number, started_at, ended_at, duration_sec,
+                    files_processed, files_skipped, files_errored, bytes_scanned, bytes_stored,
+                    block_hash, block_logs[0]['log_id'], block_logs[-1]['log_id']
+                ))
+            except Exception as e:
+                self.logger.warning(f"Failed to create block {block_id}: {e}")
+        
+        try:
+            self.conn.commit()
+        except Exception:
+            pass
+        
+        return len(blocks)
+    
+    def get_phase_errors(self, phase: str, limit: int = 50) -> list:
+        """Get error entries from a phase for reporting.
+        
+        Returns:
+            List of dicts with relpath, error_type, error_msg
+        """
+        cursor = self.conn.execute("""
+            SELECT relpath, error_type, error_msg
+            FROM ingest_log
+            WHERE build_id = ? AND phase = ? AND status = 'error'
+            ORDER BY log_id
+            LIMIT ?
+        """, (self.build_id, phase, limit))
+        
+        return [dict(row) for row in cursor.fetchall()]
+    
+    def log_phase_delta_ingest(self, phase: str) -> int:
+        """Log files ingested during ingest phases by querying what's new in the DB.
+        
+        For 'vanilla_ingest' and 'mod_ingest' phases, logs files from files table
+        that were just ingested (created during this build).
+        
+        Returns:
+            Number of files logged
+        """
+        # Get files that were added/updated during this build
+        # We look at files table entries based on content_versions ingested_at
+        cursor = self.conn.execute("""
+            SELECT f.file_id, f.relpath, f.content_version_id, f.content_hash,
+                   fc.size as size_raw
+            FROM files f
+            JOIN file_contents fc ON f.content_hash = fc.content_hash
+            WHERE f.deleted = 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM ingest_log il 
+                  WHERE il.build_id = ? AND il.phase = ? AND il.file_id = f.file_id
+              )
+        """, (self.build_id, phase))
+        
+        rows = cursor.fetchall()
+        if not rows:
+            return 0
+        
+        entries = [{
+            'file_id': row['file_id'],
+            'relpath': row['relpath'],
+            'content_version_id': row['content_version_id'],
+            'status': 'processed',
+            'size_raw': row['size_raw'],
+            'content_hash': row['content_hash'],
+        } for row in rows]
+        
+        self.log_files_bulk(phase, entries)
+        return len(entries)
+    
+    def log_phase_delta_ast(self, phase: str = "ast_generation") -> int:
+        """Log AST generation results by querying files that now have ASTs.
+        
+        Returns:
+            Number of files logged
+        """
+        # Get files that have ASTs (via asts table) but aren't logged yet
+        cursor = self.conn.execute("""
+            SELECT f.file_id, f.relpath, f.content_version_id, f.content_hash,
+                   LENGTH(COALESCE(fc.content_blob, '')) as size_raw,
+                   LENGTH(a.ast_blob) as size_stored
+            FROM files f
+            JOIN asts a ON f.content_hash = a.content_hash
+            LEFT JOIN file_contents fc ON f.content_hash = fc.content_hash
+            WHERE a.parse_ok = 1
+              AND NOT EXISTS (
+                  SELECT 1 FROM ingest_log il 
+                  WHERE il.build_id = ? AND il.phase = ? AND il.file_id = f.file_id
+              )
+        """, (self.build_id, phase))
+        
+        rows = cursor.fetchall()
+        if not rows:
+            return 0
+        
+        entries = [{
+            'file_id': row['file_id'],
+            'relpath': row['relpath'],
+            'content_version_id': row['content_version_id'],
+            'status': 'processed',
+            'size_raw': row['size_raw'],
+            'size_stored': row['size_stored'],
+            'content_hash': row['content_hash'],
+        } for row in rows]
+        
+        self.log_files_bulk(phase, entries)
+        return len(entries)
 
 
 def write_heartbeat():
@@ -694,14 +967,21 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
             
             logger.info(f"Ingesting vanilla from {vanilla_path}")
             
-            # Use chunked ingest with progress reporting
-            version, result = ingest_vanilla_chunked(conn, vanilla_path, "1.18.x", logger, status)
+            # Use chunked ingest with progress reporting and periodic block logging
+            version, result = ingest_vanilla_chunked(conn, vanilla_path, "1.18.x", logger, status, build_tracker)
             
             vanilla_files = result.stats.files_scanned if hasattr(result, 'stats') else 0
             build_counts['files'] += vanilla_files
             
             logger.info(f"Vanilla ingest complete: {result}")
             status.update(stats={"vanilla_files": vanilla_files})
+            
+            # Final log of any remaining files and create final blocks
+            logged = build_tracker.log_phase_delta_ingest("vanilla_ingest")
+            if logged > 0:
+                blocks = build_tracker.reconstruct_blocks(phase="vanilla_ingest")
+                logger.info(f"Final: logged {logged} vanilla files -> {blocks} blocks")
+            
             build_tracker.end_step("vanilla_ingest", StepStats(rows_out=vanilla_files))
             
             # Checkpoint after vanilla
@@ -736,7 +1016,15 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
                     check_file_changes=check_file_changes
                 )
                 build_counts['files'] += mod_files if isinstance(mod_files, int) else 0
-                build_tracker.end_step("mod_ingest", StepStats(rows_out=mod_files if isinstance(mod_files, int) else 0))
+                mod_file_count = mod_files if isinstance(mod_files, int) else 0
+                
+                # Log ingested files and reconstruct blocks immediately
+                logged = build_tracker.log_phase_delta_ingest("mod_ingest")
+                if logged > 0:
+                    blocks = build_tracker.reconstruct_blocks(phase="mod_ingest")
+                    logger.info(f"Logged {logged} mod files -> {blocks} blocks")
+                
+                build_tracker.end_step("mod_ingest", StepStats(rows_out=mod_file_count))
                 db_wrapper.checkpoint()
             else:
                 build_tracker.skip_step("mod_ingest", "test mode with skip_mods=True")
@@ -760,6 +1048,13 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
         ast_stats = generate_missing_asts(conn, logger, status, force=force)
         ast_count = ast_stats.get('generated', 0) if isinstance(ast_stats, dict) else 0
         build_counts['asts'] = ast_count
+        
+        # Log AST generation results and reconstruct blocks immediately
+        logged = build_tracker.log_phase_delta_ast("ast_generation")
+        if logged > 0:
+            blocks = build_tracker.reconstruct_blocks(phase="ast_generation")
+            logger.info(f"Logged {logged} AST files -> {blocks} blocks")
+        
         build_tracker.end_step("ast_generation", StepStats(
             rows_out=ast_count,
             rows_skipped=ast_stats.get('skipped', 0) if isinstance(ast_stats, dict) else 0,
@@ -843,6 +1138,7 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
             db_wrapper.checkpoint()
         
         # Done - record build completion
+        # (blocks were already created after each phase via reconstruct_blocks)
         build_tracker.complete(build_counts)
         
         status.update(
@@ -909,9 +1205,16 @@ def _process_pending_refreshes(conn, logger: DaemonLogger, status: StatusWriter)
     return processed
 
 
-def ingest_vanilla_chunked(conn, vanilla_path: Path, version: str, logger: DaemonLogger, status: StatusWriter):
-    """Ingest vanilla files with progress reporting via callback."""
+def ingest_vanilla_chunked(conn, vanilla_path: Path, version: str, logger: DaemonLogger, status: StatusWriter, build_tracker: 'BuildTracker' = None):
+    """Ingest vanilla files with progress reporting via callback.
+    
+    If build_tracker is provided, also logs ingested files and creates blocks
+    periodically during the ingest.
+    """
     from ck3raven.db.ingest import ingest_vanilla
+    
+    # Track how many files we've logged so far
+    last_logged_count = [0]  # Use list to allow mutation in closure
     
     def progress_callback(done, total):
         write_heartbeat()
@@ -920,6 +1223,14 @@ def ingest_vanilla_chunked(conn, vanilla_path: Path, version: str, logger: Daemo
             status.update(progress=pct, message=f"Vanilla ingest: {done}/{total} files ({pct:.1f}%)")
             if done % 5000 == 0:
                 logger.info(f"Vanilla progress: {done}/{total} ({pct:.1f}%)")
+            
+            # Periodic block logging - every 5000 files
+            if build_tracker and done >= last_logged_count[0] + 5000:
+                logged = build_tracker.log_phase_delta_ingest("vanilla_ingest")
+                if logged > 0:
+                    blocks = build_tracker.reconstruct_blocks(phase="vanilla_ingest")
+                    logger.debug(f"Block checkpoint: logged {logged} files -> {blocks} blocks")
+                last_logged_count[0] = done
     
     # The updated ingest_vanilla now accepts progress_callback
     return ingest_vanilla(conn, vanilla_path, version, progress_callback=progress_callback)
@@ -2622,28 +2933,93 @@ def start_detached(db_path: Path, force: bool, symbols_only: bool = False, inges
     print(f"Logs: {LOG_FILE}")
 
 
-def show_status():
-    """Show current daemon status."""
+def show_status(verbose: bool = False, format_json: bool = False):
+    """Show current daemon status.
+    
+    Args:
+        verbose: Show error details from ingest_log
+        format_json: Output as JSON instead of text
+    """
     
     running = is_daemon_running()
     
-    print(f"Daemon running: {running}")
+    # Collect status data
+    status_data = {
+        "daemon_running": running,
+        "pid": None,
+        "heartbeat_age_sec": None,
+        "current_phase": None,
+        "progress": 0,
+        "message": "",
+    }
     
     if PID_FILE.exists():
-        print(f"PID: {PID_FILE.read_text().strip()}")
+        status_data["pid"] = int(PID_FILE.read_text().strip())
     
     if HEARTBEAT_FILE.exists():
         try:
             last = float(HEARTBEAT_FILE.read_text().strip())
-            age = time.time() - last
-            print(f"Last heartbeat: {age:.1f}s ago")
+            status_data["heartbeat_age_sec"] = time.time() - last
         except Exception:
             pass
     
     if STATUS_FILE.exists():
         try:
             status = json.loads(STATUS_FILE.read_text())
-            print(f"\nStatus:")
+            status_data["state"] = status.get('state', 'unknown')
+            status_data["current_phase"] = status.get('phase', 'unknown')
+            status_data["phase_number"] = status.get('phase_number', 0)
+            status_data["total_phases"] = status.get('total_phases', 7)
+            status_data["progress"] = status.get('progress', 0)
+            status_data["message"] = status.get('message', '')
+            status_data["error"] = status.get('error')
+            status_data["started_at"] = status.get('started_at', 'unknown')
+            status_data["updated_at"] = status.get('updated_at', 'unknown')
+        except Exception:
+            pass
+    
+    # Try to get recent build info from database
+    try:
+        from ck3raven.db.schema import get_connection
+        conn = get_connection(DEFAULT_DB_PATH)
+        # Get most recent build
+        build = conn.execute("""
+            SELECT build_id, started_at, completed_at, state, 
+                   files_ingested, asts_produced, symbols_extracted
+            FROM builder_runs 
+            ORDER BY started_at DESC LIMIT 1
+        """).fetchone()
+        if build:
+            status_data["last_build"] = {
+                "build_id": build['build_id'],
+                "started_at": build['started_at'],
+                "completed_at": build['completed_at'],
+                "state": build['state'],
+                "files": build['files_ingested'],
+                "asts": build['asts_produced'],
+                "symbols": build['symbols_extracted'],
+            }
+    except Exception:
+        pass  # Table might not exist yet
+    
+    # Output
+    if format_json:
+        print(json.dumps(status_data, indent=2, default=str))
+        return
+    
+    # Text output
+    print(f"Daemon running: {running}")
+    
+    if status_data.get("pid"):
+        print(f"PID: {status_data['pid']}")
+    
+    if status_data.get("heartbeat_age_sec") is not None:
+        print(f"Last heartbeat: {status_data['heartbeat_age_sec']:.1f}s ago")
+    
+    if STATUS_FILE.exists():
+        try:
+            status = json.loads(STATUS_FILE.read_text())
+            print(f"\nCurrent Status:")
             print(f"  State: {status.get('state', 'unknown')}")
             print(f"  Phase: {status.get('phase', 'unknown')} ({status.get('phase_number', 0)}/{status.get('total_phases', 7)})")
             print(f"  Progress: {status.get('progress', 0):.1f}%")
@@ -2656,6 +3032,33 @@ def show_status():
             print(f"Error reading status: {e}")
     else:
         print("No status file found")
+    
+    # Show last build info
+    if status_data.get("last_build"):
+        build = status_data["last_build"]
+        print(f"\nLast Build ({build['build_id'][:8]}...):")
+        print(f"  State: {build['state']}")
+        print(f"  Started: {build['started_at']}")
+        print(f"  Completed: {build['completed_at'] or 'in progress'}")
+        print(f"  Files: {build['files']}, ASTs: {build['asts']}, Symbols: {build['symbols']}")
+        
+        if verbose:
+            # Show errors from ingest_log if any
+            try:
+                from ck3raven.db.schema import get_connection
+                conn = get_connection(DEFAULT_DB_PATH)
+                errors = conn.execute("""
+                    SELECT phase, relpath, error_type, error_msg
+                    FROM ingest_log 
+                    WHERE build_id = ? AND status = 'error'
+                    LIMIT 10
+                """, (build['build_id'],)).fetchall()
+                if errors:
+                    print(f"\n  Recent Errors:")
+                    for err in errors:
+                        print(f"    [{err['phase']}] {err['relpath']}: {err['error_type']}")
+            except Exception:
+                pass
 
 
 def show_logs(follow: bool = False):
@@ -2746,6 +3149,12 @@ def main():
     parser.add_argument("--skip-file-check", action="store_true",
                         help="Skip checking for changed files in already-indexed mods (faster but may miss changes)")
     
+    # Status command options
+    parser.add_argument("--verbose", "-v", action="store_true",
+                        help="Show detailed status including error manifests from recent blocks")
+    parser.add_argument("--format", choices=["text", "json"], default="text",
+                        help="Output format for status command (default: text)")
+    
     args = parser.parse_args()
     
     if args.command == "start":
@@ -2828,7 +3237,7 @@ def main():
         )
     
     elif args.command == "status":
-        show_status()
+        show_status(verbose=args.verbose, format_json=(args.format == "json"))
     
     elif args.command == "stop":
         stop_daemon()

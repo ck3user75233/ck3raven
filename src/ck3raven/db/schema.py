@@ -353,6 +353,76 @@ CREATE TABLE IF NOT EXISTS build_lock (
     FOREIGN KEY (build_id) REFERENCES builder_runs(build_id)
 );
 
+-- Ingest log - per-file logging for daemon operations
+-- Each row = one file processed in a build phase
+-- BuildTracker reconstructs blocks from this table after each phase
+CREATE TABLE IF NOT EXISTS ingest_log (
+    log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    build_id TEXT NOT NULL,                  -- FK to builder_runs
+    phase TEXT NOT NULL,                     -- e.g., "ingest", "ast_generation", "symbol_extraction"
+    timestamp REAL NOT NULL,                 -- Unix timestamp (time.time())
+    
+    -- File identity
+    file_id INTEGER,                         -- FK to files (NULL if file not yet in DB)
+    relpath TEXT NOT NULL,                   -- Relative path for identification
+    content_version_id INTEGER,              -- FK to content_versions
+    
+    -- What happened
+    status TEXT NOT NULL,                    -- 'processed', 'skipped_routing', 'skipped_uptodate', 'error'
+    
+    -- Sizes (for block thresholds and metrics)
+    size_raw INTEGER,                        -- Original file size in bytes
+    size_stored INTEGER,                     -- Bytes written to DB (may differ)
+    
+    -- Hashing (for Merkle root computation)
+    content_hash TEXT,                       -- SHA256 of content
+    
+    -- Errors
+    error_type TEXT,                         -- e.g., "ParseError", "IOError"
+    error_msg TEXT,                          -- Truncated error message
+    
+    FOREIGN KEY (build_id) REFERENCES builder_runs(build_id) ON DELETE CASCADE,
+    FOREIGN KEY (file_id) REFERENCES files(file_id),
+    FOREIGN KEY (content_version_id) REFERENCES content_versions(content_version_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ingest_log_build_phase ON ingest_log(build_id, phase);
+CREATE INDEX IF NOT EXISTS idx_ingest_log_timestamp ON ingest_log(timestamp);
+CREATE INDEX IF NOT EXISTS idx_ingest_log_status ON ingest_log(build_id, status);
+
+-- Reconstructed blocks - summary records created by BuildTracker after phases complete
+-- Each block = chunk of ingest_log entries (500 files OR 50MB threshold)
+CREATE TABLE IF NOT EXISTS ingest_blocks (
+    block_id TEXT PRIMARY KEY,               -- UUID (e.g., "blk-a1b2c3d4")
+    build_id TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    block_number INTEGER NOT NULL,           -- Sequence within phase (1, 2, 3...)
+    
+    -- Timing (from first/last log entry in block)
+    started_at REAL NOT NULL,                -- Unix timestamp of first entry
+    ended_at REAL NOT NULL,                  -- Unix timestamp of last entry
+    duration_sec REAL NOT NULL,
+    
+    -- Aggregated metrics
+    files_processed INTEGER NOT NULL DEFAULT 0,
+    files_skipped INTEGER NOT NULL DEFAULT 0,
+    files_errored INTEGER NOT NULL DEFAULT 0,
+    bytes_scanned INTEGER NOT NULL DEFAULT 0,
+    bytes_stored INTEGER NOT NULL DEFAULT 0,
+    
+    -- Integrity
+    block_hash TEXT,                         -- Merkle root of content_hash values
+    
+    -- Range of log entries this block covers
+    log_id_start INTEGER NOT NULL,
+    log_id_end INTEGER NOT NULL,
+    
+    UNIQUE(build_id, phase, block_number),
+    FOREIGN KEY (build_id) REFERENCES builder_runs(build_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_ingest_blocks_build ON ingest_blocks(build_id);
+
 -- ============================================================================
 -- CONTRIBUTION & CONFLICT ANALYSIS
 -- ============================================================================
