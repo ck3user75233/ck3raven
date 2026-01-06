@@ -553,8 +553,9 @@ class BuildTracker:
     def reconstruct_blocks(self, phase: str, file_threshold: int = 500, byte_threshold: int = 50_000_000) -> int:
         """Reconstruct blocks from ingest_log entries for a completed phase.
         
-        Called automatically after log_phase_delta_*() to create ingest_blocks records.
-        Only processes log entries not yet assigned to a block.
+        Called automatically after log_phase_delta() or log_phase_delta_ingest()
+        to create ingest_blocks records. Only processes log entries not yet 
+        assigned to a block.
         
         Args:
             phase: Phase to process
@@ -710,27 +711,137 @@ class BuildTracker:
         self.log_files_bulk(phase, entries)
         return len(entries)
     
-    def log_phase_delta_ast(self, phase: str = "ast_generation") -> int:
-        """Log AST generation results by querying files that now have ASTs.
+    # Phase configurations for log_phase_delta()
+    # Each config defines how to query derived data for that phase
+    PHASE_CONFIGS = {
+        'ast_generation': {
+            'table': 'asts',
+            'alias': 'a',
+            'join_col': 'content_hash',
+            'join_type': 'content_hash',  # JOIN on f.content_hash = a.content_hash
+            'count_col': 'ast_id',
+            'where': 'a.parse_ok = 1',
+            'size_stored_expr': 'LENGTH(a.ast_blob)',
+            'needs_group_by': False,
+        },
+        'symbol_extraction': {
+            'table': 'symbols',
+            'alias': 's',
+            'join_col': 'defining_file_id',
+            'join_type': 'file_id',  # JOIN on f.file_id = s.defining_file_id
+            'count_col': 'symbol_id',
+            'where': None,
+            'size_stored_expr': None,  # Will use COUNT
+            'needs_group_by': True,
+        },
+        'ref_extraction': {
+            'table': 'refs',
+            'alias': 'r',
+            'join_col': 'using_file_id',
+            'join_type': 'file_id',
+            'count_col': 'ref_id',
+            'where': None,
+            'size_stored_expr': None,
+            'needs_group_by': True,
+        },
+        'localization_parsing': {
+            'table': 'localization_entries',
+            'alias': 'l',
+            'join_col': 'content_hash',
+            'join_type': 'content_hash',
+            'count_col': 'loc_id',
+            'where': None,
+            'size_stored_expr': None,
+            'needs_group_by': True,
+        },
+        'lookup_extraction': {
+            'table': 'symbols',
+            'alias': 's',
+            'join_col': 'defining_file_id',
+            'join_type': 'file_id',
+            'count_col': 'symbol_id',
+            'where': "s.symbol_type IN ('trait', 'event', 'decision', 'dynasty', 'house', 'religion', 'faith', 'culture', 'culture_pillar')",
+            'size_stored_expr': None,
+            'needs_group_by': True,
+        },
+    }
+    
+    def log_phase_delta(self, phase: str) -> int:
+        """Log files processed during a build phase by querying derived data.
+        
+        This is a unified function that handles all phases that produce derived
+        data (ASTs, symbols, refs, localization, lookups). For ingest phases,
+        use log_phase_delta_ingest() instead.
+        
+        The function queries the appropriate derived table to find files that
+        have been processed but not yet logged for this phase/build.
+        
+        Args:
+            phase: Phase name. Must be one of:
+                - ast_generation
+                - symbol_extraction
+                - ref_extraction
+                - localization_parsing
+                - lookup_extraction
         
         Returns:
             Number of files logged
+            
+        Raises:
+            ValueError: If phase is not in PHASE_CONFIGS
         """
-        # Get files that have ASTs (via asts table) but aren't logged yet
-        cursor = self.conn.execute("""
+        config = self.PHASE_CONFIGS.get(phase)
+        if not config:
+            raise ValueError(
+                f"Unknown phase '{phase}'. Use log_phase_delta_ingest() for ingest phases, "
+                f"or add config to PHASE_CONFIGS. Valid phases: {list(self.PHASE_CONFIGS.keys())}"
+            )
+        
+        table = config['table']
+        alias = config['alias']
+        join_col = config['join_col']
+        count_col = config['count_col']
+        where_clause = config.get('where') or ''
+        size_stored_expr = config.get('size_stored_expr')
+        needs_group_by = config.get('needs_group_by', False)
+        
+        # Build JOIN expression
+        if config['join_type'] == 'file_id':
+            join_expr = f"f.file_id = {alias}.{join_col}"
+        else:  # content_hash
+            join_expr = f"f.content_hash = {alias}.{join_col}"
+        
+        # Build size_stored expression (either explicit or COUNT)
+        if size_stored_expr:
+            stored_select = f"{size_stored_expr} as size_stored"
+        else:
+            stored_select = f"COUNT({alias}.{count_col}) as size_stored"
+        
+        # Build WHERE clause
+        where_parts = [
+            f"""NOT EXISTS (
+                SELECT 1 FROM ingest_log il 
+                WHERE il.build_id = ? AND il.phase = ? AND il.file_id = f.file_id
+            )"""
+        ]
+        if where_clause:
+            where_parts.append(where_clause)
+        
+        full_where = " AND ".join(where_parts)
+        group_by = "GROUP BY f.file_id" if needs_group_by else ""
+        
+        sql = f"""
             SELECT f.file_id, f.relpath, f.content_version_id, f.content_hash,
                    LENGTH(COALESCE(fc.content_blob, '')) as size_raw,
-                   LENGTH(a.ast_blob) as size_stored
+                   {stored_select}
             FROM files f
-            JOIN asts a ON f.content_hash = a.content_hash
+            JOIN {table} {alias} ON {join_expr}
             LEFT JOIN file_contents fc ON f.content_hash = fc.content_hash
-            WHERE a.parse_ok = 1
-              AND NOT EXISTS (
-                  SELECT 1 FROM ingest_log il 
-                  WHERE il.build_id = ? AND il.phase = ? AND il.file_id = f.file_id
-              )
-        """, (self.build_id, phase))
+            WHERE {full_where}
+            {group_by}
+        """
         
+        cursor = self.conn.execute(sql, (self.build_id, phase))
         rows = cursor.fetchall()
         if not rows:
             return 0
@@ -742,178 +853,6 @@ class BuildTracker:
             'status': 'processed',
             'size_raw': row['size_raw'],
             'size_stored': row['size_stored'],
-            'content_hash': row['content_hash'],
-        } for row in rows]
-        
-        self.log_files_bulk(phase, entries)
-        return len(entries)
-    
-    def log_phase_delta_symbols(self, phase: str = "symbol_extraction") -> int:
-        """Log symbol extraction results by querying files that have symbols extracted.
-        
-        Tracks files where symbols were extracted by checking the symbols table.
-        Groups by file to count symbols extracted per file.
-        
-        Returns:
-            Number of files logged
-        """
-        # Get files that have symbols but aren't logged for this phase yet
-        # Count symbols per file and log size as symbol count
-        # Note: symbols table uses defining_file_id, not file_id
-        cursor = self.conn.execute("""
-            SELECT f.file_id, f.relpath, f.content_version_id, f.content_hash,
-                   LENGTH(COALESCE(fc.content_blob, '')) as size_raw,
-                   COUNT(s.symbol_id) as symbol_count
-            FROM files f
-            JOIN symbols s ON f.file_id = s.defining_file_id
-            LEFT JOIN file_contents fc ON f.content_hash = fc.content_hash
-            WHERE NOT EXISTS (
-                SELECT 1 FROM ingest_log il 
-                WHERE il.build_id = ? AND il.phase = ? AND il.file_id = f.file_id
-            )
-            GROUP BY f.file_id
-        """, (self.build_id, phase))
-        
-        rows = cursor.fetchall()
-        if not rows:
-            return 0
-        
-        entries = [{
-            'file_id': row['file_id'],
-            'relpath': row['relpath'],
-            'content_version_id': row['content_version_id'],
-            'status': 'processed',
-            'size_raw': row['size_raw'],
-            'size_stored': row['symbol_count'],  # Store symbol count as "stored" metric
-            'content_hash': row['content_hash'],
-        } for row in rows]
-        
-        self.log_files_bulk(phase, entries)
-        return len(entries)
-    
-    def log_phase_delta_refs(self, phase: str = "ref_extraction") -> int:
-        """Log reference extraction results by querying files that have refs extracted.
-        
-        Tracks files where references were extracted by checking the refs table.
-        Groups by file to count refs extracted per file.
-        
-        Returns:
-            Number of files logged
-        """
-        # Get files that have refs but aren't logged for this phase yet
-        # Note: refs table uses using_file_id, not file_id
-        cursor = self.conn.execute("""
-            SELECT f.file_id, f.relpath, f.content_version_id, f.content_hash,
-                   LENGTH(COALESCE(fc.content_blob, '')) as size_raw,
-                   COUNT(r.ref_id) as ref_count
-            FROM files f
-            JOIN refs r ON f.file_id = r.using_file_id
-            LEFT JOIN file_contents fc ON f.content_hash = fc.content_hash
-            WHERE NOT EXISTS (
-                SELECT 1 FROM ingest_log il 
-                WHERE il.build_id = ? AND il.phase = ? AND il.file_id = f.file_id
-            )
-            GROUP BY f.file_id
-        """, (self.build_id, phase))
-        
-        rows = cursor.fetchall()
-        if not rows:
-            return 0
-        
-        entries = [{
-            'file_id': row['file_id'],
-            'relpath': row['relpath'],
-            'content_version_id': row['content_version_id'],
-            'status': 'processed',
-            'size_raw': row['size_raw'],
-            'size_stored': row['ref_count'],  # Store ref count as "stored" metric
-            'content_hash': row['content_hash'],
-        } for row in rows]
-        
-        self.log_files_bulk(phase, entries)
-        return len(entries)
-    
-    def log_phase_delta_localization(self, phase: str = "localization_parsing") -> int:
-        """Log localization parsing results by querying files that have loc entries.
-        
-        Tracks files where localization entries were parsed.
-        Groups by content_hash to count entries per file.
-        
-        Returns:
-            Number of files logged
-        """
-        # Get files that have localization entries but aren't logged for this phase yet
-        cursor = self.conn.execute("""
-            SELECT f.file_id, f.relpath, f.content_version_id, f.content_hash,
-                   LENGTH(COALESCE(fc.content_blob, '')) as size_raw,
-                   COUNT(l.loc_id) as loc_count
-            FROM files f
-            JOIN localization_entries l ON f.content_hash = l.content_hash
-            LEFT JOIN file_contents fc ON f.content_hash = fc.content_hash
-            WHERE NOT EXISTS (
-                SELECT 1 FROM ingest_log il 
-                WHERE il.build_id = ? AND il.phase = ? AND il.file_id = f.file_id
-            )
-            GROUP BY f.file_id
-        """, (self.build_id, phase))
-        
-        rows = cursor.fetchall()
-        if not rows:
-            return 0
-        
-        entries = [{
-            'file_id': row['file_id'],
-            'relpath': row['relpath'],
-            'content_version_id': row['content_version_id'],
-            'status': 'processed',
-            'size_raw': row['size_raw'],
-            'size_stored': row['loc_count'],  # Store loc entry count as "stored" metric
-            'content_hash': row['content_hash'],
-        } for row in rows]
-        
-        self.log_files_bulk(phase, entries)
-        return len(entries)
-    
-    def log_phase_delta_lookups(self, phase: str = "lookup_extraction") -> int:
-        """Log lookup extraction results.
-        
-        Lookups are extracted from symbols, so we log files that have symbols
-        of certain types (trait, event, decision, etc.) that generated lookups.
-        
-        For simplicity, we track files that have lookup-generating symbol types.
-        
-        Returns:
-            Number of files logged
-        """
-        # Get files with lookup-generating symbols not yet logged
-        # Note: symbols table uses defining_file_id, not file_id
-        cursor = self.conn.execute("""
-            SELECT f.file_id, f.relpath, f.content_version_id, f.content_hash,
-                   LENGTH(COALESCE(fc.content_blob, '')) as size_raw,
-                   COUNT(s.symbol_id) as lookup_count
-            FROM files f
-            JOIN symbols s ON f.file_id = s.defining_file_id
-            LEFT JOIN file_contents fc ON f.content_hash = fc.content_hash
-            WHERE s.symbol_type IN ('trait', 'event', 'decision', 'dynasty', 'house', 
-                                    'religion', 'faith', 'culture', 'culture_pillar')
-              AND NOT EXISTS (
-                SELECT 1 FROM ingest_log il 
-                WHERE il.build_id = ? AND il.phase = ? AND il.file_id = f.file_id
-            )
-            GROUP BY f.file_id
-        """, (self.build_id, phase))
-        
-        rows = cursor.fetchall()
-        if not rows:
-            return 0
-        
-        entries = [{
-            'file_id': row['file_id'],
-            'relpath': row['relpath'],
-            'content_version_id': row['content_version_id'],
-            'status': 'processed',
-            'size_raw': row['size_raw'],
-            'size_stored': row['lookup_count'],  # Store lookup count as "stored" metric
             'content_hash': row['content_hash'],
         } for row in rows]
         
@@ -1222,7 +1161,7 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
         build_counts['asts'] = ast_count
         
         # Log AST generation results and reconstruct blocks immediately
-        logged = build_tracker.log_phase_delta_ast("ast_generation")
+        logged = build_tracker.log_phase_delta("ast_generation")
         if logged > 0:
             blocks = build_tracker.reconstruct_blocks(phase="ast_generation")
             logger.info(f"Logged {logged} AST files -> {blocks} blocks")
@@ -1254,7 +1193,7 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
             build_counts['symbols'] = symbol_count
             
             # Log symbol extraction results and reconstruct blocks immediately
-            logged = build_tracker.log_phase_delta_symbols("symbol_extraction")
+            logged = build_tracker.log_phase_delta("symbol_extraction")
             if logged > 0:
                 blocks = build_tracker.reconstruct_blocks(phase="symbol_extraction")
                 logger.info(f"Logged {logged} files with symbols -> {blocks} blocks")
@@ -1277,7 +1216,7 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
             build_counts['refs'] = ref_count
             
             # Log ref extraction results and reconstruct blocks immediately
-            logged = build_tracker.log_phase_delta_refs("ref_extraction")
+            logged = build_tracker.log_phase_delta("ref_extraction")
             if logged > 0:
                 blocks = build_tracker.reconstruct_blocks(phase="ref_extraction")
                 logger.info(f"Logged {logged} files with refs -> {blocks} blocks")
@@ -1300,7 +1239,7 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
             build_counts['localization'] = loc_count
             
             # Log localization parsing results and reconstruct blocks immediately
-            logged = build_tracker.log_phase_delta_localization("localization_parsing")
+            logged = build_tracker.log_phase_delta("localization_parsing")
             if logged > 0:
                 blocks = build_tracker.reconstruct_blocks(phase="localization_parsing")
                 logger.info(f"Logged {logged} loc files -> {blocks} blocks")
@@ -1323,7 +1262,7 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
             build_counts['lookups'] = lookup_count
             
             # Log lookup extraction results and reconstruct blocks immediately
-            logged = build_tracker.log_phase_delta_lookups("lookup_extraction")
+            logged = build_tracker.log_phase_delta("lookup_extraction")
             if logged > 0:
                 blocks = build_tracker.reconstruct_blocks(phase="lookup_extraction")
                 logger.info(f"Logged {logged} files with lookups -> {blocks} blocks")
