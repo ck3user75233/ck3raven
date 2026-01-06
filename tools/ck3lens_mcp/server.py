@@ -216,7 +216,7 @@ def _list_available_playsets() -> list[dict]:
         if f.name.endswith(".schema.json"):
             continue  # Skip schema files
         try:
-            data = json.loads(f.read_text(encoding="utf-8"))
+            data = json.loads(f.read_text(encoding="utf-8-sig"))
             playsets.append({
                 "name": data.get("playset_name", f.stem),
                 "file_path": str(f),
@@ -241,7 +241,7 @@ def _load_playset_from_json(playset_file: Path) -> Optional[dict]:
         return None
     
     try:
-        data = json.loads(playset_file.read_text(encoding='utf-8'))
+        data = json.loads(playset_file.read_text(encoding='utf-8-sig'))
         
         active_mod_ids = set()
         active_roots = set()
@@ -323,7 +323,7 @@ def _get_session_scope(force_refresh: bool = False) -> dict:
     # Try manifest file first - this points to the active playset
     if PLAYSET_MANIFEST_FILE.exists():
         try:
-            manifest = json.loads(PLAYSET_MANIFEST_FILE.read_text(encoding='utf-8'))
+            manifest = json.loads(PLAYSET_MANIFEST_FILE.read_text(encoding='utf-8-sig'))
             active_filename = manifest.get("active", "")
             if active_filename:
                 active_file = PLAYSETS_DIR / active_filename
@@ -1840,7 +1840,7 @@ def ck3_playset(
         # Read manifest to see which is active
         if PLAYSET_MANIFEST_FILE.exists():
             try:
-                manifest = json.loads(PLAYSET_MANIFEST_FILE.read_text(encoding='utf-8'))
+                manifest = json.loads(PLAYSET_MANIFEST_FILE.read_text(encoding='utf-8-sig'))
                 manifest_active = manifest.get("active", "")
             except Exception:
                 pass
@@ -1849,7 +1849,7 @@ def ck3_playset(
             if f.name.endswith(".schema.json") or f.name == "playset_manifest.json" or f.name == "sub_agent_templates.json":
                 continue
             try:
-                data = json.loads(f.read_text(encoding="utf-8"))
+                data = json.loads(f.read_text(encoding="utf-8-sig"))
                 enabled_mods = [m for m in data.get("mods", []) if m.get("enabled", True)]
                 playsets.append({
                     "filename": f.name,
@@ -1889,12 +1889,12 @@ def ck3_playset(
             if f.name == playset_name or f.stem == playset_name:
                 target_file = f
                 try:
-                    playset_data = json.loads(f.read_text(encoding="utf-8"))
+                    playset_data = json.loads(f.read_text(encoding="utf-8-sig"))
                 except Exception:
                     pass
                 break
             try:
-                data = json.loads(f.read_text(encoding="utf-8"))
+                data = json.loads(f.read_text(encoding="utf-8-sig"))
                 if data.get("playset_name") == playset_name:
                     target_file = f
                     playset_data = data
@@ -2042,7 +2042,7 @@ def ck3_playset(
         manifest_active = None
         if PLAYSET_MANIFEST_FILE.exists():
             try:
-                manifest = json.loads(PLAYSET_MANIFEST_FILE.read_text(encoding='utf-8'))
+                manifest = json.loads(PLAYSET_MANIFEST_FILE.read_text(encoding='utf-8-sig'))
                 manifest_active = manifest.get("active")
             except Exception:
                 pass
@@ -2089,7 +2089,7 @@ def ck3_playset(
             return {"success": False, "error": "No playset manifest found"}
         
         try:
-            manifest = json.loads(PLAYSET_MANIFEST_FILE.read_text(encoding="utf-8"))
+            manifest = json.loads(PLAYSET_MANIFEST_FILE.read_text(encoding="utf-8-sig"))
             active_file = manifest.get("active")
             if not active_file:
                 return {"success": False, "error": "No active playset in manifest"}
@@ -2098,7 +2098,7 @@ def ck3_playset(
             if not playset_path.exists():
                 return {"success": False, "error": f"Active playset file not found: {active_file}"}
             
-            playset_data = json.loads(playset_path.read_text(encoding="utf-8"))
+            playset_data = json.loads(playset_path.read_text(encoding="utf-8-sig"))
         except Exception as e:
             return {"success": False, "error": f"Failed to read playset: {e}"}
         
