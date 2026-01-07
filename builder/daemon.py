@@ -1180,10 +1180,10 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
         
         # Phases 4-7 write to protected tables (symbols, refs, lookups, localization)
         # These require an active builder session
-        # Use 24-hour TTL and renew periodically to handle large datasets
+        # Use 60-minute TTL with periodic renewal as safety net
         from ck3raven.db.schema import BuilderSession
         
-        with BuilderSession(conn, purpose="daemon rebuild phases 4-7", ttl_minutes=1440) as builder_session:
+        with BuilderSession(conn, purpose="daemon rebuild phases 4-7", ttl_minutes=60) as builder_session:
             # Phase 4: Symbol extraction from stored ASTs
             build_tracker.start_step("symbol_extraction")
             status.update(

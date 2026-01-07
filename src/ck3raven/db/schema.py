@@ -166,6 +166,8 @@ CREATE INDEX IF NOT EXISTS idx_symbols_type ON symbols(symbol_type);
 CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
 CREATE INDEX IF NOT EXISTS idx_symbols_type_name ON symbols(symbol_type, name);
 CREATE INDEX IF NOT EXISTS idx_symbols_content_version ON symbols(content_version_id);
+CREATE INDEX IF NOT EXISTS idx_symbols_defining_ast_id ON symbols(defining_ast_id);
+CREATE INDEX IF NOT EXISTS idx_symbols_defining_file_id ON symbols(defining_file_id);
 
 -- References - places that use symbols
 CREATE TABLE IF NOT EXISTS refs (
