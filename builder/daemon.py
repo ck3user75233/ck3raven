@@ -1180,9 +1180,10 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
         
         # Phases 4-7 write to protected tables (symbols, refs, lookups, localization)
         # These require an active builder session
+        # Use 24-hour TTL and renew periodically to handle large datasets
         from ck3raven.db.schema import BuilderSession
         
-        with BuilderSession(conn, purpose="daemon rebuild phases 4-7", ttl_minutes=120):
+        with BuilderSession(conn, purpose="daemon rebuild phases 4-7", ttl_minutes=1440) as builder_session:
             # Phase 4: Symbol extraction from stored ASTs
             build_tracker.start_step("symbol_extraction")
             status.update(
@@ -1192,8 +1193,9 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
             )
             write_heartbeat()
             build_tracker.update_lock_heartbeat()
+            builder_session.renew_if_needed(30)  # Renew every 30 minutes
             
-            symbol_stats = extract_symbols_from_stored_asts(conn, logger, status)
+            symbol_stats = extract_symbols_from_stored_asts(conn, logger, status, builder_session)
             symbol_count = symbol_stats.get('extracted', 0) if isinstance(symbol_stats, dict) else 0
             build_counts['symbols'] = symbol_count
             
@@ -1205,6 +1207,7 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
             
             build_tracker.end_step("symbol_extraction", StepStats(rows_out=symbol_count))
             db_wrapper.checkpoint()
+            builder_session.renew_if_needed(30)  # Renew before next phase
             
             # Phase 5: Ref extraction from stored ASTs
             build_tracker.start_step("ref_extraction")
@@ -1216,7 +1219,7 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
             write_heartbeat()
             build_tracker.update_lock_heartbeat()
             
-            ref_stats = extract_refs_from_stored_asts(conn, logger, status)
+            ref_stats = extract_refs_from_stored_asts(conn, logger, status, builder_session)
             ref_count = ref_stats.get('extracted', 0) if isinstance(ref_stats, dict) else 0
             build_counts['refs'] = ref_count
             
@@ -1239,7 +1242,7 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
             write_heartbeat()
             build_tracker.update_lock_heartbeat()
             
-            loc_stats = parse_localization_files(conn, logger, status, force=force)
+            loc_stats = parse_localization_files(conn, logger, status, force=force, builder_session=builder_session)
             loc_count = loc_stats.get('entries', 0) if isinstance(loc_stats, dict) else 0
             build_counts['localization'] = loc_count
             
@@ -1262,7 +1265,7 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
             write_heartbeat()
             build_tracker.update_lock_heartbeat()
             
-            lookup_stats = extract_lookup_tables(conn, logger, status)
+            lookup_stats = extract_lookup_tables(conn, logger, status, builder_session)
             lookup_count = lookup_stats.get('total', 0) if isinstance(lookup_stats, dict) else 0
             build_counts['lookups'] = lookup_count
             
@@ -1879,7 +1882,7 @@ def generate_missing_asts(conn, logger: DaemonLogger, status: StatusWriter, forc
 # LOCALIZATION PARSING
 # =============================================================================
 
-def parse_localization_files(conn, logger: DaemonLogger, status: StatusWriter, force: bool = False):
+def parse_localization_files(conn, logger: DaemonLogger, status: StatusWriter, force: bool = False, builder_session=None):
     """
     Parse localization files and store entries in localization_entries table.
     
@@ -1888,6 +1891,13 @@ def parse_localization_files(conn, logger: DaemonLogger, status: StatusWriter, f
     
     If force=True, clears all localization entries and re-parses.
     Otherwise, only parses files that don't have entries yet.
+    
+    Args:
+        conn: Database connection
+        logger: Daemon logger
+        status: Status writer for progress updates
+        force: If True, clear all entries and re-parse
+        builder_session: Optional BuilderSession for renewal during long operations
     """
     from ck3raven.parser.localization import parse_localization, LocalizationFile
     
@@ -1948,6 +1958,10 @@ def parse_localization_files(conn, logger: DaemonLogger, status: StatusWriter, f
     
     while True:
         write_heartbeat()
+        
+        # Renew builder session if needed (every 30 minutes)
+        if builder_session:
+            builder_session.renew_if_needed(30)
         
         rows = conn.execute(
             query + " LIMIT ? OFFSET ?",
@@ -2035,7 +2049,7 @@ def parse_localization_files(conn, logger: DaemonLogger, status: StatusWriter, f
     return {'files': processed, 'entries': total_entries, 'refs': total_refs, 'errors': errors}
 
 
-def extract_lookup_tables(conn, logger: DaemonLogger, status: StatusWriter):
+def extract_lookup_tables(conn, logger: DaemonLogger, status: StatusWriter, builder_session=None):
     """
     Extract ID-keyed lookup data into denormalized tables.
     
@@ -2048,11 +2062,21 @@ def extract_lookup_tables(conn, logger: DaemonLogger, status: StatusWriter):
     - title_lookup: title key → tier, capital, colors
     
     Note: traits, events, decisions are STRING-KEYED and use symbols table.
+    
+    Args:
+        conn: Database connection
+        logger: Daemon logger
+        status: Status writer for progress updates
+        builder_session: Optional BuilderSession for renewal during long operations
     """
     from pathlib import Path
     from builder.config import get_config
     
     logger.info("Starting ID-keyed lookup table extraction...")
+    
+    # Renew builder session if needed at start
+    if builder_session:
+        builder_session.renew_if_needed(30)
     
     total_extracted = 0
     total_errors = 0
@@ -2138,7 +2162,7 @@ def extract_lookup_tables(conn, logger: DaemonLogger, status: StatusWriter):
 # SYMBOL/REF EXTRACTION FROM STORED ASTs
 # =============================================================================
 
-def extract_symbols_from_stored_asts(conn, logger: DaemonLogger, status: StatusWriter, force_rebuild: bool = False):
+def extract_symbols_from_stored_asts(conn, logger: DaemonLogger, status: StatusWriter, builder_session=None, force_rebuild: bool = False):
     """Extract symbols from stored ASTs using the library's incremental function.
     
     Delegates to ck3raven.db.symbols.extract_symbols_incremental which:
@@ -2146,6 +2170,13 @@ def extract_symbols_from_stored_asts(conn, logger: DaemonLogger, status: StatusW
     - Doesn't delete existing valid symbols (unless force_rebuild)
     - Uses centralized file routing from file_routes.py
     - Maintains full source traceability
+    
+    Args:
+        conn: Database connection
+        logger: DaemonLogger for logging
+        status: StatusWriter for progress updates
+        builder_session: Optional BuilderSession to renew during long operations
+        force_rebuild: If True, delete all existing symbols first
     
     Enhanced logging:
     - Progress every 50 ASTs with timing
@@ -2188,6 +2219,10 @@ def extract_symbols_from_stored_asts(conn, logger: DaemonLogger, status: StatusW
             progress=pct,
             message=f"Symbols: {processed}/{total} ASTs, {symbols} symbols"
         )
+        
+        # Renew builder session if needed (every 30 minutes)
+        if builder_session:
+            builder_session.renew_if_needed(30)
         
         # Log every 50 ASTs with timing info
         if processed - last_log_count >= 50 or processed == total:
@@ -2242,13 +2277,19 @@ def extract_symbols_from_stored_asts(conn, logger: DaemonLogger, status: StatusW
             'duplicates': result['duplicates'], 'errors': result['errors']}
 
 
-def extract_refs_from_stored_asts(conn, logger: DaemonLogger, status: StatusWriter):
+def extract_refs_from_stored_asts(conn, logger: DaemonLogger, status: StatusWriter, builder_session=None):
     """Extract references from stored ASTs (not re-parsing).
     
     Optimized for performance:
     - Batch inserts instead of individual INSERTs
     - Pre-fetch content_version_id to avoid subquery per ref
     - Process in larger batches
+    
+    Args:
+        conn: Database connection
+        logger: Daemon logger
+        status: Status writer for progress updates
+        builder_session: Optional BuilderSession for renewal during long operations
     """
     from ck3raven.db.symbols import extract_refs_from_ast
     import json
@@ -2308,6 +2349,10 @@ def extract_refs_from_stored_asts(conn, logger: DaemonLogger, status: StatusWrit
     
     while offset < total_count:
         write_heartbeat()
+        
+        # Renew builder session if needed (every 30 minutes)
+        if builder_session:
+            builder_session.renew_if_needed(30)
         
         rows = conn.execute(main_query, (chunk_size, offset)).fetchall()
         

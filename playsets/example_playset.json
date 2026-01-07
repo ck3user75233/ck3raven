@@ -23,9 +23,9 @@
       "notes": "Main content mod"
     },
     {
-      "name": "Mini Super Compatch",
-      "mod_id": "MSC",
-      "path": "~/Documents/Paradox Interactive/Crusader Kings III/mod/Mini Super Compatch",
+      "name": "My Compatch",
+      "mod_id": "my_compatch",
+      "path": "~/Documents/Paradox Interactive/Crusader Kings III/mod/My Compatch",
       "load_order": 2,
       "enabled": true,
       "is_compatch": true,
@@ -42,7 +42,7 @@
     ],
     
     "conflict_resolution_notes": [
-      "Morven's compatch addresses the 8 mods that directly precede it - conflicts with those mods are expected and should NOT be addressed by MSC",
+      "Morven's compatch addresses the 8 mods that directly precede it - conflicts with those mods are expected and should NOT be addressed by your compatch",
       "Loading errors from Morven's compatch target mods should be discounted in importance",
       "If errors occur during steady gameplay from these mods, there may be a problem to solve"
     ],

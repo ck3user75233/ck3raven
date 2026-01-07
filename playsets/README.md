@@ -42,7 +42,7 @@ Use the MCP tools:
 
 ```
 ck3_list_playsets()      # See available playsets
-ck3_switch_playset("MSC") # Switch to a playset by name
+ck3_switch_playset("MyPlayset") # Switch to a playset by name
 ck3_get_active_playset()  # Check current playset
 ck3_get_agent_briefing()  # Get briefing notes for sub-agents
 ```
@@ -53,7 +53,7 @@ The `agent_briefing` section tells AI agents important context:
 
 ```json
 "agent_briefing": {
-  "context": "Developing MSC compatibility patch",
+  "context": "Developing a compatibility patch",
   
   "error_analysis_notes": [
     "Errors from Morven's compatch target mods are expected",
@@ -133,18 +133,20 @@ Playsets are validated against `playset.schema.json`. Required fields:
 
 Optional fields: `description`, `created_at`, `agent_briefing`, `sub_agent_config`
 
-## Writability Model
+## Enforcement (NOT Stored in Playset)
 
-**IMPORTANT:** There is no `live_mods[]` or `editable_mods[]` list.
+**IMPORTANT:** Playsets do NOT store permission information.
 
-Writability is determined at **enforcement time** by checking if a mod's path
-is under `local_mods_folder` (set in workspace config):
+The playset only stores:
+- `mods[]` - THE mod list (ordered)
+- `agent_briefing` - notes for AI agents
 
-- Mods under `local_mods_folder` → potentially writable (enforcement allows)
-- Workshop mods → never writable
-- Vanilla → never writable
+Enforcement happens at **execution time** in `enforcement.py`:
+- Path under `local_mods_folder` → enforcement allows writes
+- Workshop paths → enforcement denies
+- Vanilla paths → enforcement denies
 
-This is derived dynamically, not stored in the playset.
+There is no `live_mods[]`, `editable_mods[]`, or any permission list in playsets.
 
 ## Migration from Database
 

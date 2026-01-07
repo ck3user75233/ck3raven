@@ -1208,6 +1208,9 @@ class BuilderSession:
         with BuilderSession(conn, "Extracting symbols from mod X") as session:
             # Can write to protected tables here
             conn.execute("INSERT INTO symbols ...")
+            
+            # For long-running operations, renew periodically
+            session.renew()  # Extends expiration by ttl_minutes
         # Session automatically ended
     """
     
@@ -1216,12 +1219,61 @@ class BuilderSession:
         self.purpose = purpose
         self.ttl_minutes = ttl_minutes
         self.token: Optional[str] = None
+        self._last_renewed: Optional[float] = None
     
     def __enter__(self) -> "BuilderSession":
         self.token = start_builder_session(self.conn, self.purpose, self.ttl_minutes)
+        self._last_renewed = time.time()
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.token:
             end_builder_session(self.conn, self.token)
         return False  # Don't suppress exceptions
+    
+    def renew(self) -> bool:
+        """Extend the session expiration by ttl_minutes from now.
+        
+        Call this periodically during long-running operations to prevent
+        session expiration. Automatically called by renew_if_needed().
+        
+        Returns:
+            True if renewal succeeded, False if session not active
+        """
+        if not self.token:
+            return False
+        
+        from datetime import datetime, timedelta
+        new_expires = datetime.now() + timedelta(minutes=self.ttl_minutes)
+        
+        result = self.conn.execute("""
+            UPDATE builder_sessions 
+            SET expires_at = ?
+            WHERE token = ? AND is_active = 1
+        """, (new_expires.isoformat(), self.token))
+        self.conn.commit()
+        
+        if result.rowcount > 0:
+            self._last_renewed = time.time()
+            return True
+        return False
+    
+    def renew_if_needed(self, threshold_minutes: int = 30) -> bool:
+        """Renew session if more than threshold_minutes since last renewal.
+        
+        Call this frequently (e.g., in progress callbacks) to ensure the 
+        session doesn't expire during long-running operations.
+        
+        Args:
+            threshold_minutes: Renew if this many minutes have passed
+            
+        Returns:
+            True if renewed, False if not needed or failed
+        """
+        if self._last_renewed is None:
+            return self.renew()
+        
+        elapsed_minutes = (time.time() - self._last_renewed) / 60
+        if elapsed_minutes >= threshold_minutes:
+            return self.renew()
+        return False
