@@ -91,6 +91,7 @@ We do not classify files by "Type" (e.g., Local Mod). We classify them by "Locat
 | Root Category | Physical Location |
 | --- | --- |
 | `ROOT_USER_DOCS` | `Documents/Paradox Interactive/Crusader Kings III/mod/` |
+| `ROOT_CK3_USERDATA` | `Documents/Paradox Interactive/Crusader Kings III/{logs,crashes,saves,player,exceptions}` |
 | `ROOT_STEAM` | `steamapps/workshop/content/...` |
 | `ROOT_GAME` | `steamapps/common/Crusader Kings III/` |
 | `ROOT_REPO` | The `ck3raven` repository root |

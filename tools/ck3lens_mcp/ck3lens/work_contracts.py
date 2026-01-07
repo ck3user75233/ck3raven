@@ -205,6 +205,7 @@ CANONICAL_DOMAINS = PRODUCT_DOMAINS | REPO_DOMAINS
 # not by domain membership. See LENSWORLD.md for canonical architecture.
 CK3LENS_DOMAINS = frozenset({
     "ROOT_USER_DOCS",   # Documents/Paradox Interactive/Crusader Kings III/mod/
+    "ROOT_CK3_USERDATA",# Documents/Paradox Interactive/Crusader Kings III/{logs,crashes,saves,player,exceptions}
     "ROOT_STEAM",       # steamapps/workshop/content/... (read-only)
     "ROOT_GAME",        # steamapps/common/Crusader Kings III/ (read-only)
     "ROOT_WIP",         # ~/.ck3raven/wip/ (scratchpad)
