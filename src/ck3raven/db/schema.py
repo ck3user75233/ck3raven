@@ -12,7 +12,7 @@ import threading
 import time
 
 # Schema version - bump when schema changes
-DATABASE_VERSION = 2
+DATABASE_VERSION = 3
 
 # Thread-local storage for connections
 _local = threading.local()
@@ -134,6 +134,7 @@ CREATE TABLE IF NOT EXISTS asts (
     parse_ok INTEGER NOT NULL DEFAULT 1,     -- 1 = success, 0 = failed
     node_count INTEGER,                      -- Number of AST nodes
     diagnostics_json TEXT,                   -- Parse errors/warnings as JSON
+    symbols_processed_at TEXT,               -- When symbols were extracted (NULL = pending)
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (parser_version_id) REFERENCES parsers(parser_version_id),
     UNIQUE(content_hash, parser_version_id)
@@ -141,6 +142,7 @@ CREATE TABLE IF NOT EXISTS asts (
 
 CREATE INDEX IF NOT EXISTS idx_asts_content_hash ON asts(content_hash);
 CREATE INDEX IF NOT EXISTS idx_asts_parse_ok ON asts(parse_ok);
+CREATE INDEX IF NOT EXISTS idx_asts_symbols_processed ON asts(symbols_processed_at);
 
 -- ============================================================================
 -- REFERENCE GRAPH (Symbols & References)
@@ -1065,6 +1067,25 @@ def init_database(db_path: Optional[Path] = None, force: bool = False) -> sqlite
     # Create schema
     conn.executescript(SCHEMA_SQL)
     conn.executescript(FTS_TRIGGERS_SQL)
+    
+    # ============================================================================
+    # MIGRATIONS - Safe column additions for existing databases
+    # ============================================================================
+    
+    # Migration: Add symbols_processed_at column to asts table
+    # This column tracks whether an AST has been processed for symbol extraction,
+    # even if it yielded 0 symbols (e.g., empty/comment-only files).
+    try:
+        conn.execute("ALTER TABLE asts ADD COLUMN symbols_processed_at TEXT")
+    except sqlite3.OperationalError:
+        # Column already exists, that's fine
+        pass
+    
+    # Migration: Add index for symbols_processed_at if not exists
+    try:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_asts_symbols_processed ON asts(symbols_processed_at)")
+    except sqlite3.OperationalError:
+        pass
     
     # Apply write protection triggers (ignore errors if tables don't exist yet)
     try:

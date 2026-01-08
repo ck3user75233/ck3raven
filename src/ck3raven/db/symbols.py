@@ -782,16 +782,15 @@ def extract_symbols_incremental(
     file_filter = get_symbol_file_filter_sql()
 
     # Count ASTs needing symbols (only from symbol-eligible files)
+    # Uses symbols_processed_at IS NULL instead of NOT EXISTS to correctly handle
+    # ASTs that yield 0 symbols (e.g., empty/comment-only files)
     count_sql = f"""
         SELECT COUNT(DISTINCT a.ast_id)
         FROM asts a
         JOIN files f ON a.content_hash = f.content_hash
         WHERE a.parse_ok = 1
+        AND a.symbols_processed_at IS NULL
         AND {file_filter}
-        AND NOT EXISTS (
-            SELECT 1 FROM symbols s
-            WHERE s.defining_ast_id = a.ast_id
-        )
     """
     total_row = conn.execute(count_sql).fetchone()
     total_pending = total_row[0]
@@ -820,11 +819,8 @@ def extract_symbols_incremental(
             FROM asts a
             JOIN files f ON a.content_hash = f.content_hash
             WHERE a.parse_ok = 1
+            AND a.symbols_processed_at IS NULL
             AND {file_filter}
-            AND NOT EXISTS (
-                SELECT 1 FROM symbols s
-                WHERE s.defining_ast_id = a.ast_id
-            )
             GROUP BY a.ast_id
             LIMIT ?
         """
@@ -875,6 +871,12 @@ def extract_symbols_incremental(
                 if errors <= 10:
                     logger.warning(f"Error extracting symbols from {relpath}: {e}")
             
+            # Mark AST as processed ALWAYS (even if 0 symbols or error)
+            # This prevents infinite re-processing of empty/comment-only files
+            conn.execute(
+                "UPDATE asts SET symbols_processed_at = datetime('now') WHERE ast_id = ?",
+                (ast_id,)
+            )
             processed += 1
         
         conn.commit()
