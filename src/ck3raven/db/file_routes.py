@@ -365,12 +365,3 @@ def should_skip_for_symbols(relpath: str) -> Tuple[bool, str]:
     Symbol extraction follows from AST generation - if it has an AST, it has symbols.
     """
     return should_skip_for_ast(relpath)
-
-
-def get_symbol_file_filter_sql() -> str:
-    """
-    Legacy API: SQL WHERE clause for symbol-eligible files.
-    
-    Deprecated: Use get_script_file_filter_sql() instead.
-    """
-    return get_script_file_filter_sql()

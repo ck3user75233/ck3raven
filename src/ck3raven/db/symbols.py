@@ -769,7 +769,7 @@ def extract_symbols_incremental(
         Dict with 'processed', 'symbols', 'errors', 'skipped' counts
     """
     import json
-    from ck3raven.db.file_routes import should_skip_for_symbols, get_symbol_file_filter_sql
+    from ck3raven.db.file_routes import should_skip_for_symbols, get_script_file_filter_sql
 
     # Handle force rebuild
     if force_rebuild:
@@ -779,7 +779,7 @@ def extract_symbols_incremental(
         logger.info("Symbols cleared")
 
     # Get SQL filter for symbol-eligible files
-    file_filter = get_symbol_file_filter_sql()
+    file_filter = get_script_file_filter_sql()
 
     # Count ASTs needing symbols (only from symbol-eligible files)
     # Uses symbols_processed_at IS NULL instead of NOT EXISTS to correctly handle
