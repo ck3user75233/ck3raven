@@ -609,7 +609,8 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
     
     if op == OperationType.FILE_DELETE:
         # Deletes always require token
-        token_type = "DELETE_SOURCE" if mode == "ck3raven-dev" else "DELETE_LOCALMOD"
+        # Use token names that exist in tokens.py TOKEN_TYPES
+        token_type = "FS_DELETE_CODE" if mode == "ck3raven-dev" else "DELETE_MOD_FILE"
         if not request.token_id:
             return EnforcementResult(
                 decision=Decision.REQUIRE_TOKEN,

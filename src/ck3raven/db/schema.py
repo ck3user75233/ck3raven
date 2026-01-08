@@ -9,6 +9,7 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 import threading
+import time
 
 # Schema version - bump when schema changes
 DATABASE_VERSION = 2
