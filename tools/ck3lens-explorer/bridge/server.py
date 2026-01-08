@@ -4,6 +4,11 @@ CK3 Lens Explorer - Python Bridge Server
 
 JSON-RPC server that bridges VS Code extension to ck3raven functionality.
 Runs as a child process of the VS Code extension, communicating via stdio.
+
+ARCHITECTURE (January 2026):
+- Playset operations use ck3lens.impl modules (shared with MCP server)
+- NO playset_mods table queries (BANNED per CANONICAL_ARCHITECTURE.md)
+- CVIDs are derived from playset_ops.get_playset_mods()
 """
 
 import json
@@ -64,12 +69,21 @@ except ImportError as e:
     class ParseError(Exception):
         pass
 
+# Import impl modules for shared logic
+IMPL_AVAILABLE = False
+try:
+    from ck3lens.impl import playset_ops, search_ops, file_ops, conflict_ops
+    IMPL_AVAILABLE = True
+except ImportError as e:
+    IMPL_IMPORT_ERROR = str(e)
+
 
 class CK3LensBridge:
     """Bridge server providing JSON-RPC interface to ck3raven.
     
-    Playset operations delegate to MCP tools (ck3_playset) to avoid
-    duplicating logic. This bridge handles JSON-RPC transport only.
+    Playset operations use ck3lens.impl modules (shared with MCP server).
+    This avoids the broken `from server import ck3_playset` pattern and
+    prevents duplicating playset logic.
     """
     
     def __init__(self):
@@ -78,6 +92,8 @@ class CK3LensBridge:
         self.session = None
         self.search_engine = None
         self.initialized = False
+        self._active_cvids: set = set()  # CVIDs from active playset
+        self._playset_name: str = None
         
     def handle_request(self, request: dict) -> dict:
         """Handle a JSON-RPC request."""
@@ -134,10 +150,31 @@ class CK3LensBridge:
         
         return handler(params)
     
+    def _refresh_active_cvids(self):
+        """Refresh cached CVIDs from active playset using impl module."""
+        if not IMPL_AVAILABLE:
+            return
+        
+        try:
+            # Use playset_ops to get active playset mods
+            result = playset_ops.get_playset_mods()
+            if result.get("success"):
+                self._playset_name = result.get("playset_name")
+                # Extract CVIDs from mods
+                # Note: playset JSON has content_version_id if mods are indexed
+                mods = result.get("mods", [])
+                self._active_cvids = set()
+                for mod in mods:
+                    cvid = mod.get("content_version_id")
+                    if cvid:
+                        self._active_cvids.add(cvid)
+        except Exception:
+            pass
+    
     def init_session(self, params: dict) -> dict:
         """Initialize session with database connection.
         
-        Gets active playset info from MCP tool (ck3_playset).
+        Gets active playset info from impl modules.
         """
         if not CKRAVEN_AVAILABLE:
             return {
@@ -161,15 +198,18 @@ class CK3LensBridge:
             self.db_conn = sqlite3.connect(str(self.db_path))
             self.db_conn.row_factory = sqlite3.Row
             
-            # Get active playset info from MCP tool
+            # Get active playset info from impl module
             playset_name = None
-            try:
-                from server import ck3_playset
-                result = ck3_playset(command="get")
-                if result.get("success"):
-                    playset_name = result.get("name")
-            except Exception:
-                pass
+            if IMPL_AVAILABLE:
+                try:
+                    result = playset_ops.get_active_playset()
+                    if result.get("success"):
+                        playset_name = result.get("playset_name")
+                    
+                    # Refresh CVIDs
+                    self._refresh_active_cvids()
+                except Exception:
+                    pass
             
             self.initialized = True
             
@@ -183,6 +223,7 @@ class CK3LensBridge:
                 "mod_root": str(mod_root),
                 "local_mods_folder": local_mods_folder,
                 "playset_name": playset_name,
+                "impl_available": IMPL_AVAILABLE,
             }
         except Exception as e:
             return {
@@ -490,94 +531,73 @@ class CK3LensBridge:
     def search_symbols(self, params: dict) -> dict:
         """Search for symbols in the database.
         
-        Uses FTS5 search on symbols_fts table, filtered to active playset mods.
+        Uses impl module with CVID filtering (NOT playset_mods table).
         """
         query = params.get("query", "")
         symbol_type = params.get("symbol_type")
         limit = params.get("limit", 50)
-        adjacency = params.get("adjacency", "auto")  # For future fuzzy matching
         
         if not self.db_conn or not query.strip():
             return {"results": [], "adjacencies": [], "query_patterns": [query]}
         
-        try:
-            # Escape query for FTS5
-            fts_query = self._escape_fts_query(query)
-            
-            # Build SQL with playset filtering
-            # Only return symbols from mods in the active playset
-            sql = """
-                SELECT s.symbol_id, s.name, s.symbol_type, s.scope,
-                       s.line_number, f.relpath, cv.content_version_id,
-                       mp.name as mod_name, rank
-                FROM symbols_fts fts
-                JOIN symbols s ON s.symbol_id = fts.rowid
-                LEFT JOIN files f ON s.defining_file_id = f.file_id
-                LEFT JOIN content_versions cv ON s.content_version_id = cv.content_version_id
-                LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-                WHERE symbols_fts MATCH ?
-            """
-            params_list = [fts_query]
-            
-            # Filter by active playset
-            if self.playset_id:
-                sql += """
-                    AND cv.content_version_id IN (
-                        SELECT content_version_id FROM playset_mods 
-                        WHERE playset_id = ? AND enabled = 1
-                    )
+        if IMPL_AVAILABLE:
+            # Use impl module with CVID filtering
+            result = search_ops.search_symbols(
+                conn=self.db_conn,
+                query=query,
+                cvids=self._active_cvids if self._active_cvids else None,
+                symbol_type=symbol_type,
+                limit=limit,
+            )
+            return result
+        else:
+            # Fallback to basic search without playset filtering
+            try:
+                fts_query = self._escape_fts_query(query)
+                sql = """
+                    SELECT s.symbol_id, s.name, s.symbol_type, s.scope,
+                           s.line_number, f.relpath, cv.content_version_id,
+                           mp.name as mod_name, rank
+                    FROM symbols_fts fts
+                    JOIN symbols s ON s.symbol_id = fts.rowid
+                    LEFT JOIN files f ON s.defining_file_id = f.file_id
+                    LEFT JOIN content_versions cv ON s.content_version_id = cv.content_version_id
+                    LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                    WHERE symbols_fts MATCH ?
                 """
-                params_list.append(self.playset_id)
-            
-            # Filter by symbol type if specified
-            if symbol_type:
-                sql += " AND s.symbol_type = ?"
-                params_list.append(symbol_type)
-            
-            sql += " ORDER BY rank LIMIT ?"
-            params_list.append(limit)
-            
-            rows = self.db_conn.execute(sql, params_list).fetchall()
-            
-            results = []
-            for r in rows:
-                results.append({
-                    "symbolId": r[0],
-                    "name": r[1],
-                    "symbolType": r[2],
-                    "scope": r[3],
-                    "line": r[4],
-                    "relpath": r[5],
-                    "contentVersionId": r[6],
-                    "mod": r[7] or "vanilla",
-                    "relevance": -r[8] if r[8] else 0
-                })
-            
-            return {
-                "results": results,
-                "adjacencies": [],  # TODO: Implement fuzzy/adjacent matches
-                "query_patterns": [query, fts_query]
-            }
-            
-        except Exception as e:
-            return {
-                "results": [],
-                "adjacencies": [],
-                "query_patterns": [query],
-                "error": str(e)
-            }
+                params_list = [fts_query]
+                if symbol_type:
+                    sql += " AND s.symbol_type = ?"
+                    params_list.append(symbol_type)
+                sql += " ORDER BY rank LIMIT ?"
+                params_list.append(limit)
+                
+                rows = self.db_conn.execute(sql, params_list).fetchall()
+                
+                return {
+                    "results": [
+                        {
+                            "symbolId": r[0], "name": r[1], "symbolType": r[2],
+                            "scope": r[3], "line": r[4], "relpath": r[5],
+                            "contentVersionId": r[6], "mod": r[7] or "vanilla",
+                            "relevance": -r[8] if r[8] else 0
+                        }
+                        for r in rows
+                    ],
+                    "adjacencies": [],
+                    "query_patterns": [query, fts_query]
+                }
+            except Exception as e:
+                return {"results": [], "adjacencies": [], "query_patterns": [query], "error": str(e)}
     
     def _escape_fts_query(self, query: str) -> str:
         """Escape special characters for FTS5 queries."""
-        # Escape double quotes
         query = query.replace('"', '""')
         terms = query.split()
         if not terms:
             return ''
         if len(terms) == 1:
-            # Single term: use prefix match for autocomplete
             return f'"{terms[0]}"*'
-        # Multiple terms: OR them together
         return ' OR '.join(f'"{t}"*' for t in terms if t)
     
     def get_file(self, params: dict) -> dict:
@@ -589,62 +609,55 @@ class CK3LensBridge:
         if not self.initialized or not self.db_conn:
             return {"error": "Session not initialized"}
         
-        try:
-            # Query by file_id or relpath
-            if file_id:
-                row = self.db_conn.execute("""
-                    SELECT f.file_id, f.relpath, f.content_hash, fc.content_text,
-                           mp.name as mod_name, cv.content_version_id
-                    FROM files f
-                    JOIN file_contents fc ON f.content_hash = fc.content_hash
-                    JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-                    LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-                    WHERE f.file_id = ?
-                """, (file_id,)).fetchone()
-            else:
-                # Search by relpath in active playset (returns winner)
-                row = self.db_conn.execute("""
-                    SELECT f.file_id, f.relpath, f.content_hash, fc.content_text,
-                           mp.name as mod_name, cv.content_version_id
-                    FROM files f
-                    JOIN file_contents fc ON f.content_hash = fc.content_hash
-                    JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-                    LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-                    JOIN playset_mods pm ON pm.content_version_id = cv.content_version_id
-                    WHERE f.relpath = ? AND pm.playset_id = ? AND pm.enabled = 1
-                    ORDER BY pm.load_order_index DESC
-                    LIMIT 1
-                """, (file_path, self.playset_id)).fetchone()
-            
-            if not row:
-                return {"error": f"File not found: {file_path or file_id}"}
-            
-            result = {
-                "fileId": row[0],
-                "relpath": row[1],
-                "contentHash": row[2],
-                "content": row[3],
-                "mod": row[4] or "vanilla",
-                "contentVersionId": row[5]
-            }
-            
-            # Optionally include AST
-            if include_ast:
-                ast_row = self.db_conn.execute("""
-                    SELECT ast_blob FROM asts WHERE content_hash = ?
-                """, (row[2],)).fetchone()
-                if ast_row and ast_row[0]:
-                    try:
-                        import zlib
-                        ast_json = zlib.decompress(ast_row[0]).decode('utf-8')
-                    except:
-                        ast_json = ast_row[0].decode('utf-8') if isinstance(ast_row[0], bytes) else ast_row[0]
-                    result["ast"] = ast_json
-            
+        if IMPL_AVAILABLE:
+            result = file_ops.get_file(
+                conn=self.db_conn,
+                file_id=file_id,
+                relpath=file_path,
+                cvids=self._active_cvids if self._active_cvids else None,
+                include_content=True,
+                include_ast=include_ast,
+            )
             return result
-            
-        except Exception as e:
-            return {"error": str(e)}
+        else:
+            # Fallback to basic file retrieval
+            try:
+                if file_id:
+                    row = self.db_conn.execute("""
+                        SELECT f.file_id, f.relpath, f.content_hash, fc.content_text,
+                               mp.name as mod_name, cv.content_version_id
+                        FROM files f
+                        JOIN file_contents fc ON f.content_hash = fc.content_hash
+                        JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+                        LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                        WHERE f.file_id = ?
+                    """, (file_id,)).fetchone()
+                else:
+                    row = self.db_conn.execute("""
+                        SELECT f.file_id, f.relpath, f.content_hash, fc.content_text,
+                               mp.name as mod_name, cv.content_version_id
+                        FROM files f
+                        JOIN file_contents fc ON f.content_hash = fc.content_hash
+                        JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+                        LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                        WHERE f.relpath = ?
+                        ORDER BY cv.content_version_id DESC
+                        LIMIT 1
+                    """, (file_path,)).fetchone()
+                
+                if not row:
+                    return {"error": f"File not found: {file_path or file_id}"}
+                
+                return {
+                    "fileId": row[0],
+                    "relpath": row[1],
+                    "contentHash": row[2],
+                    "content": row[3],
+                    "mod": row[4] or "vanilla",
+                    "contentVersionId": row[5]
+                }
+            except Exception as e:
+                return {"error": str(e)}
     
     def list_files(self, params: dict) -> dict:
         """List files in a folder within the active playset."""
@@ -653,117 +666,45 @@ class CK3LensBridge:
         if not self.initialized or not self.db_conn:
             return {"error": "Session not initialized", "files": [], "folders": []}
         
-        try:
-            # Get files directly in this folder
-            files = self.db_conn.execute("""
-                SELECT f.file_id, f.relpath, mp.name as mod_name, pm.load_order_index
-                FROM files f
-                JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-                LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-                JOIN playset_mods pm ON pm.content_version_id = cv.content_version_id
-                WHERE pm.playset_id = ? AND pm.enabled = 1
-                AND f.relpath LIKE ? || '/%'
-                AND f.relpath NOT LIKE ? || '/%/%'
-                ORDER BY f.relpath
-            """, (self.playset_id, folder, folder)).fetchall()
-            
-            # Get subfolders
-            subfolders = self.db_conn.execute("""
-                SELECT DISTINCT 
-                    SUBSTR(f.relpath, LENGTH(?) + 2, 
-                           INSTR(SUBSTR(f.relpath, LENGTH(?) + 2), '/') - 1
-                    ) as subfolder,
-                    COUNT(*) as file_count
-                FROM files f
-                JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-                JOIN playset_mods pm ON pm.content_version_id = cv.content_version_id
-                WHERE pm.playset_id = ? AND pm.enabled = 1
-                AND f.relpath LIKE ? || '/%/%'
-                GROUP BY subfolder
-                HAVING subfolder != '' AND subfolder IS NOT NULL
-                ORDER BY subfolder
-            """, (folder, folder, self.playset_id, folder)).fetchall()
-            
-            return {
-                "files": [
-                    {"fileId": f[0], "relpath": f[1], "mod": f[2] or "vanilla", "loadOrder": f[3]}
-                    for f in files
-                ],
-                "folders": [
-                    {"name": sf[0], "fileCount": sf[1]}
-                    for sf in subfolders
-                ]
-            }
-            
-        except Exception as e:
-            return {"error": str(e), "files": [], "folders": []}
+        if IMPL_AVAILABLE:
+            result = file_ops.list_files(
+                conn=self.db_conn,
+                folder=folder,
+                cvids=self._active_cvids if self._active_cvids else None,
+            )
+            return result
+        else:
+            return {"error": "impl modules not available", "files": [], "folders": []}
     
     def get_conflicts(self, params: dict) -> dict:
-        """Get conflicts for a folder or symbol type.
-        
-        Conflicts occur when multiple mods define the same file path or symbol.
-        The mod with higher load order wins.
-        """
+        """Get conflicts for a folder or symbol type."""
         path_pattern = params.get("path_pattern", "%")
         symbol_type = params.get("symbol_type")
         
         if not self.initialized or not self.db_conn:
             return {"error": "Session not initialized", "conflicts": []}
         
-        try:
-            # File-level conflicts: same relpath from multiple mods
-            conflicts = self.db_conn.execute("""
-                SELECT f.relpath, 
-                       GROUP_CONCAT(mp.name || ':' || pm.load_order_index, '|') as sources,
-                       COUNT(*) as source_count
-                FROM files f
-                JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-                LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-                JOIN playset_mods pm ON pm.content_version_id = cv.content_version_id
-                WHERE pm.playset_id = ? AND pm.enabled = 1
-                AND f.relpath LIKE ?
-                GROUP BY f.relpath
-                HAVING COUNT(*) > 1
-                ORDER BY f.relpath
-                LIMIT 100
-            """, (self.playset_id, path_pattern)).fetchall()
-            
-            result_conflicts = []
-            for c in conflicts:
-                sources = c[1].split('|')
-                # Parse mod:load_order pairs and sort by load order desc
-                parsed = []
-                for s in sources:
-                    parts = s.rsplit(':', 1)
-                    if len(parts) == 2:
-                        mod_name = parts[0] if parts[0] != 'None' else 'vanilla'
-                        load_order = int(parts[1])
-                        parsed.append((mod_name, load_order))
-                
-                parsed.sort(key=lambda x: -x[1])  # Highest load order first (winner)
-                
-                if len(parsed) >= 2:
-                    result_conflicts.append({
-                        "relpath": c[0],
-                        "winner": {"mod": parsed[0][0], "loadOrder": parsed[0][1]},
-                        "losers": [{"mod": p[0], "loadOrder": p[1]} for p in parsed[1:]]
-                    })
-            
-            return {"conflicts": result_conflicts}
-            
-        except Exception as e:
-            return {"error": str(e), "conflicts": []}
+        if IMPL_AVAILABLE:
+            if symbol_type:
+                result = conflict_ops.get_symbol_conflicts(
+                    conn=self.db_conn,
+                    cvids=self._active_cvids if self._active_cvids else None,
+                    symbol_type=symbol_type,
+                )
+            else:
+                result = conflict_ops.get_file_conflicts(
+                    conn=self.db_conn,
+                    cvids=self._active_cvids if self._active_cvids else None,
+                    path_pattern=path_pattern,
+                )
+            return result
+        else:
+            return {"error": "impl modules not available", "conflicts": []}
     
     def get_playset_mods(self, params: dict) -> dict:
-        """Get mods in the active playset - thin wrapper around MCP tool.
-        
-        Delegates to ck3_playset(command="mods") from the MCP server.
-        """
-        try:
-            # Import and call the MCP tool directly
-            from server import ck3_playset
-            result = ck3_playset(command="mods")
-            
+        """Get mods in the active playset using impl module."""
+        if IMPL_AVAILABLE:
+            result = playset_ops.get_playset_mods()
             if not result.get("success"):
                 return {"error": result.get("error", "Unknown error"), "mods": []}
             
@@ -771,125 +712,58 @@ class CK3LensBridge:
             mods_list = []
             for idx, mod in enumerate(result.get("mods", [])):
                 mods_list.append({
-                    "loadOrder": idx,
+                    "loadOrder": mod.get("load_order", idx),
                     "name": mod.get("name", "Unknown"),
-                    "workshopId": mod.get("workshop_id"),
+                    "workshopId": mod.get("steam_id"),
                     "fileCount": mod.get("file_count", 0),
                     "contentVersionId": mod.get("content_version_id"),
-                    "sourcePath": mod.get("source_path", ""),
-                    "kind": "steam" if mod.get("workshop_id") else "local"
+                    "sourcePath": mod.get("path", ""),
+                    "kind": "steam" if mod.get("steam_id") else "local"
                 })
             
             return {"mods": mods_list}
-            
-        except ImportError:
-            return {"error": "MCP server not available", "mods": []}
-        except Exception as e:
-            return {"error": str(e), "mods": []}
+        else:
+            return {"error": "impl modules not available", "mods": []}
     
     def get_top_level_folders(self, params: dict) -> dict:
         """Get top-level folders across all mods in the active playset."""
         if not self.initialized or not self.db_conn:
             return {"error": "Session not initialized", "folders": []}
         
-        try:
-            # Get unique folder prefixes from files
-            folders = self.db_conn.execute("""
-                SELECT 
-                    CASE 
-                        WHEN INSTR(f.relpath, '/') > 0 THEN SUBSTR(f.relpath, 1, INSTR(f.relpath, '/') - 1)
-                        ELSE f.relpath
-                    END as folder,
-                    COUNT(*) as file_count
-                FROM files f
-                JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-                JOIN playset_mods pm ON pm.content_version_id = cv.content_version_id
-                WHERE pm.playset_id = ? AND pm.enabled = 1
-                GROUP BY folder
-                ORDER BY folder
-            """, (self.playset_id,)).fetchall()
-            
-            return {
-                "folders": [
-                    {"name": f[0], "fileCount": f[1]}
-                    for f in folders
-                ]
-            }
-        except Exception as e:
-            return {"error": str(e), "folders": []}
-
+        if IMPL_AVAILABLE:
+            result = file_ops.get_top_level_folders(
+                conn=self.db_conn,
+                cvids=self._active_cvids if self._active_cvids else None,
+            )
+            return result
+        else:
+            return {"error": "impl modules not available", "folders": []}
+    
     def confirm_not_exists(self, params: dict) -> dict:
-        """Exhaustive search to confirm something doesn't exist.
-        
-        This performs a thorough search to prevent false negatives when
-        claiming a symbol doesn't exist.
-        """
+        """Exhaustive search to confirm something doesn't exist."""
         name = params.get("name", "")
         symbol_type = params.get("symbol_type")
         
         if not self.initialized or not self.db_conn or not name:
             return {"can_claim_not_exists": False, "similar_matches": []}
         
-        try:
-            # 1. Exact match search
-            sql = """
-                SELECT s.name, s.symbol_type, mp.name as mod_name
-                FROM symbols s
-                LEFT JOIN content_versions cv ON s.content_version_id = cv.content_version_id
-                LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-                WHERE s.name = ?
-            """
-            params_list = [name]
-            if symbol_type:
-                sql += " AND s.symbol_type = ?"
-                params_list.append(symbol_type)
-            sql += " LIMIT 10"
-            
-            exact_matches = self.db_conn.execute(sql, params_list).fetchall()
-            
-            if exact_matches:
-                # Found exact matches - cannot claim it doesn't exist
-                return {
-                    "can_claim_not_exists": False,
-                    "similar_matches": [
-                        {"name": m[0], "symbolType": m[1], "mod": m[2] or "vanilla"}
-                        for m in exact_matches
-                    ]
-                }
-            
-            # 2. Fuzzy/similar match search using FTS
-            fts_query = f'"{name}"*'
-            similar_sql = """
-                SELECT s.name, s.symbol_type, mp.name as mod_name
-                FROM symbols_fts fts
-                JOIN symbols s ON s.symbol_id = fts.rowid
-                LEFT JOIN content_versions cv ON s.content_version_id = cv.content_version_id
-                LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-                WHERE symbols_fts MATCH ?
-            """
-            params_list = [fts_query]
-            if symbol_type:
-                similar_sql += " AND s.symbol_type = ?"
-                params_list.append(symbol_type)
-            similar_sql += " LIMIT 20"
-            
-            similar_matches = self.db_conn.execute(similar_sql, params_list).fetchall()
-            
+        if IMPL_AVAILABLE:
+            result = search_ops.confirm_not_exists(
+                conn=self.db_conn,
+                name=name,
+                cvids=self._active_cvids if self._active_cvids else None,
+                symbol_type=symbol_type,
+            )
+            # Transform keys for extension compatibility
             return {
-                "can_claim_not_exists": len(similar_matches) == 0,
+                "can_claim_not_exists": result.get("can_claim_not_exists", False),
                 "similar_matches": [
-                    {"name": m[0], "symbolType": m[1], "mod": m[2] or "vanilla"}
-                    for m in similar_matches
+                    {"name": m["name"], "symbolType": m.get("type"), "mod": m.get("mod", "vanilla")}
+                    for m in result.get("similar_matches", [])
                 ]
             }
-            
-        except Exception as e:
-            return {"can_claim_not_exists": False, "similar_matches": [], "error": str(e)}
-    
-    # DELETED: get_playset_mod_config (December 30, 2025)
-    # This was a BANNED parallel list (the "local_mods" concept trying to survive).
-    # Use get_playset_mods() instead - it returns mods[] from the database.
-    # Editability is derived at runtime: mod.path.startswith(local_mods_folder)
+        else:
+            return {"can_claim_not_exists": False, "similar_matches": [], "error": "impl not available"}
 
     def read_local_file(self, params: dict) -> dict:
         """Read file from local mod."""
@@ -909,48 +783,19 @@ class CK3LensBridge:
             return {"exists": False, "error": str(e)}
     
     def write_file(self, params: dict) -> dict:
-        """Write file to mod.
+        """Write file to mod - direct filesystem write for local mods."""
+        mod_name = params.get("mod_name", "")
+        rel_path = params.get("rel_path", "")
+        content = params.get("content", "")
         
-        Delegates to ck3_file(command="write") from the MCP server.
-        This ensures proper enforcement and consistent behavior with the agent.
-        """
+        mod_root = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
+        file_path = mod_root / mod_name / rel_path
+        
         try:
-            # Import and call the MCP tool directly
-            from server import ck3_file
-            
-            mod_name = params.get("mod_name", "")
-            rel_path = params.get("rel_path", "")
-            content = params.get("content", "")
-            validate_syntax = params.get("validate_syntax", True)
-            
-            # Delegate to MCP tool
-            result = ck3_file(
-                command="write",
-                mod_name=mod_name,
-                rel_path=rel_path,
-                content=content,
-                validate_syntax=validate_syntax,
-            )
-            
-            # Transform response for extension compatibility
-            if result.get("success"):
-                return {
-                    "success": True,
-                    "bytes_written": result.get("bytes_written", len(content)),
-                    "warnings": result.get("warnings", [])
-                }
-            else:
-                # Handle validation errors
-                if "syntax_errors" in result:
-                    return {
-                        "success": False,
-                        "errors": result.get("syntax_errors", []),
-                        "warnings": result.get("warnings", [])
-                    }
-                return {"success": False, "error": result.get("error", "Unknown error")}
-                
-        except ImportError:
-            return {"success": False, "error": "MCP server not available - cannot write files"}
+            # Ensure parent directory exists
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text(content, encoding="utf-8")
+            return {"success": True, "bytes_written": len(content.encode('utf-8'))}
         except Exception as e:
             return {"success": False, "error": str(e)}
     
@@ -1073,17 +918,15 @@ class CK3LensBridge:
         try:
             from ck3raven.resolver.conflict_analyzer import get_conflict_units
             
-            conflicts = get_conflict_units(
-                self.db_conn,
-                self.playset_id,
-                risk_filter=params.get("risk_filter"),
-                domain_filter=params.get("domain_filter"),
-                status_filter=params.get("status_filter"),
-                limit=params.get("limit", 50),
-                offset=params.get("offset", 0)
-            )
-            
-            return {"conflicts": conflicts}
+            # Use impl module to get conflict summary instead of playset_id
+            if IMPL_AVAILABLE:
+                result = conflict_ops.get_conflict_summary(
+                    conn=self.db_conn,
+                    cvids=self._active_cvids if self._active_cvids else None,
+                )
+                return {"conflicts": result}
+            else:
+                return {"error": "impl not available", "conflicts": []}
         except Exception as e:
             return {"error": str(e), "conflicts": []}
 
@@ -1105,65 +948,54 @@ class CK3LensBridge:
             return {"error": str(e)}
 
     def create_override_patch(self, params: dict) -> dict:
-        """Create an override patch file in a mod.
+        """Create an override patch file in a mod."""
+        source_path = params.get("source_path")
+        target_mod = params.get("target_mod")
+        mode = params.get("mode", "override_patch")
+        initial_content = params.get("initial_content")
         
-        Delegates to ck3_file(command="create_patch") from the MCP server.
-        This ensures consistent behavior with the agent and proper enforcement.
-        """
+        if not source_path or not target_mod:
+            return {"success": False, "error": "source_path and target_mod required"}
+        
+        # Direct filesystem implementation for local mods
+        mod_root = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
+        
+        # Determine output path based on mode
+        if mode == "override_patch":
+            # zzz_ prefix for partial patch
+            rel_path = source_path
+            if '/' in rel_path:
+                parts = rel_path.rsplit('/', 1)
+                rel_path = f"{parts[0]}/zzz_{parts[1]}"
+            else:
+                rel_path = f"zzz_{rel_path}"
+        else:
+            # full_replace: same name
+            rel_path = source_path
+        
+        target_path = mod_root / target_mod / rel_path
+        
         try:
-            # Import and call the MCP tool directly
-            from server import ck3_file
+            target_path.parent.mkdir(parents=True, exist_ok=True)
             
-            source_path = params.get("source_path")
-            target_mod = params.get("target_mod")
-            mode = params.get("mode", "override_patch")
-            initial_content = params.get("initial_content")
+            content = initial_content or f"# Override patch for {source_path}\n# Created by CK3 Lens\n\n"
+            target_path.write_text(content, encoding="utf-8")
             
-            # Map bridge mode names to MCP mode names
-            if mode == "override_patch":
-                patch_mode = "partial_patch"
-            elif mode == "full_replace":
-                patch_mode = "full_replace"
-            else:
-                return {"success": False, "error": f"Invalid mode: {mode}. Use 'override_patch' or 'full_replace'"}
-            
-            # Delegate to MCP tool
-            result = ck3_file(
-                command="create_patch",
-                mod_name=target_mod,
-                source_path=source_path,
-                patch_mode=patch_mode,
-                content=initial_content,
-            )
-            
-            # Transform response for extension compatibility
-            if result.get("success"):
-                return {
-                    "success": True,
-                    "created_path": result.get("rel_path", ""),
-                    "full_path": result.get("absolute_path", ""),
-                    "mode": mode,
-                    "source_path": source_path,
-                    "message": result.get("message", f"Created override patch")
-                }
-            else:
-                return {"success": False, "error": result.get("error", "Unknown error")}
-                
-        except ImportError:
-            return {"success": False, "error": "MCP server not available - cannot create patches"}
+            return {
+                "success": True,
+                "created_path": rel_path,
+                "full_path": str(target_path),
+                "mode": mode,
+                "source_path": source_path,
+                "message": f"Created {'override patch' if mode == 'override_patch' else 'full replace'}"
+            }
         except Exception as e:
             return {"success": False, "error": str(e)}
 
     def list_playsets(self, params: dict) -> dict:
-        """List all playsets - thin wrapper around MCP tool.
-        
-        Delegates to ck3_playset(command="list") from the MCP server.
-        """
-        try:
-            # Import and call the MCP tool directly
-            from server import ck3_playset
-            result = ck3_playset(command="list")
-            
+        """List all playsets using impl module."""
+        if IMPL_AVAILABLE:
+            result = playset_ops.list_playsets()
             if not result.get("success"):
                 return {"error": result.get("error", "Unknown error"), "playsets": []}
             
@@ -1181,35 +1013,27 @@ class CK3LensBridge:
             # Sort with active first, then alphabetically
             playsets.sort(key=lambda p: (not p['is_active'], p['name'].lower()))
             return {"playsets": playsets}
-            
-        except ImportError:
-            return {"error": "MCP server not available", "playsets": []}
-        except Exception as e:
-            return {"error": str(e), "playsets": []}
+        else:
+            return {"error": "impl modules not available", "playsets": []}
 
     def reorder_mod(self, params: dict) -> dict:
         """Reorder a mod in the active playset."""
-        try:
-            mod_identifier = params.get("mod_identifier")
-            new_position = params.get("new_position")
-            
-            if not mod_identifier:
-                return {"success": False, "error": "mod_identifier required"}
-            if new_position is None:
-                return {"success": False, "error": "new_position required"}
-            
-            # Use the MCP tool
-            if CKRAVEN_AVAILABLE:
-                from ck3lens_mcp.server import ck3_reorder_mod_in_playset
-                result = ck3_reorder_mod_in_playset(
-                    mod_identifier=mod_identifier,
-                    new_position=new_position
-                )
-                return result
-            
-            return {"success": False, "error": "ck3raven not available"}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+        mod_identifier = params.get("mod_identifier")
+        new_position = params.get("new_position")
+        
+        if not mod_identifier:
+            return {"success": False, "error": "mod_identifier required"}
+        if new_position is None:
+            return {"success": False, "error": "new_position required"}
+        
+        if IMPL_AVAILABLE:
+            result = playset_ops.reorder_mod(
+                mod_identifier=mod_identifier,
+                new_position=new_position,
+            )
+            return result
+        else:
+            return {"success": False, "error": "impl modules not available"}
 
     def _ast_to_dict(self, ast) -> dict:
         """Convert AST node to dictionary."""
@@ -1258,4 +1082,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
