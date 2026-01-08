@@ -909,37 +909,48 @@ class CK3LensBridge:
             return {"exists": False, "error": str(e)}
     
     def write_file(self, params: dict) -> dict:
-        """Write file to live mod."""
-        mod_name = params.get("mod_name", "")
-        rel_path = params.get("rel_path", "")
-        content = params.get("content", "")
-        validate_syntax = params.get("validate_syntax", True)
+        """Write file to mod.
         
-        # Validate syntax first
-        if validate_syntax:
-            parse_result = self.parse_content({"content": content, "include_warnings": True})
-            if parse_result.get("errors"):
-                return {
-                    "success": False,
-                    "errors": parse_result["errors"],
-                    "warnings": parse_result.get("warnings", [])
-                }
-            # Include warnings in successful write too
-            warnings = parse_result.get("warnings", [])
-        else:
-            warnings = []
-        
-        mod_root = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
-        file_path = mod_root / mod_name / rel_path
-        
+        Delegates to ck3_file(command="write") from the MCP server.
+        This ensures proper enforcement and consistent behavior with the agent.
+        """
         try:
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            file_path.write_text(content, encoding="utf-8-sig")
-            return {
-                "success": True, 
-                "bytes_written": len(content),
-                "warnings": warnings  # Return any style warnings even on success
-            }
+            # Import and call the MCP tool directly
+            from server import ck3_file
+            
+            mod_name = params.get("mod_name", "")
+            rel_path = params.get("rel_path", "")
+            content = params.get("content", "")
+            validate_syntax = params.get("validate_syntax", True)
+            
+            # Delegate to MCP tool
+            result = ck3_file(
+                command="write",
+                mod_name=mod_name,
+                rel_path=rel_path,
+                content=content,
+                validate_syntax=validate_syntax,
+            )
+            
+            # Transform response for extension compatibility
+            if result.get("success"):
+                return {
+                    "success": True,
+                    "bytes_written": result.get("bytes_written", len(content)),
+                    "warnings": result.get("warnings", [])
+                }
+            else:
+                # Handle validation errors
+                if "syntax_errors" in result:
+                    return {
+                        "success": False,
+                        "errors": result.get("syntax_errors", []),
+                        "warnings": result.get("warnings", [])
+                    }
+                return {"success": False, "error": result.get("error", "Unknown error")}
+                
+        except ImportError:
+            return {"success": False, "error": "MCP server not available - cannot write files"}
         except Exception as e:
             return {"success": False, "error": str(e)}
     
@@ -1094,91 +1105,52 @@ class CK3LensBridge:
             return {"error": str(e)}
 
     def create_override_patch(self, params: dict) -> dict:
-        """Create an override patch file in a live mod."""
-        from datetime import datetime
+        """Create an override patch file in a mod.
         
-        source_path = params.get("source_path")
-        target_mod = params.get("target_mod")
-        mode = params.get("mode", "override_patch")
-        initial_content = params.get("initial_content")
-        
-        if not source_path or not target_mod:
-            return {"success": False, "error": "source_path and target_mod required"}
-        
+        Delegates to ck3_file(command="create_patch") from the MCP server.
+        This ensures consistent behavior with the agent and proper enforcement.
+        """
         try:
-            source = Path(source_path)
+            # Import and call the MCP tool directly
+            from server import ck3_file
             
-            # Determine output filename
+            source_path = params.get("source_path")
+            target_mod = params.get("target_mod")
+            mode = params.get("mode", "override_patch")
+            initial_content = params.get("initial_content")
+            
+            # Map bridge mode names to MCP mode names
             if mode == "override_patch":
-                new_name = f"zzz_msc_{source.name}"
+                patch_mode = "partial_patch"
             elif mode == "full_replace":
-                new_name = source.name
+                patch_mode = "full_replace"
             else:
-                return {"success": False, "error": f"Invalid mode: {mode}"}
+                return {"success": False, "error": f"Invalid mode: {mode}. Use 'override_patch' or 'full_replace'"}
             
-            # Build target path
-            target_rel_path = str(source.parent / new_name)
+            # Delegate to MCP tool
+            result = ck3_file(
+                command="create_patch",
+                mod_name=target_mod,
+                source_path=source_path,
+                patch_mode=patch_mode,
+                content=initial_content,
+            )
             
-            # Get mod path from playset config or try direct folder match
-            mod_root = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
-            mod_path = None
-            
-            # Try to load from playset config first
-            raven_dir = Path.home() / ".ck3raven"
-            active_file = raven_dir / "playsets" / "active.txt"
-            if active_file.exists():
-                try:
-                    playset_name = active_file.read_text().strip()
-                    playset_file = raven_dir / "playsets" / f"{playset_name}.json"
-                    if playset_file.exists():
-                        import json
-                        playset_data = json.loads(playset_file.read_text())
-                        # Read from legacy 'local_mods' key in playset JSON
-                        for mod_cfg in playset_data.get("local_mods", []):
-                            if isinstance(mod_cfg, dict):
-                                if mod_cfg.get("short_id") == target_mod or mod_cfg.get("name") == target_mod:
-                                    folder = mod_cfg.get("folder", mod_cfg.get("name", target_mod))
-                                    mod_path = mod_root / folder
-                                    break
-                            elif mod_cfg == target_mod:
-                                mod_path = mod_root / target_mod
-                                break
-                except Exception:
-                    pass
-            
-            # Fall back to direct name match
-            if mod_path is None:
-                mod_path = mod_root / target_mod
-            
-            if not mod_path.exists():
-                return {"success": False, "error": f"Mod directory not found: {mod_path}"}
-            
-            # Create full path
-            full_path = mod_path / target_rel_path
-            
-            # Generate default content if not provided
-            if initial_content is None:
-                initial_content = f"""# Override patch for: {source_path}
-# Created: {datetime.now().strftime("%Y-%m-%d %H:%M")}
-# Mode: {mode}
-# 
-# Add your overrides below. For 'override_patch' mode, only include
-# the specific units you want to override/add.
-
-"""
-            
-            # Create directories and write file
-            full_path.parent.mkdir(parents=True, exist_ok=True)
-            full_path.write_text(initial_content, encoding="utf-8")
-            
-            return {
-                "success": True,
-                "created_path": target_rel_path,
-                "full_path": str(full_path),
-                "mode": mode,
-                "source_path": source_path,
-                "message": f"Created override patch: {target_rel_path}"
-            }
+            # Transform response for extension compatibility
+            if result.get("success"):
+                return {
+                    "success": True,
+                    "created_path": result.get("rel_path", ""),
+                    "full_path": result.get("absolute_path", ""),
+                    "mode": mode,
+                    "source_path": source_path,
+                    "message": result.get("message", f"Created override patch")
+                }
+            else:
+                return {"success": False, "error": result.get("error", "Unknown error")}
+                
+        except ImportError:
+            return {"success": False, "error": "MCP server not available - cannot create patches"}
         except Exception as e:
             return {"success": False, "error": str(e)}
 

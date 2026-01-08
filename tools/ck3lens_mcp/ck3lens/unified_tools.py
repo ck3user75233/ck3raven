@@ -26,6 +26,34 @@ MOD_PATH_DOMAINS = {PathDomain.LOCAL_MOD, PathDomain.WORKSHOP_MOD}
 
 
 # ============================================================================
+# Helpers
+# ============================================================================
+
+def _compute_mod_prefix(mod_name: str) -> str:
+    """
+    Generate a short prefix from mod name using first letter of each word.
+    
+    Used for creating override patch files with zzz_ prefix.
+    
+    Examples:
+        "Mini Super Compatch" → "msc"
+        "Adoption Options" → "ao"
+        "MSC Religion Expanded" → "mre"
+        "Unofficial Patch" → "up"
+        "More Game Rules" → "mgr"
+        "EPE" → "epe" (single word/acronym preserved)
+    
+    Returns:
+        Lowercase prefix string (e.g., "msc", "ao", "up")
+    """
+    words = mod_name.split()
+    if not words:
+        return "mod"
+    prefix = "".join(word[0].lower() for word in words if word)
+    return prefix or "mod"
+
+
+# ============================================================================
 # ck3_logs - Unified Logging Tool
 # ============================================================================
 
@@ -1386,8 +1414,9 @@ def _file_create_patch(mod_name, source_mod, source_path, patch_mode, initial_co
     
     # Compute output filename based on patch mode
     if patch_mode == "partial_patch":
-        # Prefix with zzz_[mod]_ to load LAST (wins for OVERRIDE types)
-        mod_prefix = mod_name.lower().replace(" ", "_")
+        # Prefix with zzz_[prefix]_ to load LAST (wins for OVERRIDE types)
+        # Use first letter of each word for short prefix: "Mini Super Compatch" -> "msc"
+        mod_prefix = _compute_mod_prefix(mod_name)
         new_name = f"zzz_{mod_prefix}_{source.name}"
     else:  # full_replace
         # Same name (will override due to load order)
