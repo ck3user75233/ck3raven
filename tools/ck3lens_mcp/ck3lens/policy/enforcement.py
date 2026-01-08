@@ -103,13 +103,20 @@ SAFE_COMMANDS = frozenset({
     "python -c", "python -m pytest", "python -m mypy",
     # Info commands
     "pwd", "echo", "which", "where", "whoami",
+    # PowerShell read-only commands (Get-* cmdlets are non-mutating)
+    "get-process", "get-childitem", "get-content", "get-item", "get-location",
+    "get-service", "get-command", "get-help", "get-date", "get-host",
+    "get-eventlog", "get-wmiobject", "get-ciminstance", "get-acl",
+    "select-object", "format-table", "format-list", "where-object",
+    "test-path", "resolve-path", "split-path", "join-path",
 })
 
 # Commands that are NEVER allowed (hard deny)
 BLOCKED_COMMANDS = frozenset({
-    # System modification
+    # System modification (require exact patterns to avoid false positives)
     "rm -rf /", "del /s /q c:\\",
-    "format", "diskpart", "shutdown", "reboot",
+    # format as a standalone command (disk formatting), NOT format-* PowerShell cmdlets
+    "diskpart", "shutdown", "reboot",
     # Package management (risky)
     "pip uninstall", "npm uninstall",
     # History rewriting
@@ -176,15 +183,21 @@ def classify_command(command: str) -> CommandCategory:
     """
     cmd_lower = command.lower()
     
-    # Check blocked first
-    for blocked in BLOCKED_COMMANDS:
-        if blocked in cmd_lower:
-            return CommandCategory.BLOCKED
-    
-    # Check safe commands
+    # Check safe commands FIRST - PowerShell Get-* cmdlets should not be blocked
     for safe in SAFE_COMMANDS:
         if cmd_lower.startswith(safe):
             return CommandCategory.READ_ONLY
+    
+    # Check blocked - use startswith for most, contains only for compound patterns
+    for blocked in BLOCKED_COMMANDS:
+        # For compound patterns like "git push --force origin main", use contains
+        if " " in blocked:
+            if blocked in cmd_lower:
+                return CommandCategory.BLOCKED
+        # For single-word patterns, require startswith to avoid false positives
+        else:
+            if cmd_lower.startswith(blocked) or cmd_lower.startswith("./" + blocked) or f" {blocked}" in cmd_lower:
+                return CommandCategory.BLOCKED
     
     # Git classification
     if cmd_lower.startswith("git "):
