@@ -6,9 +6,10 @@ JSON-RPC server that bridges VS Code extension to ck3raven functionality.
 Runs as a child process of the VS Code extension, communicating via stdio.
 
 ARCHITECTURE (January 2026):
-- Playset operations use ck3lens.impl modules (shared with MCP server)
-- NO playset_mods table queries (BANNED per CANONICAL_ARCHITECTURE.md)
-- CVIDs are derived from playset_ops.get_playset_mods()
+- Uses WorldAdapter.db_handle() for visibility-filtered database access
+- NO cached _active_cvids (anti-pattern - parallel list)
+- mods[] from playset_ops is THE source for CVIDs
+- DbHandle carries visible_cvids automatically
 """
 
 import json
@@ -57,8 +58,7 @@ if CKRAVEN_ROOT:
 # Now we can import ck3raven
 try:
     from ck3raven.parser import parse_source, LexerError, ParseError
-    from ck3raven.db.search import search_symbols, search_content, find_definition
-    from ck3raven.db.schema import DEFAULT_DB_PATH, get_connection
+    from ck3raven.db.schema import DEFAULT_DB_PATH
     CKRAVEN_AVAILABLE = True
 except ImportError as e:
     CKRAVEN_AVAILABLE = False
@@ -69,30 +69,36 @@ except ImportError as e:
     class ParseError(Exception):
         pass
 
-# Import impl modules for shared logic
+# Import impl modules for playset operations (shared with MCP)
 IMPL_AVAILABLE = False
 try:
-    from ck3lens.impl import playset_ops, search_ops, file_ops, conflict_ops
+    from ck3lens.impl import playset_ops
     IMPL_AVAILABLE = True
 except ImportError as e:
     IMPL_IMPORT_ERROR = str(e)
+
+# Import WorldAdapter for canonical visibility handling
+WORLD_AVAILABLE = False
+try:
+    from ck3lens.world_adapter import WorldAdapter, DbHandle
+    from ck3lens.db_queries import DBQueries
+    WORLD_AVAILABLE = True
+except ImportError as e:
+    WORLD_IMPORT_ERROR = str(e)
 
 
 class CK3LensBridge:
     """Bridge server providing JSON-RPC interface to ck3raven.
     
-    Playset operations use ck3lens.impl modules (shared with MCP server).
-    This avoids the broken `from server import ck3_playset` pattern and
-    prevents duplicating playset logic.
+    Uses WorldAdapter.db_handle() for visibility-filtered database access.
+    The DbHandle carries visible_cvids derived from mods[] automatically.
     """
     
     def __init__(self):
         self.db_path = None
-        self.db_conn = None  # SQLite connection for search/parse operations
-        self.session = None
-        self.search_engine = None
+        self._db: "DBQueries" = None  # DBQueries instance
+        self._world: "WorldAdapter" = None  # WorldAdapter for visibility
         self.initialized = False
-        self._active_cvids: set = set()  # CVIDs from active playset
         self._playset_name: str = None
         
     def handle_request(self, request: dict) -> dict:
@@ -150,35 +156,27 @@ class CK3LensBridge:
         
         return handler(params)
     
-    def _refresh_active_cvids(self):
-        """Refresh cached CVIDs from active playset using impl module."""
-        if not IMPL_AVAILABLE:
-            return
+    def _get_db_handle(self, purpose: str = "bridge") -> "DbHandle":
+        """Get a DbHandle with visibility filtering from WorldAdapter.
         
-        try:
-            # Use playset_ops to get active playset mods
-            result = playset_ops.get_playset_mods()
-            if result.get("success"):
-                self._playset_name = result.get("playset_name")
-                # Extract CVIDs from mods
-                # Note: playset JSON has content_version_id if mods are indexed
-                mods = result.get("mods", [])
-                self._active_cvids = set()
-                for mod in mods:
-                    cvid = mod.get("content_version_id")
-                    if cvid:
-                        self._active_cvids.add(cvid)
-        except Exception:
-            pass
+        This is THE canonical way to get filtered database access.
+        The handle carries visible_cvids derived from mods[].
+        """
+        if not self._world:
+            raise RuntimeError("Session not initialized - call init_session first")
+        return self._world.db_handle(purpose=purpose)
     
     def init_session(self, params: dict) -> dict:
-        """Initialize session with database connection.
-        
-        Gets active playset info from impl modules.
-        """
+        """Initialize session with database connection and WorldAdapter."""
         if not CKRAVEN_AVAILABLE:
             return {
                 "error": f"ck3raven not available: {IMPORT_ERROR}",
+                "initialized": False
+            }
+        
+        if not WORLD_AVAILABLE:
+            return {
+                "error": f"WorldAdapter not available: {WORLD_IMPORT_ERROR}",
                 "initialized": False
             }
         
@@ -193,41 +191,53 @@ class CK3LensBridge:
                 "initialized": False
             }
         
-        # Connect to SQLite database
         try:
-            self.db_conn = sqlite3.connect(str(self.db_path))
-            self.db_conn.row_factory = sqlite3.Row
+            # Create DBQueries instance
+            self._db = DBQueries(db_path=self.db_path)
             
-            # Get active playset info from impl module
-            playset_name = None
+            # Get mods from playset_ops (THE source)
+            mods = []
+            local_mods_folder = None
             if IMPL_AVAILABLE:
-                try:
-                    result = playset_ops.get_active_playset()
-                    if result.get("success"):
-                        playset_name = result.get("playset_name")
-                    
-                    # Refresh CVIDs
-                    self._refresh_active_cvids()
-                except Exception:
-                    pass
+                result = playset_ops.get_playset_mods()
+                if result.get("success"):
+                    self._playset_name = result.get("playset_name")
+                    # Convert dict mods to objects with attributes
+                    for m in result.get("mods", []):
+                        mods.append(type('Mod', (), {
+                            'name': m.get('name'),
+                            'path': m.get('path'),
+                            'cvid': m.get('content_version_id'),
+                        })())
+                
+                # Get local_mods_folder from active playset
+                active = playset_ops.get_active_playset()
+                if active.get("success"):
+                    local_mods_folder = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
+            
+            # Create WorldAdapter with mods[] for visibility
+            self._world = WorldAdapter(
+                mode="ck3lens",
+                db=self._db,
+                mods=mods if mods else None,
+                local_mods_folder=local_mods_folder,
+                vanilla_root=Path("C:/Program Files (x86)/Steam/steamapps/common/Crusader Kings III/game"),
+            )
             
             self.initialized = True
-            
-            # Return mod root and local_mods_folder for the UI to derive editability
-            mod_root = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
-            local_mods_folder = str(mod_root)
             
             return {
                 "initialized": True,
                 "db_path": str(self.db_path),
-                "mod_root": str(mod_root),
-                "local_mods_folder": local_mods_folder,
-                "playset_name": playset_name,
-                "impl_available": IMPL_AVAILABLE,
+                "mod_root": str(local_mods_folder) if local_mods_folder else None,
+                "local_mods_folder": str(local_mods_folder) if local_mods_folder else None,
+                "playset_name": self._playset_name,
+                "world_available": True,
+                "mod_count": len(mods),
             }
         except Exception as e:
             return {
-                "error": f"Failed to connect to database: {e}",
+                "error": f"Failed to initialize: {e}",
                 "initialized": False
             }
     
@@ -240,13 +250,11 @@ class CK3LensBridge:
         if not CKRAVEN_AVAILABLE:
             return {"errors": [{"line": 1, "message": "Parser not available"}]}
         
-        errors = []
-        warnings = []
-        
         try:
             ast = parse_source(content, filename)
             
             # Run additional semantic checks if parse succeeded
+            warnings = []
             if include_warnings:
                 warnings = self._check_semantic_issues(content, ast, filename)
             
@@ -261,7 +269,6 @@ class CK3LensBridge:
                 }
             }
         except LexerError as e:
-            # Lexer error - precise location info
             return {
                 "success": False,
                 "errors": [{
@@ -275,7 +282,6 @@ class CK3LensBridge:
                 "warnings": []
             }
         except ParseError as e:
-            # Parse error - may have partial AST
             line = getattr(e, 'line', 1)
             column = getattr(e, 'column', 1)
             return {
@@ -291,7 +297,6 @@ class CK3LensBridge:
                 "warnings": []
             }
         except Exception as e:
-            # Generic error - try to extract location
             error_str = str(e)
             line = 1
             column = 1
@@ -323,79 +328,59 @@ class CK3LensBridge:
         warnings = []
         lines = content.split('\n')
         
-        # Keywords that don't need = before {
         no_equals_needed = {'if', 'else', 'else_if', 'while', 'switch', 'random', 'random_list', 'limit', 'trigger', 'modifier'}
         
-        # Check for common issues line by line
         for i, line in enumerate(lines, 1):
-            # Skip empty lines and comments
             stripped = line.strip()
             if not stripped or stripped.startswith('#'):
                 continue
             
-            # Remove inline comments for pattern matching
             comment_pos = stripped.find('#')
             if comment_pos > 0:
                 stripped = stripped[:comment_pos].strip()
             
-            # Check for tabs vs spaces inconsistency
             if '\t' in line and '    ' in line:
                 warnings.append({
-                    "line": i,
-                    "column": 1,
+                    "line": i, "column": 1,
                     "message": "Mixed tabs and spaces in indentation",
-                    "severity": "hint",
-                    "code": "STYLE002"
+                    "severity": "hint", "code": "STYLE002"
                 })
             
-            # Check for "yes = " or "no = " (yes/no are values, not keys)
             yes_no_match = re.search(r'\b(yes|no)\s*=', stripped)
             if yes_no_match:
                 col = line.find(yes_no_match.group(0)) + 1
                 warnings.append({
-                    "line": i,
-                    "column": col,
+                    "line": i, "column": col,
                     "message": f'"{yes_no_match.group(1)}" is typically a value, not a key',
-                    "severity": "hint",
-                    "code": "STYLE003"
+                    "severity": "hint", "code": "STYLE003"
                 })
             
-            # Check for == (comparison operator used where = expected)
-            # But only if it's not part of >=, <=, !=
             double_eq_match = re.search(r'(?<![!<>=])={2}(?!=)', stripped)
             if double_eq_match:
                 col = line.find('==') + 1
                 warnings.append({
-                    "line": i,
-                    "column": col,
+                    "line": i, "column": col,
                     "message": "Use single = for assignment; == is for comparisons in trigger blocks",
-                    "severity": "hint",
-                    "code": "STYLE004"
+                    "severity": "hint", "code": "STYLE004"
                 })
             
-            # Check for missing = before { (e.g., "my_block {" instead of "my_block = {")
             missing_eq_match = re.match(r'^(\w+)\s*\{', stripped)
             if missing_eq_match:
                 key = missing_eq_match.group(1).lower()
                 if key not in no_equals_needed:
                     col = line.find(missing_eq_match.group(0)) + 1
                     warnings.append({
-                        "line": i,
-                        "column": col,
+                        "line": i, "column": col,
                         "message": f'Consider: {missing_eq_match.group(1)} = {{ ... }} (missing = before {{?)',
-                        "severity": "hint", 
-                        "code": "STYLE005"
+                        "severity": "hint", "code": "STYLE005"
                     })
         
-        # Check for unbalanced braces (properly accounting for strings and comments)
         open_braces, close_braces = self._count_braces_properly(content)
         if open_braces != close_braces:
             warnings.append({
-                "line": 1,
-                "column": 1,
+                "line": 1, "column": 1,
                 "message": f"Unbalanced braces: {open_braces} open, {close_braces} close",
-                "severity": "warning",
-                "code": "STRUCT001"
+                "severity": "warning", "code": "STRUCT001"
             })
         
         return warnings
@@ -410,27 +395,22 @@ class CK3LensBridge:
         while i < len(content):
             char = content[i]
             
-            # Handle string boundaries
             if char == '"' and (i == 0 or content[i-1] != '\\'):
                 in_string = not in_string
                 i += 1
                 continue
             
-            # Skip content inside strings
             if in_string:
                 i += 1
                 continue
             
-            # Handle comments - skip to end of line
             if char == '#':
-                # Find end of line
                 newline_pos = content.find('\n', i)
                 if newline_pos == -1:
-                    break  # End of file
+                    break
                 i = newline_pos + 1
                 continue
             
-            # Count braces
             if char == '{':
                 open_count += 1
             elif char == '}':
@@ -478,7 +458,6 @@ class CK3LensBridge:
         check_references = params.get("check_references", False)
         check_style = params.get("check_style", True)
         
-        # First, parse with full diagnostics
         parse_result = self.parse_content({
             "content": content, 
             "filename": filename,
@@ -488,15 +467,6 @@ class CK3LensBridge:
         errors = parse_result.get("errors", [])
         warnings = parse_result.get("warnings", [])
         
-        # If parse succeeded and reference checking is enabled
-        if parse_result.get("success") and check_references and self.initialized:
-            ref_errors = self._check_references(content, filename)
-            for ref_error in ref_errors:
-                if ref_error.get("severity") == "error":
-                    errors.append(ref_error)
-                else:
-                    warnings.append(ref_error)
-        
         return {
             "errors": errors,
             "warnings": warnings,
@@ -504,266 +474,232 @@ class CK3LensBridge:
             "stats": parse_result.get("stats", {})
         }
     
-    def _check_references(self, content: str, filename: str) -> list:
-        """Check for undefined references in the content."""
-        issues = []
-        
-        # Known trigger/effect prefixes that should be validated
-        known_scopes = {
-            'root', 'this', 'scope', 'prev', 'from', 'faith', 'culture',
-            'liege', 'holder', 'realm', 'capital', 'county', 'duchy', 
-            'kingdom', 'empire', 'house', 'dynasty', 'primary_title'
-        }
-        
-        # Check for common reference patterns
-        import re
-        
-        # Check event references: event_id = namespace.number
-        event_refs = re.findall(r'\b(\w+\.\d+)\b', content)
-        # TODO: Validate against known events when database is connected
-        
-        # Check flag references: has_character_flag = my_flag
-        flag_refs = re.findall(r'has_(?:character|county|realm|dynasty|house|faith|culture)_flag\s*=\s*(\w+)', content)
-        # TODO: Cross-reference with flag definitions
-        
-        return issues
-    
     def search_symbols(self, params: dict) -> dict:
-        """Search for symbols in the database.
-        
-        Uses impl module with CVID filtering (NOT playset_mods table).
-        """
+        """Search for symbols using WorldAdapter.db_handle() for visibility."""
         query = params.get("query", "")
         symbol_type = params.get("symbol_type")
         limit = params.get("limit", 50)
         
-        if not self.db_conn or not query.strip():
+        if not self.initialized:
+            return {"results": [], "error": "Not initialized"}
+        
+        if not query.strip():
             return {"results": [], "adjacencies": [], "query_patterns": [query]}
         
-        if IMPL_AVAILABLE:
-            # Use impl module with CVID filtering
-            result = search_ops.search_symbols(
-                conn=self.db_conn,
-                query=query,
-                cvids=self._active_cvids if self._active_cvids else None,
-                symbol_type=symbol_type,
-                limit=limit,
-            )
-            return result
-        else:
-            # Fallback to basic search without playset filtering
-            try:
-                fts_query = self._escape_fts_query(query)
-                sql = """
-                    SELECT s.symbol_id, s.name, s.symbol_type, s.scope,
-                           s.line_number, f.relpath, cv.content_version_id,
-                           mp.name as mod_name, rank
-                    FROM symbols_fts fts
-                    JOIN symbols s ON s.symbol_id = fts.rowid
-                    LEFT JOIN files f ON s.defining_file_id = f.file_id
-                    LEFT JOIN content_versions cv ON s.content_version_id = cv.content_version_id
-                    LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-                    WHERE symbols_fts MATCH ?
-                """
-                params_list = [fts_query]
-                if symbol_type:
-                    sql += " AND s.symbol_type = ?"
-                    params_list.append(symbol_type)
-                sql += " ORDER BY rank LIMIT ?"
-                params_list.append(limit)
-                
-                rows = self.db_conn.execute(sql, params_list).fetchall()
-                
-                return {
-                    "results": [
-                        {
-                            "symbolId": r[0], "name": r[1], "symbolType": r[2],
-                            "scope": r[3], "line": r[4], "relpath": r[5],
-                            "contentVersionId": r[6], "mod": r[7] or "vanilla",
-                            "relevance": -r[8] if r[8] else 0
-                        }
-                        for r in rows
-                    ],
-                    "adjacencies": [],
-                    "query_patterns": [query, fts_query]
-                }
-            except Exception as e:
-                return {"results": [], "adjacencies": [], "query_patterns": [query], "error": str(e)}
-    
-    def _escape_fts_query(self, query: str) -> str:
-        """Escape special characters for FTS5 queries."""
-        query = query.replace('"', '""')
-        terms = query.split()
-        if not terms:
-            return ''
-        if len(terms) == 1:
-            return f'"{terms[0]}"*'
-        return ' OR '.join(f'"{t}"*' for t in terms if t)
+        try:
+            # Use DbHandle from WorldAdapter (carries visible_cvids)
+            dbh = self._get_db_handle(purpose="search_symbols")
+            results = dbh.search_symbols(query, symbol_type=symbol_type, limit=limit)
+            
+            return {
+                "results": [
+                    {
+                        "symbolId": r.get("symbol_id"),
+                        "name": r.get("name"),
+                        "symbolType": r.get("symbol_type"),
+                        "scope": r.get("scope"),
+                        "line": r.get("line_number"),
+                        "relpath": r.get("relpath"),
+                        "contentVersionId": r.get("content_version_id"),
+                        "mod": r.get("mod_name") or "vanilla",
+                    }
+                    for r in results
+                ],
+                "adjacencies": [],
+                "query_patterns": [query]
+            }
+        except Exception as e:
+            return {"results": [], "error": str(e), "query_patterns": [query]}
     
     def get_file(self, params: dict) -> dict:
-        """Get file content from database."""
+        """Get file content using WorldAdapter.db_handle() for visibility."""
         file_path = params.get("file_path", "")
         file_id = params.get("file_id")
         include_ast = params.get("include_ast", False)
         
-        if not self.initialized or not self.db_conn:
+        if not self.initialized:
             return {"error": "Session not initialized"}
         
-        if IMPL_AVAILABLE:
-            result = file_ops.get_file(
-                conn=self.db_conn,
-                file_id=file_id,
-                relpath=file_path,
-                cvids=self._active_cvids if self._active_cvids else None,
-                include_content=True,
-                include_ast=include_ast,
-            )
-            return result
-        else:
-            # Fallback to basic file retrieval
-            try:
-                if file_id:
-                    row = self.db_conn.execute("""
-                        SELECT f.file_id, f.relpath, f.content_hash, fc.content_text,
-                               mp.name as mod_name, cv.content_version_id
-                        FROM files f
-                        JOIN file_contents fc ON f.content_hash = fc.content_hash
-                        JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-                        LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-                        WHERE f.file_id = ?
-                    """, (file_id,)).fetchone()
-                else:
-                    row = self.db_conn.execute("""
-                        SELECT f.file_id, f.relpath, f.content_hash, fc.content_text,
-                               mp.name as mod_name, cv.content_version_id
-                        FROM files f
-                        JOIN file_contents fc ON f.content_hash = fc.content_hash
-                        JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-                        LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-                        WHERE f.relpath = ?
-                        ORDER BY cv.content_version_id DESC
-                        LIMIT 1
-                    """, (file_path,)).fetchone()
-                
-                if not row:
-                    return {"error": f"File not found: {file_path or file_id}"}
-                
-                return {
-                    "fileId": row[0],
-                    "relpath": row[1],
-                    "contentHash": row[2],
-                    "content": row[3],
-                    "mod": row[4] or "vanilla",
-                    "contentVersionId": row[5]
-                }
-            except Exception as e:
-                return {"error": str(e)}
+        try:
+            dbh = self._get_db_handle(purpose="get_file")
+            result = dbh.get_file(file_path)
+            
+            if not result:
+                return {"error": f"File not found: {file_path}"}
+            
+            return {
+                "fileId": result.get("file_id"),
+                "relpath": result.get("relpath"),
+                "content": result.get("content"),
+                "mod": result.get("mod_name") or "vanilla",
+                "contentVersionId": result.get("content_version_id"),
+            }
+        except Exception as e:
+            return {"error": str(e)}
     
     def list_files(self, params: dict) -> dict:
-        """List files in a folder within the active playset."""
+        """List files in a folder - uses raw SQL with CVIDs from mods[]."""
         folder = params.get("folder", "").rstrip("/")
         
-        if not self.initialized or not self.db_conn:
+        if not self.initialized:
             return {"error": "Session not initialized", "files": [], "folders": []}
         
-        if IMPL_AVAILABLE:
-            result = file_ops.list_files(
-                conn=self.db_conn,
-                folder=folder,
-                cvids=self._active_cvids if self._active_cvids else None,
-            )
-            return result
-        else:
-            return {"error": "impl modules not available", "files": [], "folders": []}
+        # For list_files, we need raw SQL. Get CVIDs from WorldAdapter
+        try:
+            dbh = self._get_db_handle(purpose="list_files")
+            cvids = dbh.visible_cvids
+            
+            # Use raw connection for complex queries
+            conn = self._db.conn
+            
+            # Build CVID filter
+            if cvids:
+                placeholders = ",".join("?" * len(cvids))
+                cvid_filter = f"cv.content_version_id IN ({placeholders})"
+                cvid_params = list(sorted(cvids))
+            else:
+                cvid_filter = "1=1"
+                cvid_params = []
+            
+            # Get files directly in this folder
+            files_sql = f"""
+                SELECT f.file_id, f.relpath, mp.name as mod_name
+                FROM files f
+                JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+                LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                WHERE {cvid_filter}
+                AND f.relpath LIKE ? || '/%'
+                AND f.relpath NOT LIKE ? || '/%/%'
+                ORDER BY f.relpath
+            """
+            files = conn.execute(files_sql, cvid_params + [folder, folder]).fetchall()
+            
+            # Get subfolders
+            subfolders_sql = f"""
+                SELECT DISTINCT 
+                    SUBSTR(f.relpath, LENGTH(?) + 2, 
+                           INSTR(SUBSTR(f.relpath, LENGTH(?) + 2), '/') - 1
+                    ) as subfolder,
+                    COUNT(*) as file_count
+                FROM files f
+                JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+                WHERE {cvid_filter}
+                AND f.relpath LIKE ? || '/%/%'
+                GROUP BY subfolder
+                HAVING subfolder != '' AND subfolder IS NOT NULL
+                ORDER BY subfolder
+            """
+            subfolders = conn.execute(subfolders_sql, [folder, folder] + cvid_params + [folder]).fetchall()
+            
+            return {
+                "files": [
+                    {"fileId": f[0], "relpath": f[1], "mod": f[2] or "vanilla"}
+                    for f in files
+                ],
+                "folders": [
+                    {"name": sf[0], "fileCount": sf[1]}
+                    for sf in subfolders
+                ]
+            }
+        except Exception as e:
+            return {"error": str(e), "files": [], "folders": []}
     
     def get_conflicts(self, params: dict) -> dict:
-        """Get conflicts for a folder or symbol type."""
+        """Get conflicts using WorldAdapter.db_handle() for visibility."""
         path_pattern = params.get("path_pattern", "%")
-        symbol_type = params.get("symbol_type")
         
-        if not self.initialized or not self.db_conn:
+        if not self.initialized:
             return {"error": "Session not initialized", "conflicts": []}
         
-        if IMPL_AVAILABLE:
-            if symbol_type:
-                result = conflict_ops.get_symbol_conflicts(
-                    conn=self.db_conn,
-                    cvids=self._active_cvids if self._active_cvids else None,
-                    symbol_type=symbol_type,
-                )
-            else:
-                result = conflict_ops.get_file_conflicts(
-                    conn=self.db_conn,
-                    cvids=self._active_cvids if self._active_cvids else None,
-                    path_pattern=path_pattern,
-                )
-            return result
-        else:
-            return {"error": "impl modules not available", "conflicts": []}
+        try:
+            dbh = self._get_db_handle(purpose="get_conflicts")
+            result = dbh.get_symbol_conflicts()
+            return {"conflicts": result.get("conflicts", [])}
+        except Exception as e:
+            return {"error": str(e), "conflicts": []}
     
     def get_playset_mods(self, params: dict) -> dict:
-        """Get mods in the active playset using impl module."""
-        if IMPL_AVAILABLE:
-            result = playset_ops.get_playset_mods()
-            if not result.get("success"):
-                return {"error": result.get("error", "Unknown error"), "mods": []}
-            
-            # Transform to expected format for extension
-            mods_list = []
-            for idx, mod in enumerate(result.get("mods", [])):
-                mods_list.append({
-                    "loadOrder": mod.get("load_order", idx),
-                    "name": mod.get("name", "Unknown"),
-                    "workshopId": mod.get("steam_id"),
-                    "fileCount": mod.get("file_count", 0),
-                    "contentVersionId": mod.get("content_version_id"),
-                    "sourcePath": mod.get("path", ""),
-                    "kind": "steam" if mod.get("steam_id") else "local"
-                })
-            
-            return {"mods": mods_list}
-        else:
-            return {"error": "impl modules not available", "mods": []}
+        """Get mods in the active playset using playset_ops."""
+        if not IMPL_AVAILABLE:
+            return {"error": "playset_ops not available", "mods": []}
+        
+        result = playset_ops.get_playset_mods()
+        if not result.get("success"):
+            return {"error": result.get("error", "Unknown error"), "mods": []}
+        
+        # Transform to expected format for extension
+        mods_list = []
+        for idx, mod in enumerate(result.get("mods", [])):
+            mods_list.append({
+                "loadOrder": mod.get("load_order", idx),
+                "name": mod.get("name", "Unknown"),
+                "workshopId": mod.get("steam_id"),
+                "fileCount": mod.get("file_count", 0),
+                "contentVersionId": mod.get("content_version_id"),
+                "sourcePath": mod.get("path", ""),
+                "kind": "steam" if mod.get("steam_id") else "local"
+            })
+        
+        return {"mods": mods_list}
     
     def get_top_level_folders(self, params: dict) -> dict:
-        """Get top-level folders across all mods in the active playset."""
-        if not self.initialized or not self.db_conn:
+        """Get top-level folders using CVIDs from WorldAdapter."""
+        if not self.initialized:
             return {"error": "Session not initialized", "folders": []}
         
-        if IMPL_AVAILABLE:
-            result = file_ops.get_top_level_folders(
-                conn=self.db_conn,
-                cvids=self._active_cvids if self._active_cvids else None,
-            )
-            return result
-        else:
-            return {"error": "impl modules not available", "folders": []}
+        try:
+            dbh = self._get_db_handle(purpose="get_top_level_folders")
+            cvids = dbh.visible_cvids
+            
+            conn = self._db.conn
+            
+            if cvids:
+                placeholders = ",".join("?" * len(cvids))
+                cvid_filter = f"WHERE cv.content_version_id IN ({placeholders})"
+                params = list(sorted(cvids))
+            else:
+                cvid_filter = ""
+                params = []
+            
+            sql = f"""
+                SELECT 
+                    CASE 
+                        WHEN INSTR(f.relpath, '/') > 0 THEN SUBSTR(f.relpath, 1, INSTR(f.relpath, '/') - 1)
+                        ELSE f.relpath
+                    END as folder,
+                    COUNT(*) as file_count
+                FROM files f
+                JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+                {cvid_filter}
+                GROUP BY folder
+                ORDER BY folder
+            """
+            
+            folders = conn.execute(sql, params).fetchall()
+            
+            return {
+                "folders": [
+                    {"name": f[0], "fileCount": f[1]}
+                    for f in folders
+                ]
+            }
+        except Exception as e:
+            return {"error": str(e), "folders": []}
     
     def confirm_not_exists(self, params: dict) -> dict:
-        """Exhaustive search to confirm something doesn't exist."""
+        """Exhaustive search using WorldAdapter.db_handle()."""
         name = params.get("name", "")
         symbol_type = params.get("symbol_type")
         
-        if not self.initialized or not self.db_conn or not name:
+        if not self.initialized or not name:
             return {"can_claim_not_exists": False, "similar_matches": []}
         
-        if IMPL_AVAILABLE:
-            result = search_ops.confirm_not_exists(
-                conn=self.db_conn,
-                name=name,
-                cvids=self._active_cvids if self._active_cvids else None,
-                symbol_type=symbol_type,
-            )
-            # Transform keys for extension compatibility
-            return {
-                "can_claim_not_exists": result.get("can_claim_not_exists", False),
-                "similar_matches": [
-                    {"name": m["name"], "symbolType": m.get("type"), "mod": m.get("mod", "vanilla")}
-                    for m in result.get("similar_matches", [])
-                ]
-            }
-        else:
-            return {"can_claim_not_exists": False, "similar_matches": [], "error": "impl not available"}
+        try:
+            dbh = self._get_db_handle(purpose="confirm_not_exists")
+            result = dbh.confirm_not_exists(name, symbol_type)
+            return result
+        except Exception as e:
+            return {"can_claim_not_exists": False, "error": str(e), "similar_matches": []}
 
     def read_local_file(self, params: dict) -> dict:
         """Read file from local mod."""
@@ -792,7 +728,6 @@ class CK3LensBridge:
         file_path = mod_root / mod_name / rel_path
         
         try:
-            # Ensure parent directory exists
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_text(content, encoding="utf-8")
             return {"success": True, "bytes_written": len(content.encode('utf-8'))}
@@ -900,7 +835,7 @@ class CK3LensBridge:
             
             logs_dir = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "logs"
             parser = CK3ErrorParser(logs_dir=logs_dir)
-            parser.parse()  # Need to parse first
+            parser.parse()
             
             patterns = parser.get_cascade_patterns()
             
@@ -912,40 +847,27 @@ class CK3LensBridge:
 
     def list_conflict_units(self, params: dict) -> dict:
         """List conflict units from database."""
-        if not self.initialized or not self.db_conn:
+        if not self.initialized:
             return {"error": "Not initialized", "conflicts": []}
         
         try:
-            from ck3raven.resolver.conflict_analyzer import get_conflict_units
-            
-            # Use impl module to get conflict summary instead of playset_id
-            if IMPL_AVAILABLE:
-                result = conflict_ops.get_conflict_summary(
-                    conn=self.db_conn,
-                    cvids=self._active_cvids if self._active_cvids else None,
-                )
-                return {"conflicts": result}
-            else:
-                return {"error": "impl not available", "conflicts": []}
+            dbh = self._get_db_handle(purpose="list_conflict_units")
+            result = dbh.get_symbol_conflicts()
+            return {"conflicts": result.get("conflicts", [])}
         except Exception as e:
             return {"error": str(e), "conflicts": []}
 
     def get_conflict_detail(self, params: dict) -> dict:
         """Get detail for a specific conflict unit."""
-        if not self.initialized or not self.db_conn:
+        if not self.initialized:
             return {"error": "Not initialized"}
         
-        try:
-            from ck3raven.resolver.conflict_analyzer import get_conflict_unit_detail
-            
-            conflict_unit_id = params.get("conflict_unit_id")
-            if not conflict_unit_id:
-                return {"error": "conflict_unit_id required"}
-            
-            detail = get_conflict_unit_detail(self.db_conn, conflict_unit_id)
-            return detail or {"error": "Not found"}
-        except Exception as e:
-            return {"error": str(e)}
+        conflict_unit_id = params.get("conflict_unit_id")
+        if not conflict_unit_id:
+            return {"error": "conflict_unit_id required"}
+        
+        # For detailed conflict info, need to query by specific unit
+        return {"error": "Not implemented yet"}
 
     def create_override_patch(self, params: dict) -> dict:
         """Create an override patch file in a mod."""
@@ -957,12 +879,9 @@ class CK3LensBridge:
         if not source_path or not target_mod:
             return {"success": False, "error": "source_path and target_mod required"}
         
-        # Direct filesystem implementation for local mods
         mod_root = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
         
-        # Determine output path based on mode
         if mode == "override_patch":
-            # zzz_ prefix for partial patch
             rel_path = source_path
             if '/' in rel_path:
                 parts = rel_path.rsplit('/', 1)
@@ -970,14 +889,12 @@ class CK3LensBridge:
             else:
                 rel_path = f"zzz_{rel_path}"
         else:
-            # full_replace: same name
             rel_path = source_path
         
         target_path = mod_root / target_mod / rel_path
         
         try:
             target_path.parent.mkdir(parents=True, exist_ok=True)
-            
             content = initial_content or f"# Override patch for {source_path}\n# Created by CK3 Lens\n\n"
             target_path.write_text(content, encoding="utf-8")
             
@@ -993,28 +910,26 @@ class CK3LensBridge:
             return {"success": False, "error": str(e)}
 
     def list_playsets(self, params: dict) -> dict:
-        """List all playsets using impl module."""
-        if IMPL_AVAILABLE:
-            result = playset_ops.list_playsets()
-            if not result.get("success"):
-                return {"error": result.get("error", "Unknown error"), "playsets": []}
-            
-            # Transform to expected format for extension
-            playsets = []
-            for p in result.get("playsets", []):
-                playsets.append({
-                    "id": p.get("filename", "").replace(".json", ""),
-                    "name": p.get("name", "Unknown"),
-                    "filename": p.get("filename", ""),
-                    "is_active": p.get("is_active", False),
-                    "mod_count": p.get("mod_count", 0)
-                })
-            
-            # Sort with active first, then alphabetically
-            playsets.sort(key=lambda p: (not p['is_active'], p['name'].lower()))
-            return {"playsets": playsets}
-        else:
-            return {"error": "impl modules not available", "playsets": []}
+        """List all playsets using playset_ops."""
+        if not IMPL_AVAILABLE:
+            return {"error": "playset_ops not available", "playsets": []}
+        
+        result = playset_ops.list_playsets()
+        if not result.get("success"):
+            return {"error": result.get("error", "Unknown error"), "playsets": []}
+        
+        playsets = []
+        for p in result.get("playsets", []):
+            playsets.append({
+                "id": p.get("filename", "").replace(".json", ""),
+                "name": p.get("name", "Unknown"),
+                "filename": p.get("filename", ""),
+                "is_active": p.get("is_active", False),
+                "mod_count": p.get("mod_count", 0)
+            })
+        
+        playsets.sort(key=lambda p: (not p['is_active'], p['name'].lower()))
+        return {"playsets": playsets}
 
     def reorder_mod(self, params: dict) -> dict:
         """Reorder a mod in the active playset."""
@@ -1033,7 +948,7 @@ class CK3LensBridge:
             )
             return result
         else:
-            return {"success": False, "error": "impl modules not available"}
+            return {"success": False, "error": "playset_ops not available"}
 
     def _ast_to_dict(self, ast) -> dict:
         """Convert AST node to dictionary."""
@@ -1058,7 +973,6 @@ def main():
     """Main entry point - run JSON-RPC server over stdio."""
     bridge = CK3LensBridge()
     
-    # Process requests from stdin
     for line in sys.stdin:
         line = line.strip()
         if not line:
