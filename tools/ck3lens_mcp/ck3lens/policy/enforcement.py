@@ -731,19 +731,24 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
         )
     
     if op == OperationType.SHELL_DESTRUCTIVE:
+        # Determine the specific token type based on command pattern
+        # This allows git push -> GIT_PUSH, git push --force -> GIT_FORCE_PUSH, etc.
+        specific_token_type = get_required_token_type(request.command) if request.command else None
+        required_token = specific_token_type or "CMD_RUN_DESTRUCTIVE"
+        
         if not request.token_id:
             return EnforcementResult(
                 decision=Decision.REQUIRE_TOKEN,
-                reason="Destructive shell commands require token",
+                reason=f"Command requires {required_token} token",
                 required_token_tier=TokenTier.TIER_B,
-                required_token_type="CMD_RUN_DESTRUCTIVE",
+                required_token_type=required_token,
                 contract_id=contract.contract_id if contract else None,
             )
         
         # Validate the provided token
         is_valid, reason = _validate_token_for_operation(
             token_id=request.token_id,
-            required_type="CMD_RUN_DESTRUCTIVE",
+            required_type=required_token,
             command=request.command,
         )
         if not is_valid:
@@ -755,7 +760,7 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
         
         return EnforcementResult(
             decision=Decision.ALLOW,
-            reason="Destructive shell command allowed with valid token",
+            reason=f"Command allowed with valid {required_token} token",
             contract_id=contract.contract_id if contract else None,
             token_id=request.token_id,
         )
