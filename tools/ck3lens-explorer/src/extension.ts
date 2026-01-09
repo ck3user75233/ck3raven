@@ -960,10 +960,76 @@ function registerFileWatchers(context: vscode.ExtensionContext, lintingProvider:
 }
 
 /**
+ * Clean up database state on shutdown.
+ * 
+ * This runs a quick Python command to:
+ * 1. Checkpoint WAL file (flush uncommitted writes)
+ * 2. Clean stale daemon lock files if daemon is dead
+ * 
+ * Runs synchronously to ensure cleanup before VS Code exits.
+ */
+function cleanupDatabaseState(logger: Logger): void {
+    const { spawnSync } = require('child_process');
+    
+    // Get Python path from config
+    const config = vscode.workspace.getConfiguration('ck3lens');
+    let pythonPath = config.get<string>('pythonPath') || 'python';
+    
+    // Also try venv in ck3raven path
+    const ck3ravenPath = config.get<string>('ck3ravenPath') || '';
+    if (ck3ravenPath) {
+        const venvPython = path.join(ck3ravenPath, '.venv', 'Scripts', 'python.exe');
+        if (fs.existsSync(venvPython)) {
+            pythonPath = venvPython;
+        }
+    }
+    
+    // Quick inline cleanup script
+    const cleanupScript = `
+import sys
+sys.path.insert(0, r'${ck3ravenPath}')
+try:
+    from builder.db_health import check_and_recover
+    result = check_and_recover()
+    if result['actions_taken']:
+        print('Cleanup actions:', result['actions_taken'])
+except Exception as e:
+    print('Cleanup error:', e)
+`;
+    
+    try {
+        logger.info('Running database cleanup on shutdown...');
+        const result = spawnSync(pythonPath, ['-c', cleanupScript], {
+            timeout: 5000,  // 5 second timeout
+            encoding: 'utf8',
+            windowsHide: true
+        });
+        
+        if (result.stdout) {
+            logger.info(`DB cleanup: ${result.stdout.trim()}`);
+        }
+        if (result.stderr) {
+            logger.debug(`DB cleanup stderr: ${result.stderr.trim()}`);
+        }
+    } catch (err) {
+        logger.debug('DB cleanup failed: ' + (err as Error).message);
+    }
+}
+
+/**
  * Extension deactivation
  */
 export function deactivate(): void {
     logger?.info('CK3 Lens Explorer deactivating...');
+    
+    // Clean up database state (checkpoint WAL, clean stale locks)
+    if (logger) {
+        cleanupDatabaseState(logger);
+    }
+    
+    // Stop IPC diagnostics server
+    diagnosticsServer?.dispose();
+    
     session?.dispose();
     pythonBridge?.dispose();
     statusBar?.dispose();
