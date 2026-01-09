@@ -82,6 +82,31 @@ The emulator module will:
 
 ---
 
+## Utility Scripts
+
+Standalone scripts for common modding tasks (can be run independently of MCP):
+
+| Script | Purpose |
+|-------|---------|
+| `scripts/fix_localization_encoding.py` | Detect and fix CK3 localization file encoding (must be UTF-8-BOM) |
+| `scripts/create_playset.py` | Create a playset configuration from launcher data |
+| `scripts/launcher_to_playset.py` | Import playset from CK3 launcher database |
+| `scripts/ingest_localization.py` | Parse and ingest localization files into database |
+
+### Encoding Fix Script
+
+CK3 requires all localization files to be UTF-8 with BOM. Use this to fix broken files:
+
+```bash
+# Check mod for encoding issues
+python scripts/fix_localization_encoding.py path/to/mod --check
+
+# Fix all encoding issues
+python scripts/fix_localization_encoding.py path/to/mod --fix
+```
+
+---
+
 ## Key Specifications
 
 ### Parser Specifications
