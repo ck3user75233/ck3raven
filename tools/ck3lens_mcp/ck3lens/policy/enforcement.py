@@ -586,6 +586,13 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
         for path in paths_to_check:
             if path:
                 # Extract relative path from canonical address (e.g., 'ck3raven:/tools/...' -> 'tools/...')
+                # Check if canonical address type directly matches a repo domain
+                # e.g., 'wip:/test.txt' with 'wip' in repo_domains -> auto-allow
+                if ':/' in path and not path[1:3] == ':\\':
+                    addr_type = path.split(':/', 1)[0]
+                    if addr_type in repo_domains:
+                        continue  # Address type matches domain, skip pattern check
+                
                 rel_path = path.split(':/', 1)[1] if ':/' in path and not path[1:3] == ':\\' else path
                 allowed, reason = validate_path_in_repo_domains(
                     rel_path, 

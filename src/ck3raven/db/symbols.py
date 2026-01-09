@@ -863,6 +863,26 @@ def extract_symbols_incremental(
                     if cursor.rowcount > 0:
                         batch_inserted += 1
                         symbols_inserted += 1
+                    else:
+                        # Duplicate definition - record as a reference for conflict tracking
+                        # This enables ck3_conflicts to detect when multiple mods define the same symbol
+                        conn.execute("""
+                            INSERT OR IGNORE INTO refs
+                            (ref_type, name, using_ast_id, using_file_id, content_version_id,
+                             line_number, context, resolution_status)
+                            VALUES (?, ?, ?, ?, 
+                                    (SELECT content_version_id FROM files WHERE file_id = ?),
+                                    ?, ?, ?)
+                        """, (
+                            sym.kind,  # ref_type matches symbol_type for cross-reference
+                            sym.name,
+                            ast_id,
+                            file_id,
+                            file_id,
+                            sym.line,
+                            'duplicate_definition',
+                            'resolved'
+                        ))
 
                 symbols_extracted += len(symbols)
                 
