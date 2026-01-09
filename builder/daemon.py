@@ -1093,15 +1093,36 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
             status.update(stats={"vanilla_files": vanilla_files})
             
             # Final log of any remaining files and create final blocks
-            logged = build_tracker.log_phase_delta_ingest("vanilla_ingest")
-            if logged > 0:
-                blocks = build_tracker.reconstruct_blocks(phase="vanilla_ingest")
-                logger.info(f"Final: logged {logged} vanilla files -> {blocks} blocks")
+            # DEBUG: Wrap in try/except to catch crash cause
+            logger.info("Starting log_phase_delta_ingest(vanilla_ingest)...")
+            write_heartbeat()
+            try:
+                _delta_start = time.time()
+                logged = build_tracker.log_phase_delta_ingest("vanilla_ingest")
+                _delta_elapsed = time.time() - _delta_start
+                logger.info(f"log_phase_delta_ingest completed in {_delta_elapsed:.1f}s, logged={logged}")
+            except Exception as e:
+                logger.error(f"CRASH in log_phase_delta_ingest(vanilla_ingest): {type(e).__name__}: {e}")
+                logger.error(traceback.format_exc())
+                logged = 0
             
+            if logged > 0:
+                logger.info("Starting reconstruct_blocks(vanilla_ingest)...")
+                write_heartbeat()
+                try:
+                    blocks = build_tracker.reconstruct_blocks(phase="vanilla_ingest")
+                    logger.info(f"Final: logged {logged} vanilla files -> {blocks} blocks")
+                except Exception as e:
+                    logger.error(f"CRASH in reconstruct_blocks(vanilla_ingest): {type(e).__name__}: {e}")
+                    logger.error(traceback.format_exc())
+            
+            logger.info("Calling end_step(vanilla_ingest)...")
             build_tracker.end_step("vanilla_ingest", StepStats(rows_out=vanilla_files))
             
             # Checkpoint after vanilla
+            logger.info("Calling checkpoint after vanilla_ingest...")
             db_wrapper.checkpoint()
+            logger.info("Checkpoint complete, starting mod_ingest phase...")
             write_heartbeat()
             
             # Phase 2: Mod ingest - playset mods only if playset_file provided, else ALL mods
@@ -1166,17 +1187,38 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
         build_counts['asts'] = ast_count
         
         # Log AST generation results and reconstruct blocks immediately
-        logged = build_tracker.log_phase_delta("ast_generation")
-        if logged > 0:
-            blocks = build_tracker.reconstruct_blocks(phase="ast_generation")
-            logger.info(f"Logged {logged} AST files -> {blocks} blocks")
+        # DEBUG: Wrap in try/except to catch crash cause
+        logger.info("Starting log_phase_delta(ast_generation)...")
+        write_heartbeat()  # Keep heartbeat alive during long query
+        try:
+            _delta_start = time.time()
+            logged = build_tracker.log_phase_delta("ast_generation")
+            _delta_elapsed = time.time() - _delta_start
+            logger.info(f"log_phase_delta completed in {_delta_elapsed:.1f}s, logged={logged}")
+        except Exception as e:
+            logger.error(f"CRASH in log_phase_delta(ast_generation): {type(e).__name__}: {e}")
+            logger.error(traceback.format_exc())
+            logged = 0  # Continue without crashing
         
+        if logged > 0:
+            logger.info("Starting reconstruct_blocks(ast_generation)...")
+            write_heartbeat()
+            try:
+                blocks = build_tracker.reconstruct_blocks(phase="ast_generation")
+                logger.info(f"Logged {logged} AST files -> {blocks} blocks")
+            except Exception as e:
+                logger.error(f"CRASH in reconstruct_blocks(ast_generation): {type(e).__name__}: {e}")
+                logger.error(traceback.format_exc())
+        
+        logger.info("Calling end_step(ast_generation)...")
         build_tracker.end_step("ast_generation", StepStats(
             rows_out=ast_count,
             rows_skipped=ast_stats.get('skipped', 0) if isinstance(ast_stats, dict) else 0,
             rows_errored=ast_stats.get('errors', 0) if isinstance(ast_stats, dict) else 0
         ))
+        logger.info("Calling checkpoint after ast_generation...")
         db_wrapper.checkpoint()
+        logger.info("Checkpoint complete, starting symbol_extraction phase...")
         
         # Phases 4-7 write to protected tables (symbols, refs, lookups, localization)
         # These require an active builder session
@@ -1200,13 +1242,34 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
             build_counts['symbols'] = symbol_count
             
             # Log symbol extraction results and reconstruct blocks immediately
-            logged = build_tracker.log_phase_delta("symbol_extraction")
-            if logged > 0:
-                blocks = build_tracker.reconstruct_blocks(phase="symbol_extraction")
-                logger.info(f"Logged {logged} files with symbols -> {blocks} blocks")
+            # DEBUG: Wrap in try/except to catch crash cause
+            logger.info("Starting log_phase_delta(symbol_extraction)...")
+            write_heartbeat()
+            try:
+                _delta_start = time.time()
+                logged = build_tracker.log_phase_delta("symbol_extraction")
+                _delta_elapsed = time.time() - _delta_start
+                logger.info(f"log_phase_delta completed in {_delta_elapsed:.1f}s, logged={logged}")
+            except Exception as e:
+                logger.error(f"CRASH in log_phase_delta(symbol_extraction): {type(e).__name__}: {e}")
+                logger.error(traceback.format_exc())
+                logged = 0
             
+            if logged > 0:
+                logger.info("Starting reconstruct_blocks(symbol_extraction)...")
+                write_heartbeat()
+                try:
+                    blocks = build_tracker.reconstruct_blocks(phase="symbol_extraction")
+                    logger.info(f"Logged {logged} files with symbols -> {blocks} blocks")
+                except Exception as e:
+                    logger.error(f"CRASH in reconstruct_blocks(symbol_extraction): {type(e).__name__}: {e}")
+                    logger.error(traceback.format_exc())
+            
+            logger.info("Calling end_step(symbol_extraction)...")
             build_tracker.end_step("symbol_extraction", StepStats(rows_out=symbol_count))
+            logger.info("Calling checkpoint after symbol_extraction...")
             db_wrapper.checkpoint()
+            logger.info("Checkpoint complete, starting ref_extraction phase...")
             builder_session.renew_if_needed(30)  # Renew before next phase
             
             # Phase 5: Ref extraction from stored ASTs
@@ -1224,13 +1287,34 @@ def run_rebuild(db_path: Path, force: bool, logger: DaemonLogger, status: Status
             build_counts['refs'] = ref_count
             
             # Log ref extraction results and reconstruct blocks immediately
-            logged = build_tracker.log_phase_delta("ref_extraction")
-            if logged > 0:
-                blocks = build_tracker.reconstruct_blocks(phase="ref_extraction")
-                logger.info(f"Logged {logged} files with refs -> {blocks} blocks")
+            # DEBUG: Wrap in try/except to catch crash cause
+            logger.info("Starting log_phase_delta(ref_extraction)...")
+            write_heartbeat()  # Keep heartbeat alive during long query
+            try:
+                _delta_start = time.time()
+                logged = build_tracker.log_phase_delta("ref_extraction")
+                _delta_elapsed = time.time() - _delta_start
+                logger.info(f"log_phase_delta completed in {_delta_elapsed:.1f}s, logged={logged}")
+            except Exception as e:
+                logger.error(f"CRASH in log_phase_delta(ref_extraction): {type(e).__name__}: {e}")
+                logger.error(traceback.format_exc())
+                logged = 0  # Continue without crashing
             
+            if logged > 0:
+                logger.info("Starting reconstruct_blocks(ref_extraction)...")
+                write_heartbeat()
+                try:
+                    blocks = build_tracker.reconstruct_blocks(phase="ref_extraction")
+                    logger.info(f"Logged {logged} files with refs -> {blocks} blocks")
+                except Exception as e:
+                    logger.error(f"CRASH in reconstruct_blocks(ref_extraction): {type(e).__name__}: {e}")
+                    logger.error(traceback.format_exc())
+            
+            logger.info("Calling end_step(ref_extraction)...")
             build_tracker.end_step("ref_extraction", StepStats(rows_out=ref_count))
+            logger.info("Calling checkpoint after ref_extraction...")
             db_wrapper.checkpoint()
+            logger.info("Checkpoint complete, starting localization phase...")
             
             # Phase 6: Localization parsing
             build_tracker.start_step("localization_parsing")
