@@ -1452,40 +1452,62 @@ def _file_create_patch(mod_name, source_mod, source_path, patch_mode, initial_co
 def _refresh_file_in_db_internal(mod_name, rel_path, content=None, deleted=False):
     """Internal helper to refresh file in database.
     
-    If builder daemon is running, appends to pending_refresh.log instead of
-    blocking on DB lock. The daemon processes pending entries after build completes.
+    If builder daemon is running OR database is locked, appends to pending_refresh.log
+    instead of blocking. The daemon processes pending entries after build completes.
+    
+    Uses a short timeout (1 second) to fail fast if DB is locked, then defers to
+    the pending log for later processing.
     """
+    import sys
+    import sqlite3
+    from pathlib import Path as P
+    
+    project_root = P(__file__).parent.parent.parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    
+    def _defer_to_pending(reason: str) -> dict:
+        """Helper to defer operation to pending log."""
+        from builder.pending_refresh import append_pending_write, append_pending_delete
+        if deleted:
+            success = append_pending_delete(mod_name, rel_path)
+        else:
+            success = append_pending_write(mod_name, rel_path)
+        return {
+            "success": success,
+            "deferred": True,
+            "reason": reason
+        }
+    
     try:
-        import sys
-        from pathlib import Path as P
-        project_root = P(__file__).parent.parent.parent.parent
-        if str(project_root) not in sys.path:
-            sys.path.insert(0, str(project_root))\
-        
         # Check if builder daemon is running - defer to pending log
         from builder.daemon import is_daemon_running
         if is_daemon_running():
-            from builder.pending_refresh import append_pending_write, append_pending_delete
-            if deleted:
-                success = append_pending_delete(mod_name, rel_path)
-            else:
-                success = append_pending_write(mod_name, rel_path)
-            return {
-                "success": success,
-                "deferred": True,
-                "reason": "Builder daemon running - queued for processing after build"
-            }
+            return _defer_to_pending("Builder daemon running - queued for processing after build")
         
         from builder.incremental import refresh_single_file, mark_file_deleted
-        from ck3raven.db.schema import get_connection, DEFAULT_DB_PATH
+        from ck3raven.db.schema import DEFAULT_DB_PATH
         
-        conn = get_connection(DEFAULT_DB_PATH)
+        # Use a SHORT timeout connection (1 second) to fail fast if DB is locked
+        # This prevents the 5+ second hang when WAL is uncommitted from crashed builds
+        conn = sqlite3.connect(str(DEFAULT_DB_PATH), timeout=1.0)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
         
-        if deleted:
-            return mark_file_deleted(conn, mod_name, rel_path)
-        else:
-            return refresh_single_file(conn, mod_name, rel_path, content=content)
-    except Exception as e:
+        try:
+            if deleted:
+                return mark_file_deleted(conn, mod_name, rel_path)
+            else:
+                return refresh_single_file(conn, mod_name, rel_path, content=content)
+        finally:
+            conn.close()
+            
+    except sqlite3.OperationalError as e:
+        if "database is locked" in str(e).lower():
+            # DB locked (stale WAL, crashed daemon, etc.) - defer instead of failing
+            return _defer_to_pending(f"Database locked - queued for later: {e}")
         return {"success": False, "error": str(e)}
     except Exception as e:
         return {"success": False, "error": str(e)}
