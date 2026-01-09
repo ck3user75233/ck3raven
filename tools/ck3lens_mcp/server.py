@@ -96,10 +96,23 @@ _cached_world_mode: Optional[str] = None
 
 
 def _get_session() -> Session:
-    global _session
+    global _session, _session_cv_ids_resolved, _db
     if _session is None:
         from ck3lens.workspace import load_config
         _session = load_config()
+    
+    # Ensure CVIDs are resolved if we have a DB connection
+    # This handles cases where _get_session() is called after _get_db()
+    # but CVIDs weren't resolved yet (e.g., after server restart)
+    if not _session_cv_ids_resolved and _db is not None:
+        stats = _session.resolve_cvids(_db)
+        _session_cv_ids_resolved = True
+        if stats.get("mods_missing"):
+            import logging
+            logging.getLogger(__name__).warning(
+                f"Mods not indexed: {stats['mods_missing']}"
+            )
+    
     return _session
 
 
