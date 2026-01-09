@@ -252,4 +252,14 @@ def get_health_status() -> Dict[str, Any]:
     if stale_check["is_stale"]:
         status["stale_reason"] = stale_check["reason"]
     
+    # Check for pending writes (files written but not yet synced to DB)
+    try:
+        from builder.pending_refresh import get_pending_count, has_pending
+        status["pending_writes"] = get_pending_count()
+        status["has_pending"] = has_pending()
+    except Exception:
+        status["pending_writes"] = 0
+        status["has_pending"] = False
+    
     return status
+

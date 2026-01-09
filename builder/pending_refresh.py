@@ -158,3 +158,54 @@ def get_pending_count() -> int:
         return len([l for l in content.strip().split("\n") if l])
     except Exception:
         return 0
+
+
+def is_file_pending(mod_name: str, rel_path: str) -> bool:
+    """
+    Check if a specific file has a pending write/delete.
+    
+    Use this before DB reads to check if more recent data exists on disk.
+    """
+    if not PENDING_REFRESH_LOG.exists():
+        return False
+    try:
+        content = PENDING_REFRESH_LOG.read_text(encoding="utf-8")
+        # Check for either WRITE or DELETE entry
+        write_entry = f"WRITE|{mod_name}|{rel_path}"
+        delete_entry = f"DELETE|{mod_name}|{rel_path}"
+        return write_entry in content or delete_entry in content
+    except Exception:
+        return False
+
+
+def get_pending_files() -> dict[str, list[tuple[str, str]]]:
+    """
+    Get all pending files grouped by operation type.
+    
+    Returns:
+        {
+            "writes": [(mod_name, rel_path), ...],
+            "deletes": [(mod_name, rel_path), ...]
+        }
+    """
+    result = {"writes": [], "deletes": []}
+    
+    if not PENDING_REFRESH_LOG.exists():
+        return result
+    
+    try:
+        content = PENDING_REFRESH_LOG.read_text(encoding="utf-8")
+        for line in content.strip().split("\n"):
+            if not line:
+                continue
+            parts = line.split("|", 2)
+            if len(parts) == 3:
+                op, mod_name, rel_path = parts
+                if op == "WRITE":
+                    result["writes"].append((mod_name, rel_path))
+                elif op == "DELETE":
+                    result["deletes"].append((mod_name, rel_path))
+    except Exception:
+        pass
+    
+    return result
