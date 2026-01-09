@@ -235,6 +235,9 @@ def _load_playset_from_json(playset_file: Path) -> Optional[dict]:
     This is the NEW primary source for playset data.
     Reads the full playset format with agent_briefing support.
     
+    IMPORTANT: Auto-migrates paths if they reference a different user profile.
+    This handles the case where playset files are synced via git between machines.
+    
     Returns dict with session scope data or None if file missing.
     """
     if not playset_file.exists():
@@ -242,6 +245,18 @@ def _load_playset_from_json(playset_file: Path) -> Optional[dict]:
     
     try:
         data = json.loads(playset_file.read_text(encoding='utf-8-sig'))
+        
+        # Auto-migrate paths if they reference a different user profile
+        try:
+            from .ck3lens.path_migration import migrate_playset_paths, validate_paths_exist
+            migrated_data, was_modified, migration_msg = migrate_playset_paths(data)
+            if was_modified:
+                print(f"[PATH MIGRATION] {migration_msg}")
+                data = migrated_data
+                # Optionally save the migrated playset
+                # (disabled for now - just migrate in memory)
+        except ImportError:
+            pass  # path_migration module not available
         
         active_mod_ids = set()
         active_roots = set()
@@ -2427,7 +2442,7 @@ def ck3_vscode(
 
 @mcp.tool()
 def ck3_repair(
-    command: Literal["query", "diagnose_launcher", "repair_registry", "delete_cache", "backup_launcher"] = "query",
+    command: Literal["query", "diagnose_launcher", "repair_registry", "delete_cache", "backup_launcher", "migrate_paths"] = "query",
     # For query - get status of repair targets
     target: Literal["all", "launcher", "cache", "dlc_load"] | None = None,
     # For repair_registry / delete_cache
@@ -2452,6 +2467,7 @@ def ck3_repair(
     command=repair_registry   ? Fix launcher registry entries (requires dry_run=False)
     command=delete_cache      ? Clear ck3raven cache files (requires dry_run=False)
     command=backup_launcher   ? Create backup of launcher database before repair
+    command=migrate_paths     ? Migrate playset paths to current user profile
     
     Args:
         command: Action to perform
@@ -2627,6 +2643,114 @@ def ck3_repair(
             "deleted": deleted,
             "message": "Cache cleared. ck3raven will rebuild as needed.",
         }
+    
+    if command == "migrate_paths":
+        # Migrate playset paths to current user profile
+        from .ck3lens.path_migration import detect_path_mismatch, migrate_playset_paths, validate_paths_exist
+        
+        # Get active playset data
+        if not session.playset_id:
+            return {"error": "No active playset. Use ck3_playset to switch to a playset first."}
+        
+        # Find the playset file
+        playsets_dir = Path(__file__).parent.parent.parent / "playsets"
+        playset_file = None
+        playset_data = None
+        
+        # Try to find playset file by name match
+        for f in playsets_dir.glob("*.json"):
+            try:
+                with open(f, 'r', encoding='utf-8') as fp:
+                    data = json.load(fp)
+                    if data.get("playset_id") == session.playset_id or data.get("name") == session.playset_name:
+                        playset_file = f
+                        playset_data = data
+                        break
+            except:
+                continue
+        
+        if not playset_data:
+            return {
+                "error": f"Could not find playset file for '{session.playset_name}'",
+                "hint": "Playset may be stored in database only, not a JSON file",
+            }
+        
+        # Detect path mismatch
+        local_mods_folder = playset_data.get("local_mods_folder", "")
+        mismatch = detect_path_mismatch(local_mods_folder)
+        
+        if not mismatch:
+            # Check individual mod paths too
+            mods = playset_data.get("mods", [])
+            for mod in mods:
+                disk_path = mod.get("disk_path", "")
+                if disk_path:
+                    mismatch = detect_path_mismatch(disk_path)
+                    if mismatch:
+                        break
+        
+        if not mismatch:
+            return {
+                "success": True,
+                "message": "No path migration needed - paths already match current user profile",
+                "local_mods_folder": local_mods_folder,
+            }
+        
+        old_user, new_user = mismatch
+        
+        # Perform migration
+        migrated_data, was_modified, migration_msg = migrate_playset_paths(playset_data)
+        
+        if not was_modified:
+            return {
+                "success": True,
+                "message": "No changes needed",
+            }
+        
+        # Validate migrated paths exist
+        validation_issues = validate_paths_exist(migrated_data)
+        
+        if dry_run:
+            return {
+                "dry_run": True,
+                "migration": {
+                    "old_user": old_user,
+                    "new_user": new_user,
+                    "message": migration_msg,
+                },
+                "validation_issues": validation_issues[:10],  # First 10
+                "validation_issue_count": len(validation_issues),
+                "playset_file": str(playset_file),
+                "message": "Set dry_run=False to save changes to playset file",
+            }
+        
+        # Save migrated playset
+        try:
+            with open(playset_file, 'w', encoding='utf-8') as fp:
+                json.dump(migrated_data, fp, indent=2, ensure_ascii=False)
+            
+            # Reload the playset
+            _load_playset_from_json(str(playset_file))
+            
+            trace.log("ck3lens.repair", {"command": "migrate_paths", "dry_run": False}, {
+                "old_user": old_user,
+                "new_user": new_user,
+                "file": str(playset_file),
+            })
+            
+            return {
+                "success": True,
+                "migration": {
+                    "old_user": old_user,
+                    "new_user": new_user,
+                    "message": migration_msg,
+                },
+                "validation_issues": validation_issues[:5],
+                "playset_file": str(playset_file),
+                "message": "Paths migrated and playset reloaded",
+            }
+        except Exception as e:
+            return {"error": f"Failed to save migrated playset: {e}"}
     
     return {"error": f"Unknown command: {command}"}
 
