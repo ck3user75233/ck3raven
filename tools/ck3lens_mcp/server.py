@@ -109,6 +109,21 @@ def _get_db() -> DBQueries:
         session = _get_session()
         if session.db_path is None:
             raise RuntimeError("No database path configured. Check playset configuration.")
+        
+        # Run health check BEFORE opening database connection
+        # This recovers from stale daemon state and checkpoints large WAL files
+        try:
+            from builder.db_health import check_and_recover
+            health = check_and_recover()
+            if health["actions_taken"]:
+                import logging
+                logging.getLogger(__name__).info(
+                    f"DB health recovery: {health['actions_taken']}"
+                )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"DB health check failed: {e}")
+        
         _db = DBQueries(db_path=session.db_path)
         
         # Resolve cvids on first DB connection
@@ -663,10 +678,21 @@ def ck3_get_db_status() -> dict:
     status = _check_db_health(db.conn)
     status["rebuild_command"] = "python builder/daemon.py start"
     
+    # Add health information
+    try:
+        from builder.db_health import get_health_status
+        status["health"] = get_health_status()
+    except Exception as e:
+        status["health"] = {"error": str(e)}
+    
     if status.get("needs_rebuild"):
-        status["message"] = f"âš ï¸ Database needs rebuild: {status.get('rebuild_reason')}"
+        status["message"] = f"Database needs rebuild: {status.get('rebuild_reason')}"
     else:
-        status["message"] = f"âœ… Database ready: {status.get('symbols_extracted', 0):,} symbols, {status.get('refs_extracted', 0):,} refs"
+        status["message"] = f"Database ready: {status.get('symbols_extracted', 0):,} symbols, {status.get('refs_extracted', 0):,} refs"
+    
+    # Add warning if daemon is stale
+    if status.get("health", {}).get("daemon_stale"):
+        status["message"] += f" | STALE DAEMON: {status['health'].get('stale_reason', 'unknown')}"
     
     trace.log("ck3lens.get_db_status", {}, status)
     
