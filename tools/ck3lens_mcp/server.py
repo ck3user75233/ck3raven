@@ -276,7 +276,7 @@ def _load_playset_from_json(playset_file: Path) -> Optional[dict]:
         
         # Auto-migrate paths if they reference a different user profile
         try:
-            from .ck3lens.path_migration import migrate_playset_paths, validate_paths_exist
+            from .ck3lens.path_migration import migrate_playset_paths
             migrated_data, was_modified, migration_msg = migrate_playset_paths(data)
             if was_modified:
                 print(f"[PATH MIGRATION] {migration_msg}")
@@ -2685,7 +2685,7 @@ def ck3_repair(
     
     if command == "migrate_paths":
         # Migrate playset paths to current user profile
-        from .ck3lens.path_migration import detect_path_mismatch, migrate_playset_paths, validate_paths_exist
+        from .ck3lens.path_migration import detect_path_mismatch, migrate_playset_paths
         
         # Get active playset data
         if not session.playset_id:
@@ -2746,9 +2746,6 @@ def ck3_repair(
                 "message": "No changes needed",
             }
         
-        # Validate migrated paths exist
-        validation_issues = validate_paths_exist(migrated_data)
-        
         if dry_run:
             return {
                 "dry_run": True,
@@ -2757,8 +2754,6 @@ def ck3_repair(
                     "new_user": new_user,
                     "message": migration_msg,
                 },
-                "validation_issues": validation_issues[:10],  # First 10
-                "validation_issue_count": len(validation_issues),
                 "playset_file": str(playset_file),
                 "message": "Set dry_run=False to save changes to playset file",
             }
@@ -2784,7 +2779,6 @@ def ck3_repair(
                     "new_user": new_user,
                     "message": migration_msg,
                 },
-                "validation_issues": validation_issues[:5],
                 "playset_file": str(playset_file),
                 "message": "Paths migrated and playset reloaded",
             }
