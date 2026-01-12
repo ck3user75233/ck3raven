@@ -3028,6 +3028,7 @@ def ck3_exec(
     target_paths: list[str] | None = None,
     token_id: str | None = None,
     dry_run: bool = False,
+    timeout: int = 30,
 ) -> dict:
     """
     Execute a shell command with CLW policy enforcement.
@@ -3039,9 +3040,9 @@ def ck3_exec(
     This is the ONLY safe way for agents to run shell commands.
     All commands are evaluated against the policy engine:
     
-    - Safe commands (cat, git status, etc.) ? Allowed automatically
-    - Risky commands (rm *.py, git push) ? Require approval token
-    - Blocked commands (rm -rf /) ? Always denied
+    - Safe commands (cat, git status, etc.) → Allowed automatically
+    - Risky commands (rm *.py, git push) → Require approval token
+    - Blocked commands (rm -rf /) → Always denied
     
     If a command requires a token, use ck3_token to request one first,
     then pass the token_id here.
@@ -3052,6 +3053,7 @@ def ck3_exec(
         target_paths: Files/dirs being affected (helps scope validation)
         token_id: Approval token ID (required for risky commands)
         dry_run: If True, only check policy without executing
+        timeout: Max seconds to wait for command (default 30, max 300)
     
     Returns:
         {
@@ -3411,6 +3413,9 @@ def ck3_exec(
             "message": "Dry run - command would be allowed",
         }
     
+    # Clamp timeout to max 300 seconds (moved outside try block for exception handler access)
+    actual_timeout = min(max(timeout, 1), 300)
+    
     # Actually execute
     try:
         import platform
@@ -3434,7 +3439,7 @@ def ck3_exec(
                 cwd=working_dir,
                 capture_output=True,
                 text=True,
-                timeout=300,  # 5 minute timeout
+                timeout=actual_timeout,
                 env=exec_env,
                 stdin=subprocess.DEVNULL,  # Prevent any stdin reads
             )
@@ -3445,7 +3450,7 @@ def ck3_exec(
                 cwd=working_dir,
                 capture_output=True,
                 text=True,
-                timeout=300,  # 5 minute timeout
+                timeout=actual_timeout,
                 env=exec_env,
             )
         
@@ -3460,10 +3465,11 @@ def ck3_exec(
         return {
             "allowed": True,
             "executed": True,
-            "output": "Command timed out after 5 minutes",
+            "output": f"Command timed out after {actual_timeout} seconds",
             "exit_code": -1,
             "policy": policy_info,
             "error": "timeout",
+            "hint": f"Command exceeded timeout of {actual_timeout}s. Use timeout= parameter to increase (max 300s).",
         }
     except Exception as e:
         return {
