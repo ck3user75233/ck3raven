@@ -9,6 +9,7 @@ Key behaviors:
 - Executes complete envelope for each file
 - Never skips work based on artifact existence
 - Writes derived artifacts with fingerprint binding
+- **AUTOMATIC RECOVERY**: Reclaims expired leases and marks repeatedly-failing items as errors
 
 No parallel constructs:
 - No relpath/cvid in build_queue (derived via joins)
@@ -18,6 +19,7 @@ No parallel constructs:
 
 import json
 import os
+import signal
 import sqlite3
 import sys
 import time
@@ -30,8 +32,15 @@ from typing import Callable, Optional
 # Lease duration in seconds
 BUILD_LEASE_SECONDS = 180  # 3 minutes
 
-# Maximum retry attempts
+# Maximum retry attempts before marking as permanent error
 MAX_RETRIES = 3
+
+# Maximum times a single item can be reclaimed (lease expired without completion)
+# After this many reclaims, the item is marked as error even if retry_count < MAX_RETRIES
+MAX_RECLAIMS = 3
+
+# Timeout for processing a single item (seconds)
+ITEM_TIMEOUT_SECONDS = 120  # 2 minutes
 
 
 def _safe_print(msg: str) -> None:
@@ -276,6 +285,7 @@ class BuildWorker:
     
     Claims work by monotonic build_id (oldest first).
     Resolves paths via canonical joins.
+    Automatically recovers from crashed workers via lease expiration.
     """
     
     def __init__(self, conn: sqlite3.Connection, worker_id: Optional[str] = None):
@@ -283,17 +293,69 @@ class BuildWorker:
         self.worker_id = worker_id or f"worker-{os.getpid()}"
         self.executor = EnvelopeExecutor(conn)
     
+    def recover_expired_leases(self) -> int:
+        """
+        Check for items with expired leases and either reset or mark as error.
+        
+        Items that have been reclaimed too many times (MAX_RECLAIMS) are marked
+        as permanent errors to prevent infinite loops on problematic files.
+        
+        Returns count of items recovered.
+        """
+        now = time.time()
+        
+        # First, mark items that have been reclaimed too many times as errors
+        self.conn.execute("""
+            UPDATE build_queue
+            SET status = 'error',
+                error_message = 'Exceeded max reclaims (' || reclaim_count || ') - likely causing worker crashes',
+                lease_expires_at = NULL,
+                lease_holder = NULL
+            WHERE status = 'processing'
+              AND lease_expires_at < ?
+              AND reclaim_count >= ?
+        """, (now, MAX_RECLAIMS))
+        
+        marked_as_error = self.conn.total_changes
+        
+        # Reset remaining expired items to pending and increment reclaim_count
+        self.conn.execute("""
+            UPDATE build_queue
+            SET status = 'pending',
+                reclaim_count = COALESCE(reclaim_count, 0) + 1,
+                lease_expires_at = NULL,
+                lease_holder = NULL
+            WHERE status = 'processing'
+              AND lease_expires_at < ?
+        """, (now,))
+        
+        recovered = self.conn.total_changes
+        self.conn.commit()
+        
+        if marked_as_error > 0:
+            _safe_print(f"[Recovery] Marked {marked_as_error} repeatedly-failing items as errors")
+        if recovered > 0:
+            _safe_print(f"[Recovery] Reset {recovered} expired leases to pending")
+        
+        return recovered + marked_as_error
+    
     def claim_work(self) -> Optional[dict]:
         """
         Claim highest-priority pending work item.
         
         Order: priority DESC (flash=1 first), then build_id ASC (FIFO within priority).
         Returns work item with all context resolved via joins.
+        
+        Automatically recovers expired leases before claiming.
         """
         now = time.time()
+        
+        # First, recover any expired leases
+        self.recover_expired_leases()
+        
         lease_until = now + BUILD_LEASE_SECONDS
         
-        # Claim with priority ordering: flash (priority=1) first, then FIFO by build_id
+        # Claim pending item (expired items already reset to pending above)
         cursor = self.conn.execute("""
             UPDATE build_queue
             SET status = 'processing',
@@ -303,13 +365,12 @@ class BuildWorker:
             WHERE build_id = (
                 SELECT build_id FROM build_queue
                 WHERE status = 'pending'
-                   OR (status = 'processing' AND lease_expires_at < ?)
                 ORDER BY priority DESC, build_id ASC
                 LIMIT 1
             )
             RETURNING build_id, file_id, envelope, priority,
                       work_file_mtime, work_file_size, work_file_hash
-        """, (lease_until, self.worker_id, now, now))
+        """, (lease_until, self.worker_id, now))
         
         row = cursor.fetchone()
         self.conn.commit()

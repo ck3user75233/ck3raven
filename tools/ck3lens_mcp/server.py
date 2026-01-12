@@ -3091,9 +3091,16 @@ def ck3_exec(
     # ==========================================================================
     # CANONICAL PATH NORMALIZATION for working_dir and target_paths
     # Use normalize_path_input() for all path resolution.
+    # NOTE: WorldAdapter is OPTIONAL - don't fail if DB unavailable
     # ==========================================================================
     
-    world = _get_world()
+    try:
+        world = _get_world()
+    except Exception:
+        # DB unavailable or not initialized - continue without path visibility checks
+        # This allows ck3_exec to work even when DB is locked or missing
+        world = None
+    
     if world is not None:
         # Check working directory visibility
         if working_dir:

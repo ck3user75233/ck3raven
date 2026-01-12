@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS build_queue (
     started_at REAL,
     completed_at REAL,
     retry_count INTEGER NOT NULL DEFAULT 0,
+    reclaim_count INTEGER NOT NULL DEFAULT 0,  -- Times reclaimed due to expired lease (crash recovery)
     error_message TEXT,
     error_step TEXT                         -- Which step failed (for debugging only)
 );
@@ -127,6 +128,9 @@ def init_qbuilder_schema(conn: sqlite3.Connection) -> None:
     
     # Add priority column to build_queue if not exists (migration for existing DBs)
     _add_column_if_missing(conn, 'build_queue', 'priority', 'INTEGER DEFAULT 0')
+    
+    # Add reclaim_count for tracking lease expirations (crash recovery)
+    _add_column_if_missing(conn, 'build_queue', 'reclaim_count', 'INTEGER DEFAULT 0')
     
     # Add AST validity signature fields (file_id + input fingerprint)
     # An AST is valid only if its signature matches current file fingerprint
