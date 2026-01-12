@@ -1,0 +1,76 @@
+Generated: 2026-01-11T14:34:41.964630
+Script: show_routing.py
+
+======================================================================
+ROUTING TABLE VALIDATION PROOF
+======================================================================
+
+1. STRUCTURE VALIDATION
+----------------------------------------
+  [OK] All required keys present: ['extension_to_type', 'type_to_envelope', 'envelope_steps']
+
+  Extensions mapped: 8
+  File types: 9
+  Envelopes defined: 7
+
+2. EXTENSION TO TYPE MAPPING
+----------------------------------------
+  .gfx       -> gfx             [OK]
+  .gui       -> gui             [OK]
+  .info      -> info            [OK]
+  .json      -> json            [OK]
+  .md        -> markdown        [OK]
+  .py        -> python          [OK]
+  .txt       -> script          [OK]
+  .yml       -> localization    [OK]
+
+3. TYPE TO ENVELOPE MAPPING
+----------------------------------------
+  gfx             -> E_GFX           [OK]
+  gui             -> E_GUI           [OK]
+  info            -> E_SKIP          [OK]
+  json            -> E_JSON          [OK]
+  localization    -> E_LOC           [OK]
+  markdown        -> E_SKIP          [OK]
+  python          -> E_PYTHON        [OK]
+  script          -> E_SCRIPT        [OK]
+  unknown         -> E_SKIP          [OK]
+
+4. ENVELOPE STEP DEFINITIONS
+----------------------------------------
+  E_GFX:
+    - parse
+  E_GUI:
+    - parse
+    - extract_gui_widgets
+  E_JSON:
+    - parse_json
+  E_LOC:
+    - parse_loc
+    - extract_loc_entries
+  E_PYTHON:
+    - lint_python
+  E_SCRIPT:
+    - parse
+    - extract_symbols
+    - extract_refs
+  E_SKIP: (no steps - skip envelope)
+
+5. SAMPLE ROUTING DECISIONS
+----------------------------------------
+  common/traits/00_traits.txt
+    -> E_SCRIPT
+  events/story_events.txt
+    -> E_SCRIPT
+  localization/english/custom_l_english.yml
+    -> E_LOC
+  gfx/portraits/some_file.dds
+    -> E_SKIP (binary)
+  gui/window.gui
+    -> E_GUI
+  random/unknown.xyz
+    -> E_SKIP
+
+======================================================================
+VALIDATION COMPLETE
+======================================================================

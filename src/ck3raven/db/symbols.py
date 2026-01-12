@@ -10,6 +10,10 @@ DESIGN PHILOSOPHY:
 - Use 'definition' as fallback for unknown paths
 - Extract scripted values (@name = value) everywhere
 - Better to have "too many" symbols than miss definitions
+
+SCHEMA v4 COLUMN NAMES:
+- symbols: file_id, ast_id, content_version_id, line_number, column_number, symbol_type
+- refs: file_id, ast_id, content_version_id, line_number, column_number, ref_type
 """
 
 import sqlite3
@@ -506,12 +510,14 @@ def extract_refs_from_ast(
 def store_symbols_batch(
     conn: sqlite3.Connection,
     file_id: int,
-    content_hash: str,
+    content_version_id: int,
     ast_id: int,
     symbols: List[ExtractedSymbol]
 ) -> int:
     """
     Store multiple symbols in batch.
+    
+    Schema v4 column names: file_id, ast_id, content_version_id, line_number, column_number, symbol_type
     
     Returns:
         Number of symbols stored
@@ -524,15 +530,17 @@ def store_symbols_batch(
     
     # Insert new symbols
     rows = [
-        (file_id, content_hash, ast_id, s.name, s.kind, s.line, s.column, 
-         s.scope, s.signature, s.doc)
+        (file_id, content_version_id, ast_id, s.line, s.column,
+         s.kind, s.name, s.scope,
+         json.dumps({"signature": s.signature, "doc": s.doc}) if s.signature or s.doc else None)
         for s in symbols
     ]
     
     conn.executemany("""
         INSERT INTO symbols 
-        (file_id, content_hash, ast_id, name, kind, line, column, scope, signature, doc)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (file_id, content_version_id, ast_id, line_number, column_number,
+         symbol_type, name, scope, metadata_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, rows)
     
     conn.commit()
@@ -542,12 +550,14 @@ def store_symbols_batch(
 def store_refs_batch(
     conn: sqlite3.Connection,
     file_id: int,
-    content_hash: str,
+    content_version_id: int,
     ast_id: int,
     refs: List[ExtractedRef]
 ) -> int:
     """
     Store multiple references in batch.
+    
+    Schema v4 column names: file_id, ast_id, content_version_id, line_number, column_number, ref_type
     
     Returns:
         Number of refs stored
@@ -560,14 +570,16 @@ def store_refs_batch(
     
     # Insert new refs
     rows = [
-        (file_id, content_hash, ast_id, r.name, r.kind, r.line, r.column, r.context)
+        (file_id, content_version_id, ast_id, r.line, r.column,
+         r.kind, r.name, r.context, 'unknown')
         for r in refs
     ]
     
     conn.executemany("""
         INSERT INTO refs 
-        (file_id, content_hash, ast_id, name, kind, line, column, context)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (file_id, content_version_id, ast_id, line_number, column_number,
+         ref_type, name, context, resolution_status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, rows)
     
     conn.commit()
@@ -577,7 +589,7 @@ def store_refs_batch(
 def extract_and_store(
     conn: sqlite3.Connection,
     file_id: int,
-    content_hash: str,
+    content_version_id: int,
     ast_id: int,
     ast_dict: Dict[str, Any],
     relpath: str
@@ -588,11 +600,11 @@ def extract_and_store(
     Returns:
         (symbol_count, ref_count)
     """
-    symbols = list(extract_symbols_from_ast(ast_dict, relpath, content_hash))
-    refs = list(extract_refs_from_ast(ast_dict, relpath, content_hash))
+    symbols = list(extract_symbols_from_ast(ast_dict, relpath, ""))
+    refs = list(extract_refs_from_ast(ast_dict, relpath, ""))
     
-    sym_count = store_symbols_batch(conn, file_id, content_hash, ast_id, symbols)
-    ref_count = store_refs_batch(conn, file_id, content_hash, ast_id, refs)
+    sym_count = store_symbols_batch(conn, file_id, content_version_id, ast_id, symbols)
+    ref_count = store_refs_batch(conn, file_id, content_version_id, ast_id, refs)
     
     return sym_count, ref_count
 
@@ -600,13 +612,13 @@ def extract_and_store(
 def find_symbol_by_name(
     conn: sqlite3.Connection,
     name: str,
-    kind: Optional[str] = None
+    symbol_type: Optional[str] = None
 ) -> List[Symbol]:
     """Find symbols by exact name match."""
-    if kind:
+    if symbol_type:
         rows = conn.execute("""
-            SELECT * FROM symbols WHERE name = ? AND kind = ?
-        """, (name, kind)).fetchall()
+            SELECT * FROM symbols WHERE name = ? AND symbol_type = ?
+        """, (name, symbol_type)).fetchall()
     else:
         rows = conn.execute("""
             SELECT * FROM symbols WHERE name = ?
@@ -634,13 +646,13 @@ def find_symbols_fts(
 def find_refs_to_symbol(
     conn: sqlite3.Connection,
     name: str,
-    kind: Optional[str] = None
+    ref_type: Optional[str] = None
 ) -> List[Reference]:
     """Find all references to a symbol."""
-    if kind:
+    if ref_type:
         rows = conn.execute("""
-            SELECT * FROM refs WHERE name = ? AND kind = ?
-        """, (name, kind)).fetchall()
+            SELECT * FROM refs WHERE name = ? AND ref_type = ?
+        """, (name, ref_type)).fetchall()
     else:
         rows = conn.execute("""
             SELECT * FROM refs WHERE name = ?
@@ -676,39 +688,39 @@ def get_symbol_stats(conn: sqlite3.Connection) -> Dict[str, Any]:
     row = conn.execute("SELECT COUNT(*) as cnt FROM refs").fetchone()
     stats['total_refs'] = row['cnt']
     
-    # By kind
+    # By type (using correct column names)
     rows = conn.execute("""
-        SELECT kind, COUNT(*) as cnt FROM symbols GROUP BY kind ORDER BY cnt DESC
+        SELECT symbol_type, COUNT(*) as cnt FROM symbols GROUP BY symbol_type ORDER BY cnt DESC
     """).fetchall()
-    stats['symbols_by_kind'] = {r['kind']: r['cnt'] for r in rows}
+    stats['symbols_by_type'] = {r['symbol_type']: r['cnt'] for r in rows}
     
     rows = conn.execute("""
-        SELECT kind, COUNT(*) as cnt FROM refs GROUP BY kind ORDER BY cnt DESC
+        SELECT ref_type, COUNT(*) as cnt FROM refs GROUP BY ref_type ORDER BY cnt DESC
     """).fetchall()
-    stats['refs_by_kind'] = {r['kind']: r['cnt'] for r in rows}
+    stats['refs_by_type'] = {r['ref_type']: r['cnt'] for r in rows}
     
     return stats
 
 
 def find_unused_symbols(
     conn: sqlite3.Connection,
-    kind: Optional[str] = None
+    symbol_type: Optional[str] = None
 ) -> List[Symbol]:
     """
     Find symbols that are never referenced.
     
     Useful for finding dead code.
     """
-    if kind:
+    if symbol_type:
         rows = conn.execute("""
             SELECT s.* FROM symbols s
-            LEFT JOIN refs r ON s.name = r.name AND s.kind = r.kind
-            WHERE r.ref_id IS NULL AND s.kind = ?
-        """, (kind,)).fetchall()
+            LEFT JOIN refs r ON s.name = r.name AND s.symbol_type = r.ref_type
+            WHERE r.ref_id IS NULL AND s.symbol_type = ?
+        """, (symbol_type,)).fetchall()
     else:
         rows = conn.execute("""
             SELECT s.* FROM symbols s
-            LEFT JOIN refs r ON s.name = r.name AND s.kind = r.kind
+            LEFT JOIN refs r ON s.name = r.name AND s.symbol_type = r.ref_type
             WHERE r.ref_id IS NULL
         """).fetchall()
     
@@ -717,27 +729,28 @@ def find_unused_symbols(
 
 def find_undefined_refs(
     conn: sqlite3.Connection,
-    kind: Optional[str] = None
+    ref_type: Optional[str] = None
 ) -> List[Reference]:
     """
     Find references that don't have a matching symbol.
     
     Useful for finding broken references.
     """
-    if kind:
+    if ref_type:
         rows = conn.execute("""
             SELECT r.* FROM refs r
-            LEFT JOIN symbols s ON r.name = s.name AND r.kind = s.kind
-            WHERE s.symbol_id IS NULL AND r.kind = ?
-        """, (kind,)).fetchall()
+            LEFT JOIN symbols s ON r.name = s.name AND r.ref_type = s.symbol_type
+            WHERE s.symbol_id IS NULL AND r.ref_type = ?
+        """, (ref_type,)).fetchall()
     else:
         rows = conn.execute("""
             SELECT r.* FROM refs r
-            LEFT JOIN symbols s ON r.name = s.name AND r.kind = s.kind
+            LEFT JOIN symbols s ON r.name = s.name AND r.ref_type = s.symbol_type
             WHERE s.symbol_id IS NULL
         """).fetchall()
     
     return [Reference.from_row(r) for r in rows]
+
 
 # =============================================================================
 # Incremental Extraction Functions
@@ -759,6 +772,8 @@ def extract_symbols_incremental(
     4. Supports progress callbacks for long-running operations
     5. Maintains full source traceability (file_id, line_number, ast_id)
 
+    Schema v4 column names: file_id, ast_id, content_version_id, line_number, column_number, symbol_type
+
     Args:
         conn: Database connection
         batch_size: Number of ASTs to process per batch
@@ -768,7 +783,6 @@ def extract_symbols_incremental(
     Returns:
         Dict with 'processed', 'symbols', 'errors', 'skipped' counts
     """
-    import json
     from ck3raven.db.file_routes import should_skip_for_symbols, get_script_file_filter_sql
 
     # Handle force rebuild
@@ -815,7 +829,8 @@ def extract_symbols_incremental(
                 a.content_hash,
                 a.ast_blob,
                 f.file_id,
-                f.relpath
+                f.relpath,
+                f.content_version_id
             FROM asts a
             JOIN files f ON a.content_hash = f.content_hash
             WHERE a.parse_ok = 1
@@ -832,7 +847,14 @@ def extract_symbols_incremental(
         batch_extracted = 0
         batch_inserted = 0
 
-        for ast_id, content_hash, ast_blob, file_id, relpath in rows:
+        for row in rows:
+            ast_id = row[0]
+            content_hash = row[1]
+            ast_blob = row[2]
+            file_id = row[3]
+            relpath = row[4]
+            content_version_id = row[5]
+            
             # Double-check with Python skip rules (SQL filter is approximate)
             skip, reason = should_skip_for_symbols(relpath)
             if skip:
@@ -847,18 +869,16 @@ def extract_symbols_incremental(
                 # Extract symbols
                 symbols = list(extract_symbols_from_ast(ast_dict, relpath, content_hash))
 
-                # Store symbols with full source traceability
+                # Store symbols with full source traceability (schema v4 column names)
                 for sym in symbols:
                     cursor = conn.execute("""
                         INSERT OR IGNORE INTO symbols
-                        (symbol_type, name, scope, defining_ast_id, defining_file_id,
-                         content_version_id, line_number, metadata_json)
-                        VALUES (?, ?, ?, ?, ?,
-                                (SELECT content_version_id FROM files WHERE file_id = ?),
-                                ?, ?)
+                        (symbol_type, name, scope, ast_id, file_id,
+                         content_version_id, line_number, column_number, metadata_json)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         sym.kind, sym.name, sym.scope, ast_id, file_id,
-                        file_id, sym.line, None
+                        content_version_id, sym.line, sym.column, None
                     ))
                     if cursor.rowcount > 0:
                         batch_inserted += 1
@@ -868,18 +888,17 @@ def extract_symbols_incremental(
                         # This enables ck3_conflicts to detect when multiple mods define the same symbol
                         conn.execute("""
                             INSERT OR IGNORE INTO refs
-                            (ref_type, name, using_ast_id, using_file_id, content_version_id,
-                             line_number, context, resolution_status)
-                            VALUES (?, ?, ?, ?, 
-                                    (SELECT content_version_id FROM files WHERE file_id = ?),
-                                    ?, ?, ?)
+                            (ref_type, name, ast_id, file_id, content_version_id,
+                             line_number, column_number, context, resolution_status)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (
                             sym.kind,  # ref_type matches symbol_type for cross-reference
                             sym.name,
                             ast_id,
                             file_id,
-                            file_id,
+                            content_version_id,
                             sym.line,
+                            sym.column,
                             'duplicate_definition',
                             'resolved'
                         ))
@@ -929,6 +948,8 @@ def extract_refs_incremental(
 
     Similar to extract_symbols_incremental but for references.
 
+    Schema v4 column names: file_id, ast_id, content_version_id, line_number, column_number, ref_type
+
     Args:
         conn: Database connection
         batch_size: Number of ASTs to process per batch
@@ -937,16 +958,14 @@ def extract_refs_incremental(
     Returns:
         Dict with 'processed', 'refs', 'errors' counts
     """
-    import json
-    
-    # Count ASTs needing refs
+    # Count ASTs needing refs (using correct column name: ast_id)
     total_row = conn.execute("""
         SELECT COUNT(*)
         FROM asts a
         WHERE a.parse_ok = 1
         AND NOT EXISTS (
             SELECT 1 FROM refs r
-            WHERE r.defining_ast_id = a.ast_id
+            WHERE r.ast_id = a.ast_id
         )
     """).fetchone()
     total_pending = total_row[0]
@@ -968,14 +987,15 @@ def extract_refs_incremental(
                 a.content_hash,
                 a.ast_blob,
                 f.file_id,
-                f.relpath
+                f.relpath,
+                f.content_version_id
             FROM asts a
             JOIN files f ON a.content_hash = f.content_hash
             WHERE a.parse_ok = 1
             AND f.deleted = 0
             AND NOT EXISTS (
                 SELECT 1 FROM refs r
-                WHERE r.defining_ast_id = a.ast_id
+                WHERE r.ast_id = a.ast_id
             )
             GROUP BY a.ast_id
             LIMIT ?
@@ -986,7 +1006,14 @@ def extract_refs_incremental(
         
         batch_refs = 0
         
-        for ast_id, content_hash, ast_blob, file_id, relpath in rows:
+        for row in rows:
+            ast_id = row[0]
+            content_hash = row[1]
+            ast_blob = row[2]
+            file_id = row[3]
+            relpath = row[4]
+            content_version_id = row[5]
+            
             try:
                 ast_dict = json.loads(ast_blob.decode('utf-8'))
                 refs = list(extract_refs_from_ast(ast_dict, relpath, content_hash))
@@ -994,12 +1021,12 @@ def extract_refs_incremental(
                 for ref in refs:
                     conn.execute("""
                         INSERT OR IGNORE INTO refs
-                        (ref_type, name, defining_ast_id, defining_file_id, 
-                         line_number, content_version_id)
-                        VALUES (?, ?, ?, ?, ?, 
-                                (SELECT content_version_id FROM files WHERE file_id = ?))
+                        (ref_type, name, ast_id, file_id, 
+                         line_number, column_number, content_version_id, resolution_status)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 'unknown')
                     """, (
-                        ref.kind, ref.name, ast_id, file_id, ref.line, file_id
+                        ref.kind, ref.name, ast_id, file_id, 
+                        ref.line, ref.column, content_version_id
                     ))
                 
                 batch_refs += len(refs)

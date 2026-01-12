@@ -123,19 +123,9 @@ def _get_db() -> DBQueries:
         if session.db_path is None:
             raise RuntimeError("No database path configured. Check playset configuration.")
         
-        # Run health check BEFORE opening database connection
-        # This recovers from stale daemon state and checkpoints large WAL files
-        try:
-            from builder.db_health import check_and_recover
-            health = check_and_recover()
-            if health["actions_taken"]:
-                import logging
-                logging.getLogger(__name__).info(
-                    f"DB health recovery: {health['actions_taken']}"
-                )
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"DB health check failed: {e}")
+        # NOTE: Removed qbuilder.api import here (January 2026)
+        # Health checks now done via subprocess to avoid import dependency
+        # that blocks MCP tools when qbuilder has DB locked
         
         _db = DBQueries(db_path=session.db_path)
         
@@ -595,61 +585,99 @@ def _init_session_internal(
 
 
 def _check_db_health(conn) -> dict:
-    """Check database build status and completeness."""
+    """Check database build status and completeness.
+    
+    Works with qbuilder tables (build_queue, build_runs).
+    Falls back gracefully if tables don't exist.
+    """
     try:
-        # Check builder_runs table (written by daemon)
-        run_row = conn.execute("""
-            SELECT build_id, state, completed_at, files_ingested, 
-                   symbols_extracted, refs_extracted, error_message
-            FROM builder_runs 
-            ORDER BY started_at DESC 
-            LIMIT 1
-        """).fetchone()
-        
-        if run_row:
-            last_state = run_row[1]  # state column
-            is_complete = last_state == 'complete'
-            last_updated = run_row[2]  # completed_at
-        else:
-            last_state = None
-            is_complete = False
-            last_updated = None
-        
-        # Get counts
+        # Get counts first (these tables should always exist)
         files = conn.execute("SELECT COUNT(*) FROM files WHERE deleted = 0").fetchone()[0]
         symbols = conn.execute("SELECT COUNT(*) FROM symbols").fetchone()[0]
         refs = conn.execute("SELECT COUNT(*) FROM refs").fetchone()[0]
         
-        # Determine if rebuild needed
-        needs_rebuild = False
-        rebuild_reason = None
+        # Check which tables exist
+        tables = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        )}
         
-        if not run_row:
-            needs_rebuild = True
-            rebuild_reason = "No build runs found - database may not be fully initialized"
-        elif last_state == 'failed':
-            needs_rebuild = True
-            error = run_row[6]  # error_message
-            rebuild_reason = f"Last build failed: {error[:100] if error else 'Unknown error'}"
-        elif last_state == 'running':
-            needs_rebuild = True
-            rebuild_reason = "Build still in progress or was interrupted"
+        # Check qbuilder queue status (preferred)
+        queue_pending = 0
+        queue_processing = 0
+        queue_completed = 0
+        queue_error = 0
+        
+        if 'build_queue' in tables:
+            for row in conn.execute("""
+                SELECT status, COUNT(*) as cnt FROM build_queue GROUP BY status
+            """):
+                if row[0] == 'pending':
+                    queue_pending = row[1]
+                elif row[0] == 'processing':
+                    queue_processing = row[1]
+                elif row[0] == 'completed':
+                    queue_completed = row[1]
+                elif row[0] == 'error':
+                    queue_error = row[1]
+        
+        # Check build_runs table (qbuilder's run tracking)
+        last_state = None
+        last_updated = None
+        
+        if 'build_runs' in tables:
+            run_row = conn.execute("""
+                SELECT status, completed_at FROM build_runs 
+                ORDER BY started_at DESC LIMIT 1
+            """).fetchone()
+            if run_row:
+                last_state = run_row[0]
+                last_updated = run_row[1]
+        
+        # Determine completion status
+        # Complete if: no pending/processing items AND we have symbols/refs
+        has_pending_work = queue_pending > 0 or queue_processing > 0
+        
+        if has_pending_work:
+            is_complete = False
+            phase = "building"
+            needs_rebuild = False  # Work in progress, not a "rebuild" situation
+            rebuild_reason = f"{queue_pending} pending, {queue_processing} processing"
         elif symbols == 0:
+            is_complete = False
+            phase = "no_symbols"
             needs_rebuild = True
-            rebuild_reason = "No symbols extracted"
+            rebuild_reason = "No symbols extracted - run: python -m qbuilder.cli build"
         elif refs == 0:
+            is_complete = False
+            phase = "no_refs"
             needs_rebuild = True
-            rebuild_reason = "No references extracted"
+            rebuild_reason = "No references extracted - run: python -m qbuilder.cli build"
+        elif queue_error > 0:
+            is_complete = False
+            phase = "has_errors"
+            needs_rebuild = False
+            rebuild_reason = f"{queue_error} files had errors during build"
+        else:
+            is_complete = True
+            phase = "complete"
+            needs_rebuild = False
+            rebuild_reason = None
         
         return {
-            "is_complete": is_complete and not needs_rebuild,
-            "phase": last_state if last_state else "unknown",
+            "is_complete": is_complete,
+            "phase": phase,
             "last_updated": last_updated,
             "files_indexed": files,
             "symbols_extracted": symbols,
             "refs_extracted": refs,
             "needs_rebuild": needs_rebuild,
             "rebuild_reason": rebuild_reason,
+            "queue": {
+                "pending": queue_pending,
+                "processing": queue_processing,
+                "completed": queue_completed,
+                "error": queue_error,
+            },
         }
     except Exception as e:
         return {
@@ -689,23 +717,16 @@ def ck3_get_db_status() -> dict:
     trace = _get_trace()
     
     status = _check_db_health(db.conn)
-    status["rebuild_command"] = "python builder/daemon.py start"
+    status["rebuild_command"] = "python -m qbuilder.cli build"
     
-    # Add health information
-    try:
-        from builder.db_health import get_health_status
-        status["health"] = get_health_status()
-    except Exception as e:
-        status["health"] = {"error": str(e)}
+    # NOTE: Removed qbuilder.api get_health_status import (January 2026)
+    # Health info now derived from pure SQL in _check_db_health()
+    # This avoids import dependency that blocks MCP when qbuilder has DB locked
     
     if status.get("needs_rebuild"):
         status["message"] = f"Database needs rebuild: {status.get('rebuild_reason')}"
     else:
         status["message"] = f"Database ready: {status.get('symbols_extracted', 0):,} symbols, {status.get('refs_extracted', 0):,} refs"
-    
-    # Add warning if daemon is stale
-    if status.get("health", {}).get("daemon_stale"):
-        status["message"] += f" | STALE DAEMON: {status['health'].get('stale_reason', 'unknown')}"
     
     trace.log("ck3lens.get_db_status", {}, status)
     
@@ -807,11 +828,13 @@ def ck3_get_playset_build_status(playset_name: str | None = None) -> dict:
             "guidance": str,            # Human-readable guidance
         }
     """
-    from builder.incremental import check_playset_build_status
+    # NOTE: Inlined check_playset_build_status logic (January 2026)
+    # Avoids qbuilder.api import that blocks MCP when qbuilder has DB locked
     from pathlib import Path
     
     db = _get_db()
     trace = _get_trace()
+    conn = db.conn
     
     # Get playset data
     if playset_name:
@@ -837,9 +860,86 @@ def ck3_get_playset_build_status(playset_name: str | None = None) -> dict:
         playset_data = scope.get("playset_data", {})
         playset_name = playset_data.get("playset_name", "Unknown")
     
-    # Check build status
-    result = check_playset_build_status(db.conn, playset_data)
-    result["playset_name"] = playset_name
+    # Check build status - INLINED from qbuilder.api.check_playset_build_status
+    mods = playset_data.get('mods', [])
+    
+    results = []
+    ready_count = 0
+    pending_count = 0
+    missing_count = 0
+    missing_names = []
+    
+    for mod in mods:
+        mod_name = mod.get('name', 'Unknown')
+        mod_path = mod.get('path') or mod.get('source_path')
+        
+        # Check if mod exists on disk
+        exists_on_disk = mod_path and Path(mod_path).exists()
+        
+        if not exists_on_disk:
+            results.append({
+                "name": mod_name,
+                "status": "missing",
+                "exists_on_disk": False,
+            })
+            missing_count += 1
+            missing_names.append(mod_name)
+            continue
+        
+        # Check if mod has files in DB
+        try:
+            row = conn.execute("""
+                SELECT COUNT(*) as file_count,
+                       (SELECT COUNT(*) FROM build_queue bq 
+                        JOIN files f ON bq.file_id = f.file_id
+                        JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+                        JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                        WHERE mp.name = ? AND bq.status = 'pending') as pending_count
+                FROM files f
+                JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+                JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                WHERE mp.name = ?
+            """, (mod_name, mod_name)).fetchone()
+            
+            file_count = row[0] if row else 0
+            pending = row[1] if row else 0
+        except:
+            file_count = 0
+            pending = 0
+        
+        if file_count == 0:
+            status = "not_indexed"
+            pending_count += 1
+        elif pending > 0:
+            status = "pending_build"
+            pending_count += 1
+        else:
+            status = "ready"
+            ready_count += 1
+        
+        results.append({
+            "name": mod_name,
+            "status": status,
+            "exists_on_disk": True,
+            "file_count": file_count,
+            "pending_builds": pending,
+        })
+    
+    # Overall status
+    playset_valid = len(mods) == 0 or (len(mods) - missing_count) > 0
+    needs_build = pending_count > 0
+    
+    result = {
+        "playset_name": playset_name,
+        "playset_valid": playset_valid,
+        "total_mods": len(mods),
+        "ready_mods": ready_count,
+        "pending_mods": pending_count,
+        "missing_mods": missing_count,
+        "missing_mod_names": missing_names,
+        "needs_build": needs_build,
+        "mods": results,
+    }
     
     # Add guidance
     if not result["playset_valid"]:
@@ -847,8 +947,8 @@ def ck3_get_playset_build_status(playset_name: str | None = None) -> dict:
         result["build_command"] = None
     elif result["needs_build"]:
         pending = result["pending_mods"]
-        result["guidance"] = f"?? {pending} mod(s) need processing before full functionality."
-        result["build_command"] = "python builder/daemon.py start --symbols-only"
+        result["guidance"] = f"⚠️ {pending} mod(s) need processing before full functionality."
+        result["build_command"] = "python -m qbuilder.cli build"
     else:
         result["guidance"] = "? All mods are fully processed and ready."
         result["build_command"] = None
@@ -1974,27 +2074,65 @@ def ck3_playset(
         new_scope = _get_session_scope(force_refresh=True)
         
         # Check build status for all mods in this playset
+        # NOTE: Inlined check logic (January 2026) - avoids qbuilder import hang
         build_status = None
         mods_needing_build = []
         mods_missing_from_disk = []
         db_available = False
         try:
-            from builder.incremental import check_playset_build_status
             db = _get_db()
             if db and playset_data:
                 db_available = True
-                build_status = check_playset_build_status(db.conn, playset_data)
+                conn = db.conn
+                mods = playset_data.get('mods', [])
                 
-                # Collect mods needing build (on disk but not fully indexed)
-                for mod in build_status.get("mods", []):
-                    if mod["status"] in ("not_indexed", "pending_ingest", "pending_symbols"):
+                for mod in mods:
+                    mod_name_check = mod.get('name', 'Unknown')
+                    mod_path_check = mod.get('path') or mod.get('source_path')
+                    exists_on_disk = mod_path_check and Path(mod_path_check).exists()
+                    
+                    if not exists_on_disk:
+                        mods_missing_from_disk.append(mod_name_check)
+                        continue
+                    
+                    # Check if mod has files in DB
+                    try:
+                        row = conn.execute("""
+                            SELECT COUNT(*) as file_count,
+                                   (SELECT COUNT(*) FROM build_queue bq 
+                                    JOIN files f ON bq.file_id = f.file_id
+                                    JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+                                    JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                                    WHERE mp.name = ? AND bq.status = 'pending') as pending_count
+                            FROM files f
+                            JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+                            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                            WHERE mp.name = ?
+                        """, (mod_name_check, mod_name_check)).fetchone()
+                        
+                        file_count = row[0] if row else 0
+                        pending = row[1] if row else 0
+                    except:
+                        file_count = 0
+                        pending = 0
+                    
+                    if file_count == 0:
                         mods_needing_build.append({
-                            "name": mod["name"],
-                            "status": mod["status"],
-                            "path": mod.get("path")
+                            "name": mod_name_check,
+                            "status": "not_indexed",
+                            "path": mod_path_check
                         })
-                    elif mod["status"] == "missing":
-                        mods_missing_from_disk.append(mod["name"])
+                    elif pending > 0:
+                        mods_needing_build.append({
+                            "name": mod_name_check,
+                            "status": "pending_build",
+                            "path": mod_path_check
+                        })
+                
+                build_status = {
+                    "needs_build": len(mods_needing_build) > 0,
+                    "mods": mods_needing_build,
+                }
         except Exception as e:
             # DB might not be available yet - need to build everything
             build_status = {"error": str(e), "needs_build": True}
@@ -2247,17 +2385,22 @@ def ck3_playset(
         # Clear cached scope
         _session_scope = None
         
-        # Check if mod needs building
+        # Check if mod needs building - pure SQL, no qbuilder import (January 2026)
         build_needed = False
         try:
-            from builder.incremental import check_playset_build_status
             db = _get_db()
             if db:
-                build_status = check_playset_build_status(db.conn, playset_data)
-                for mod in build_status.get("mods", []):
-                    if mod.get("path") == mod_path and mod["status"] != "ready":
-                        build_needed = True
-                        break
+                # Check if mod has files in DB
+                row = db.conn.execute("""
+                    SELECT COUNT(*) as file_count
+                    FROM files f
+                    JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+                    JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+                    WHERE mp.name = ?
+                """, (mod_name,)).fetchone()
+                
+                file_count = row[0] if row else 0
+                build_needed = (file_count == 0)
         except Exception:
             build_needed = True  # Assume needs build if we can't check
         
@@ -2271,8 +2414,8 @@ def ck3_playset(
         if build_needed:
             result["build_needed"] = True
             result["build_prompt"] = (
-                f"?? Mod '{mod_name}' needs to be indexed. "
-                f"Run: python builder/daemon.py start --playset-file \"{playset_path}\""
+                f"⚠️ Mod '{mod_name}' needs to be indexed. "
+                f"Run: python -m qbuilder.cli build"
             )
         
         return result
@@ -5048,6 +5191,160 @@ def _get_table_stats() -> dict:
         except:
             stats[name] = "error"
     return stats
+
+
+# ============================================================================
+# QBuilder - Build System Tools
+# ============================================================================
+
+@mcp.tool()
+def ck3_qbuilder(
+    command: Literal["status", "build", "discover", "reset"] = "status",
+    max_tasks: Optional[int] = None,
+    fresh: bool = False,
+) -> dict:
+    """
+    Unified QBuilder tool for build system operations.
+    
+    This is a THIN wrapper that calls the queue pipeline.
+    It does NOT introduce new scheduling or eligibility logic.
+    
+    Commands:
+    
+    command=status   -> Get queue statistics and build status
+    command=build    -> Launch background build subprocess
+    command=discover -> Enqueue discovery tasks from active playset
+    command=reset    -> Reset queues (fresh=True clears all data)
+    
+    Args:
+        command: Operation to perform
+        max_tasks: Execution throttle (caps work per invocation, not eligibility)
+        fresh: For reset command - clear ALL data for fresh build
+    
+    Returns:
+        Dict with command-specific results
+    
+    Background builds:
+        The build command launches `python -m qbuilder.cli build` as a subprocess.
+        It tracks run_id and logs to ~/.ck3raven/logs/qbuilder_YYYY-MM-DD.jsonl
+        Leases handle crash recovery/resume.
+    """
+    # NOTE: NO qbuilder imports here (January 2026)
+    # All operations use subprocess or pure SQL to avoid blocking MCP
+    import subprocess
+    import sys
+    import json
+    
+    db = _get_db()
+    trace = _get_trace()
+    ck3raven_root = str(Path(__file__).parent.parent.parent)
+    python_exe = sys.executable
+    
+    if command == "status":
+        # Pure SQL - no qbuilder imports
+        queue_stats = {"pending": 0, "processing": 0, "completed": 0, "error": 0}
+        try:
+            for row in db.conn.execute("""
+                SELECT status, COUNT(*) as cnt FROM build_queue GROUP BY status
+            """):
+                if row[0] in queue_stats:
+                    queue_stats[row[0]] = row[1]
+        except:
+            pass  # Table might not exist
+        
+        # Add database counts
+        db_counts = {}
+        for table in ['files', 'asts', 'symbols', 'refs']:
+            try:
+                row = db.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+                db_counts[table] = row[0] if row else 0
+            except:
+                db_counts[table] = 0
+        
+        result = {
+            "queue": queue_stats,
+            "database": db_counts,
+            "has_pending_work": queue_stats["pending"] > 0 or queue_stats["processing"] > 0,
+        }
+        trace.log("ck3_qbuilder.status", {}, result)
+        return result
+    
+    elif command == "build":
+        # Launch background subprocess - NO IMPORTS
+        try:
+            proc = subprocess.Popen(
+                [python_exe, "-m", "qbuilder.cli", "build"],
+                cwd=ck3raven_root,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,  # Detach from parent
+            )
+            result = {
+                "success": True,
+                "pid": proc.pid,
+                "message": f"Build started in background (PID {proc.pid})",
+            }
+        except Exception as e:
+            result = {"success": False, "error": str(e)}
+        
+        trace.log("ck3_qbuilder.build", {}, result)
+        return result
+    
+    elif command == "discover":
+        # Use subprocess - NO IMPORTS
+        try:
+            proc = subprocess.run(
+                [python_exe, "-m", "qbuilder.cli", "discover"],
+                cwd=ck3raven_root,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if proc.returncode == 0:
+                result = {
+                    "success": True,
+                    "output": proc.stdout,
+                    "next_step": "Run ck3_qbuilder(command='build') to process the queue",
+                }
+            else:
+                result = {"success": False, "error": proc.stderr or proc.stdout}
+        except Exception as e:
+            result = {"success": False, "error": str(e)}
+        
+        trace.log("ck3_qbuilder.discover", {}, result)
+        return result
+    
+    elif command == "reset":
+        # Use subprocess - NO IMPORTS
+        args = [python_exe, "-m", "qbuilder.cli", "reset"]
+        if fresh:
+            args.append("--fresh")
+        
+        try:
+            proc = subprocess.run(
+                args,
+                cwd=ck3raven_root,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if proc.returncode == 0:
+                result = {
+                    "success": True,
+                    "fresh": fresh,
+                    "output": proc.stdout,
+                    "next_step": "Run ck3_qbuilder(command='discover') to repopulate",
+                }
+            else:
+                result = {"success": False, "error": proc.stderr or proc.stdout}
+        except Exception as e:
+            result = {"success": False, "error": str(e)}
+        
+        trace.log("ck3_qbuilder.reset", {"fresh": fresh}, result)
+        return result
+    
+    else:
+        return {"error": f"Unknown command: {command}"}
 
 
 # ============================================================================

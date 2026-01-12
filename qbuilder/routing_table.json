@@ -1,0 +1,125 @@
+{
+  "path_rules": [
+    {
+      "match": "history/characters/",
+      "envelope": "E_LOOKUP_CHARACTERS"
+    },
+    {
+      "match": "history/provinces/",
+      "envelope": "E_LOOKUP_PROVINCES"
+    },
+    {
+      "match": "common/culture/name_lists/",
+      "envelope": "E_LOOKUP_NAMES"
+    },
+    {
+      "match": "common/religion/holy_sites/",
+      "envelope": "E_LOOKUP_HOLY_SITES"
+    },
+    {
+      "match": "common/dynasties/",
+      "envelope": "E_LOOKUP_DYNASTIES"
+    },
+    {
+      "match": "gui/",
+      "envelope": "E_SKIP"
+    },
+    {
+      "match": "gfx/",
+      "envelope": "E_SKIP"
+    },
+    {
+      "match": "map_data/",
+      "envelope": "E_SKIP"
+    },
+    {
+      "match": "fonts/",
+      "envelope": "E_SKIP"
+    },
+    {
+      "match": "music/",
+      "envelope": "E_SKIP"
+    },
+    {
+      "match": "sound/",
+      "envelope": "E_SKIP"
+    },
+    {
+      "match": "dlc_metadata/",
+      "envelope": "E_SKIP"
+    },
+    {
+      "match": "content_source/",
+      "envelope": "E_SKIP"
+    }
+  ],
+  "extension_to_type": {
+    ".txt": "script",
+    ".yml": "localization",
+    ".gui": "skip",
+    ".gfx": "skip",
+    ".json": "skip",
+    ".py": "skip",
+    ".info": "skip",
+    ".md": "skip"
+  },
+  "type_to_envelope": {
+    "script": "E_SCRIPT",
+    "localization": "E_LOC",
+    "skip": "E_SKIP"
+  },
+  "envelope_steps": {
+    "E_SCRIPT": [
+      "parse",
+      "extract_symbols",
+      "extract_refs"
+    ],
+    "E_LOC": [
+      "parse_loc",
+      "extract_loc_entries"
+    ],
+    "E_LOOKUP_CHARACTERS": [
+      "extract_characters"
+    ],
+    "E_LOOKUP_PROVINCES": [
+      "extract_provinces"
+    ],
+    "E_LOOKUP_NAMES": [
+      "extract_names"
+    ],
+    "E_LOOKUP_HOLY_SITES": [
+      "extract_holy_sites"
+    ],
+    "E_LOOKUP_DYNASTIES": [
+      "extract_dynasties"
+    ],
+    "E_SKIP": []
+  },
+  "skip_extensions": [
+    ".dds",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".bmp",
+    ".tga",
+    ".wav",
+    ".mp3",
+    ".ogg",
+    ".bank",
+    ".wem",
+    ".mesh",
+    ".anim",
+    ".skeleton",
+    ".asset",
+    ".settings",
+    ".shader",
+    ".mod",
+    ".ttf",
+    ".otf",
+    ".fnt",
+    ".bik",
+    ".bk2",
+    ".psd"
+  ]
+}

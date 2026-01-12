@@ -28,7 +28,7 @@ def serialize_ast(ast: RootNode) -> bytes:
         if isinstance(node, RootNode):
             return {
                 '_type': 'root',
-                'filename': node.filename,
+                'filename': str(node.filename),  # Convert Path to string
                 'children': [node_to_dict(c) for c in node.children]
             }
         elif isinstance(node, BlockNode):

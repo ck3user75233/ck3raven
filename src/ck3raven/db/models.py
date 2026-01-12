@@ -2,6 +2,10 @@
 Data Models for ck3raven Database
 
 Dataclasses representing database entities with helper methods.
+
+SCHEMA v4 COLUMN NAMES:
+- symbols: file_id, ast_id, content_version_id, line_number, column_number, symbol_type
+- refs: file_id, ast_id, content_version_id, line_number, column_number, ref_type
 """
 
 from dataclasses import dataclass, field
@@ -208,16 +212,20 @@ class ASTRecord:
 
 @dataclass
 class Symbol:
-    """A symbol definition (something that defines a name/ID/key)."""
+    """A symbol definition (something that defines a name/ID/key).
+    
+    Schema v4 column names: file_id, ast_id, content_version_id, line_number, column_number, symbol_type
+    """
     symbol_id: Optional[int] = None
     symbol_type: str = ""  # 'tradition', 'event', 'decision', etc.
     name: str = ""
     scope: Optional[str] = None
-    defining_ast_id: Optional[int] = None
-    defining_file_id: int = 0
+    ast_id: Optional[int] = None  # Was: defining_ast_id
+    file_id: int = 0              # Was: defining_file_id
     content_version_id: int = 0
     ast_node_path: Optional[str] = None
     line_number: Optional[int] = None
+    column_number: Optional[int] = None  # NEW in v4
     metadata: Dict[str, Any] = field(default_factory=dict)
     
     @property
@@ -230,13 +238,14 @@ class Symbol:
             symbol_id=row['symbol_id'],
             symbol_type=row['symbol_type'],
             name=row['name'],
-            scope=row['scope'],
-            defining_ast_id=row['defining_ast_id'],
-            defining_file_id=row['defining_file_id'],
+            scope=row.get('scope'),
+            ast_id=row.get('ast_id'),
+            file_id=row['file_id'],
             content_version_id=row['content_version_id'],
-            ast_node_path=row['ast_node_path'],
-            line_number=row['line_number'],
-            metadata=json.loads(row['metadata_json']) if row['metadata_json'] else {},
+            ast_node_path=row.get('ast_node_path'),
+            line_number=row.get('line_number'),
+            column_number=row.get('column_number'),
+            metadata=json.loads(row['metadata_json']) if row.get('metadata_json') else {},
         )
     
     def __repr__(self):
@@ -245,15 +254,19 @@ class Symbol:
 
 @dataclass
 class Reference:
-    """A reference to a symbol (something that uses a name)."""
+    """A reference to a symbol (something that uses a name).
+    
+    Schema v4 column names: file_id, ast_id, content_version_id, line_number, column_number, ref_type
+    """
     ref_id: Optional[int] = None
-    ref_type: str = ""  # 'tradition_ref', 'event_ref', etc.
+    ref_type: str = ""  # 'trait_ref', 'event_ref', etc.
     name: str = ""
-    using_ast_id: Optional[int] = None
-    using_file_id: int = 0
+    ast_id: Optional[int] = None  # Was: using_ast_id
+    file_id: int = 0              # Was: using_file_id
     content_version_id: int = 0
     ast_node_path: Optional[str] = None
     line_number: Optional[int] = None
+    column_number: Optional[int] = None  # NEW in v4
     context: Optional[str] = None
     resolution_status: str = "unknown"  # 'resolved', 'unresolved', 'dynamic', 'unknown'
     resolved_symbol_id: Optional[int] = None
@@ -269,15 +282,16 @@ class Reference:
             ref_id=row['ref_id'],
             ref_type=row['ref_type'],
             name=row['name'],
-            using_ast_id=row['using_ast_id'],
-            using_file_id=row['using_file_id'],
+            ast_id=row.get('ast_id'),
+            file_id=row['file_id'],
             content_version_id=row['content_version_id'],
-            ast_node_path=row['ast_node_path'],
-            line_number=row['line_number'],
-            context=row['context'],
-            resolution_status=row['resolution_status'],
-            resolved_symbol_id=row['resolved_symbol_id'],
-            candidates=json.loads(row['candidates_json']) if row['candidates_json'] else [],
+            ast_node_path=row.get('ast_node_path'),
+            line_number=row.get('line_number'),
+            column_number=row.get('column_number'),
+            context=row.get('context'),
+            resolution_status=row.get('resolution_status', 'unknown'),
+            resolved_symbol_id=row.get('resolved_symbol_id'),
+            candidates=json.loads(row['candidates_json']) if row.get('candidates_json') else [],
         )
     
     def __repr__(self):
@@ -327,9 +341,11 @@ class Snapshot:
         return f"Snapshot({self.name}, {len(self.members)} versions)"
 
 
+# NOTE: ExemplarMod is a deprecated concept - see CANONICAL_ARCHITECTURE.md banned terms
+# Keeping model for backwards compatibility with existing code that may reference it
 @dataclass
 class ExemplarMod:
-    """A curated exemplar mod for linter-by-example."""
+    """A curated exemplar mod for linter-by-example. DEPRECATED."""
     exemplar_id: Optional[int] = None
     mod_package_id: int = 0
     pinned_content_version_id: Optional[int] = None

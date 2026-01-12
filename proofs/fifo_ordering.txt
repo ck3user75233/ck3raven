@@ -1,0 +1,34 @@
+Generated: 2026-01-11T14:34:03.617050
+Script: show_fifo.py
+
+======================================================================
+FIFO ORDERING PROOF
+======================================================================
+
+1. SCHEMA PROOF: build_id AUTOINCREMENT
+----------------------------------------
+  [OK] build_id INTEGER PRIMARY KEY AUTOINCREMENT
+    (monotonically increasing, never reused)
+
+2. CLAIM QUERY STRUCTURE
+----------------------------------------
+  Canonical claim query:
+    SELECT build_id FROM build_queue 
+        WHERE status = 'pending' 
+        ORDER BY build_id ASC 
+        LIMIT 1
+
+  [OK] ORDER BY build_id ASC ensures oldest first
+  [OK] LIMIT 1 claims one at a time
+
+3. CURRENT QUEUE ORDERING
+----------------------------------------
+  (Queue is empty - no items to show)
+
+4. INVARIANT: No gaps in processing order
+----------------------------------------
+  (No completed items yet)
+
+======================================================================
+FIFO PROOF COMPLETE
+======================================================================

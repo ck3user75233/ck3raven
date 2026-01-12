@@ -3,6 +3,11 @@ Database Schema for ck3raven
 
 SQLite schema with content-addressed storage, versioning, and full traceability.
 All content is deduplicated by SHA256 hash.
+
+SCHEMA REVISION: January 2026 - QBuilder Cleanup
+- Renamed: defining_file_id → file_id, using_file_id → file_id
+- Added: column_number for IDE precision
+- Removed: deprecated daemon/logging/conflict tables
 """
 
 import sqlite3
@@ -12,7 +17,7 @@ import threading
 import time
 
 # Schema version - bump when schema changes
-DATABASE_VERSION = 3
+DATABASE_VERSION = 4  # Bumped for QBuilder schema revision
 
 # Thread-local storage for connections
 _local = threading.local()
@@ -149,115 +154,73 @@ CREATE INDEX IF NOT EXISTS idx_asts_symbols_processed ON asts(symbols_processed_
 -- ============================================================================
 
 -- Symbols - things that define names/IDs/keys
+-- REVISED January 2026: Simplified column names
 CREATE TABLE IF NOT EXISTS symbols (
     symbol_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    symbol_type TEXT NOT NULL,               -- 'tradition', 'event', 'decision', 'scripted_effect', etc.
-    name TEXT NOT NULL,                      -- The symbol name/ID
-    scope TEXT,                              -- Scope/domain (e.g., namespace for events)
-    defining_ast_id INTEGER,                 -- FK to asts
-    defining_file_id INTEGER NOT NULL,       -- FK to files
-    content_version_id INTEGER NOT NULL,     -- FK to content_versions
-    ast_node_path TEXT,                      -- JSON path to AST node (for exact location)
+    
+    -- Location (simplified names)
+    file_id INTEGER NOT NULL,                -- FK to files (was: defining_file_id)
+    content_version_id INTEGER NOT NULL,     -- FK to content_versions (for playset filtering)
+    ast_id INTEGER,                          -- FK to asts (was: defining_ast_id)
+    ast_node_path TEXT,                      -- JSON path to AST node (for navigation)
     line_number INTEGER,
-    metadata_json TEXT,                      -- Additional symbol metadata
-    FOREIGN KEY (defining_ast_id) REFERENCES asts(ast_id),
-    FOREIGN KEY (defining_file_id) REFERENCES files(file_id),
+    column_number INTEGER,                   -- NEW: for IDE click-to-navigate
+    
+    -- Identity
+    symbol_type TEXT NOT NULL,               -- 'trait', 'event', 'decision', 'scripted_effect', etc.
+    name TEXT NOT NULL,                      -- The symbol name/ID
+    scope TEXT,                              -- Namespace (e.g., event namespace)
+    
+    -- Metadata
+    metadata_json TEXT,                      -- Extensible additional data
+    
+    FOREIGN KEY (ast_id) REFERENCES asts(ast_id),
+    FOREIGN KEY (file_id) REFERENCES files(file_id),
     FOREIGN KEY (content_version_id) REFERENCES content_versions(content_version_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_symbols_type ON symbols(symbol_type);
 CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
+CREATE INDEX IF NOT EXISTS idx_symbols_type ON symbols(symbol_type);
 CREATE INDEX IF NOT EXISTS idx_symbols_type_name ON symbols(symbol_type, name);
-CREATE INDEX IF NOT EXISTS idx_symbols_content_version ON symbols(content_version_id);
-CREATE INDEX IF NOT EXISTS idx_symbols_defining_ast_id ON symbols(defining_ast_id);
-CREATE INDEX IF NOT EXISTS idx_symbols_defining_file_id ON symbols(defining_file_id);
+CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);
+CREATE INDEX IF NOT EXISTS idx_symbols_cvid ON symbols(content_version_id);
+CREATE INDEX IF NOT EXISTS idx_symbols_ast ON symbols(ast_id);
 
 -- References - places that use symbols
+-- REVISED January 2026: Simplified column names
 CREATE TABLE IF NOT EXISTS refs (
     ref_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ref_type TEXT NOT NULL,                  -- Type of reference (e.g., 'tradition_ref', 'event_ref')
-    name TEXT NOT NULL,                      -- Referenced name
-    using_ast_id INTEGER,                    -- FK to asts
-    using_file_id INTEGER NOT NULL,          -- FK to files
-    content_version_id INTEGER NOT NULL,     -- FK to content_versions
+    
+    -- Location (simplified names)
+    file_id INTEGER NOT NULL,                -- FK to files (was: using_file_id)
+    content_version_id INTEGER NOT NULL,     -- FK to content_versions (for playset filtering)
+    ast_id INTEGER,                          -- FK to asts (was: using_ast_id)
     ast_node_path TEXT,                      -- JSON path to AST node
     line_number INTEGER,
-    context TEXT,                            -- Context (e.g., which effect/trigger)
-    resolution_status TEXT NOT NULL DEFAULT 'unknown', -- 'resolved', 'unresolved', 'dynamic', 'unknown'
+    column_number INTEGER,                   -- NEW: for IDE click-to-navigate
+    
+    -- Identity
+    ref_type TEXT NOT NULL,                  -- Type of reference ('trait_ref', 'event_ref', etc.)
+    name TEXT NOT NULL,                      -- Referenced symbol name
+    context TEXT,                            -- Context (which effect/trigger contains this)
+    
+    -- Resolution
+    resolution_status TEXT NOT NULL DEFAULT 'unknown',  -- 'resolved', 'unresolved', 'dynamic', 'unknown'
     resolved_symbol_id INTEGER,              -- FK to symbols if resolved
     candidates_json TEXT,                    -- Best-guess candidates if unresolved
-    FOREIGN KEY (using_ast_id) REFERENCES asts(ast_id),
-    FOREIGN KEY (using_file_id) REFERENCES files(file_id),
+    
+    FOREIGN KEY (ast_id) REFERENCES asts(ast_id),
+    FOREIGN KEY (file_id) REFERENCES files(file_id),
     FOREIGN KEY (content_version_id) REFERENCES content_versions(content_version_id),
     FOREIGN KEY (resolved_symbol_id) REFERENCES symbols(symbol_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_refs_type ON refs(ref_type);
 CREATE INDEX IF NOT EXISTS idx_refs_name ON refs(name);
+CREATE INDEX IF NOT EXISTS idx_refs_type ON refs(ref_type);
 CREATE INDEX IF NOT EXISTS idx_refs_type_name ON refs(ref_type, name);
-CREATE INDEX IF NOT EXISTS idx_refs_content_version ON refs(content_version_id);
-CREATE INDEX IF NOT EXISTS idx_refs_resolution ON refs(resolution_status);
-
--- ============================================================================
--- PLAYSETS & BUILDS - EXPUNGED 2025-01-02
--- ============================================================================
--- 
--- These tables are EXPUNGED. Playsets are now file-based JSON:
--- - playsets/*.json - playset definitions with mod lists
--- - server.py ck3_playset - MCP tool for playset operations
--- 
--- The database-based playset architecture (playset_id, playset_mods) is BANNED.
--- See docs/CANONICAL_ARCHITECTURE.md for details.
---
--- REMOVED TABLES: playsets, playset_mods, builds
--- These tables will be dropped in a future migration.
-
-
--- ============================================================================
--- SNAPSHOTS (Cryo)
--- ============================================================================
-
--- Snapshots - frozen immutable state captures
-CREATE TABLE IF NOT EXISTS snapshots (
-    snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    description TEXT,
-    vanilla_version_id INTEGER NOT NULL,
-    playset_id INTEGER,                      -- Optional: snapshot of a playset
-    parser_version_id INTEGER,
-    ruleset_version TEXT,
-    include_ast INTEGER NOT NULL DEFAULT 1,
-    include_refs INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (vanilla_version_id) REFERENCES vanilla_versions(vanilla_version_id),
-    FOREIGN KEY (playset_id) REFERENCES playsets(playset_id),
-    FOREIGN KEY (parser_version_id) REFERENCES parsers(parser_version_id)
-);
-
--- Snapshot members - which content versions are included
-CREATE TABLE IF NOT EXISTS snapshot_members (
-    snapshot_id INTEGER NOT NULL,
-    content_version_id INTEGER NOT NULL,
-    PRIMARY KEY (snapshot_id, content_version_id),
-    FOREIGN KEY (snapshot_id) REFERENCES snapshots(snapshot_id),
-    FOREIGN KEY (content_version_id) REFERENCES content_versions(content_version_id)
-);
-
--- ============================================================================
--- EXEMPLAR MODS (for linter-by-example)
--- ============================================================================
-
-CREATE TABLE IF NOT EXISTS exemplar_mods (
-    exemplar_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    mod_package_id INTEGER NOT NULL,
-    pinned_content_version_id INTEGER,       -- Specific version to use as exemplar
-    reason_tags_json TEXT,                   -- JSON array: ["best_practice", "merge_behavior", etc.]
-    topics_json TEXT,                        -- JSON array of topics this exemplar covers
-    notes TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (mod_package_id) REFERENCES mod_packages(mod_package_id),
-    FOREIGN KEY (pinned_content_version_id) REFERENCES content_versions(content_version_id)
-);
+CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
+CREATE INDEX IF NOT EXISTS idx_refs_cvid ON refs(content_version_id);
+CREATE INDEX IF NOT EXISTS idx_refs_status ON refs(resolution_status);
 
 -- ============================================================================
 -- FULL-TEXT SEARCH
@@ -298,55 +261,25 @@ CREATE TABLE IF NOT EXISTS db_metadata (
 );
 
 -- ============================================================================
--- BUILDER PIPELINE TRACKING
+-- QBUILDER PIPELINE TRACKING
 -- ============================================================================
 
--- Builder runs - tracks each full or partial build
-CREATE TABLE IF NOT EXISTS builder_runs (
-    build_id TEXT PRIMARY KEY,               -- UUID for this build
-    builder_version TEXT NOT NULL,           -- e.g., "1.0.0"
-    git_commit TEXT,                         -- Git commit hash if available
-    schema_version INTEGER NOT NULL,         -- DATABASE_VERSION at build time
+-- Build runs - tracks each build session
+-- REVISED January 2026: Simplified from old builder_runs
+CREATE TABLE IF NOT EXISTS build_runs (
+    run_id INTEGER PRIMARY KEY,
     started_at TEXT NOT NULL,
     completed_at TEXT,
-    state TEXT NOT NULL DEFAULT 'running',   -- 'running', 'complete', 'failed', 'cancelled'
-    error_message TEXT,
-    -- Inputs
-    vanilla_path TEXT,
-    playset_id INTEGER,
-    force_rebuild INTEGER DEFAULT 0,
-    -- Aggregate counts (populated on completion)
-    files_ingested INTEGER DEFAULT 0,
-    asts_produced INTEGER DEFAULT 0,
-    symbols_extracted INTEGER DEFAULT 0,
-    refs_extracted INTEGER DEFAULT 0,
-    localization_rows INTEGER DEFAULT 0,
-    lookup_rows INTEGER DEFAULT 0,
-    FOREIGN KEY (playset_id) REFERENCES playsets(playset_id)
+    status TEXT NOT NULL DEFAULT 'running',  -- running/completed/aborted
+    trigger TEXT,                            -- 'cli', 'watch', 'manual'
+    config_json TEXT,                        -- routing table version, limits, etc.
+    
+    -- Aggregate stats (updated on completion)
+    envelopes_total INTEGER,
+    envelopes_completed INTEGER,
+    envelopes_failed INTEGER,
+    duration_seconds REAL
 );
-
--- Builder steps - tracks each phase within a build
-CREATE TABLE IF NOT EXISTS builder_steps (
-    step_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    build_id TEXT NOT NULL,                  -- FK to builder_runs
-    step_name TEXT NOT NULL,                 -- e.g., 'vanilla_ingest', 'ast_generation'
-    step_version TEXT,                       -- Version of step implementation
-    step_number INTEGER NOT NULL,            -- Order in pipeline
-    started_at TEXT NOT NULL,
-    completed_at TEXT,
-    duration_sec REAL,
-    state TEXT NOT NULL DEFAULT 'running',   -- 'running', 'complete', 'failed', 'skipped'
-    error_message TEXT,
-    -- Row counts
-    rows_in INTEGER DEFAULT 0,               -- Input rows/files processed
-    rows_out INTEGER DEFAULT 0,              -- Output rows created
-    rows_skipped INTEGER DEFAULT 0,          -- Skipped due to rules
-    rows_errored INTEGER DEFAULT 0,          -- Failed to process
-    FOREIGN KEY (build_id) REFERENCES builder_runs(build_id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_builder_steps_build ON builder_steps(build_id);
-CREATE INDEX IF NOT EXISTS idx_builder_steps_name ON builder_steps(step_name);
 
 -- Build lock - prevents concurrent builds
 CREATE TABLE IF NOT EXISTS build_lock (
@@ -354,226 +287,70 @@ CREATE TABLE IF NOT EXISTS build_lock (
     build_id TEXT NOT NULL,
     acquired_at TEXT NOT NULL,
     heartbeat_at TEXT NOT NULL,
-    pid INTEGER,
-    FOREIGN KEY (build_id) REFERENCES builder_runs(build_id)
+    pid INTEGER
 );
 
--- Ingest log - per-file logging for daemon operations
--- Each row = one file processed in a build phase
--- BuildTracker reconstructs blocks from this table after each phase
-CREATE TABLE IF NOT EXISTS ingest_log (
-    log_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    build_id TEXT NOT NULL,                  -- FK to builder_runs
-    phase TEXT NOT NULL,                     -- e.g., "ingest", "ast_generation", "symbol_extraction"
-    timestamp REAL NOT NULL,                 -- Unix timestamp (time.time())
-    
-    -- File identity
-    file_id INTEGER,                         -- FK to files (NULL if file not yet in DB)
-    relpath TEXT NOT NULL,                   -- Relative path for identification
-    content_version_id INTEGER,              -- FK to content_versions
-    
-    -- What happened
-    status TEXT NOT NULL,                    -- 'processed', 'skipped_routing', 'skipped_uptodate', 'error'
-    
-    -- Sizes (for block thresholds and metrics)
-    size_raw INTEGER,                        -- Original file size in bytes
-    size_stored INTEGER,                     -- Bytes written to DB (may differ)
-    
-    -- Hashing (for Merkle root computation)
-    content_hash TEXT,                       -- SHA256 of content
-    
-    -- Errors
-    error_type TEXT,                         -- e.g., "ParseError", "IOError"
-    error_msg TEXT,                          -- Truncated error message
-    
-    FOREIGN KEY (build_id) REFERENCES builder_runs(build_id) ON DELETE CASCADE,
+-- ============================================================================
+-- QBUILDER QUEUE (January 2026)
+-- ============================================================================
+-- Envelope-based work queue. Each file gets one envelope defining all steps.
+-- The routing table is the SOLE AUTHORITY for what work a file needs.
+
+CREATE TABLE IF NOT EXISTS qbuilder_queue (
+    queue_id INTEGER PRIMARY KEY,
+    file_id INTEGER NOT NULL,
+    content_version_id INTEGER NOT NULL,
+    relpath TEXT NOT NULL,
+    content_hash TEXT,
+    envelope TEXT NOT NULL,
+    steps_json TEXT NOT NULL,                -- ["INGEST", "PARSE", ...]
+    current_step INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'pending',           -- pending, processing, done, error
+    error_message TEXT,
+    lease_holder TEXT,
+    lease_expires_at TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (file_id) REFERENCES files(file_id),
     FOREIGN KEY (content_version_id) REFERENCES content_versions(content_version_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_ingest_log_build_phase ON ingest_log(build_id, phase);
-CREATE INDEX IF NOT EXISTS idx_ingest_log_timestamp ON ingest_log(timestamp);
-CREATE INDEX IF NOT EXISTS idx_ingest_log_status ON ingest_log(build_id, status);
-
--- Reconstructed blocks - summary records created by BuildTracker after phases complete
--- Each block = chunk of ingest_log entries (500 files OR 50MB threshold)
-CREATE TABLE IF NOT EXISTS ingest_blocks (
-    block_id TEXT PRIMARY KEY,               -- UUID (e.g., "blk-a1b2c3d4")
-    build_id TEXT NOT NULL,
-    phase TEXT NOT NULL,
-    block_number INTEGER NOT NULL,           -- Sequence within phase (1, 2, 3...)
-    
-    -- Timing (from first/last log entry in block)
-    started_at REAL NOT NULL,                -- Unix timestamp of first entry
-    ended_at REAL NOT NULL,                  -- Unix timestamp of last entry
-    duration_sec REAL NOT NULL,
-    
-    -- Aggregated metrics
-    files_processed INTEGER NOT NULL DEFAULT 0,
-    files_skipped INTEGER NOT NULL DEFAULT 0,
-    files_errored INTEGER NOT NULL DEFAULT 0,
-    bytes_scanned INTEGER NOT NULL DEFAULT 0,
-    bytes_stored INTEGER NOT NULL DEFAULT 0,
-    
-    -- Integrity
-    block_hash TEXT,                         -- Merkle root of content_hash values
-    
-    -- Range of log entries this block covers
-    log_id_start INTEGER NOT NULL,
-    log_id_end INTEGER NOT NULL,
-    
-    UNIQUE(build_id, phase, block_number),
-    FOREIGN KEY (build_id) REFERENCES builder_runs(build_id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_ingest_blocks_build ON ingest_blocks(build_id);
-
--- ============================================================================
--- CONTRIBUTION & CONFLICT ANALYSIS
--- ============================================================================
-
--- Contribution Units - what each source (vanilla/mod) provides for a unit_key
--- Extracted ONCE per content_version, NOT per playset
--- This is the canonical "what does this mod define" data
-CREATE TABLE IF NOT EXISTS contribution_units (
-    contrib_id TEXT PRIMARY KEY,              -- SHA256[:16] of (cv_id, file_id, node_path)
-    content_version_id INTEGER NOT NULL,      -- FK to content_versions
-    file_id INTEGER NOT NULL,                 -- FK to files
-    domain TEXT NOT NULL,                     -- on_action, decision, trait, etc.
-    unit_key TEXT NOT NULL,                   -- on_action:on_yearly_pulse
-    node_path TEXT,                           -- JSON path to AST node
-    relpath TEXT NOT NULL,                    -- File path for display
-    line_number INTEGER,
-    merge_behavior TEXT NOT NULL,             -- replace, append, merge_by_id, unknown
-    symbols_json TEXT,                        -- JSON: symbols defined by this unit
-    refs_json TEXT,                           -- JSON: refs used by this unit
-    node_hash TEXT,                           -- Hash of AST node for diff detection
-    summary TEXT,                             -- Human-readable summary
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (content_version_id) REFERENCES content_versions(content_version_id),
-    FOREIGN KEY (file_id) REFERENCES files(file_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_contrib_cv ON contribution_units(content_version_id);
-CREATE INDEX IF NOT EXISTS idx_contrib_domain ON contribution_units(domain);
-CREATE INDEX IF NOT EXISTS idx_contrib_unit_key ON contribution_units(unit_key);
-CREATE INDEX IF NOT EXISTS idx_contrib_file ON contribution_units(file_id);
-
--- Conflict Units - grouped conflicts for a specific playset
--- Created by grouping contribution_units from playset's content_versions by unit_key
-CREATE TABLE IF NOT EXISTS conflict_units (
-    conflict_unit_id TEXT PRIMARY KEY,        -- SHA256[:16] of (playset_id, unit_key)
-    playset_id INTEGER NOT NULL,              -- FK to playsets
-    unit_key TEXT NOT NULL,                   -- on_action:on_yearly_pulse
-    domain TEXT NOT NULL,                     -- on_action
-    candidate_count INTEGER NOT NULL,
-    merge_capability TEXT NOT NULL,           -- winner_only, guided_merge, ai_merge
-    risk TEXT NOT NULL,                       -- low, med, high
-    risk_score INTEGER NOT NULL,              -- 0-100
-    uncertainty TEXT NOT NULL,                -- none, low, med, high
-    reasons_json TEXT,                        -- JSON array of risk reasons
-    resolution_status TEXT NOT NULL DEFAULT 'unresolved',  -- unresolved, resolved, deferred
-    resolution_id TEXT,                       -- FK to resolution if resolved
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (playset_id) REFERENCES playsets(playset_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_conflict_playset ON conflict_units(playset_id);
-CREATE INDEX IF NOT EXISTS idx_conflict_unit_key ON conflict_units(unit_key);
-CREATE INDEX IF NOT EXISTS idx_conflict_domain ON conflict_units(domain);
-CREATE INDEX IF NOT EXISTS idx_conflict_risk ON conflict_units(risk);
-CREATE INDEX IF NOT EXISTS idx_conflict_status ON conflict_units(resolution_status);
-
--- Conflict Candidates - link conflict units to contribution units
--- Each candidate is a contribution from a specific source in the playset
-CREATE TABLE IF NOT EXISTS conflict_candidates (
-    conflict_unit_id TEXT NOT NULL,
-    candidate_id TEXT NOT NULL,               -- Unique within conflict
-    contrib_id TEXT NOT NULL,                 -- FK to contribution_units
-    source_kind TEXT NOT NULL,                -- vanilla or mod
-    source_name TEXT NOT NULL,                -- Mod name
-    load_order_index INTEGER NOT NULL,
-    is_winner INTEGER NOT NULL DEFAULT 0,     -- 1 if this would win by load order
-    PRIMARY KEY (conflict_unit_id, candidate_id),
-    FOREIGN KEY (conflict_unit_id) REFERENCES conflict_units(conflict_unit_id),
-    FOREIGN KEY (contrib_id) REFERENCES contribution_units(contrib_id)
-);
-
--- Resolution Choices - user decisions on how to handle conflicts
-CREATE TABLE IF NOT EXISTS resolution_choices (
-    resolution_id TEXT PRIMARY KEY,
-    conflict_unit_id TEXT NOT NULL,
-    decision_type TEXT NOT NULL,              -- winner, custom_merge, defer
-    winner_candidate_id TEXT,                 -- For winner type
-    merge_policy_json TEXT,                   -- For custom_merge type
-    notes TEXT,
-    applied_at TEXT,
-    applied_by TEXT NOT NULL DEFAULT 'user',
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (conflict_unit_id) REFERENCES conflict_units(conflict_unit_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_resolution_conflict ON resolution_choices(conflict_unit_id);
-
--- ============================================================================
--- CHANGE LOG & UPDATE TRACKING
--- ============================================================================
-
--- Change Log - tracks all file changes when mods/vanilla are updated
-CREATE TABLE IF NOT EXISTS change_log (
-    change_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    content_version_id INTEGER NOT NULL,      -- Which mod/vanilla was updated
-    previous_version_id INTEGER,              -- Previous content_version (if upgrade)
-    change_type TEXT NOT NULL,                -- 'initial', 'update', 'revert'
-    changed_at TEXT NOT NULL DEFAULT (datetime('now')),
-    summary TEXT,                             -- Human-readable summary
-    FOREIGN KEY (content_version_id) REFERENCES content_versions(content_version_id),
-    FOREIGN KEY (previous_version_id) REFERENCES content_versions(content_version_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_changelog_cv ON change_log(content_version_id);
-CREATE INDEX IF NOT EXISTS idx_changelog_time ON change_log(changed_at);
-
--- File Changes - detailed per-file changes within a change_log entry
-CREATE TABLE IF NOT EXISTS file_changes (
-    file_change_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    change_id INTEGER NOT NULL,               -- FK to change_log
-    file_id INTEGER NOT NULL,                 -- FK to files
-    relpath TEXT NOT NULL,                    -- Path for display
-    change_type TEXT NOT NULL,                -- 'added', 'modified', 'deleted'
-    old_content_hash TEXT,                    -- Previous content hash
-    new_content_hash TEXT,                    -- New content hash
-    blocks_changed_json TEXT,                 -- JSON: [{name, type, change}] summary
-    FOREIGN KEY (change_id) REFERENCES change_log(change_id),
-    FOREIGN KEY (file_id) REFERENCES files(file_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_filechange_changeid ON file_changes(change_id);
-CREATE INDEX IF NOT EXISTS idx_filechange_relpath ON file_changes(relpath);
+CREATE INDEX IF NOT EXISTS idx_qqueue_status ON qbuilder_queue(status);
+CREATE INDEX IF NOT EXISTS idx_qqueue_cvid ON qbuilder_queue(content_version_id);
+CREATE INDEX IF NOT EXISTS idx_qqueue_envelope ON qbuilder_queue(envelope);
 
 -- ============================================================================
 -- LOCALIZATION (Paradox .yml format)
 -- ============================================================================
 
 -- Localization entries - parsed key/value pairs from .yml files
--- Separate from ASTs because localization uses a different format
+-- REVISED January 2026: Changed content_hash → file_id, added content_version_id
 CREATE TABLE IF NOT EXISTS localization_entries (
     loc_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    content_hash TEXT NOT NULL,               -- FK to file_contents
-    language TEXT NOT NULL,                   -- 'english', 'german', 'french', etc.
-    loc_key TEXT NOT NULL,                    -- Key name, e.g. 'trait_brave'
-    version INTEGER NOT NULL DEFAULT 0,       -- Version number from key:0 or key:2
-    raw_value TEXT NOT NULL,                  -- Full value with codes
-    plain_text TEXT,                          -- Stripped of [scope], $var$, #format#
-    line_number INTEGER,                      -- Line in source file
-    parser_version_id INTEGER,                -- FK to parsers for cache invalidation
-    UNIQUE(content_hash, loc_key, parser_version_id),
-    FOREIGN KEY (parser_version_id) REFERENCES parsers(parser_version_id)
+    
+    -- Location
+    file_id INTEGER NOT NULL,                -- FK to files (was: content_hash)
+    content_version_id INTEGER NOT NULL,     -- FK to content_versions (for playset filtering)
+    line_number INTEGER,
+    
+    -- Identity
+    language TEXT NOT NULL,                  -- 'english', 'german', 'french', etc.
+    loc_key TEXT NOT NULL,                   -- Key name, e.g. 'trait_brave'
+    version INTEGER NOT NULL DEFAULT 0,      -- Version number from key:0 or key:2
+    
+    -- Content
+    raw_value TEXT NOT NULL,                 -- Full value with codes
+    plain_text TEXT,                         -- Stripped of [scope], $var$, #format#
+    
+    UNIQUE(file_id, loc_key, version),
+    FOREIGN KEY (file_id) REFERENCES files(file_id),
+    FOREIGN KEY (content_version_id) REFERENCES content_versions(content_version_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_loc_key ON localization_entries(loc_key);
 CREATE INDEX IF NOT EXISTS idx_loc_language ON localization_entries(language);
-CREATE INDEX IF NOT EXISTS idx_loc_hash ON localization_entries(content_hash);
+CREATE INDEX IF NOT EXISTS idx_loc_file ON localization_entries(file_id);
+CREATE INDEX IF NOT EXISTS idx_loc_cvid ON localization_entries(content_version_id);
 
 -- Localization references - [scope.Function] and $variable$ refs within loc values
 CREATE TABLE IF NOT EXISTS localization_refs (
@@ -590,16 +367,6 @@ CREATE INDEX IF NOT EXISTS idx_locref_value ON localization_refs(ref_value);
 -- ============================================================================
 -- LOOKUP TABLES - ID-keyed reference data
 -- ============================================================================
--- These tables store mappings from numeric IDs to human-readable data.
--- Unlike symbols (which are string-keyed and in ASTs), these are for:
---   - province IDs (e.g., 2333 → Paris)
---   - character IDs (e.g., 163110 → Charlemagne)  
---   - dynasty IDs (e.g., 699 → Karling)
---   - title mappings
---
--- The key insight: lookups are for OPAQUE NUMERIC IDs where you need to
--- know "what does ID 2333 mean?" Symbols are for string keys where you
--- need to know "is brave a valid trait?"
 
 -- Province lookup - from map_data/definition.csv + history/provinces/
 CREATE TABLE IF NOT EXISTS province_lookup (
@@ -702,15 +469,10 @@ CREATE TABLE IF NOT EXISTS holy_site_lookup (
 CREATE INDEX IF NOT EXISTS idx_holy_site_county ON holy_site_lookup(county_key);
 
 -- ============================================================================
--- DEPRECATED LOOKUP TABLES (to be removed)
+-- TRAIT/EVENT/DECISION LOOKUPS (linked to symbols)
 -- ============================================================================
--- These were based on a misunderstanding: traits, events, decisions are
--- STRING-KEYED and already in the symbols table with full AST data.
--- They don't need separate lookup tables - use symbols + AST queries.
---
--- Keeping temporarily for backward compatibility but not populated.
 
--- DEPRECATED: Trait lookup table - use symbols table instead
+-- Trait lookup - additional trait metadata beyond symbols
 CREATE TABLE IF NOT EXISTS trait_lookups (
     trait_id INTEGER PRIMARY KEY AUTOINCREMENT,
     symbol_id INTEGER NOT NULL,
@@ -718,10 +480,10 @@ CREATE TABLE IF NOT EXISTS trait_lookups (
     category TEXT,                            -- education, personality, lifestyle, etc.
     trait_group TEXT,                         -- group = X value
     level INTEGER,                            -- level = X value (for tiered traits)
-    is_genetic INTEGER DEFAULT 0,             -- genetic = yes
-    is_physical INTEGER DEFAULT 0,            -- physical = yes
-    is_health INTEGER DEFAULT 0,              -- health = yes
-    is_fame INTEGER DEFAULT 0,                -- fame = yes
+    is_genetic INTEGER DEFAULT 0,
+    is_physical INTEGER DEFAULT 0,
+    is_health INTEGER DEFAULT 0,
+    is_fame INTEGER DEFAULT 0,
     opposites_json TEXT,                      -- JSON array of opposite trait names
     flags_json TEXT,                          -- JSON array of flag values
     modifiers_json TEXT,                      -- JSON of modifier key/values
@@ -731,39 +493,66 @@ CREATE TABLE IF NOT EXISTS trait_lookups (
 
 CREATE INDEX IF NOT EXISTS idx_trait_name ON trait_lookups(name);
 CREATE INDEX IF NOT EXISTS idx_trait_category ON trait_lookups(category);
-CREATE INDEX IF NOT EXISTS idx_trait_group ON trait_lookups(trait_group);
 
--- Decision lookup table - extracted from common/decisions/*.txt ASTs
+-- Decision lookup - additional decision metadata
 CREATE TABLE IF NOT EXISTS decision_lookups (
     decision_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    symbol_id INTEGER NOT NULL,               -- FK to symbols table
-    name TEXT NOT NULL,                       -- decision name
-    is_shown_check TEXT,                      -- is_shown block summary (TBC)
-    is_valid_check TEXT,                      -- is_valid block summary (TBC)
-    major INTEGER DEFAULT 0,                  -- major = yes
-    ai_check_interval INTEGER,                -- ai_check_interval value
+    symbol_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    is_shown_check TEXT,
+    is_valid_check TEXT,
+    major INTEGER DEFAULT 0,
+    ai_check_interval INTEGER,
     FOREIGN KEY (symbol_id) REFERENCES symbols(symbol_id) ON DELETE CASCADE,
     UNIQUE(symbol_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_decision_name ON decision_lookups(name);
 
--- Event lookup table - extracted from events/*.txt ASTs  
+-- Event lookup - additional event metadata
 CREATE TABLE IF NOT EXISTS event_lookups (
     event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    symbol_id INTEGER NOT NULL,               -- FK to symbols table
-    event_name TEXT NOT NULL,                 -- e.g., 'blackmail.0001'
-    namespace TEXT,                           -- extracted namespace
+    symbol_id INTEGER NOT NULL,
+    event_name TEXT NOT NULL,
+    namespace TEXT,
     event_type TEXT,                          -- character_event, letter_event, etc.
-    is_hidden INTEGER DEFAULT 0,              -- hidden = yes
-    theme TEXT,                               -- theme value
+    is_hidden INTEGER DEFAULT 0,
+    theme TEXT,
     FOREIGN KEY (symbol_id) REFERENCES symbols(symbol_id) ON DELETE CASCADE,
     UNIQUE(symbol_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_event_name ON event_lookups(event_name);
 CREATE INDEX IF NOT EXISTS idx_event_namespace ON event_lookups(namespace);
-CREATE INDEX IF NOT EXISTS idx_event_type ON event_lookups(event_type);
+
+-- ============================================================================
+-- BUILDER SESSION MANAGEMENT (for write protection)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS builder_sessions (
+    session_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT NOT NULL UNIQUE,
+    purpose TEXT NOT NULL,
+    started_at TEXT NOT NULL DEFAULT (datetime('now')),
+    expires_at TEXT NOT NULL,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    ended_at TEXT,
+    rows_written INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_builder_sessions_active ON builder_sessions(is_active, expires_at);
+CREATE INDEX IF NOT EXISTS idx_builder_sessions_token ON builder_sessions(token);
+
+-- Helper view: Is there an active builder session?
+CREATE VIEW IF NOT EXISTS v_builder_session_active AS
+SELECT CASE 
+    WHEN EXISTS (
+        SELECT 1 FROM builder_sessions 
+        WHERE is_active = 1 
+        AND datetime(expires_at) > datetime('now')
+    ) THEN 1 
+    ELSE 0 
+END AS has_active_session;
 """
 
 # FTS triggers for keeping indexes in sync
@@ -813,78 +602,31 @@ CREATE TRIGGER IF NOT EXISTS refs_au AFTER UPDATE ON refs BEGIN
 END;
 """
 
-# ============================================================================
-# WRITE PROTECTION TRIGGERS (DB-level enforcement)
-# ============================================================================
-# These BEFORE triggers prevent writes to derived tables unless a builder
-# session is active. This prevents agents from accidentally corrupting
-# extracted data through ad-hoc queries.
-#
-# Protected tables: symbols, refs, *_lookups
-# Allowed: builder sessions with valid token
-#
-# To write to these tables, you must:
-# 1. Call start_builder_session() to get a session token
-# 2. Store the token in builder_sessions table
-# 3. The trigger checks for an active session before allowing writes
-
+# Write protection triggers (optional - can be enabled for safety)
 WRITE_PROTECTION_SQL = """
--- Builder session tracking for write protection
--- Only active builder sessions can write to derived tables
-CREATE TABLE IF NOT EXISTS builder_sessions (
-    session_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    token TEXT NOT NULL UNIQUE,              -- HMAC-signed session token
-    purpose TEXT NOT NULL,                   -- What this session is doing
-    started_at TEXT NOT NULL DEFAULT (datetime('now')),
-    expires_at TEXT NOT NULL,                -- Session expiry
-    is_active INTEGER NOT NULL DEFAULT 1,    -- 0 = ended/expired
-    ended_at TEXT,
-    rows_written INTEGER NOT NULL DEFAULT 0  -- Tracking for audit
-);
-
-CREATE INDEX IF NOT EXISTS idx_builder_sessions_active 
-    ON builder_sessions(is_active, expires_at);
-CREATE INDEX IF NOT EXISTS idx_builder_sessions_token 
-    ON builder_sessions(token);
-
--- Helper view: Is there an active builder session?
--- This is checked by the BEFORE triggers
-CREATE VIEW IF NOT EXISTS v_builder_session_active AS
-SELECT CASE 
-    WHEN EXISTS (
-        SELECT 1 FROM builder_sessions 
-        WHERE is_active = 1 
-        AND datetime(expires_at) > datetime('now')
-    ) THEN 1 
-    ELSE 0 
-END AS has_active_session;
-
--- ============================================================================
 -- BEFORE INSERT/UPDATE/DELETE triggers on protected tables
--- ============================================================================
 -- These triggers ABORT if no active builder session exists.
--- This is DB-level enforcement - cannot be bypassed by application code.
 
 -- SYMBOLS table protection
 CREATE TRIGGER IF NOT EXISTS symbols_write_protect_insert
 BEFORE INSERT ON symbols
 WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
 BEGIN
-    SELECT RAISE(ABORT, 'WRITE_PROTECTED: symbols table requires active builder session. Use start_builder_session().');
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: symbols table requires active builder session.');
 END;
 
 CREATE TRIGGER IF NOT EXISTS symbols_write_protect_update
 BEFORE UPDATE ON symbols
 WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
 BEGIN
-    SELECT RAISE(ABORT, 'WRITE_PROTECTED: symbols table requires active builder session. Use start_builder_session().');
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: symbols table requires active builder session.');
 END;
 
 CREATE TRIGGER IF NOT EXISTS symbols_write_protect_delete
 BEFORE DELETE ON symbols
 WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
 BEGIN
-    SELECT RAISE(ABORT, 'WRITE_PROTECTED: symbols table requires active builder session. Use start_builder_session().');
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: symbols table requires active builder session.');
 END;
 
 -- REFS table protection
@@ -892,24 +634,46 @@ CREATE TRIGGER IF NOT EXISTS refs_write_protect_insert
 BEFORE INSERT ON refs
 WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
 BEGIN
-    SELECT RAISE(ABORT, 'WRITE_PROTECTED: refs table requires active builder session. Use start_builder_session().');
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: refs table requires active builder session.');
 END;
 
 CREATE TRIGGER IF NOT EXISTS refs_write_protect_update
 BEFORE UPDATE ON refs
 WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
 BEGIN
-    SELECT RAISE(ABORT, 'WRITE_PROTECTED: refs table requires active builder session. Use start_builder_session().');
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: refs table requires active builder session.');
 END;
 
 CREATE TRIGGER IF NOT EXISTS refs_write_protect_delete
 BEFORE DELETE ON refs
 WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
 BEGIN
-    SELECT RAISE(ABORT, 'WRITE_PROTECTED: refs table requires active builder session. Use start_builder_session().');
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: refs table requires active builder session.');
 END;
 
--- TRAIT_LOOKUPS table protection
+-- LOCALIZATION_ENTRIES protection
+CREATE TRIGGER IF NOT EXISTS loc_entries_write_protect_insert
+BEFORE INSERT ON localization_entries
+WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: localization_entries table requires active builder session.');
+END;
+
+CREATE TRIGGER IF NOT EXISTS loc_entries_write_protect_update
+BEFORE UPDATE ON localization_entries
+WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: localization_entries table requires active builder session.');
+END;
+
+CREATE TRIGGER IF NOT EXISTS loc_entries_write_protect_delete
+BEFORE DELETE ON localization_entries
+WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
+BEGIN
+    SELECT RAISE(ABORT, 'WRITE_PROTECTED: localization_entries table requires active builder session.');
+END;
+
+-- TRAIT_LOOKUPS protection
 CREATE TRIGGER IF NOT EXISTS trait_lookups_write_protect_insert
 BEFORE INSERT ON trait_lookups
 WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
@@ -931,7 +695,7 @@ BEGIN
     SELECT RAISE(ABORT, 'WRITE_PROTECTED: trait_lookups table requires active builder session.');
 END;
 
--- DECISION_LOOKUPS table protection
+-- DECISION_LOOKUPS protection
 CREATE TRIGGER IF NOT EXISTS decision_lookups_write_protect_insert
 BEFORE INSERT ON decision_lookups
 WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
@@ -953,7 +717,7 @@ BEGIN
     SELECT RAISE(ABORT, 'WRITE_PROTECTED: decision_lookups table requires active builder session.');
 END;
 
--- EVENT_LOOKUPS table protection
+-- EVENT_LOOKUPS protection
 CREATE TRIGGER IF NOT EXISTS event_lookups_write_protect_insert
 BEFORE INSERT ON event_lookups
 WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
@@ -973,28 +737,6 @@ BEFORE DELETE ON event_lookups
 WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
 BEGIN
     SELECT RAISE(ABORT, 'WRITE_PROTECTED: event_lookups table requires active builder session.');
-END;
-
--- LOCALIZATION_ENTRIES protection (if table exists)
-CREATE TRIGGER IF NOT EXISTS loc_entries_write_protect_insert
-BEFORE INSERT ON localization_entries
-WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
-BEGIN
-    SELECT RAISE(ABORT, 'WRITE_PROTECTED: localization_entries table requires active builder session.');
-END;
-
-CREATE TRIGGER IF NOT EXISTS loc_entries_write_protect_update
-BEFORE UPDATE ON localization_entries
-WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
-BEGIN
-    SELECT RAISE(ABORT, 'WRITE_PROTECTED: localization_entries table requires active builder session.');
-END;
-
-CREATE TRIGGER IF NOT EXISTS loc_entries_write_protect_delete
-BEFORE DELETE ON localization_entries
-WHEN (SELECT has_active_session FROM v_builder_session_active) = 0
-BEGIN
-    SELECT RAISE(ABORT, 'WRITE_PROTECTED: localization_entries table requires active builder session.');
 END;
 """
 
@@ -1017,11 +759,12 @@ def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
         _local.connections = {}
     
     if key not in _local.connections:
-        conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        conn = sqlite3.connect(str(db_path), check_same_thread=False, timeout=5.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA busy_timeout = 5000")
         _local.connections[key] = conn
     
     return _local.connections[key]
@@ -1041,15 +784,20 @@ def init_database(db_path: Optional[Path] = None, force: bool = False) -> sqlite
     conn = get_connection(db_path)
     
     if force:
-        # Drop all tables (careful!)
+        # Drop all tables for fresh start
         conn.executescript("""
-            DROP TABLE IF EXISTS snapshot_members;
-            DROP TABLE IF EXISTS snapshots;
-            DROP TABLE IF EXISTS builds;
-            DROP TABLE IF EXISTS playset_mods;
-            DROP TABLE IF EXISTS playsets;
+            -- Core tables (order matters for FKs)
+            DROP TABLE IF EXISTS localization_refs;
+            DROP TABLE IF EXISTS localization_entries;
             DROP TABLE IF EXISTS refs;
             DROP TABLE IF EXISTS symbols;
+            DROP TABLE IF EXISTS trait_lookups;
+            DROP TABLE IF EXISTS decision_lookups;
+            DROP TABLE IF EXISTS event_lookups;
+            DROP TABLE IF EXISTS qbuilder_queue;
+            DROP TABLE IF EXISTS build_runs;
+            DROP TABLE IF EXISTS build_lock;
+            DROP TABLE IF EXISTS builder_sessions;
             DROP TABLE IF EXISTS asts;
             DROP TABLE IF EXISTS parsers;
             DROP TABLE IF EXISTS files;
@@ -1057,41 +805,56 @@ def init_database(db_path: Optional[Path] = None, force: bool = False) -> sqlite
             DROP TABLE IF EXISTS content_versions;
             DROP TABLE IF EXISTS mod_packages;
             DROP TABLE IF EXISTS vanilla_versions;
-            DROP TABLE IF EXISTS exemplar_mods;
             DROP TABLE IF EXISTS db_metadata;
+            
+            -- Lookup tables
+            DROP TABLE IF EXISTS province_lookup;
+            DROP TABLE IF EXISTS character_lookup;
+            DROP TABLE IF EXISTS dynasty_lookup;
+            DROP TABLE IF EXISTS title_lookup;
+            DROP TABLE IF EXISTS title_history_lookup;
+            DROP TABLE IF EXISTS holy_site_lookup;
+            
+            -- FTS tables
             DROP TABLE IF EXISTS file_content_fts;
             DROP TABLE IF EXISTS symbols_fts;
             DROP TABLE IF EXISTS refs_fts;
+            
+            -- Views
+            DROP VIEW IF EXISTS v_builder_session_active;
+            
+            -- DEPRECATED TABLES (to be removed)
+            DROP TABLE IF EXISTS ingest_blocks;
+            DROP TABLE IF EXISTS ingest_log;
+            DROP TABLE IF EXISTS processing_log;
+            DROP TABLE IF EXISTS builder_steps;
+            DROP TABLE IF EXISTS builder_runs;
+            DROP TABLE IF EXISTS work_queue;
+            DROP TABLE IF EXISTS file_state;
+            DROP TABLE IF EXISTS snapshots;
+            DROP TABLE IF EXISTS snapshot_members;
+            DROP TABLE IF EXISTS change_log;
+            DROP TABLE IF EXISTS file_changes;
+            DROP TABLE IF EXISTS exemplar_mods;
+            DROP TABLE IF EXISTS contribution_units;
+            DROP TABLE IF EXISTS conflict_units;
+            DROP TABLE IF EXISTS conflict_candidates;
+            DROP TABLE IF EXISTS resolution_choices;
+            DROP TABLE IF EXISTS cu_to_files;
+            DROP TABLE IF EXISTS conflict_types;
+            DROP TABLE IF EXISTS playsets;
+            DROP TABLE IF EXISTS playset_mods;
+            DROP TABLE IF EXISTS builds;
         """)
     
     # Create schema
     conn.executescript(SCHEMA_SQL)
     conn.executescript(FTS_TRIGGERS_SQL)
     
-    # ============================================================================
-    # MIGRATIONS - Safe column additions for existing databases
-    # ============================================================================
-    
-    # Migration: Add symbols_processed_at column to asts table
-    # This column tracks whether an AST has been processed for symbol extraction,
-    # even if it yielded 0 symbols (e.g., empty/comment-only files).
-    try:
-        conn.execute("ALTER TABLE asts ADD COLUMN symbols_processed_at TEXT")
-    except sqlite3.OperationalError:
-        # Column already exists, that's fine
-        pass
-    
-    # Migration: Add index for symbols_processed_at if not exists
-    try:
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_asts_symbols_processed ON asts(symbols_processed_at)")
-    except sqlite3.OperationalError:
-        pass
-    
-    # Apply write protection triggers (ignore errors if tables don't exist yet)
+    # Apply write protection triggers (optional)
     try:
         conn.executescript(WRITE_PROTECTION_SQL)
     except sqlite3.OperationalError:
-        # Some tables may not exist yet, that's OK
         pass
     
     # Set metadata
@@ -1135,16 +898,6 @@ def start_builder_session(
 ) -> str:
     """
     Start a builder session to allow writes to protected tables.
-    
-    This is REQUIRED before writing to: symbols, refs, *_lookups, localization_entries
-    
-    Args:
-        conn: Database connection
-        purpose: Description of what this session will do
-        ttl_minutes: Session duration in minutes (default 60)
-    
-    Returns:
-        Session token (store this to end the session later)
     """
     import secrets
     from datetime import datetime, timedelta
@@ -1162,16 +915,7 @@ def start_builder_session(
 
 
 def end_builder_session(conn: sqlite3.Connection, token: str) -> bool:
-    """
-    End a builder session.
-    
-    Args:
-        conn: Database connection
-        token: Session token from start_builder_session()
-    
-    Returns:
-        True if session was found and ended
-    """
+    """End a builder session."""
     from datetime import datetime
     
     result = conn.execute("""
@@ -1185,15 +929,7 @@ def end_builder_session(conn: sqlite3.Connection, token: str) -> bool:
 
 
 def has_active_builder_session(conn: sqlite3.Connection) -> bool:
-    """
-    Check if there's an active builder session.
-    
-    Args:
-        conn: Database connection
-    
-    Returns:
-        True if an active, non-expired session exists
-    """
+    """Check if there's an active builder session."""
     row = conn.execute("""
         SELECT has_active_session FROM v_builder_session_active
     """).fetchone()
@@ -1202,15 +938,7 @@ def has_active_builder_session(conn: sqlite3.Connection) -> bool:
 
 
 def cleanup_expired_sessions(conn: sqlite3.Connection) -> int:
-    """
-    Mark expired sessions as inactive.
-    
-    Args:
-        conn: Database connection
-    
-    Returns:
-        Number of sessions cleaned up
-    """
+    """Mark expired sessions as inactive."""
     from datetime import datetime
     
     result = conn.execute("""
@@ -1229,13 +957,8 @@ class BuilderSession:
     
     Usage:
         conn = get_connection()
-        with BuilderSession(conn, "Extracting symbols from mod X") as session:
-            # Can write to protected tables here
+        with BuilderSession(conn, "Extracting symbols") as session:
             conn.execute("INSERT INTO symbols ...")
-            
-            # For long-running operations, renew periodically
-            session.renew()  # Extends expiration by ttl_minutes
-        # Session automatically ended
     """
     
     def __init__(self, conn: sqlite3.Connection, purpose: str, ttl_minutes: int = 60):
@@ -1253,17 +976,10 @@ class BuilderSession:
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.token:
             end_builder_session(self.conn, self.token)
-        return False  # Don't suppress exceptions
+        return False
     
     def renew(self) -> bool:
-        """Extend the session expiration by ttl_minutes from now.
-        
-        Call this periodically during long-running operations to prevent
-        session expiration. Automatically called by renew_if_needed().
-        
-        Returns:
-            True if renewal succeeded, False if session not active
-        """
+        """Extend the session expiration."""
         if not self.token:
             return False
         
@@ -1283,17 +999,7 @@ class BuilderSession:
         return False
     
     def renew_if_needed(self, threshold_minutes: int = 30) -> bool:
-        """Renew session if more than threshold_minutes since last renewal.
-        
-        Call this frequently (e.g., in progress callbacks) to ensure the 
-        session doesn't expire during long-running operations.
-        
-        Args:
-            threshold_minutes: Renew if this many minutes have passed
-            
-        Returns:
-            True if renewed, False if not needed or failed
-        """
+        """Renew session if more than threshold_minutes since last renewal."""
         if self._last_renewed is None:
             return self.renew()
         
