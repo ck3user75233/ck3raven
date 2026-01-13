@@ -147,6 +147,19 @@ class EnvelopeExecutor:
         if not ctx.abspath.exists():
             raise FileNotFoundError(f"File not found: {ctx.abspath}")
         
+        # Check if AST already exists for this content_hash (deduplication)
+        # The asts table has UNIQUE(content_hash, parser_version_id) constraint
+        # so if content is identical to a previously-parsed file, skip re-parsing
+        existing = self.conn.execute("""
+            SELECT ast_id FROM asts 
+            WHERE content_hash = ? AND parser_version_id = 1
+        """, (ctx.work_hash or '',)).fetchone()
+        
+        if existing:
+            # AST already exists for identical content - skip parsing
+            # Symbol/ref extraction will use the existing AST
+            return
+        
         # Parse file using canonical runtime (subprocess with timeout)
         result = parse_file(ctx.abspath, timeout=DEFAULT_PARSE_TIMEOUT)
         
@@ -156,16 +169,13 @@ class EnvelopeExecutor:
             error_msg = result.error or "Unknown parse error"
             raise RuntimeError(f"{error_type}: {error_msg}")
         
-        # Store AST with fingerprint binding
-        # Upsert keyed by (file_id, fingerprint)
+        # Store AST - content deduplication means one AST per unique content_hash
+        # Delete any existing for this file_id (in case content changed)
+        self.conn.execute("DELETE FROM asts WHERE file_id = ?", (ctx.file_id,))
         self.conn.execute("""
             INSERT INTO asts (file_id, content_hash, parser_version_id, ast_blob, 
                               ast_format, parse_ok, node_count, created_at)
             VALUES (?, ?, 1, ?, 'json', 1, ?, datetime('now'))
-            ON CONFLICT (file_id, content_hash) DO UPDATE SET
-                ast_blob = excluded.ast_blob,
-                node_count = excluded.node_count,
-                created_at = excluded.created_at
         """, (ctx.file_id, ctx.work_hash or '', result.ast_json, result.node_count))
     
     def _step_extract_symbols(self, ctx: BuildContext) -> None:
@@ -176,10 +186,10 @@ class EnvelopeExecutor:
         except ImportError:
             return
         
-        # Get AST
+        # Get AST by content_hash (may be from different file_id due to deduplication)
         row = self.conn.execute(
-            "SELECT ast_blob FROM asts WHERE file_id = ? AND content_hash = ?",
-            (ctx.file_id, ctx.work_hash or '')
+            "SELECT ast_blob FROM asts WHERE content_hash = ? AND parser_version_id = 1",
+            (ctx.work_hash or '',)
         ).fetchone()
         
         if not row:
@@ -213,9 +223,10 @@ class EnvelopeExecutor:
         except ImportError:
             return
         
+        # Get AST by content_hash (may be from different file_id due to deduplication)
         row = self.conn.execute(
-            "SELECT ast_blob FROM asts WHERE file_id = ? AND content_hash = ?",
-            (ctx.file_id, ctx.work_hash or '')
+            "SELECT ast_blob FROM asts WHERE content_hash = ? AND parser_version_id = 1",
+            (ctx.work_hash or '',)
         ).fetchone()
         
         if not row:
