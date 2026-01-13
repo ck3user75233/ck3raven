@@ -130,25 +130,31 @@ class EnvelopeExecutor:
     # =========================================================================
     
     def _step_parse(self, ctx: BuildContext) -> None:
-        """Parse PDX script file into AST with fingerprint binding."""
-        # Use existing ast_cache infrastructure
-        try:
-            from src.ck3raven.parser import parse_file
-            from src.ck3raven.db.ast_cache import serialize_ast, count_ast_nodes, deserialize_ast
-        except ImportError:
-            # Stub if parser not available
-            return
+        """
+        Parse PDX script file into AST with fingerprint binding.
+        
+        CRITICAL: Parsing runs in a subprocess with hard timeout.
+        This prevents pathological files from blocking the queue indefinitely.
+        On timeout, ParseTimeoutError is raised and the file is marked as error.
+        """
+        from qbuilder.subprocess_parse import (
+            parse_file_in_subprocess,
+            ParseTimeoutError,
+            ParseSubprocessError,
+            DEFAULT_PARSE_TIMEOUT,
+        )
         
         if not ctx.abspath.exists():
             raise FileNotFoundError(f"File not found: {ctx.abspath}")
         
-        # Parse file
-        ast_node = parse_file(ctx.abspath)
+        # Parse file in subprocess with timeout
+        result = parse_file_in_subprocess(ctx.abspath, timeout=DEFAULT_PARSE_TIMEOUT)
         
-        # Serialize using canonical method from ast_cache
-        ast_blob = serialize_ast(ast_node)
-        ast_dict = deserialize_ast(ast_blob)
-        node_count = count_ast_nodes(ast_dict)
+        if not result.success:
+            # Parse failed (syntax error, etc.) - raise so it's recorded as error
+            error_type = result.error_type or "ParseError"
+            error_msg = result.error or "Unknown parse error"
+            raise RuntimeError(f"{error_type}: {error_msg}")
         
         # Store AST with fingerprint binding
         # Upsert keyed by (file_id, fingerprint)
@@ -160,7 +166,7 @@ class EnvelopeExecutor:
                 ast_blob = excluded.ast_blob,
                 node_count = excluded.node_count,
                 created_at = excluded.created_at
-        """, (ctx.file_id, ctx.work_hash or '', ast_blob, node_count))
+        """, (ctx.file_id, ctx.work_hash or '', result.ast_json, result.node_count))
     
     def _step_extract_symbols(self, ctx: BuildContext) -> None:
         """Extract symbols from AST with fingerprint binding."""
@@ -466,19 +472,40 @@ class BuildWorker:
             return {'build_id': build_id, 'status': 'completed', 'steps': completed_steps}
         
         except Exception as e:
+            from qbuilder.subprocess_parse import ParseTimeoutError
+            
             error_msg = f"{type(e).__name__}: {str(e)}"
-            self._mark_error(build_id, error_msg, None)
+            
+            # Timeouts are permanent failures - no retry
+            if isinstance(e, ParseTimeoutError):
+                self._mark_error(build_id, error_msg, 'parse', permanent=True)
+            else:
+                self._mark_error(build_id, error_msg, None)
+            
             return {'build_id': build_id, 'status': 'error', 'error': error_msg}
     
-    def _mark_error(self, build_id: int, message: str, step: Optional[str]) -> None:
-        """Mark work item as error."""
+    def _mark_error(self, build_id: int, message: str, step: Optional[str], permanent: bool = False) -> None:
+        """
+        Mark work item as error.
+        
+        Args:
+            build_id: The build queue item ID
+            message: Error message
+            step: The step that failed (optional)
+            permanent: If True, mark as error immediately (no retry)
+        """
         retry = self.conn.execute(
             "SELECT retry_count FROM build_queue WHERE build_id = ?",
             (build_id,)
         ).fetchone()
         
         retry_count = (retry[0] if retry else 0) + 1
-        status = 'error' if retry_count >= MAX_RETRIES else 'pending'
+        
+        # Permanent errors (like timeouts) skip retry logic
+        if permanent:
+            status = 'error'
+        else:
+            status = 'error' if retry_count >= MAX_RETRIES else 'pending'
         
         self.conn.execute("""
             UPDATE build_queue
