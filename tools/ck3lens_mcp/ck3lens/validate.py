@@ -2,8 +2,12 @@
 Validation Tools
 
 Parse and validate CK3 script content.
+
+IMPORTANT: All parsing uses the canonical runtime (subprocess + timeout).
+Direct calls to Parser().parse() are PROHIBITED.
 """
 from __future__ import annotations
+import json
 import sys
 from pathlib import Path
 from typing import Optional
@@ -18,15 +22,16 @@ from .contracts import ArtifactBundle, ValidationMessage, ValidationReport
 ALLOWED_TOPLEVEL = {"common", "events", "gfx", "localization", "interface", "music", "sound", "history", "map_data"}
 
 
-def parse_content(content: str, filename: str = "inline.txt", recover: bool = True) -> dict:
+def parse_content(content: str, filename: str = "inline.txt", recover: bool = True, timeout: int = 30) -> dict:
     """
-    Parse CK3 script content.
+    Parse CK3 script content using canonical runtime (subprocess + timeout).
     
     Args:
         content: CK3 script source code
         filename: For error messages
         recover: If True, use error-recovering parser to collect multiple errors.
                  If False, use standard parser (stops at first error).
+        timeout: Parse timeout in seconds (default 30, max 120)
     
     Returns:
         {
@@ -36,67 +41,49 @@ def parse_content(content: str, filename: str = "inline.txt", recover: bool = Tr
         }
     """
     try:
-        if recover:
-            from ck3raven.parser import parse_source_recovering
-            result = parse_source_recovering(content, filename)
-            
-            # Convert AST to dict
-            ast_dict = result.ast.to_dict() if result.ast else None
-            
-            return {
-                "success": result.success,
-                "ast": ast_dict,
-                "errors": [
-                    {
-                        "line": d.line,
-                        "column": d.column,
-                        "end_line": d.end_line,
-                        "end_column": d.end_column,
-                        "message": d.message,
-                        "code": d.code,
-                        "severity": d.severity
-                    }
-                    for d in result.diagnostics
-                ]
-            }
-        else:
-            # Original non-recovering parse
-            from ck3raven.parser import parse_source
-            from ck3raven.parser.parser import RootNode, BlockNode, AssignmentNode, ValueNode
-            
-            ast = parse_source(content, filename)
-            
-            # Simple AST serialization
-            def node_to_dict(node):
-                if isinstance(node, RootNode):
-                    return {"type": "root", "children": [node_to_dict(c) for c in node.children]}
-                elif isinstance(node, BlockNode):
-                    return {
-                        "type": "block",
-                        "name": node.name,
-                        "line": node.line,
-                        "children": [node_to_dict(c) for c in node.children]
-                    }
-                elif isinstance(node, AssignmentNode):
-                    return {
-                        "type": "assignment",
-                        "key": node.key,
-                        "operator": getattr(node, 'operator', '='),
-                        "value": node_to_dict(node.value),
-                        "line": node.line
-                    }
-                elif isinstance(node, ValueNode):
-                    return {"type": "value", "value": node.value}
-                elif hasattr(node, 'children'):
-                    return {"type": type(node).__name__, "children": [node_to_dict(c) for c in node.children]}
-                else:
-                    return {"type": type(node).__name__, "repr": str(node)}
-            
-            return {
-                "success": True,
-                "ast": node_to_dict(ast),
-                "errors": []
-            }
+        from ck3raven.parser.runtime import parse_text, ParseTimeoutError, ParseSubprocessError
+        
+        result = parse_text(content, filename=filename, timeout=timeout, recovering=recover)
+        
+        # Parse AST JSON to dict
+        ast_dict = None
+        if result.ast_json:
+            try:
+                ast_dict = json.loads(result.ast_json)
+            except json.JSONDecodeError:
+                pass
+        
+        # Convert diagnostics to error format
+        errors = []
+        if result.diagnostics:
+            for d in result.diagnostics:
+                errors.append({
+                    "line": d.line,
+                    "column": d.column,
+                    "end_line": d.end_line,
+                    "end_column": d.end_column,
+                    "message": d.message,
+                    "code": d.code,
+                    "severity": d.severity,
+                })
+        elif not result.success and result.error:
+            # Non-recovering parse returned an error
+            errors.append({
+                "line": 1,
+                "column": 0,
+                "end_line": 1,
+                "end_column": 0,
+                "message": result.error,
+                "code": result.error_type or "PARSE_ERROR",
+                "severity": "error",
+            })
+        
+        return {
+            "success": result.success,
+            "ast": ast_dict,
+            "errors": errors,
+        }
+    
     except Exception as e:
         # Try to extract line info from error message
         error_msg = str(e)

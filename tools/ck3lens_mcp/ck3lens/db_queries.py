@@ -567,7 +567,7 @@ class DBQueries:
         *,
         visible_cvids: Optional[FrozenSet[int]],
         file_id: Optional[int] = None,
-        include_ast: bool = False
+        expand: Optional[List[str]] = None,
     ) -> Optional[dict]:
         """
         Get file content by file_id or relpath.
@@ -578,7 +578,9 @@ class DBQueries:
             relpath: Relative path to search for
             visible_cvids: FrozenSet of cvids to filter, or None for all
             file_id: Specific file ID to retrieve (overrides relpath)
-            include_ast: If True, also return parsed AST
+            expand: List of derived data to include IF ALREADY EXISTS in DB.
+                    Valid values: ["ast"]
+                    NOTE: This is read-only retrieval - never triggers parsing.
         """
         cv_filter = self._cv_filter_sql(visible_cvids, "f.content_version_id")
         
@@ -626,14 +628,23 @@ class DBQueries:
             "size": row["file_size"]
         }
         
-        if include_ast:
-            try:
-                from ck3raven.parser import parse_source
-                ast = parse_source(content)
-                result["ast"] = self._ast_to_dict(ast)
-            except Exception as e:
+        # expand=["ast"] - retrieve AST from DB if it exists (read-only, no parsing)
+        expand = expand or []
+        if "ast" in expand:
+            ast_row = self.conn.execute("""
+                SELECT ast_blob FROM asts 
+                WHERE file_id = ? AND content_hash = ?
+            """, (row["file_id"], row["content_hash"])).fetchone()
+            
+            if ast_row and ast_row["ast_blob"]:
+                try:
+                    import json
+                    result["ast"] = json.loads(ast_row["ast_blob"])
+                except Exception:
+                    result["ast"] = None
+            else:
+                # AST not yet built - return None, do NOT trigger parsing
                 result["ast"] = None
-                result["ast_error"] = str(e)
         
         return result
     

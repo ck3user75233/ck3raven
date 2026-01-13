@@ -133,12 +133,12 @@ class EnvelopeExecutor:
         """
         Parse PDX script file into AST with fingerprint binding.
         
-        CRITICAL: Parsing runs in a subprocess with hard timeout.
+        CRITICAL: Uses canonical parser runtime (subprocess + timeout).
         This prevents pathological files from blocking the queue indefinitely.
         On timeout, ParseTimeoutError is raised and the file is marked as error.
         """
-        from qbuilder.subprocess_parse import (
-            parse_file_in_subprocess,
+        from src.ck3raven.parser.runtime import (
+            parse_file,
             ParseTimeoutError,
             ParseSubprocessError,
             DEFAULT_PARSE_TIMEOUT,
@@ -147,8 +147,8 @@ class EnvelopeExecutor:
         if not ctx.abspath.exists():
             raise FileNotFoundError(f"File not found: {ctx.abspath}")
         
-        # Parse file in subprocess with timeout
-        result = parse_file_in_subprocess(ctx.abspath, timeout=DEFAULT_PARSE_TIMEOUT)
+        # Parse file using canonical runtime (subprocess with timeout)
+        result = parse_file(ctx.abspath, timeout=DEFAULT_PARSE_TIMEOUT)
         
         if not result.success:
             # Parse failed (syntax error, etc.) - raise so it's recorded as error
@@ -472,7 +472,7 @@ class BuildWorker:
             return {'build_id': build_id, 'status': 'completed', 'steps': completed_steps}
         
         except Exception as e:
-            from qbuilder.subprocess_parse import ParseTimeoutError
+            from src.ck3raven.parser.runtime import ParseTimeoutError
             
             error_msg = f"{type(e).__name__}: {str(e)}"
             
