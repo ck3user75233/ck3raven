@@ -170,10 +170,12 @@ class EnvelopeExecutor:
             raise RuntimeError(f"{error_type}: {error_msg}")
         
         # Store AST - content deduplication means one AST per unique content_hash
-        # Delete any existing for this file_id (in case content changed)
-        self.conn.execute("DELETE FROM asts WHERE file_id = ?", (ctx.file_id,))
+        # Use INSERT OR IGNORE because UNIQUE(content_hash, parser_version_id) constraint
+        # means identical content from different files shares one AST row.
+        # The file_id column is vestigial (records which file triggered the parse)
+        # and is NOT part of AST identity - see docs/CANONICAL_ARCHITECTURE.md Section 13.
         self.conn.execute("""
-            INSERT INTO asts (file_id, content_hash, parser_version_id, ast_blob, 
+            INSERT OR IGNORE INTO asts (file_id, content_hash, parser_version_id, ast_blob, 
                               ast_format, parse_ok, node_count, created_at)
             VALUES (?, ?, 1, ?, 'json', 1, ?, datetime('now'))
         """, (ctx.file_id, ctx.work_hash or '', result.ast_json, result.node_count))
