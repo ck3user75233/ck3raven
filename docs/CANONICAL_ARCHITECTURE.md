@@ -46,8 +46,7 @@ Every agent working on this codebase MUST understand these 5 rules:
 | **9. Mode-Aware Addressing** | ck3lens vs ck3raven-dev addressing | [â†’ Details](#9-mode-aware-addressing) |
 | **10. Single WorldAdapter** | One class with mode-specific behavior | [â†’ Details](#10-single-worldadapter-architecture) |
 | **11. arch_lint v2.2** | Automated architecture linter | [â†’ Details](#11-arch_lint-v22) |
-| **12. _*_internal Convention** | Internal method naming pattern | [â†’ Details](#12-_internal-method-naming-convention) |
-
+| **12. _*_internal Convention** | Internal method naming pattern | [â†’ Details](#12-_internal-method-naming-convention) || **13. AST Identity Invariant** | Content-identity model for ASTs | [→ Details](#13-ast-identity-invariant-january-2026) |
 ---
 
 ## 1. Enforcement Architecture
@@ -844,4 +843,87 @@ class WorldAdapter:
 - Public methods do validation, internal methods assume valid input
 - Separating concerns makes code easier to test
 - Internal methods can be optimized without changing public API
+
+---
+
+## 13. AST Identity Invariant (January 2026)
+
+**STATUS: CANONICAL LAW — This is a schema law, not an optimization.**
+
+### Core Principle
+
+**ASTs are content-identity objects, not file-identity objects.**
+
+An AST is uniquely identified by:
+```
+(content_hash, parser_version_id)
+```
+
+### Implications
+
+| Rule | Explanation |
+|------|-------------|
+| Multiple files may share one AST | Two files with identical content reference the same AST row |
+| File identity is NOT part of AST identity | `file_id` column in `asts` table is vestigial/historical |
+| AST deduplication is intentional and required | This is by design, not a bug |
+
+### Schema Constraint
+
+The `asts` table MUST enforce:
+```sql
+UNIQUE(content_hash, parser_version_id)
+```
+
+### Worker Requirements
+
+Workers MUST:
+1. **Skip parsing** if an AST already exists for the same `content_hash`
+2. **Resolve ASTs by `content_hash`** (not `file_id`)
+
+```python
+# ✅ CORRECT - check by content_hash
+existing = conn.execute("""
+    SELECT ast_id FROM asts 
+    WHERE content_hash = ? AND parser_version_id = 1
+""", (content_hash,)).fetchone()
+
+if existing:
+    return  # Reuse existing AST
+
+# ❌ WRONG - assumes one AST per file
+row = conn.execute("SELECT ast_blob FROM asts WHERE file_id = ?", (file_id,))
+```
+
+### Symbol/Reference Extraction
+
+Extraction steps MUST:
+- Accept ASTs not originally produced from the same `file_id`
+- Look up AST by `content_hash`, not by `file_id`
+
+### Vestigial `file_id` Column
+
+The `file_id` column in `asts` records which file triggered the initial parse. It is:
+- **Historical only** — not part of AST identity
+- **NOT to be used for AST lookup**
+- Harmless but could theoretically be removed
+
+### Compatibility with Envelopes
+
+This invariant is **compatible with the envelope model**:
+- Envelopes decide **what steps must happen**
+- Content identity decides **whether parsing work is necessary**
+
+These are orthogonal concerns, not contradictory.
+
+### Non-Negotiable
+
+No component may assume:
+```
+file_id → exactly one AST
+```
+
+This invariant must be:
+1. Documented here (canonical architecture)
+2. Reflected in worker logic
+3. Treated as non-negotiable in future refactors
 
