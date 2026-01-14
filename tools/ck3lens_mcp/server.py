@@ -715,11 +715,23 @@ def ck3_close_db() -> dict:
     
     try:
         if _db is not None:
-            # Close the connection
+            # Properly close SQLite connection with WAL checkpoint
+            # This is required on Windows to fully release file locks
             try:
-                _db.conn.close()
+                conn = _db.conn
+                # Checkpoint WAL to flush all pending writes
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                # Force sync
+                conn.execute("PRAGMA synchronous = FULL")
+                conn.commit()
+                # Close the connection
+                conn.close()
             except Exception:
-                pass
+                # If checkpoint fails, still try to close
+                try:
+                    _db.conn.close()
+                except Exception:
+                    pass
             _db = None
         
         # Also clear cached state that depends on DB
@@ -732,6 +744,11 @@ def ck3_close_db() -> dict:
             close_all_connections()
         except Exception:
             pass
+        
+        # Force garbage collection to release any lingering file handles
+        # This is especially important on Windows
+        import gc
+        gc.collect()
         
         trace.log("ck3lens.close_db", {}, {"success": True})
         
@@ -2614,7 +2631,7 @@ def ck3_repair(
         from .ck3lens.path_migration import detect_path_mismatch, migrate_playset_paths
         
         # Get active playset data
-        if not session.playset_id:
+        if not session.playset_name:
             return {"error": "No active playset. Use ck3_playset to switch to a playset first."}
         
         # Find the playset file
@@ -2627,7 +2644,7 @@ def ck3_repair(
             try:
                 with open(f, 'r', encoding='utf-8') as fp:
                     data = json.load(fp)
-                    if data.get("playset_id") == session.playset_id or data.get("name") == session.playset_name:
+                    if data.get("name") == session.playset_name:
                         playset_file = f
                         playset_data = data
                         break
@@ -2639,6 +2656,9 @@ def ck3_repair(
                 "error": f"Could not find playset file for '{session.playset_name}'",
                 "hint": "Playset may be stored in database only, not a JSON file",
             }
+        
+        # At this point playset_file is guaranteed to be set (found in loop above)
+        assert playset_file is not None
         
         # Detect path mismatch
         local_mods_folder = playset_data.get("local_mods_folder", "")
@@ -2690,7 +2710,7 @@ def ck3_repair(
                 json.dump(migrated_data, fp, indent=2, ensure_ascii=False)
             
             # Reload the playset
-            _load_playset_from_json(str(playset_file))
+            _load_playset_from_json(playset_file)
             
             trace.log("ck3lens.repair", {"command": "migrate_paths", "dry_run": False}, {
                 "old_user": old_user,
