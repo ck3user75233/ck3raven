@@ -520,7 +520,7 @@ class WorldAdapter:
     def __init__(
         self,
         mode: str,
-        db: "DBQueries",
+        db: Optional["DBQueries"] = None,  # Can be None - only needed for DB operations
         *,
         # ck3lens mode parameters
         mods: Optional[list] = None,  # List of mod entries from session
@@ -536,7 +536,7 @@ class WorldAdapter:
         
         Args:
             mode: Agent mode ("ck3lens", "ck3raven-dev", or "uninitiated")
-            db: DBQueries instance
+            db: DBQueries instance (optional - only needed for DB operations, not path resolution)
             mods: List of mod entries (REQUIRED for ck3lens mode)
             local_mods_folder: Path to local mods folder (ck3lens)
             utility_roots: Dict of utility type to path (ck3lens)

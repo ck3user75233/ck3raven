@@ -199,16 +199,17 @@ def _get_world():
     if _cached_world_adapter is not None and _cached_world_mode == mode:
         return _cached_world_adapter
     
-    # Get dependencies - NO lens parameter (removed December 2025)
-    db = _get_db()
+    # Get session for mod paths - DB is NOT needed for path resolution
+    # DB is only needed for DB operations (search, get_file from DB, etc.)
     session = _get_session()
     
     # Build adapter via router - mods[] is THE source, no lens
+    # Pass db=None - WorldAdapter doesn't need DB for path resolution
     # NOTE: Do NOT catch exceptions here. If mode is not initialized,
     # the error should propagate with a clear message about calling
     # ck3_get_mode_instructions() first.
     adapter = get_world(
-        db=db,
+        db=None,  # DB not needed for path resolution - get it when needed
         local_mods_folder=session.local_mods_folder,
         mods=session.mods
     )

@@ -147,10 +147,10 @@ class WorldRouter:
         Note: mods[] should always contain at least vanilla as mods[0].
         If mods is empty or None, we proceed with empty visibility
         (searches return nothing, but tools still work).
-        """
-        if db is None:
-            raise RuntimeError("DBQueries required for ck3lens mode")
         
+        db can be None - WorldAdapter only needs DB for DB operations,
+        not for path resolution.
+        """
         # Graceful handling of empty mods - just log a warning
         # mods[] should always have vanilla, but if not, tools still work
         if not mods:
@@ -197,10 +197,10 @@ class WorldRouter:
         
         NOTE: ck3raven-dev mode does NOT use mod-related parameters.
         Mods are NOT part of the execution model for dev mode.
-        """
-        if db is None:
-            raise RuntimeError("DBQueries required for ck3raven-dev mode")
         
+        db can be None - WorldAdapter only needs DB for DB operations,
+        not for path resolution.
+        """
         # ck3raven source root
         ck3raven_root = self._detect_ck3raven_root()
         if ck3raven_root is None:
