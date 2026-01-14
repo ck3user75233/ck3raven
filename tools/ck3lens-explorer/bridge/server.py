@@ -103,6 +103,7 @@ class CK3LensBridge:
         self.db_path = None
         self._db: "DBQueries" = None  # DBQueries instance
         self._world: "WorldAdapter" = None  # WorldAdapter for visibility
+        self._local_mods_folder: Path = None  # Canonical path for local mods
         self.initialized = False
         self._playset_name: str = None
         
@@ -230,11 +231,11 @@ class CK3LensBridge:
             )
             
             self.initialized = True
+            self._local_mods_folder = local_mods_folder  # Store for use by methods
             
             return {
                 "initialized": True,
                 "db_path": str(self.db_path),
-                "mod_root": str(local_mods_folder) if local_mods_folder else None,
                 "local_mods_folder": str(local_mods_folder) if local_mods_folder else None,
                 "playset_name": self._playset_name,
                 "world_available": True,
@@ -779,8 +780,9 @@ class CK3LensBridge:
         mod_name = params.get("mod_name", "")
         rel_path = params.get("rel_path", "")
         
-        mod_root = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
-        file_path = mod_root / mod_name / rel_path
+        if not self._local_mods_folder:
+            return {"exists": False, "error": "local_mods_folder not configured"}
+        file_path = self._local_mods_folder / mod_name / rel_path
         
         if not file_path.exists():
             return {"exists": False, "content": None}
@@ -797,8 +799,9 @@ class CK3LensBridge:
         rel_path = params.get("rel_path", "")
         content = params.get("content", "")
         
-        mod_root = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
-        file_path = mod_root / mod_name / rel_path
+        if not self._local_mods_folder:
+            return {"success": False, "error": "local_mods_folder not configured"}
+        file_path = self._local_mods_folder / mod_name / rel_path
         
         try:
             file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -808,11 +811,12 @@ class CK3LensBridge:
             return {"success": False, "error": str(e)}
     
     def git_status(self, params: dict) -> dict:
-        """Get git status for a live mod."""
+        """Get git status for a local mod."""
         mod_name = params.get("mod_name", "")
         
-        mod_root = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
-        mod_path = mod_root / mod_name
+        if not self._local_mods_folder:
+            return {"error": "local_mods_folder not configured"}
+        mod_path = self._local_mods_folder / mod_name
         
         if not (mod_path / ".git").exists():
             return {"error": "Not a git repository"}
@@ -952,7 +956,8 @@ class CK3LensBridge:
         if not source_path or not target_mod:
             return {"success": False, "error": "source_path and target_mod required"}
         
-        mod_root = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
+        if not self._local_mods_folder:
+            return {"success": False, "error": "local_mods_folder not configured"}
         
         if mode == "override_patch":
             rel_path = source_path
@@ -964,7 +969,7 @@ class CK3LensBridge:
         else:
             rel_path = source_path
         
-        target_path = mod_root / target_mod / rel_path
+        target_path = self._local_mods_folder / target_mod / rel_path
         
         try:
             target_path.parent.mkdir(parents=True, exist_ok=True)

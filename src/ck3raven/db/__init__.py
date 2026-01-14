@@ -34,13 +34,7 @@ from ck3raven.db.content import (
     store_file_content,
     store_file_record,
 )
-from ck3raven.db.ingest import (
-    ingest_vanilla,
-    ingest_mod,
-    ingest_directory,
-    incremental_update,
-    compare_manifests,
-)
+# NOTE: ingest.py archived - qbuilder/discovery.py is the canonical ingestion path
 from ck3raven.db.parser_version import (
     PARSER_VERSION,
     get_or_create_parser_version,
@@ -126,12 +120,7 @@ __all__ = [
     "scan_directory",
     "store_file_content",
     "store_file_record",
-    # Ingest
-    "ingest_vanilla",
-    "ingest_mod",
-    "ingest_directory",
-    "incremental_update",
-    "compare_manifests",
+    # Ingest - ARCHIVED: use qbuilder/discovery.py instead
     # Parser Version
     "PARSER_VERSION",
     "get_or_create_parser_version",

@@ -4437,7 +4437,6 @@ def ck3_get_mode_instructions(
             "session_note": _get_mode_session_note(mode),
             # Session info (from what ck3_init_session used to return)
             "session": {
-                "mod_root": session_info.get("mod_root"),
                 "local_mods_folder": session_info.get("local_mods_folder"),
                 "db_path": session_info.get("db_path"),
                 "playset_id": session_info.get("playset_id"),
