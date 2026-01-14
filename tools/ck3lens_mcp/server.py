@@ -30,6 +30,7 @@ if CK3RAVEN_ROOT.exists():
 
 from ck3lens.workspace import Session, LocalMod
 from ck3lens.db_queries import DBQueries
+from ck3lens.db_api import db as db_api  # Database API Layer - THE interface for DB access
 from ck3lens import git_ops
 from ck3lens.validate import parse_content, validate_artifact_bundle
 from ck3lens.contracts import ArtifactBundle
@@ -117,17 +118,34 @@ def _get_session() -> Session:
 
 
 def _get_db() -> DBQueries:
+    """
+    Get database connection via db_api layer.
+    
+    NOTE: This function now delegates to db_api. If db_api.is_available()
+    returns False, this will raise RuntimeError. Tools should check
+    db_api.is_available() before calling operations that require DB.
+    
+    ARCHITECTURAL NOTE (January 2026):
+    The db_api module is THE interface for database access. This function
+    remains for backward compatibility but should not be used for new code.
+    Use db_api methods directly (db_api.unified_search(), etc.)
+    """
     global _db, _session_cv_ids_resolved
+    
+    # Check if database access is disabled
+    if not db_api.is_available():
+        raise RuntimeError("Database is disabled for maintenance. Use ck3_db(command='enable') to reconnect.")
+    
     if _db is None:
         session = _get_session()
         if session.db_path is None:
             raise RuntimeError("No database path configured. Check playset configuration.")
         
-        # NOTE: Removed qbuilder.api import here (January 2026)
-        # Health checks now done via subprocess to avoid import dependency
-        # that blocks MCP tools when qbuilder has DB locked
+        # Configure db_api with path (if not already configured)
+        db_api.configure(session.db_path, session)
         
-        _db = DBQueries(db_path=session.db_path)
+        # Get connection via db_api
+        _db = db_api._get_db()
         
         # Resolve cvids on first DB connection
         if not _session_cv_ids_resolved:
@@ -714,27 +732,13 @@ def ck3_close_db() -> dict:
     trace = _get_trace()
     
     try:
-        if _db is not None:
-            # Properly close SQLite connection with WAL checkpoint
-            # This is required on Windows to fully release file locks
-            try:
-                conn = _db.conn
-                # Checkpoint WAL to flush all pending writes
-                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                # Force sync
-                conn.execute("PRAGMA synchronous = FULL")
-                conn.commit()
-                # Close the connection
-                conn.close()
-            except Exception:
-                # If checkpoint fails, still try to close
-                try:
-                    _db.conn.close()
-                except Exception:
-                    pass
-            _db = None
+        # Use db_api to disable (which handles WAL mode, close, and blocks reconnect)
+        result = db_api.disable()
         
-        # Also clear cached state that depends on DB
+        # Also clear module-level cache
+        _db = None
+        
+        # Clear cached state that depends on DB
         _playset_id = None
         _session_scope = None
         
@@ -746,7 +750,6 @@ def ck3_close_db() -> dict:
             pass
         
         # Force garbage collection to release any lingering file handles
-        # This is especially important on Windows
         import gc
         gc.collect()
         
@@ -754,7 +757,7 @@ def ck3_close_db() -> dict:
         
         return {
             "success": True,
-            "message": "Database connection closed. File lock released."
+            "message": "Database connection closed and DISABLED. Use ck3_db(command='enable') to reconnect. File lock released."
         }
     except Exception as e:
         trace.log("ck3lens.close_db", {}, {"success": False, "error": str(e)})
@@ -762,6 +765,72 @@ def ck3_close_db() -> dict:
             "success": False,
             "message": f"Failed to close connection: {e}"
         }
+
+
+@mcp.tool()
+def ck3_db(
+    command: Literal["status", "disable", "enable"] = "status",
+) -> dict:
+    """
+    Manage database connection for maintenance operations.
+    
+    Commands:
+    
+    command=status   → Check if database is enabled/connected
+    command=disable  → Close connection and block reconnection (for file operations)
+    command=enable   → Re-enable database access
+    
+    Use disable before deleting database files to ensure file locks are released.
+    Use enable to restore normal operation.
+    
+    Args:
+        command: Operation to perform
+        
+    Returns:
+        Dict with operation result
+        
+    Examples:
+        ck3_db(command="status")   # Check current state
+        ck3_db(command="disable")  # Close and block for file deletion
+        ck3_db(command="enable")   # Restore normal operation
+    """
+    global _db
+    
+    trace = _get_trace()
+    
+    if command == "status":
+        result = db_api.status()
+        trace.log("ck3lens.db.status", {}, result)
+        return result
+        
+    elif command == "disable":
+        # Use db_api to disable (handles WAL mode, close, blocks reconnect)
+        result = db_api.disable()
+        
+        # Also clear module-level cache
+        _db = None
+        
+        # Clear thread-local connections from schema module
+        try:
+            from ck3raven.db.schema import close_all_connections
+            close_all_connections()
+        except Exception:
+            pass
+        
+        # Force garbage collection to release file handles
+        import gc
+        gc.collect()
+        
+        trace.log("ck3lens.db.disable", {}, result)
+        return result
+        
+    elif command == "enable":
+        result = db_api.enable()
+        trace.log("ck3lens.db.enable", {}, result)
+        return result
+    
+    else:
+        return {"error": f"Unknown command: {command}"}
 
 
 # NOTE: ck3_get_playset_build_status() DELETED - January 2026
