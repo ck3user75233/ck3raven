@@ -57,9 +57,16 @@ class DatabaseAPI:
     # =========================================================================
     
     def configure(self, db_path: Path, session=None) -> None:
-        """Configure the database path. Called during session initialization."""
+        """
+        Configure the database path. Called during session initialization.
+        
+        IMPORTANT: This also re-enables the database if it was disabled.
+        A new session should always start with DB enabled.
+        """
         self._db_path = db_path
         self._session = session
+        # Re-enable on new session (fixes persistence bug across MCP restarts)
+        self._enabled = True
     
     def disable(self) -> dict:
         """

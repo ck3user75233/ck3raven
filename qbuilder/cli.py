@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from .schema import init_qbuilder_schema, reset_qbuilder_tables, get_queue_counts
-from ck3raven.db.schema import BuilderSession
+from ck3raven.db.schema import BuilderSession, init_database, get_schema_version, DATABASE_VERSION
 from .discovery import enqueue_playset_roots, run_discovery
 from .worker import run_build_worker
 
@@ -55,15 +55,49 @@ def get_active_playset_file() -> Optional[Path]:
     return get_playsets_dir() / active_file
 
 
-def get_connection() -> sqlite3.Connection:
-    """Get database connection."""
-    db_path = get_db_path()
-    if not db_path.exists():
-        print(f"Error: Database not found at {db_path}")
-        sys.exit(1)
+def get_connection(auto_init: bool = True) -> sqlite3.Connection:
+    """
+    Get database connection, auto-initializing schema if needed.
     
+    Args:
+        auto_init: If True, create database and schema if missing
+    
+    Returns:
+        Database connection with row_factory set
+    """
+    db_path = get_db_path()
+    
+    # Check if database exists
+    db_exists = db_path.exists()
+    
+    if not db_exists:
+        if not auto_init:
+            print(f"Error: Database not found at {db_path}")
+            sys.exit(1)
+        
+        # Create directory if needed
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        print(f"Creating database at {db_path}")
+    
+    # Connect
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    
+    # Check if schema exists and is current version
+    if auto_init:
+        schema_version = get_schema_version(conn)
+        
+        if schema_version is None:
+            # No schema at all - initialize
+            print("Initializing database schema...")
+            conn = init_database(db_path, force=False)
+            conn.row_factory = sqlite3.Row
+            print(f"[OK] Database initialized (schema v{DATABASE_VERSION})")
+        elif schema_version < DATABASE_VERSION:
+            # Schema is outdated - warn but don't force upgrade
+            print(f"Warning: Database schema v{schema_version} is outdated (current: v{DATABASE_VERSION})")
+            print("  Run with --force to reset database")
+    
     return conn
 
 
