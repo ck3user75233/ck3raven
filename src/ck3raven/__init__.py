@@ -19,11 +19,9 @@ from ck3raven.parser import parse_file, parse_source
 
 # Re-export key classes for convenience
 from ck3raven.resolver import MergePolicy, CONTENT_TYPES
-from ck3raven.db import (
-    init_database, 
-    ingest_vanilla,
-    ingest_mod
-)
+from ck3raven.db import init_database
+
+# NOTE: ingest_vanilla/ingest_mod removed - qbuilder/discovery.py is the canonical ingestion path
 
 __all__ = [
     # Parser
@@ -34,6 +32,4 @@ __all__ = [
     "CONTENT_TYPES",
     # Database
     "init_database",
-    "ingest_vanilla",
-    "ingest_mod",
 ]

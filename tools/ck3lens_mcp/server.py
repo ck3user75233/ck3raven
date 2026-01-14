@@ -1953,36 +1953,38 @@ def ck3_playset(
                 f"These mods will be skipped: {mods_missing_from_disk}"
             )
         
-        # Automatically start builder if mods need processing
+        # Automatically start qbuilder if mods need processing
+        # NOTE: Updated January 2026 - builder/daemon.py replaced by qbuilder
         builder_started = False
         if mods_needing_build or not db_available:
             try:
                 import subprocess
                 import sys
                 
-                # Find the daemon script and venv python
+                # Find the qbuilder CLI and venv python
                 repo_root = Path(__file__).parent.parent.parent
-                daemon_script = repo_root / "builder" / "daemon.py"
+                qbuilder_module = repo_root / "qbuilder"
                 venv_python = repo_root / ".venv" / "Scripts" / "python.exe"
                 
                 if not venv_python.exists():
                     venv_python = repo_root / ".venv" / "bin" / "python"  # Linux/Mac
                 
-                if daemon_script.exists() and venv_python.exists():
-                    # Start the builder daemon - it reads from playset manifest (canonical)
+                if qbuilder_module.exists() and venv_python.exists():
+                    # Start qbuilder: python -m qbuilder build (runs discovery + build)
                     cmd = [
                         str(venv_python),
-                        str(daemon_script),
-                        "start",
+                        "-m", "qbuilder",
+                        "build",
                     ]
                     
-                    # Run detached (daemon mode)
+                    # Run detached (background mode)
                     if sys.platform == "win32":
                         DETACHED_PROCESS = 0x00000008
                         CREATE_NEW_PROCESS_GROUP = 0x00000200
                         CREATE_NO_WINDOW = 0x08000000
                         subprocess.Popen(
                             cmd,
+                            cwd=str(repo_root),  # qbuilder needs repo context
                             creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
                             close_fds=True,
                             stdout=subprocess.DEVNULL,
@@ -1991,6 +1993,7 @@ def ck3_playset(
                     else:
                         subprocess.Popen(
                             cmd,
+                            cwd=str(repo_root),
                             start_new_session=True,
                             close_fds=True,
                             stdout=subprocess.DEVNULL,
@@ -2001,18 +2004,18 @@ def ck3_playset(
                     if mods_needing_build:
                         result["builder_started"] = True
                         result["builder_message"] = (
-                            f"?? Builder started for {len(mods_needing_build)} mod(s) needing processing. "
-                            f"Check status with: python builder/daemon.py status"
+                            f"🔨 QBuilder started for {len(mods_needing_build)} mod(s) needing processing. "
+                            f"Check status with: python -m qbuilder status"
                         )
                     else:
                         result["builder_started"] = True
                         result["builder_message"] = (
-                            "?? Database not available or empty. Builder started to index all playset mods. "
-                            "Check status with: python builder/daemon.py status"
+                            "🔨 Database not available or empty. QBuilder started to index all playset mods. "
+                            "Check status with: python -m qbuilder status"
                         )
             except Exception as e:
-                result["builder_error"] = f"Failed to start builder: {e}"
-                result["build_command"] = "python builder/daemon.py start"
+                result["builder_error"] = f"Failed to start qbuilder: {e}"
+                result["build_command"] = "python -m qbuilder build"
         
         # Add build status information
         if build_status and not build_status.get("error"):
@@ -2214,7 +2217,7 @@ def ck3_playset(
         if build_needed:
             result["build_needed"] = True
             result["build_prompt"] = (
-                f"⚠️ Mod '{mod_name}' needs to be indexed. "
+                f"?? Mod '{mod_name}' needs to be indexed. "
                 f"Run: python -m qbuilder.cli build"
             )
         
@@ -3060,9 +3063,9 @@ def ck3_exec(
     This is the ONLY safe way for agents to run shell commands.
     All commands are evaluated against the policy engine:
     
-    - Safe commands (cat, git status, etc.) → Allowed automatically
-    - Risky commands (rm *.py, git push) → Require approval token
-    - Blocked commands (rm -rf /) → Always denied
+    - Safe commands (cat, git status, etc.) ? Allowed automatically
+    - Risky commands (rm *.py, git push) ? Require approval token
+    - Blocked commands (rm -rf /) ? Always denied
     
     If a command requires a token, use ck3_token to request one first,
     then pass the token_id here.

@@ -90,9 +90,11 @@ In VS Code:
 3. Look for `ck3lens` in the list
 
 If not showing:
-- Check `.vscode/mcp.json` exists
-- Verify Python path is correct
-- Try reloading again
+- Check CK3 Lens Explorer extension is installed and active
+- Verify `chat.mcp.discovery.enabled: true` in VS Code settings
+- Try reloading the VS Code window
+
+> ⚠️ **DO NOT create `.vscode/mcp.json`** - the extension registers the server dynamically.
 
 ---
 
@@ -116,7 +118,9 @@ cd "C:\Users\Nathan\Documents\AI Workspace\ck3raven\tools\ck3lens_mcp"
 
 ### "ck3lens server not found"
 - Reload VS Code
-- Check `.vscode/mcp.json` has correct Python path
+- Check CK3 Lens Explorer extension is installed
+- Verify `chat.mcp.discovery.enabled: true` in settings
+- **DO NOT create mcp.json** - this causes duplicate servers
 
 ### "Module not found"
 ```powershell

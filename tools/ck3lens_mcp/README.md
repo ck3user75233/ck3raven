@@ -38,21 +38,16 @@ cd ck3raven/tools/ck3lens_mcp
 pip install -e .
 ```
 
-### 2. Configure VS Code MCP
+### 2. Install CK3 Lens Explorer Extension
 
-Create `.vscode/mcp.json`:
+The MCP server is **dynamically registered** by the CK3 Lens Explorer VS Code extension.
 
-```jsonc
-{
-  "servers": {
-    "ck3lens": {
-      "type": "stdio",
-      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
-      "args": ["tools/ck3lens_mcp/server.py"]
-    }
-  }
-}
-```
+> ⚠️ **DO NOT create `.vscode/mcp.json`** - this is banned and causes duplicate servers.
+> See [MCP_ARCHITECTURE.md](../../docs/MCP_ARCHITECTURE.md) for details.
+
+Install the extension from:
+- `tools/ck3lens-explorer/` (development build)
+- VS Code marketplace (when published)
 
 ### 3. Reload VS Code and Start Using
 
