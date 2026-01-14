@@ -692,6 +692,9 @@ def _file_get(path, include_ast, max_bytes, db, trace, visibility):
     if not path:
         return {"error": "path required for get command"}
     
+    if db is None:
+        return {"error": "Database not available. Use command='read' for filesystem access."}
+    
     result = db.get_file(relpath=path, include_ast=include_ast, visibility=visibility)
     
     if trace:

@@ -1619,9 +1619,11 @@ def ck3_file(
     from ck3lens.unified_tools import ck3_file_impl
     
     session = _get_session()
-    db = _get_db()
     trace = _get_trace()
     world = _get_world()  # WorldAdapter for unified path resolution
+    
+    # Only acquire DB connection for commands that need it
+    db = _get_db() if command == "get" else None
     
     return ck3_file_impl(
         command=command,
@@ -1699,13 +1701,16 @@ def ck3_folder(
     """
     from ck3lens.unified_tools import ck3_folder_impl
     
-    db = _get_db()
     session = _get_session()
     trace = _get_trace()
     world = _get_world()  # WorldAdapter for visibility enforcement
     
+    # Only acquire DB connection for commands that need it
+    db_required = command in ("contents", "top_level", "mod_folders")
+    db = _get_db() if db_required else None
+    
     # CANONICAL: Get cvids from session.mods[] instead of using playset_id
-    cvids = [m.cvid for m in session.mods if m.cvid is not None]
+    cvids = [m.cvid for m in session.mods if m.cvid is not None] if db_required else None
     
     return ck3_folder_impl(
         command=command,

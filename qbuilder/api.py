@@ -24,6 +24,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -578,7 +579,7 @@ def start_background_build(
         Dict with subprocess info (pid, log_file)
     """
     # Build command
-    cmd = ["python", "-m", "qbuilder.cli", "build"]
+    cmd = [sys.executable, "-m", "qbuilder.cli", "build"]
     
     if db_path:
         cmd.extend(["--db", str(db_path)])
