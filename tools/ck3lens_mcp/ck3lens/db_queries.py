@@ -354,13 +354,13 @@ class DBQueries:
                     s.symbol_id,
                     s.name,
                     s.symbol_type,
-                    s.defining_file_id as file_id,
+                    s.file_id,
                     f.relpath,
                     COALESCE(mp.name, 'vanilla') as mod_name,
                     s.line_number,
                     s.content_version_id
                 FROM symbols s
-                JOIN files f ON s.defining_file_id = f.file_id
+                JOIN files f ON s.file_id = f.file_id
                 JOIN content_versions cv ON s.content_version_id = cv.content_version_id
                 LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
                 WHERE LOWER(s.name) LIKE ?
@@ -1011,12 +1011,12 @@ class DBQueries:
                 s.symbol_id,
                 s.name,
                 s.symbol_type,
-                s.defining_file_id as file_id,
+                s.file_id,
                 f.relpath,
                 COALESCE(mp.name, 'vanilla') as mod_name,
                 s.line_number
             FROM symbols s
-            JOIN files f ON s.defining_file_id = f.file_id
+            JOIN files f ON s.file_id = f.file_id
             JOIN content_versions cv ON s.content_version_id = cv.content_version_id
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE s.name = ?
@@ -1064,7 +1064,7 @@ class DBQueries:
                 s.symbol_type,
                 s.line_number
             FROM symbols s
-            WHERE s.defining_file_id = ?
+            WHERE s.file_id = ?
             {cv_filter}
             ORDER BY s.line_number
         """
@@ -1173,7 +1173,7 @@ class DBQueries:
             params.append(symbol_type)
         
         if game_folder:
-            sql += " AND EXISTS (SELECT 1 FROM files f WHERE f.file_id = s.defining_file_id AND f.relpath LIKE ?)"
+            sql += " AND EXISTS (SELECT 1 FROM files f WHERE f.file_id = s.file_id AND f.relpath LIKE ?)"
             params.append(f"{game_folder}%")
         
         sql += """
@@ -1208,7 +1208,7 @@ class DBQueries:
                         f.relpath,
                         s.line_number
                     FROM symbols s
-                    JOIN files f ON s.defining_file_id = f.file_id
+                    JOIN files f ON s.file_id = f.file_id
                     JOIN content_versions cv ON s.content_version_id = cv.content_version_id
                     LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
                     WHERE s.content_version_id = ? AND s.symbol_type = ? AND s.name = ?
