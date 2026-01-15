@@ -57,6 +57,21 @@ def _safe_print(msg: str) -> None:
         print(encoded.decode(sys.stdout.encoding or 'utf-8', errors='replace'))
 
 
+def _read_ck3_text(path: Path) -> str:
+    """Read a CK3 text file with encoding fallback.
+    
+    CK3 files are mostly UTF-8 (with BOM), but some vanilla files
+    (especially history/provinces) use latin-1 or Windows-1252.
+    
+    Try UTF-8-sig first, then fall back to latin-1.
+    """
+    try:
+        return path.read_text(encoding='utf-8-sig')
+    except UnicodeDecodeError:
+        # Fallback to latin-1 which accepts any byte sequence
+        return path.read_text(encoding='latin-1')
+
+
 @dataclass
 class BuildContext:
     """Context for envelope execution, derived via canonical joins."""
@@ -269,31 +284,31 @@ class EnvelopeExecutor:
     
     def _step_extract_characters(self, ctx: BuildContext) -> None:
         """Extract characters to character_lookup table."""
-        content = ctx.abspath.read_text(encoding='utf-8-sig')
+        content = _read_ck3_text(ctx.abspath)
         LOOKUP_EXECUTORS['extract_characters'](content, ctx.file_id, ctx.cvid, self.conn)
         self.conn.commit()
     
     def _step_extract_provinces(self, ctx: BuildContext) -> None:
         """Extract provinces to province_lookup table."""
-        content = ctx.abspath.read_text(encoding='utf-8-sig')
+        content = _read_ck3_text(ctx.abspath)
         LOOKUP_EXECUTORS['extract_provinces'](content, ctx.file_id, ctx.cvid, self.conn)
         self.conn.commit()
     
     def _step_extract_names(self, ctx: BuildContext) -> None:
         """Extract names to name_lookup table."""
-        content = ctx.abspath.read_text(encoding='utf-8-sig')
+        content = _read_ck3_text(ctx.abspath)
         LOOKUP_EXECUTORS['extract_names'](content, ctx.file_id, ctx.cvid, self.conn)
         self.conn.commit()
     
     def _step_extract_holy_sites(self, ctx: BuildContext) -> None:
         """Extract holy sites to holy_site_lookup table."""
-        content = ctx.abspath.read_text(encoding='utf-8-sig')
+        content = _read_ck3_text(ctx.abspath)
         LOOKUP_EXECUTORS['extract_holy_sites'](content, ctx.file_id, ctx.cvid, self.conn)
         self.conn.commit()
     
     def _step_extract_dynasties(self, ctx: BuildContext) -> None:
         """Extract dynasties to dynasty_lookup table."""
-        content = ctx.abspath.read_text(encoding='utf-8-sig')
+        content = _read_ck3_text(ctx.abspath)
         LOOKUP_EXECUTORS['extract_dynasties'](content, ctx.file_id, ctx.cvid, self.conn)
         self.conn.commit()
 

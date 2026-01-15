@@ -154,6 +154,10 @@ def extract_provinces(content: str, file_id: int, cvid: int, conn: sqlite3.Conne
             holding = tribal_holding
         }
     
+    Note: Province names come from definition.csv, not history files.
+    This extractor updates culture/religion/holding for existing provinces
+    or creates placeholder entries with name="unknown".
+    
     Returns count of provinces extracted.
     """
     prov_pattern = re.compile(r'^(\d+)\s*=\s*\{', re.MULTILINE)
@@ -172,12 +176,25 @@ def extract_provinces(content: str, file_id: int, cvid: int, conn: sqlite3.Conne
         record.religion = _extract_value(block, 'religion')
         record.holding_type = _extract_value(block, 'holding')
         
+        # Use INSERT OR IGNORE + UPDATE pattern to handle NOT NULL name constraint
+        # First, try to insert with placeholder name (only if not exists)
         conn.execute("""
-            INSERT OR REPLACE INTO province_lookup
-            (province_id, culture, religion, holding_type, content_version_id)
-            VALUES (?, ?, ?, ?, ?)
-        """, (record.province_id, record.culture, record.religion,
+            INSERT OR IGNORE INTO province_lookup
+            (province_id, name, culture, religion, holding_type, content_version_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (record.province_id, f"province_{prov_id}", record.culture, record.religion,
               record.holding_type, cvid))
+        
+        # Then update the mutable fields (in case row existed)
+        conn.execute("""
+            UPDATE province_lookup
+            SET culture = COALESCE(?, culture),
+                religion = COALESCE(?, religion),
+                holding_type = COALESCE(?, holding_type),
+                content_version_id = ?
+            WHERE province_id = ?
+        """, (record.culture, record.religion, record.holding_type, cvid, record.province_id))
+        
         count += 1
     
     return count
