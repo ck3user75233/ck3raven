@@ -20,7 +20,7 @@ import sqlite3
 import json
 import logging
 import re
-from typing import Optional, List, Dict, Any, Tuple, Set, Iterator
+from typing import Optional, List, Dict, Any, Tuple, Set, Iterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -759,7 +759,7 @@ def find_undefined_refs(
 def extract_symbols_incremental(
     conn: sqlite3.Connection,
     batch_size: int = 500,
-    progress_callback: Optional[callable] = None,
+    progress_callback: Optional[Callable] = None,
     force_rebuild: bool = False
 ) -> Dict[str, int]:
     """
@@ -941,7 +941,7 @@ def extract_symbols_incremental(
 def extract_refs_incremental(
     conn: sqlite3.Connection,
     batch_size: int = 500,
-    progress_callback: Optional[callable] = None
+    progress_callback: Optional[Callable] = None
 ) -> Dict[str, int]:
     """
     Incrementally extract references from ASTs that do not have refs yet.

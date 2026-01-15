@@ -139,7 +139,7 @@ class DbHandle:
             relpath, visible_cvids=self.visible_cvids, **kwargs
         )
     
-    def get_symbol(self, name: str, symbol_type: str = None) -> Optional[dict]:
+    def get_symbol(self, name: str, symbol_type: Optional[str] = None) -> Optional[dict]:
         """Get symbol by name with capability validation."""
         self._validate_cap()
         return self._db._get_symbol_internal(
@@ -160,7 +160,7 @@ class DbHandle:
             symbol_name, visible_cvids=self.visible_cvids, **kwargs
         )
     
-    def confirm_not_exists(self, query: str, symbol_type: str = None) -> dict:
+    def confirm_not_exists(self, query: str, symbol_type: Optional[str] = None) -> dict:
         """Exhaustive search to confirm something truly doesn't exist."""
         self._validate_cap()
         return self._db._confirm_not_exists_internal(
@@ -629,6 +629,9 @@ class WorldAdapter:
         self._utility_roots = {}
         self._mod_paths = {}
         self._visible_cvids = None  # UNRESTRICTED DB access
+        
+        # Type assertion: constructor validates ck3raven_root is not None for dev mode
+        assert self._ck3raven_root is not None, "ck3raven-dev mode requires ck3raven_root"
         
         # WIP is in the repo for dev mode
         self._wip_root = wip_root or (self._ck3raven_root / ".wip")
