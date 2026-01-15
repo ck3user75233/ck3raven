@@ -5163,19 +5163,36 @@ def ck3_qbuilder(
         return result
     
     elif command == "build":
-        # Launch background subprocess - NO IMPORTS
+        # Launch background daemon - writes logs to file, not stdout
+        # CRITICAL: Do NOT use PIPE - it causes buffer blocking and deadlocks
+        # Instead, redirect to log file for daemon-style operation
+        log_dir = Path.home() / ".ck3raven" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        
+        from datetime import datetime
+        log_file = log_dir / f"build_stdout_{datetime.now().strftime('%Y-%m-%d')}.log"
+        
         try:
-            proc = subprocess.Popen(
-                [python_exe, "-m", "qbuilder.cli", "build"],
-                cwd=ck3raven_root,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                start_new_session=True,  # Detach from parent
-            )
+            # Open log file for stdout/stderr redirect
+            with open(log_file, "a", encoding="utf-8") as log_handle:
+                log_handle.write(f"\n\n=== Build started at {datetime.now().isoformat()} ===\n")
+                log_handle.flush()
+                
+                # Launch with stdout/stderr to FILE, not PIPE
+                proc = subprocess.Popen(
+                    [python_exe, "-m", "qbuilder.cli", "build"],
+                    cwd=ck3raven_root,
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,  # Merge stderr into stdout
+                    start_new_session=True,  # Detach from parent
+                )
+            
             result = {
                 "success": True,
                 "pid": proc.pid,
-                "message": f"Build started in background (PID {proc.pid})",
+                "message": f"Build daemon started (PID {proc.pid})",
+                "log_file": str(log_file),
+                "note": "Daemon runs continuously. Check log file for progress. Ctrl+C to stop.",
             }
         except Exception as e:
             result = {"success": False, "error": str(e)}

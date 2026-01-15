@@ -153,7 +153,7 @@ def cmd_discover(args: argparse.Namespace) -> int:
 
 
 def cmd_build(args: argparse.Namespace) -> int:
-    """Run build workers on pending items."""
+    """Run build daemon (continuous by default)."""
     import uuid
     from .logging import QBuilderLogger
     
@@ -163,22 +163,27 @@ def cmd_build(args: argparse.Namespace) -> int:
     run_id = f"build-{uuid.uuid4().hex[:8]}"
     logger = QBuilderLogger(run_id=run_id)
     
+    # Continuous is default - use --no-continuous to exit on empty queue
+    continuous = not args.no_continuous
+    
     try:
         init_qbuilder_schema(conn)
         
         counts = get_queue_counts(conn)
         pending = counts.get('build', {}).get('pending', 0)
         
-        if pending == 0 and not args.continuous:
+        if pending == 0 and not continuous:
             print("[OK] No pending build items")
             return 0
         
-        mode_str = "continuously" if args.continuous else f"{pending} items"
-        print(f"Building {mode_str}...")
+        mode_str = "daemon" if continuous else f"{pending} items"
+        print(f"Starting build {mode_str}...")
         print(f"  run_id: {run_id}")
         print(f"  log: {logger.log_file}")
-        if args.continuous:
+        print(f"  pending: {pending}")
+        if continuous:
             print(f"  poll_interval: {args.poll_interval}s")
+            print(f"  mode: CONTINUOUS (Ctrl+C to stop)")
         
         start = time.time()
         logger.run_start(total_items=pending)
@@ -187,7 +192,7 @@ def cmd_build(args: argparse.Namespace) -> int:
             conn, 
             max_items=args.max_items, 
             logger=logger,
-            continuous=args.continuous,
+            continuous=continuous,
             poll_interval=args.poll_interval,
         )
         
@@ -350,13 +355,13 @@ def main():
     discover_parser.set_defaults(func=cmd_discover)
     
     # build
-    build_parser = subparsers.add_parser('build', help='Run build phase')
+    build_parser = subparsers.add_parser('build', help='Run build daemon (continuous by default)')
     build_parser.add_argument('--max-items', type=int, default=None,
-                              help='Maximum build items to process')
-    build_parser.add_argument('--continuous', action='store_true',
-                              help='Run continuously, polling for work until queue exhausted')
+                              help='Maximum build items to process (for testing only)')
+    build_parser.add_argument('--no-continuous', action='store_true',
+                              help='Exit when queue empty instead of polling (for testing)')
     build_parser.add_argument('--poll-interval', type=float, default=5.0,
-                              help='Seconds between polls in continuous mode (default: 5)')
+                              help='Seconds between polls when queue empty (default: 5)')
     build_parser.set_defaults(func=cmd_build)
     
     # run
