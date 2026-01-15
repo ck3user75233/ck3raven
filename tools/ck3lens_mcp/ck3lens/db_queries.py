@@ -484,7 +484,7 @@ class DBQueries:
                 f.relpath,
                 COALESCE(mp.name, 'vanilla') as mod_name
             FROM refs r
-            JOIN files f ON r.using_file_id = f.file_id
+            JOIN files f ON r.file_id = f.file_id
             JOIN content_versions cv ON r.content_version_id = cv.content_version_id
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE r.name IN ({placeholders})
@@ -1097,7 +1097,7 @@ class DBQueries:
                 f.relpath,
                 COALESCE(mp.name, 'vanilla') as mod_name
             FROM refs r
-            JOIN files f ON r.using_file_id = f.file_id
+            JOIN files f ON r.file_id = f.file_id
             JOIN content_versions cv ON r.content_version_id = cv.content_version_id
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE r.name = ?
