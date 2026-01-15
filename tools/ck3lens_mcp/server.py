@@ -559,11 +559,12 @@ def _init_session_internal(
     """
     from ck3lens.workspace import load_config
 
-    global _session, _db, _trace, _playset_id, _session_scope
+    global _session, _db, _trace, _playset_id, _session_scope, _session_cv_ids_resolved
 
     # Reset playset and scope cache
     _playset_id = None
     _session_scope = None
+    _session_cv_ids_resolved = False  # Reset so CVIDs are resolved on reconnect
 
     # Use load_config to get session from active playset
     _session = load_config()
@@ -574,7 +575,10 @@ def _init_session_internal(
 
     if _session.db_path is None:
         raise RuntimeError("No database path configured. Check playset configuration.")
-    _db = DBQueries(db_path=_session.db_path)
+    
+    # Use db_api.configure() so enable/disable cycle works correctly
+    db_api.configure(_session.db_path, _session)
+    _db = db_api._get_db()
 
     # Initialize trace with proper path based on mode
     _trace = ToolTrace(_get_trace_path())
