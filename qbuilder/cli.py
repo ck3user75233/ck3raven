@@ -335,6 +335,46 @@ def cmd_reset(args: argparse.Namespace) -> int:
         conn.close()
 
 
+def cmd_enqueue_file(args: argparse.Namespace) -> int:
+    """Enqueue a single file for processing (flash priority by default)."""
+    from .api import enqueue_file, PRIORITY_FLASH, PRIORITY_NORMAL
+    
+    priority = PRIORITY_FLASH if args.flash else PRIORITY_NORMAL
+    
+    result = enqueue_file(
+        mod_name=args.mod_name,
+        rel_path=args.rel_path,
+        priority=priority,
+    )
+    
+    if result.success:
+        if result.already_queued:
+            print(f"[OK] Already queued: {args.mod_name}/{args.rel_path}")
+        else:
+            print(f"[OK] Enqueued: {args.mod_name}/{args.rel_path} (build_id={result.build_id}, priority={priority})")
+        return 0
+    else:
+        print(f"[ERROR] {result.message}")
+        return 1
+
+
+def cmd_delete_file(args: argparse.Namespace) -> int:
+    """Remove a file and its artifacts from the database."""
+    from .api import delete_file
+    
+    result = delete_file(
+        mod_name=args.mod_name,
+        rel_path=args.rel_path,
+    )
+    
+    if result.get("success"):
+        print(f"[OK] {result.get('message', 'Deleted')}")
+        return 0
+    else:
+        print(f"[ERROR] {result.get('error', 'Unknown error')}")
+        return 1
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog='qbuilder',
@@ -377,6 +417,24 @@ def main():
     reset_parser.add_argument('--fresh', action='store_true',
                               help='Clear ALL data for fresh build')
     reset_parser.set_defaults(func=cmd_reset)
+    
+    # enqueue-file (for MCP flash updates)
+    enqueue_parser = subparsers.add_parser('enqueue-file', 
+                                           help='Enqueue a single file for processing')
+    enqueue_parser.add_argument('mod_name', help='Mod name')
+    enqueue_parser.add_argument('rel_path', help='Relative path within the mod')
+    enqueue_parser.add_argument('--flash', action='store_true',
+                                help='Use flash priority (default behavior)')
+    enqueue_parser.add_argument('--normal', dest='flash', action='store_false',
+                                help='Use normal priority instead of flash')
+    enqueue_parser.set_defaults(flash=True, func=cmd_enqueue_file)
+    
+    # delete-file (for MCP file deletions)
+    delete_parser = subparsers.add_parser('delete-file',
+                                          help='Remove a file from the database')
+    delete_parser.add_argument('mod_name', help='Mod name')
+    delete_parser.add_argument('rel_path', help='Relative path within the mod')
+    delete_parser.set_defaults(func=cmd_delete_file)
     
     args = parser.parse_args()
     return args.func(args)
