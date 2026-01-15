@@ -533,14 +533,18 @@ def run_build_worker(
     conn: sqlite3.Connection, 
     max_items: Optional[int] = None,
     logger: Optional["QBuilderLogger"] = None,
+    continuous: bool = False,
+    poll_interval: float = 5.0,
 ) -> dict:
     """
-    Run build worker until no more work.
+    Run build worker until no more work (or continuously if daemon mode).
     
     Args:
         conn: Database connection
         max_items: Max items to process (execution throttle only)
         logger: Optional JSONL logger for structured logging
+        continuous: If True, keep polling for work instead of exiting
+        poll_interval: Seconds to wait between polls when queue is empty
     
     Returns summary.
     """
@@ -549,14 +553,49 @@ def run_build_worker(
     items_processed = 0
     completed = 0
     errors = 0
+    idle_polls = 0
+    max_idle_polls = 60  # Exit after 5 minutes of no work in continuous mode
+    
+    if logger:
+        logger.log_event("worker_start", {"continuous": continuous, "max_items": max_items})
     
     while True:
         if max_items and items_processed >= max_items:
+            exit_reason = f"max_items limit reached ({max_items})"
+            if logger:
+                logger.log_event("worker_exit", {"reason": exit_reason, "processed": items_processed})
+            _safe_print(f"[Worker] Exiting: {exit_reason}")
             break
         
         item = worker.claim_work()
+        
         if not item:
-            break
+            if continuous:
+                idle_polls += 1
+                if idle_polls >= max_idle_polls:
+                    exit_reason = f"no work for {max_idle_polls * poll_interval}s"
+                    if logger:
+                        logger.log_event("worker_exit", {"reason": exit_reason, "processed": items_processed})
+                    _safe_print(f"[Worker] Exiting: {exit_reason}")
+                    break
+                
+                # Log periodic status while idle
+                if idle_polls % 12 == 1:  # Every minute
+                    if logger:
+                        logger.log_event("worker_idle", {"polls": idle_polls, "processed": items_processed})
+                    _safe_print(f"[Worker] Waiting for work... ({items_processed} processed so far)")
+                
+                time.sleep(poll_interval)
+                continue
+            else:
+                exit_reason = "queue empty"
+                if logger:
+                    logger.log_event("worker_exit", {"reason": exit_reason, "processed": items_processed})
+                _safe_print(f"[Worker] Exiting: {exit_reason}")
+                break
+        
+        # Reset idle counter when we get work
+        idle_polls = 0
         
         relpath = item['relpath']
         envelope = item['envelope']
@@ -582,6 +621,16 @@ def run_build_worker(
             _safe_print(f"  Error: {err_msg}")
             if logger:
                 logger.item_error(file_id, relpath, err_msg, result.get('step'))
+        
+        # Periodic progress logging
+        if items_processed % 100 == 0:
+            if logger:
+                logger.log_event("worker_progress", {
+                    "processed": items_processed,
+                    "completed": completed,
+                    "errors": errors,
+                })
+            _safe_print(f"[Worker] Progress: {items_processed} processed, {completed} completed, {errors} errors")
     
     return {
         'items_processed': items_processed,

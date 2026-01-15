@@ -98,6 +98,10 @@ class QBuilderLogger:
     # Run-level events
     # =========================================================================
     
+    def log_event(self, event: str, data: Optional[dict] = None) -> None:
+        """Log a generic event with optional data."""
+        self._write(self._entry(event, extra=data))
+    
     def run_start(self, playset: Optional[str] = None, total_items: int = 0) -> None:
         """Log the start of a build run."""
         self._write(self._entry(

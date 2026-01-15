@@ -169,18 +169,27 @@ def cmd_build(args: argparse.Namespace) -> int:
         counts = get_queue_counts(conn)
         pending = counts.get('build', {}).get('pending', 0)
         
-        if pending == 0:
+        if pending == 0 and not args.continuous:
             print("[OK] No pending build items")
             return 0
         
-        print(f"Building {pending} items...")
+        mode_str = "continuously" if args.continuous else f"{pending} items"
+        print(f"Building {mode_str}...")
         print(f"  run_id: {run_id}")
         print(f"  log: {logger.log_file}")
+        if args.continuous:
+            print(f"  poll_interval: {args.poll_interval}s")
         
         start = time.time()
         logger.run_start(total_items=pending)
         
-        result = run_build_worker(conn, max_items=args.max_items, logger=logger)
+        result = run_build_worker(
+            conn, 
+            max_items=args.max_items, 
+            logger=logger,
+            continuous=args.continuous,
+            poll_interval=args.poll_interval,
+        )
         
         elapsed = time.time() - start
         rate = result['items_processed'] / elapsed if elapsed > 0 else 0
@@ -196,6 +205,8 @@ def cmd_build(args: argparse.Namespace) -> int:
         print(f"  Completed: {result['completed']}")
         print(f"  Errors: {result['errors']}")
         print(f"  Time: {elapsed:.1f}s ({rate:.1f} items/sec)")
+        
+        return 0
         
         return 0
     finally:
@@ -342,6 +353,10 @@ def main():
     build_parser = subparsers.add_parser('build', help='Run build phase')
     build_parser.add_argument('--max-items', type=int, default=None,
                               help='Maximum build items to process')
+    build_parser.add_argument('--continuous', action='store_true',
+                              help='Run continuously, polling for work until queue exhausted')
+    build_parser.add_argument('--poll-interval', type=float, default=5.0,
+                              help='Seconds between polls in continuous mode (default: 5)')
     build_parser.set_defaults(func=cmd_build)
     
     # run
