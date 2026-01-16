@@ -196,7 +196,11 @@ class EnvelopeExecutor:
         """, (ctx.file_id, ctx.work_hash or '', result.ast_json, result.node_count))
     
     def _step_extract_symbols(self, ctx: BuildContext) -> None:
-        """Extract symbols from AST with fingerprint binding."""
+        """Extract symbols from AST with content-keyed storage.
+        
+        FLAG-DAY MIGRATION: Symbols bind to ast_id ONLY.
+        File association derived via Golden Join: symbols → asts → files (via content_hash).
+        """
         try:
             from src.ck3raven.db.symbols import extract_symbols_from_ast
             from src.ck3raven.db.schema import BuilderSession
@@ -205,35 +209,46 @@ class EnvelopeExecutor:
         
         # Get AST by content_hash (may be from different file_id due to deduplication)
         row = self.conn.execute(
-            "SELECT ast_blob FROM asts WHERE content_hash = ? AND parser_version_id = 1",
+            "SELECT ast_id, ast_blob FROM asts WHERE content_hash = ? AND parser_version_id = 1",
             (ctx.work_hash or '',)
         ).fetchone()
         
         if not row:
             return
         
-        ast_data = json.loads(row[0])
+        ast_id, ast_blob = row
+        ast_data = json.loads(ast_blob)
+        
+        # Check if symbols already extracted for this AST (content deduplication)
+        existing = self.conn.execute(
+            "SELECT 1 FROM symbols WHERE ast_id = ? LIMIT 1", (ast_id,)
+        ).fetchone()
+        
+        if existing:
+            # Symbols already extracted for this AST - skip (content dedup)
+            return
         
         # extract_symbols_from_ast returns iterator of ExtractedSymbol dataclass
         # Signature: (ast_dict, relpath, content_hash) -> Iterator[ExtractedSymbol]
         symbols = list(extract_symbols_from_ast(ast_data, ctx.relpath, ctx.work_hash or ''))
         
         # Use BuilderSession to allow writes to protected symbols table
-        with BuilderSession(self.conn, f"extract_symbols:{ctx.file_id}"):
-            # Delete old symbols for this file (any fingerprint)
-            self.conn.execute("DELETE FROM symbols WHERE file_id = ?", (ctx.file_id,))
-            
-            # Insert new symbols (ExtractedSymbol has: name, kind, line, column, scope, signature, doc)
+        with BuilderSession(self.conn, f"extract_symbols:{ast_id}"):
+            # Insert symbols bound to ast_id ONLY (content identity)
             for sym in symbols:
                 self.conn.execute("""
-                    INSERT INTO symbols (file_id, content_version_id, name, symbol_type, 
+                    INSERT INTO symbols (ast_id, name, symbol_type, 
                                          line_number, column_number)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (ctx.file_id, ctx.cvid, sym.name, sym.kind, sym.line, sym.column))
+                    VALUES (?, ?, ?, ?, ?)
+                """, (ast_id, sym.name, sym.kind, sym.line, sym.column))
             self.conn.commit()
     
     def _step_extract_refs(self, ctx: BuildContext) -> None:
-        """Extract references from AST."""
+        """Extract references from AST with content-keyed storage.
+        
+        FLAG-DAY MIGRATION: Refs bind to ast_id ONLY.
+        File association derived via Golden Join: refs → asts → files (via content_hash).
+        """
         try:
             from src.ck3raven.db.symbols import extract_refs_from_ast
             from src.ck3raven.db.schema import BuilderSession
@@ -242,30 +257,38 @@ class EnvelopeExecutor:
         
         # Get AST by content_hash (may be from different file_id due to deduplication)
         row = self.conn.execute(
-            "SELECT ast_blob FROM asts WHERE content_hash = ? AND parser_version_id = 1",
+            "SELECT ast_id, ast_blob FROM asts WHERE content_hash = ? AND parser_version_id = 1",
             (ctx.work_hash or '',)
         ).fetchone()
         
         if not row:
             return
         
-        ast_data = json.loads(row[0])
+        ast_id, ast_blob = row
+        ast_data = json.loads(ast_blob)
+        
+        # Check if refs already extracted for this AST (content deduplication)
+        existing = self.conn.execute(
+            "SELECT 1 FROM refs WHERE ast_id = ? LIMIT 1", (ast_id,)
+        ).fetchone()
+        
+        if existing:
+            # Refs already extracted for this AST - skip (content dedup)
+            return
         
         # extract_refs_from_ast returns iterator of ExtractedRef dataclass
         # Signature: (ast_dict, relpath, content_hash) -> Iterator[ExtractedRef]
         refs = list(extract_refs_from_ast(ast_data, ctx.relpath, ctx.work_hash or ''))
         
         # Use BuilderSession to allow writes to protected refs table
-        with BuilderSession(self.conn, f"extract_refs:{ctx.file_id}"):
-            self.conn.execute("DELETE FROM refs WHERE file_id = ?", (ctx.file_id,))
-            
-            # Insert refs (ExtractedRef has: name, kind, line, column, context)
+        with BuilderSession(self.conn, f"extract_refs:{ast_id}"):
+            # Insert refs bound to ast_id ONLY (content identity)
             for ref in refs:
                 self.conn.execute("""
-                    INSERT INTO refs (file_id, content_version_id, name, ref_type, 
+                    INSERT INTO refs (ast_id, name, ref_type, 
                                       line_number, column_number)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (ctx.file_id, ctx.cvid, ref.name, ref.kind, ref.line, ref.column))
+                    VALUES (?, ?, ?, ?, ?)
+                """, (ast_id, ref.name, ref.kind, ref.line, ref.column))
             self.conn.commit()
     
     def _step_parse_loc(self, ctx: BuildContext) -> None:

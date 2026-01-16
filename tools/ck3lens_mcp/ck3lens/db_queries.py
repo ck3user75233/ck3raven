@@ -314,6 +314,10 @@ class DBQueries:
         
         INTERNAL: Called by DbHandle.search_symbols()
         
+        GOLDEN JOIN (January 2026 Flag Day):
+        - symbols bind to ast_id only (content identity)
+        - File association via: symbols → asts → files
+        
         Args:
             query: Search term
             visible_cvids: FrozenSet of content_version_ids to search within, or None for all
@@ -337,8 +341,8 @@ class DBQueries:
         adjacencies = []
         patterns_searched = []
         
-        # Build content_version filter
-        cv_filter = self._cv_filter_sql(visible_cvids, "s.content_version_id")
+        # Build content_version filter - via Golden Join to files
+        cv_filter = self._cv_filter_sql(visible_cvids, "f.content_version_id")
         
         # Determine which patterns to use
         if adjacency == "strict":
@@ -349,19 +353,23 @@ class DBQueries:
         for pattern, match_type in patterns:
             patterns_searched.append(pattern)
             
+            # CORRECT GOLDEN JOIN: symbols → asts → files (via content_hash, NOT file_id)
+            # ASTs are content-identity objects; a.file_id is vestigial/provenance only
+            # The canonical association is: files.content_hash = asts.content_hash
             sql = f"""
                 SELECT DISTINCT
                     s.symbol_id,
                     s.name,
                     s.symbol_type,
-                    s.file_id,
+                    f.file_id,
                     f.relpath,
                     COALESCE(mp.name, 'vanilla') as mod_name,
                     s.line_number,
-                    s.content_version_id
+                    f.content_version_id
                 FROM symbols s
-                JOIN files f ON s.file_id = f.file_id
-                JOIN content_versions cv ON s.content_version_id = cv.content_version_id
+                JOIN asts a ON s.ast_id = a.ast_id
+                JOIN files f ON f.content_hash = a.content_hash
+                JOIN content_versions cv ON f.content_version_id = cv.content_version_id
                 LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
                 WHERE LOWER(s.name) LIKE ?
                 {cv_filter}
@@ -459,14 +467,20 @@ class DBQueries:
         file_pattern: Optional[str] = None,
         limit: int = 500
     ) -> list[dict]:
-        """Get all references to the given symbol names."""
+        """Get all references to the given symbol names.
+        
+        GOLDEN JOIN (January 2026 Flag Day):
+        - refs bind to ast_id only (content identity)
+        - File association via: refs → asts → files
+        """
         if not symbol_names:
             return []
         
         placeholders = ",".join("?" * len(symbol_names))
         params = list(symbol_names)
         
-        cv_filter = self._cv_filter_sql(visible_cvids, "r.content_version_id")
+        # CV filter via Golden Join to files
+        cv_filter = self._cv_filter_sql(visible_cvids, "f.content_version_id")
         
         file_filter = ""
         if file_pattern:
@@ -475,6 +489,8 @@ class DBQueries:
         
         params.append(limit)
         
+        # CORRECT GOLDEN JOIN: refs → asts → files (via content_hash, NOT file_id)
+        # ASTs are content-identity objects; a.file_id is vestigial/provenance only
         sql = f"""
             SELECT 
                 r.name,
@@ -484,8 +500,9 @@ class DBQueries:
                 f.relpath,
                 COALESCE(mp.name, 'vanilla') as mod_name
             FROM refs r
-            JOIN files f ON r.file_id = f.file_id
-            JOIN content_versions cv ON r.content_version_id = cv.content_version_id
+            JOIN asts a ON r.ast_id = a.ast_id
+            JOIN files f ON f.content_hash = a.content_hash
+            JOIN content_versions cv ON f.content_version_id = cv.content_version_id
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE r.name IN ({placeholders})
             {cv_filter}
@@ -1003,21 +1020,28 @@ class DBQueries:
         Get a symbol by exact name.
         
         INTERNAL: Called by DbHandle.get_symbol()
-        """
-        cv_filter = self._cv_filter_sql(visible_cvids, "s.content_version_id")
         
+        GOLDEN JOIN (January 2026 Flag Day):
+        - symbols bind to ast_id only (content identity)
+        - File association via: symbols → asts → files (content_hash)
+        - NEVER use asts.file_id (vestigial/provenance only)
+        """
+        cv_filter = self._cv_filter_sql(visible_cvids, "f.content_version_id")
+        
+        # CORRECT GOLDEN JOIN: symbols → asts → files (via content_hash)
         sql = f"""
             SELECT 
                 s.symbol_id,
                 s.name,
                 s.symbol_type,
-                s.file_id,
+                f.file_id,
                 f.relpath,
                 COALESCE(mp.name, 'vanilla') as mod_name,
                 s.line_number
             FROM symbols s
-            JOIN files f ON s.file_id = f.file_id
-            JOIN content_versions cv ON s.content_version_id = cv.content_version_id
+            JOIN asts a ON s.ast_id = a.ast_id
+            JOIN files f ON f.content_hash = a.content_hash
+            JOIN content_versions cv ON f.content_version_id = cv.content_version_id
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE s.name = ?
             {cv_filter}
@@ -1054,9 +1078,16 @@ class DBQueries:
         Get all symbols defined in a file.
         
         INTERNAL: Called by DbHandle.get_symbols_by_file()
-        """
-        cv_filter = self._cv_filter_sql(visible_cvids, "s.content_version_id")
         
+        GOLDEN JOIN (January 2026 Flag Day):
+        - symbols bind to ast_id only (content identity)
+        - To find symbols by file: symbols → asts → files (content_hash)
+        - NEVER use asts.file_id (vestigial/provenance only)
+        """
+        cv_filter = self._cv_filter_sql(visible_cvids, "f.content_version_id")
+        
+        # CORRECT GOLDEN JOIN: symbols → asts → files (via content_hash)
+        # First get the file's content_hash, then find ASTs with that hash
         sql = f"""
             SELECT 
                 s.symbol_id,
@@ -1064,7 +1095,9 @@ class DBQueries:
                 s.symbol_type,
                 s.line_number
             FROM symbols s
-            WHERE s.file_id = ?
+            JOIN asts a ON s.ast_id = a.ast_id
+            JOIN files f ON f.content_hash = a.content_hash
+            WHERE f.file_id = ?
             {cv_filter}
             ORDER BY s.line_number
         """
@@ -1084,9 +1117,15 @@ class DBQueries:
         Get references to a symbol.
         
         INTERNAL: Called by DbHandle.get_refs()
-        """
-        cv_filter = self._cv_filter_sql(visible_cvids, "r.content_version_id")
         
+        GOLDEN JOIN (January 2026 Flag Day):
+        - refs bind to ast_id only (content identity)
+        - File association via: refs → asts → files (content_hash)
+        - NEVER use asts.file_id (vestigial/provenance only)
+        """
+        cv_filter = self._cv_filter_sql(visible_cvids, "f.content_version_id")
+        
+        # CORRECT GOLDEN JOIN: refs → asts → files (via content_hash)
         sql = f"""
             SELECT 
                 r.ref_id,
@@ -1097,8 +1136,9 @@ class DBQueries:
                 f.relpath,
                 COALESCE(mp.name, 'vanilla') as mod_name
             FROM refs r
-            JOIN files f ON r.file_id = f.file_id
-            JOIN content_versions cv ON r.content_version_id = cv.content_version_id
+            JOIN asts a ON r.ast_id = a.ast_id
+            JOIN files f ON f.content_hash = a.content_hash
+            JOIN content_versions cv ON f.content_version_id = cv.content_version_id
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE r.name = ?
             {cv_filter}

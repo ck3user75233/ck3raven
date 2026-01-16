@@ -3,9 +3,11 @@ Data Models for ck3raven Database
 
 Dataclasses representing database entities with helper methods.
 
-SCHEMA v4 COLUMN NAMES:
-- symbols: file_id, ast_id, content_version_id, line_number, column_number, symbol_type
-- refs: file_id, ast_id, content_version_id, line_number, column_number, ref_type
+CONTENT-KEYED (January 2026 Flag Day):
+- symbols: ast_id, name, symbol_type, scope, line_number, column_number
+- refs: ast_id, name, ref_type, context, line_number, column_number
+- NO file_id or content_version_id in symbols/refs
+- File association derived via Golden Join: symbols → asts → files
 """
 
 from dataclasses import dataclass, field
@@ -214,18 +216,18 @@ class ASTRecord:
 class Symbol:
     """A symbol definition (something that defines a name/ID/key).
     
-    Schema v4 column names: file_id, ast_id, content_version_id, line_number, column_number, symbol_type
+    CONTENT-KEYED (January 2026 Flag Day):
+    - Binds to ast_id ONLY (content identity)
+    - NO file_id or content_version_id
+    - File association derived via Golden Join: symbols → asts → files
     """
     symbol_id: Optional[int] = None
-    symbol_type: str = ""  # 'tradition', 'event', 'decision', etc.
+    ast_id: int = 0               # FK to asts (REQUIRED - content identity)
     name: str = ""
+    symbol_type: str = ""         # 'trait', 'event', 'decision', etc.
     scope: Optional[str] = None
-    ast_id: Optional[int] = None  # Was: defining_ast_id
-    file_id: int = 0              # Was: defining_file_id
-    content_version_id: int = 0
-    ast_node_path: Optional[str] = None
     line_number: Optional[int] = None
-    column_number: Optional[int] = None  # NEW in v4
+    column_number: Optional[int] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     
     @property
@@ -236,13 +238,10 @@ class Symbol:
     def from_row(cls, row) -> "Symbol":
         return cls(
             symbol_id=row['symbol_id'],
-            symbol_type=row['symbol_type'],
+            ast_id=row['ast_id'],
             name=row['name'],
+            symbol_type=row['symbol_type'],
             scope=row.get('scope'),
-            ast_id=row.get('ast_id'),
-            file_id=row['file_id'],
-            content_version_id=row['content_version_id'],
-            ast_node_path=row.get('ast_node_path'),
             line_number=row.get('line_number'),
             column_number=row.get('column_number'),
             metadata=json.loads(row['metadata_json']) if row.get('metadata_json') else {},
@@ -256,19 +255,19 @@ class Symbol:
 class Reference:
     """A reference to a symbol (something that uses a name).
     
-    Schema v4 column names: file_id, ast_id, content_version_id, line_number, column_number, ref_type
+    CONTENT-KEYED (January 2026 Flag Day):
+    - Binds to ast_id ONLY (content identity)
+    - NO file_id or content_version_id
+    - File association derived via Golden Join: refs → asts → files
     """
     ref_id: Optional[int] = None
-    ref_type: str = ""  # 'trait_ref', 'event_ref', etc.
+    ast_id: int = 0               # FK to asts (REQUIRED - content identity)
     name: str = ""
-    ast_id: Optional[int] = None  # Was: using_ast_id
-    file_id: int = 0              # Was: using_file_id
-    content_version_id: int = 0
-    ast_node_path: Optional[str] = None
-    line_number: Optional[int] = None
-    column_number: Optional[int] = None  # NEW in v4
+    ref_type: str = ""            # 'trait_ref', 'event_ref', etc.
     context: Optional[str] = None
-    resolution_status: str = "unknown"  # 'resolved', 'unresolved', 'dynamic', 'unknown'
+    line_number: Optional[int] = None
+    column_number: Optional[int] = None
+    resolution_status: str = "unresolved"
     resolved_symbol_id: Optional[int] = None
     candidates: List[int] = field(default_factory=list)
     
@@ -280,16 +279,13 @@ class Reference:
     def from_row(cls, row) -> "Reference":
         return cls(
             ref_id=row['ref_id'],
-            ref_type=row['ref_type'],
+            ast_id=row['ast_id'],
             name=row['name'],
-            ast_id=row.get('ast_id'),
-            file_id=row['file_id'],
-            content_version_id=row['content_version_id'],
-            ast_node_path=row.get('ast_node_path'),
+            ref_type=row['ref_type'],
+            context=row.get('context'),
             line_number=row.get('line_number'),
             column_number=row.get('column_number'),
-            context=row.get('context'),
-            resolution_status=row.get('resolution_status', 'unknown'),
+            resolution_status=row.get('resolution_status', 'unresolved'),
             resolved_symbol_id=row.get('resolved_symbol_id'),
             candidates=json.loads(row['candidates_json']) if row.get('candidates_json') else [],
         )

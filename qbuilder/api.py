@@ -294,19 +294,7 @@ def delete_file(
         # Delete from build_queue first (no FK constraint, just cleanup)
         conn.execute("DELETE FROM build_queue WHERE file_id = ?", (file_id,))
         
-        # Delete artifacts (these may have FK constraints or write protection)
-        # Use BuilderSession if needed
-        try:
-            from src.ck3raven.db.schema import BuilderSession
-            with BuilderSession(conn, f"delete_file:{file_id}"):
-                conn.execute("DELETE FROM symbols WHERE file_id = ?", (file_id,))
-                conn.execute("DELETE FROM refs WHERE file_id = ?", (file_id,))
-                conn.commit()
-        except ImportError:
-            # No BuilderSession available, try direct
-            conn.execute("DELETE FROM symbols WHERE file_id = ?", (file_id,))
-            conn.execute("DELETE FROM refs WHERE file_id = ?", (file_id,))
-        
+        # Delete ASTs - symbols/refs CASCADE automatically (content-keyed schema)
         conn.execute("DELETE FROM asts WHERE file_id = ?", (file_id,))
         conn.execute("DELETE FROM files WHERE file_id = ?", (file_id,))
         conn.commit()

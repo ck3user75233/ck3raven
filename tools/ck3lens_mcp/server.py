@@ -1009,11 +1009,15 @@ def ck3_db_delete(
         elif scope == "mods_only":
             if table == "content_versions":
                 return "WHERE kind = 'mod'", []
-            elif table in ("files", "asts", "symbols", "refs"):
+            elif table in ("files", "asts"):
                 if table == "files":
                     return "WHERE content_version_id > 1", []
                 else:
-                    return f"WHERE file_id IN (SELECT file_id FROM files WHERE content_version_id > 1)", []
+                    # ASTs: filter by files with content_version_id > 1
+                    return "WHERE file_id IN (SELECT file_id FROM files WHERE content_version_id > 1)", []
+            elif table in ("symbols", "refs"):
+                # CONTENT-KEYED: symbols/refs join through asts.file_id
+                return f"WHERE ast_id IN (SELECT ast_id FROM asts WHERE file_id IN (SELECT file_id FROM files WHERE content_version_id > 1))", []
             else:
                 return "", []  # For other tables, mods_only = all
         elif scope == "by_ids":
@@ -1030,6 +1034,11 @@ def ck3_db_delete(
                 return f"WHERE content_version_id IN ({placeholders})", content_version_ids
             elif table == "files":
                 return f"WHERE content_version_id IN ({placeholders})", content_version_ids
+            elif table == "asts":
+                return f"WHERE file_id IN (SELECT file_id FROM files WHERE content_version_id IN ({placeholders}))", content_version_ids
+            elif table in ("symbols", "refs"):
+                # CONTENT-KEYED: symbols/refs join through asts.file_id
+                return f"WHERE ast_id IN (SELECT ast_id FROM asts WHERE file_id IN (SELECT file_id FROM files WHERE content_version_id IN ({placeholders})))", content_version_ids
             else:
                 return f"WHERE file_id IN (SELECT file_id FROM files WHERE content_version_id IN ({placeholders}))", content_version_ids
         else:
@@ -1054,34 +1063,20 @@ def ck3_db_delete(
             
         elif target == "files":
             where, params = get_where_clause("files", "file_id")
-            # Files cascade - need to delete symbols, refs, asts first
+            # Files have CASCADE DELETE to asts, which cascades to symbols/refs
+            # We just need to delete files - SQLite cascade handles the rest
             count_sql = f"SELECT COUNT(*) FROM files {where}"
             
             if confirm:
-                # Get content_version_ids for the files being deleted
-                cv_where = where.replace("WHERE content_version_id", "WHERE content_version_id")
-                if scope == "mods_only":
-                    # Delete symbols/refs by content_version_id > 1
-                    cur.execute("DELETE FROM symbols WHERE content_version_id > 1")
-                    symbols_deleted = cur.rowcount
-                    cur.execute("DELETE FROM refs WHERE content_version_id > 1")
-                    refs_deleted = cur.rowcount
-                else:
-                    # Get file_ids first, then find their content_version_ids
-                    cur.execute(f"SELECT DISTINCT content_version_id FROM files {where}", params)
-                    cv_ids = [r[0] for r in cur.fetchall()]
-                    if cv_ids:
-                        placeholders = ",".join("?" * len(cv_ids))
-                        cur.execute(f"DELETE FROM symbols WHERE content_version_id IN ({placeholders})", cv_ids)
-                        symbols_deleted = cur.rowcount
-                        cur.execute(f"DELETE FROM refs WHERE content_version_id IN ({placeholders})", cv_ids)
-                        refs_deleted = cur.rowcount
-                    else:
-                        symbols_deleted = refs_deleted = 0
+                # Count what will be cascade-deleted before we delete
+                cur.execute(f"SELECT COUNT(*) FROM asts WHERE file_id IN (SELECT file_id FROM files {where})", params)
+                asts_count = cur.fetchone()[0]
+                cur.execute(f"SELECT COUNT(*) FROM symbols WHERE ast_id IN (SELECT ast_id FROM asts WHERE file_id IN (SELECT file_id FROM files {where}))", params)
+                symbols_count = cur.fetchone()[0]
+                cur.execute(f"SELECT COUNT(*) FROM refs WHERE ast_id IN (SELECT ast_id FROM asts WHERE file_id IN (SELECT file_id FROM files {where}))", params)
+                refs_count = cur.fetchone()[0]
                 
-                # Delete ASTs by content_hash (ASTs are content-addressed)
-                cur.execute(f"DELETE FROM asts WHERE content_hash IN (SELECT content_hash FROM files {where})", params)
-                asts_deleted = cur.rowcount
+                # Delete files - CASCADE handles asts, symbols, refs
                 cur.execute(f"DELETE FROM files {where}", params)
                 files_deleted = cur.rowcount
                 db.conn.commit()
@@ -1089,9 +1084,9 @@ def ck3_db_delete(
                 result["success"] = True
                 result["rows_deleted"] = files_deleted
                 result["cascade"] = {
-                    "symbols_deleted": symbols_deleted,
-                    "refs_deleted": refs_deleted,
-                    "asts_deleted": asts_deleted,
+                    "symbols_deleted": symbols_count,  # Cascaded via asts
+                    "refs_deleted": refs_count,        # Cascaded via asts
+                    "asts_deleted": asts_count,        # Cascaded from files
                 }
                 trace.log("ck3lens.db_delete", {"target": target, "scope": scope}, result)
                 return result
@@ -1107,20 +1102,30 @@ def ck3_db_delete(
                 
                 if cv_ids:
                     placeholders = ",".join("?" * len(cv_ids))
-                    # Cascade delete
-                    cur.execute(f"DELETE FROM symbols WHERE file_id IN (SELECT file_id FROM files WHERE content_version_id IN ({placeholders}))", cv_ids)
-                    symbols_deleted = cur.rowcount
-                    cur.execute(f"DELETE FROM refs WHERE file_id IN (SELECT file_id FROM files WHERE content_version_id IN ({placeholders}))", cv_ids)
-                    refs_deleted = cur.rowcount
-                    cur.execute(f"DELETE FROM asts WHERE file_id IN (SELECT file_id FROM files WHERE content_version_id IN ({placeholders}))", cv_ids)
-                    asts_deleted = cur.rowcount
-                    cur.execute(f"DELETE FROM files WHERE content_version_id IN ({placeholders})", cv_ids)
-                    files_deleted = cur.rowcount
+                    
+                    # Count what will be cascade-deleted (symbols/refs cascade from asts)
+                    cur.execute(f"SELECT COUNT(*) FROM asts WHERE file_id IN (SELECT file_id FROM files WHERE content_version_id IN ({placeholders}))", cv_ids)
+                    asts_count = cur.fetchone()[0]
+                    cur.execute(f"SELECT COUNT(*) FROM symbols WHERE ast_id IN (SELECT ast_id FROM asts WHERE file_id IN (SELECT file_id FROM files WHERE content_version_id IN ({placeholders})))", cv_ids)
+                    symbols_count = cur.fetchone()[0]
+                    cur.execute(f"SELECT COUNT(*) FROM refs WHERE ast_id IN (SELECT ast_id FROM asts WHERE file_id IN (SELECT file_id FROM files WHERE content_version_id IN ({placeholders})))", cv_ids)
+                    refs_count = cur.fetchone()[0]
+                    cur.execute(f"SELECT COUNT(*) FROM files WHERE content_version_id IN ({placeholders})", cv_ids)
+                    files_count = cur.fetchone()[0]
+                    
+                    # Delete playset_mods first (no cascade)
                     cur.execute(f"DELETE FROM playset_mods WHERE content_version_id IN ({placeholders})", cv_ids)
                     playset_mods_deleted = cur.rowcount
+                    
+                    # Delete files - CASCADE handles asts → symbols/refs
+                    cur.execute(f"DELETE FROM files WHERE content_version_id IN ({placeholders})", cv_ids)
+                    files_deleted = cur.rowcount
+                    
+                    # Delete content_versions
                     cur.execute(f"DELETE FROM content_versions {where}", params)
                     cv_deleted = cur.rowcount
-                    # Also clean mod_packages for deleted mods
+                    
+                    # Clean orphaned mod_packages
                     cur.execute("DELETE FROM mod_packages WHERE mod_package_id NOT IN (SELECT DISTINCT mod_package_id FROM content_versions WHERE mod_package_id IS NOT NULL)")
                     mod_packages_deleted = cur.rowcount
                     db.conn.commit()
@@ -1129,9 +1134,9 @@ def ck3_db_delete(
                     result["rows_deleted"] = cv_deleted
                     result["cascade"] = {
                         "files_deleted": files_deleted,
-                        "symbols_deleted": symbols_deleted,
-                        "refs_deleted": refs_deleted,
-                        "asts_deleted": asts_deleted,
+                        "symbols_deleted": symbols_count,    # Cascaded via asts
+                        "refs_deleted": refs_count,          # Cascaded via asts
+                        "asts_deleted": asts_count,          # Cascaded from files
                         "playset_mods_deleted": playset_mods_deleted,
                         "mod_packages_deleted": mod_packages_deleted,
                     }

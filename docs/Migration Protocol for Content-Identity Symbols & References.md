@@ -1,8 +1,22 @@
 # Migration Protocol: Content-Identity Symbols & References (Flag Day)
 
-Status: MANDATORY  
+Status: ✅ COMPLETED — January 16, 2026  
 Mode: Flag day (no compatibility)  
 Scope: symbols, refs, dependent lookups, extraction code
+
+---
+
+## Migration Summary
+
+**Executed:** January 16, 2026  
+**Schema Version:** v5
+
+All steps completed successfully:
+- ✅ Drop legacy tables (symbols, refs, lookups, FTS)
+- ✅ Create content-keyed tables with ast_id only
+- ✅ Update qbuilder/worker.py extraction code
+- ✅ Update qbuilder/api.py delete logic (CASCADE)
+- ✅ Full database rebuild in progress
 
 ---
 

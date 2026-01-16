@@ -509,15 +509,16 @@ def extract_refs_from_ast(
 
 def store_symbols_batch(
     conn: sqlite3.Connection,
-    file_id: int,
-    content_version_id: int,
     ast_id: int,
     symbols: List[ExtractedSymbol]
 ) -> int:
     """
-    Store multiple symbols in batch.
+    Store multiple symbols in batch, keyed to AST (content identity).
     
-    Schema v4 column names: file_id, ast_id, content_version_id, line_number, column_number, symbol_type
+    CONTENT-KEYED (January 2026 Flag Day):
+    - Binds to ast_id ONLY
+    - NO file_id or content_version_id
+    - Deletes existing symbols for this AST before inserting
     
     Returns:
         Number of symbols stored
@@ -525,22 +526,22 @@ def store_symbols_batch(
     if not symbols:
         return 0
     
-    # Delete existing symbols for this file
-    conn.execute("DELETE FROM symbols WHERE file_id = ?", (file_id,))
+    # Delete existing symbols for this AST (content)
+    conn.execute("DELETE FROM symbols WHERE ast_id = ?", (ast_id,))
     
     # Insert new symbols
     rows = [
-        (file_id, content_version_id, ast_id, s.line, s.column,
-         s.kind, s.name, s.scope,
+        (ast_id, s.line, s.column,
+         s.name, s.kind, s.scope,
          json.dumps({"signature": s.signature, "doc": s.doc}) if s.signature or s.doc else None)
         for s in symbols
     ]
     
     conn.executemany("""
         INSERT INTO symbols 
-        (file_id, content_version_id, ast_id, line_number, column_number,
-         symbol_type, name, scope, metadata_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (ast_id, line_number, column_number,
+         name, symbol_type, scope, metadata_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     """, rows)
     
     conn.commit()
@@ -549,15 +550,16 @@ def store_symbols_batch(
 
 def store_refs_batch(
     conn: sqlite3.Connection,
-    file_id: int,
-    content_version_id: int,
     ast_id: int,
     refs: List[ExtractedRef]
 ) -> int:
     """
-    Store multiple references in batch.
+    Store multiple references in batch, keyed to AST (content identity).
     
-    Schema v4 column names: file_id, ast_id, content_version_id, line_number, column_number, ref_type
+    CONTENT-KEYED (January 2026 Flag Day):
+    - Binds to ast_id ONLY
+    - NO file_id or content_version_id
+    - Deletes existing refs for this AST before inserting
     
     Returns:
         Number of refs stored
@@ -565,21 +567,21 @@ def store_refs_batch(
     if not refs:
         return 0
     
-    # Delete existing refs for this file
-    conn.execute("DELETE FROM refs WHERE file_id = ?", (file_id,))
+    # Delete existing refs for this AST (content)
+    conn.execute("DELETE FROM refs WHERE ast_id = ?", (ast_id,))
     
     # Insert new refs
     rows = [
-        (file_id, content_version_id, ast_id, r.line, r.column,
-         r.kind, r.name, r.context, 'unknown')
+        (ast_id, r.line, r.column,
+         r.name, r.kind, r.context, 'unresolved')
         for r in refs
     ]
     
     conn.executemany("""
         INSERT INTO refs 
-        (file_id, content_version_id, ast_id, line_number, column_number,
-         ref_type, name, context, resolution_status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (ast_id, line_number, column_number,
+         name, ref_type, context, resolution_status)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
     """, rows)
     
     conn.commit()
@@ -588,14 +590,16 @@ def store_refs_batch(
 
 def extract_and_store(
     conn: sqlite3.Connection,
-    file_id: int,
-    content_version_id: int,
     ast_id: int,
     ast_dict: Dict[str, Any],
     relpath: str
 ) -> Tuple[int, int]:
     """
-    Extract and store both symbols and references for a file.
+    Extract and store both symbols and references for an AST.
+    
+    CONTENT-KEYED (January 2026 Flag Day):
+    - Takes ast_id only (content identity)
+    - NO file_id or content_version_id
     
     Returns:
         (symbol_count, ref_count)
@@ -603,8 +607,8 @@ def extract_and_store(
     symbols = list(extract_symbols_from_ast(ast_dict, relpath, ""))
     refs = list(extract_refs_from_ast(ast_dict, relpath, ""))
     
-    sym_count = store_symbols_batch(conn, file_id, content_version_id, ast_id, symbols)
-    ref_count = store_refs_batch(conn, file_id, content_version_id, ast_id, refs)
+    sym_count = store_symbols_batch(conn, ast_id, symbols)
+    ref_count = store_refs_batch(conn, ast_id, refs)
     
     return sym_count, ref_count
 

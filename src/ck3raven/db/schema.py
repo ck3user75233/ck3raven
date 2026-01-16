@@ -4,7 +4,14 @@ Database Schema for ck3raven
 SQLite schema with content-addressed storage, versioning, and full traceability.
 All content is deduplicated by SHA256 hash.
 
-SCHEMA REVISION: January 2026 - QBuilder Cleanup
+SCHEMA REVISION: January 2026 - Content-Keyed Symbols & References (FLAG DAY)
+- symbols and refs now bind to ast_id ONLY (content identity)
+- REMOVED: file_id, content_version_id from symbols/refs tables
+- File association derived via Golden Join: symbols → asts → files
+- ON DELETE CASCADE for AST deletion cleanup
+- See docs/SYMBOL_CONTENT_MIGRATION_PLAN.md for migration details
+
+Previous revision:
 - Renamed: defining_file_id → file_id, using_file_id → file_id
 - Added: column_number for IDE precision
 - Removed: deprecated daemon/logging/conflict tables
@@ -17,7 +24,7 @@ import threading
 import time
 
 # Schema version - bump when schema changes
-DATABASE_VERSION = 4  # Bumped for QBuilder schema revision
+DATABASE_VERSION = 5  # Content-keyed symbols/refs (flag-day migration)
 
 # Thread-local storage for connections
 _local = threading.local()
@@ -150,77 +157,68 @@ CREATE INDEX IF NOT EXISTS idx_asts_parse_ok ON asts(parse_ok);
 CREATE INDEX IF NOT EXISTS idx_asts_symbols_processed ON asts(symbols_processed_at);
 
 -- ============================================================================
--- REFERENCE GRAPH (Symbols & References)
+-- REFERENCE GRAPH (Symbols & References) - CONTENT-KEYED (January 2026)
 -- ============================================================================
+-- FLAG-DAY MIGRATION: Symbols and refs bind to AST (content), not files.
+-- File association is ALWAYS derived via Golden Join: symbols → asts → files
+-- See docs/SYMBOL_CONTENT_MIGRATION_PLAN.md for rationale.
 
 -- Symbols - things that define names/IDs/keys
--- REVISED January 2026: Simplified column names
+-- Bound to AST (content identity), NOT to files
 CREATE TABLE IF NOT EXISTS symbols (
     symbol_id INTEGER PRIMARY KEY AUTOINCREMENT,
     
-    -- Location (simplified names)
-    file_id INTEGER NOT NULL,                -- FK to files (was: defining_file_id)
-    content_version_id INTEGER NOT NULL,     -- FK to content_versions (for playset filtering)
-    ast_id INTEGER,                          -- FK to asts (was: defining_ast_id)
-    ast_node_path TEXT,                      -- JSON path to AST node (for navigation)
+    -- Content binding (THE ONLY identity key)
+    ast_id INTEGER NOT NULL,                 -- FK to asts (content identity)
+    
+    -- Position within AST
     line_number INTEGER,
-    column_number INTEGER,                   -- NEW: for IDE click-to-navigate
+    column_number INTEGER,
     
     -- Identity
-    symbol_type TEXT NOT NULL,               -- 'trait', 'event', 'decision', 'scripted_effect', etc.
     name TEXT NOT NULL,                      -- The symbol name/ID
+    symbol_type TEXT NOT NULL,               -- 'trait', 'event', 'decision', etc.
     scope TEXT,                              -- Namespace (e.g., event namespace)
     
     -- Metadata
     metadata_json TEXT,                      -- Extensible additional data
     
-    FOREIGN KEY (ast_id) REFERENCES asts(ast_id),
-    FOREIGN KEY (file_id) REFERENCES files(file_id),
-    FOREIGN KEY (content_version_id) REFERENCES content_versions(content_version_id)
+    FOREIGN KEY (ast_id) REFERENCES asts(ast_id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
-CREATE INDEX IF NOT EXISTS idx_symbols_type ON symbols(symbol_type);
-CREATE INDEX IF NOT EXISTS idx_symbols_type_name ON symbols(symbol_type, name);
-CREATE INDEX IF NOT EXISTS idx_symbols_file ON symbols(file_id);
-CREATE INDEX IF NOT EXISTS idx_symbols_cvid ON symbols(content_version_id);
 CREATE INDEX IF NOT EXISTS idx_symbols_ast ON symbols(ast_id);
+CREATE INDEX IF NOT EXISTS idx_symbols_lookup ON symbols(symbol_type, name);
+CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
 
 -- References - places that use symbols
--- REVISED January 2026: Simplified column names
+-- Bound to AST (content identity), NOT to files
 CREATE TABLE IF NOT EXISTS refs (
     ref_id INTEGER PRIMARY KEY AUTOINCREMENT,
     
-    -- Location (simplified names)
-    file_id INTEGER NOT NULL,                -- FK to files (was: using_file_id)
-    content_version_id INTEGER NOT NULL,     -- FK to content_versions (for playset filtering)
-    ast_id INTEGER,                          -- FK to asts (was: using_ast_id)
-    ast_node_path TEXT,                      -- JSON path to AST node
+    -- Content binding (THE ONLY identity key)
+    ast_id INTEGER NOT NULL,                 -- FK to asts (content identity)
+    
+    -- Position within AST
     line_number INTEGER,
-    column_number INTEGER,                   -- NEW: for IDE click-to-navigate
+    column_number INTEGER,
     
     -- Identity
-    ref_type TEXT NOT NULL,                  -- Type of reference ('trait_ref', 'event_ref', etc.)
     name TEXT NOT NULL,                      -- Referenced symbol name
-    context TEXT,                            -- Context (which effect/trigger contains this)
+    ref_type TEXT NOT NULL,                  -- Type of reference ('trait_ref', etc.)
+    context TEXT,                            -- Context (which effect/trigger)
     
     -- Resolution
-    resolution_status TEXT NOT NULL DEFAULT 'unknown',  -- 'resolved', 'unresolved', 'dynamic', 'unknown'
+    resolution_status TEXT NOT NULL DEFAULT 'unresolved',
     resolved_symbol_id INTEGER,              -- FK to symbols if resolved
     candidates_json TEXT,                    -- Best-guess candidates if unresolved
     
-    FOREIGN KEY (ast_id) REFERENCES asts(ast_id),
-    FOREIGN KEY (file_id) REFERENCES files(file_id),
-    FOREIGN KEY (content_version_id) REFERENCES content_versions(content_version_id),
+    FOREIGN KEY (ast_id) REFERENCES asts(ast_id) ON DELETE CASCADE,
     FOREIGN KEY (resolved_symbol_id) REFERENCES symbols(symbol_id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_refs_ast ON refs(ast_id);
+CREATE INDEX IF NOT EXISTS idx_refs_lookup ON refs(ref_type, name);
 CREATE INDEX IF NOT EXISTS idx_refs_name ON refs(name);
-CREATE INDEX IF NOT EXISTS idx_refs_type ON refs(ref_type);
-CREATE INDEX IF NOT EXISTS idx_refs_type_name ON refs(ref_type, name);
-CREATE INDEX IF NOT EXISTS idx_refs_file ON refs(file_id);
-CREATE INDEX IF NOT EXISTS idx_refs_cvid ON refs(content_version_id);
-CREATE INDEX IF NOT EXISTS idx_refs_status ON refs(resolution_status);
 
 -- ============================================================================
 -- FULL-TEXT SEARCH

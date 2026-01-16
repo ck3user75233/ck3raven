@@ -5,6 +5,9 @@ Applies to: ck3raven-dev, ck3lens
 Authority: Hard law  
 Compatibility: NONE (flag-day only)
 
+**Migration Status:** Laws 4, 4b, 5 implemented as of January 16, 2026.
+See [CONTENT_KEYED_SCHEMA.md](CONTENT_KEYED_SCHEMA.md) for current schema.
+
 ---
 
 ## 0. Prime Directive

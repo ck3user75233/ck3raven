@@ -127,7 +127,7 @@ Each phase function checks database state internally:
 
 1. **File level** - `mtime` for fast filtering, `content_hash` for definitive change detection
 2. **AST level** - Keyed by `content_hash` (content-addressable, deduped)
-3. **Symbol/Ref level** - Keyed by `file_id` (needs mod context for conflicts)
+3. **Symbol/Ref level** - Keyed by `ast_id` (content-based, shared across files with identical content)
 
 ### File Change Detection (Default ON)
 
