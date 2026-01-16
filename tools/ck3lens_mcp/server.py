@@ -21,6 +21,50 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Literal
 
+# =============================================================================
+# STARTUP TRIPWIRE - Verify running from correct Python environment
+# =============================================================================
+def _verify_python_environment() -> None:
+    """
+    Verify the MCP server is running from the repo .venv on Windows.
+    
+    If running from Windows Store Python stub, exit immediately with diagnostic info.
+    This prevents "ghost" processes that waste debugging time.
+    """
+    if sys.platform != "win32":
+        return  # Only enforce on Windows where the stub exists
+    
+    exe = Path(sys.executable).resolve()
+    repo_root = Path(__file__).parent.parent.parent
+    expected_venv = (repo_root / ".venv" / "Scripts" / "python.exe").resolve()
+    
+    # Check if running from WindowsApps (the stub location)
+    is_windows_store = "WindowsApps" in str(exe) or "Microsoft\\WindowsApps" in str(exe)
+    is_correct_venv = exe == expected_venv or str(exe).lower() == str(expected_venv).lower()
+    
+    if is_windows_store or not is_correct_venv:
+        # Print diagnostic info and exit
+        import site
+        print("=" * 70, file=sys.stderr)
+        print("FATAL: MCP Server started with wrong Python interpreter!", file=sys.stderr)
+        print("=" * 70, file=sys.stderr)
+        print(f"  sys.executable:    {sys.executable}", file=sys.stderr)
+        print(f"  Expected venv:     {expected_venv}", file=sys.stderr)
+        print(f"  sys.prefix:        {sys.prefix}", file=sys.stderr)
+        print(f"  VIRTUAL_ENV:       {os.environ.get('VIRTUAL_ENV', '<not set>')}", file=sys.stderr)
+        try:
+            print(f"  site-packages:     {site.getsitepackages()}", file=sys.stderr)
+        except Exception:
+            print(f"  site-packages:     <unavailable>", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("This is likely caused by a bare 'python' fallback in the launcher.", file=sys.stderr)
+        print("Fix: Ensure VS Code extension uses absolute path to .venv Python.", file=sys.stderr)
+        print("=" * 70, file=sys.stderr)
+        sys.exit(1)
+
+# Run tripwire at module load time
+_verify_python_environment()
+
 from mcp.server.fastmcp import FastMCP
 
 # Add ck3raven to path

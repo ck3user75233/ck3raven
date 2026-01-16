@@ -971,17 +971,30 @@ function registerFileWatchers(context: vscode.ExtensionContext, lintingProvider:
 function cleanupDatabaseState(logger: Logger): void {
     const { spawnSync } = require('child_process');
     
-    // Get Python path from config
+    // Get Python path - NO BARE 'python' FALLBACK
     const config = vscode.workspace.getConfiguration('ck3lens');
-    let pythonPath = config.get<string>('pythonPath') || 'python';
-    
-    // Also try venv in ck3raven path
     const ck3ravenPath = config.get<string>('ck3ravenPath') || '';
-    if (ck3ravenPath) {
-        const venvPython = path.join(ck3ravenPath, '.venv', 'Scripts', 'python.exe');
-        if (fs.existsSync(venvPython)) {
-            pythonPath = venvPython;
+    
+    // Priority: configured path > venv discovery
+    let pythonPath = config.get<string>('pythonPath');
+    if (!pythonPath || !fs.existsSync(pythonPath)) {
+        // Try venv discovery
+        const venvPaths = [
+            path.join(ck3ravenPath, '.venv', 'Scripts', 'python.exe'),  // Windows
+            path.join(ck3ravenPath, '.venv', 'bin', 'python'),          // Unix
+        ];
+        for (const venvPython of venvPaths) {
+            if (fs.existsSync(venvPython)) {
+                pythonPath = venvPython;
+                break;
+            }
         }
+    }
+    
+    // Skip cleanup if no Python found (don't use Windows Store stub)
+    if (!pythonPath || !fs.existsSync(pythonPath)) {
+        logger.debug('Skipping DB cleanup: No Python interpreter found');
+        return;
     }
     
     // Quick inline cleanup script

@@ -123,21 +123,24 @@ export class PythonBridge implements vscode.Disposable {
                     break;
                 }
             }
-            // Fall back to system python
+            // NO FALLBACK TO BARE 'python' - that resolves to Windows Store stub
             if (!pythonPath) {
-                pythonPath = 'python';
-                this.logger.warn('No .venv found in ck3raven repo. Using system Python. Run setup wizard if this fails.');
+                this.logger.error('FATAL: No Python found for Python Bridge!');
+                this.logger.error(`  ck3ravenPath: ${ck3ravenPath}`);
+                this.logger.error(`  Checked venv paths: ${venvPaths.join(', ')}`);
+                this.logger.error('Fix: Run the CK3 Lens setup wizard or configure ck3lens.pythonPath');
+                throw new Error('No Python interpreter found. Configure ck3lens.pythonPath or run setup wizard.');
             }
         }
 
-        // Check if pythonPath is an absolute path or just 'python'
-        const pythonIsAbsolute = path.isAbsolute(pythonPath);
-        const pythonFileExists = pythonIsAbsolute ? require('fs').existsSync(pythonPath) : false;
+        // Validate pythonPath exists (must be absolute at this point)
+        if (!path.isAbsolute(pythonPath) || !require('fs').existsSync(pythonPath)) {
+            this.logger.error(`FATAL: Python path invalid or missing: ${pythonPath}`);
+            throw new Error(`Python interpreter not found: ${pythonPath}`);
+        }
         
         this.logger.info(`Starting Python bridge: ${pythonPath} ${bridgeScriptPath}`);
         this.logger.info(`ck3raven path: ${ck3ravenPath || '(not set - bridge may fail imports)'}`);
-        this.logger.info(`Bridge script exists: ${require('fs').existsSync(bridgeScriptPath!)}`);
-        this.logger.info(`Python path: ${pythonPath} (${pythonIsAbsolute ? (pythonFileExists ? 'file exists' : 'file NOT found') : 'using PATH lookup'})`);
         this.logger.info(`Extension path: ${extensionPath || '(not found)'}`);
 
         return new Promise((resolve, reject) => {
@@ -292,8 +295,27 @@ export class PythonBridge implements vscode.Disposable {
      */
     async runScript(scriptName: string, args: string[] = []): Promise<string> {
         const config = vscode.workspace.getConfiguration('ck3lens');
-        const pythonPath = config.get<string>('pythonPath') || 'python';
         const ck3ravenPath = config.get<string>('ck3ravenPath') || '';
+        
+        // Find Python - NO BARE 'python' FALLBACK
+        let pythonPath = config.get<string>('pythonPath');
+        if (!pythonPath || !require('fs').existsSync(pythonPath)) {
+            // Try venv discovery
+            const venvPaths = [
+                path.join(ck3ravenPath, '.venv', 'Scripts', 'python.exe'),  // Windows
+                path.join(ck3ravenPath, '.venv', 'bin', 'python'),          // Unix
+            ];
+            for (const venvPython of venvPaths) {
+                if (require('fs').existsSync(venvPython)) {
+                    pythonPath = venvPython;
+                    break;
+                }
+            }
+        }
+        
+        if (!pythonPath || !require('fs').existsSync(pythonPath)) {
+            throw new Error('No Python interpreter found. Configure ck3lens.pythonPath or run setup wizard.');
+        }
 
         const scriptPath = path.join(ck3ravenPath, 'scripts', scriptName);
 

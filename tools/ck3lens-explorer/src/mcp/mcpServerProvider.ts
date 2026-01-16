@@ -67,6 +67,9 @@ function cleanupOldWindowKeys(context: vscode.ExtensionContext): void {
 
 /**
  * Finds the Python executable to use for the MCP server.
+ * 
+ * CRITICAL: Never falls back to bare 'python' - that resolves to Windows Store stub.
+ * Returns undefined if no valid Python found, caller must handle gracefully.
  */
 function findPythonPath(ck3ravenRoot: string, logger: Logger): string | undefined {
     // Priority 1: Extension configuration
@@ -77,16 +80,27 @@ function findPythonPath(ck3ravenRoot: string, logger: Logger): string | undefine
         return configuredPython;
     }
 
-    // Priority 2: Virtual environment in ck3raven repo
-    const localVenv = path.join(ck3ravenRoot, '.venv', 'Scripts', 'python.exe');
-    if (fs.existsSync(localVenv)) {
-        logger.debug(`Using ck3raven venv Python: ${localVenv}`);
-        return localVenv;
+    // Priority 2: Virtual environment in ck3raven repo (Windows)
+    const localVenvWin = path.join(ck3ravenRoot, '.venv', 'Scripts', 'python.exe');
+    if (fs.existsSync(localVenvWin)) {
+        logger.debug(`Using ck3raven venv Python: ${localVenvWin}`);
+        return localVenvWin;
     }
 
-    // Priority 3: System Python
-    logger.debug('Falling back to system python');
-    return 'python';
+    // Priority 3: Virtual environment in ck3raven repo (Unix)
+    const localVenvUnix = path.join(ck3ravenRoot, '.venv', 'bin', 'python');
+    if (fs.existsSync(localVenvUnix)) {
+        logger.debug(`Using ck3raven venv Python: ${localVenvUnix}`);
+        return localVenvUnix;
+    }
+
+    // NO FALLBACK TO BARE 'python' - that resolves to Windows Store stub
+    logger.error('FATAL: No Python found for MCP server!');
+    logger.error(`  Checked configured pythonPath: ${configuredPython || '(not set)'}`);
+    logger.error(`  Checked venv (Windows): ${localVenvWin}`);
+    logger.error(`  Checked venv (Unix): ${localVenvUnix}`);
+    logger.error('Fix: Run the CK3 Lens setup wizard or configure ck3lens.pythonPath');
+    return undefined;
 }
 
 /**
@@ -222,6 +236,17 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
             // Ensure Python can find ck3raven modules
             PYTHONPATH: path.join(ck3ravenRoot, 'src'),
         };
+
+        // CRITICAL: Inject venv Scripts dir into PATH so subprocesses resolve 'python' correctly
+        // This prevents Windows Store Python stub from being used by child processes
+        if (pythonPath.includes('.venv')) {
+            const venvScriptsDir = path.dirname(pythonPath);  // .venv/Scripts or .venv/bin
+            const venvDir = path.dirname(venvScriptsDir);     // .venv
+            const currentPath = process.env['PATH'] || '';
+            env['PATH'] = `${venvScriptsDir}${path.delimiter}${currentPath}`;
+            env['VIRTUAL_ENV'] = venvDir;
+            this.logger.debug(`Injected venv into PATH: ${venvScriptsDir}`);
+        }
 
         // Add ck3lens config path if configured
         const configPath = vscode.workspace.getConfiguration('ck3lens').get<string>('configPath');

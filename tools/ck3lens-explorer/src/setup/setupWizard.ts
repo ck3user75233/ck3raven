@@ -735,13 +735,38 @@ export class SetupWizard {
     async runDiagnostics(): Promise<DependencyCheck[]> {
         const checks: DependencyCheck[] = [];
 
-        // Python check
-        const pythonVersion = this.getPythonVersion(this.pythonPath || 'python');
+        // Python check - for diagnostics, we DO check system python since we're
+        // trying to determine what's available. This is intentionally different
+        // from runtime code which must NEVER fall back to bare 'python'.
+        let pythonToCheck = this.pythonPath;
+        if (!pythonToCheck) {
+            // Try to find venv first
+            const ck3ravenPath = vscode.workspace.getConfiguration('ck3lens').get<string>('ck3ravenPath') || '';
+            const venvPaths = [
+                path.join(ck3ravenPath, '.venv', 'Scripts', 'python.exe'),
+                path.join(ck3ravenPath, '.venv', 'bin', 'python'),
+            ];
+            for (const venvPython of venvPaths) {
+                if (fs.existsSync(venvPython)) {
+                    pythonToCheck = venvPython;
+                    break;
+                }
+            }
+        }
+        // For diagnostics only, fall back to checking system python existence
+        if (!pythonToCheck) {
+            pythonToCheck = 'python';
+        }
+        
+        const pythonVersion = this.getPythonVersion(pythonToCheck);
+        const isSystemPython = pythonToCheck === 'python';
         checks.push({
             name: 'Python',
             status: pythonVersion ? 'ok' : 'missing',
             version: pythonVersion || undefined,
-            message: pythonVersion ? undefined : 'Python not found in PATH',
+            message: pythonVersion 
+                ? (isSystemPython ? 'Using system Python (recommend venv)' : undefined)
+                : 'Python not found - run setup wizard',
             canAutoInstall: false
         });
 
