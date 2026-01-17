@@ -144,9 +144,18 @@ class DBQueries:
     - invalidate_lens_cache() - REMOVED
     """
     
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, read_only: bool = False):
         self.db_path = db_path
-        self.conn = get_connection(db_path)
+        self.read_only = read_only
+        
+        if read_only:
+            # Open database in read-only mode using URI
+            # This enforces read-only at the SQLite level
+            db_uri = f"file:{db_path}?mode=ro"
+            self.conn = sqlite3.connect(db_uri, uri=True, check_same_thread=False, timeout=5.0)
+        else:
+            self.conn = get_connection(db_path)
+        
         self.conn.row_factory = sqlite3.Row
     
     # =========================================================================

@@ -2,12 +2,18 @@
 QBuilder CLI — Canonical Phase 1
 
 Commands:
+    daemon    Start the single-writer daemon (IPC server + build worker)
     init      Initialize QBuilder schema
     discover  Enqueue discovery tasks and run discovery workers
     build     Run build workers on pending items
     run       Run complete pipeline (discover + build)
     status    Show queue status
     reset     Reset queues for fresh build
+
+SINGLE-WRITER ARCHITECTURE (January 2026):
+    The `daemon` command is the ONLY process that writes to the database.
+    MCP servers are read-only and communicate with the daemon via IPC.
+    See docs/SINGLE_WRITER_ARCHITECTURE.md for details.
 """
 
 import argparse
@@ -99,6 +105,136 @@ def get_connection(auto_init: bool = True) -> sqlite3.Connection:
             print("  Run with --force to reset database")
     
     return conn
+
+
+def cmd_daemon(args: argparse.Namespace) -> int:
+    """
+    Start the single-writer daemon.
+    
+    This is the ONLY process that writes to the database.
+    It runs both the IPC server (for client requests) and the build worker.
+    
+    The daemon:
+    1. Acquires the writer lock (fails if another daemon running)
+    2. Opens database in read-write mode
+    3. Starts IPC server for client requests
+    4. Runs build worker loop
+    """
+    import uuid
+    import signal
+    
+    from .writer_lock import WriterLock, WriterLockError
+    from .ipc_server import DaemonIPCServer, get_ipc_port
+    from .logging import QBuilderLogger
+    
+    db_path = get_db_path()
+    run_id = f"daemon-{uuid.uuid4().hex[:8]}"
+    logger = QBuilderLogger(run_id=run_id)
+    
+    # Fresh build mode
+    if args.fresh:
+        print("Fresh build mode: will reset all data")
+    
+    # Acquire writer lock
+    print(f"Acquiring writer lock for {db_path}...")
+    lock = WriterLock(db_path)
+    
+    if not lock.acquire():
+        holder_info = lock.get_holder_info()
+        if holder_info:
+            print(f"[ERROR] Another daemon is already running (PID {holder_info.pid})")
+        else:
+            print("[ERROR] Could not acquire writer lock")
+        return 1
+    
+    print(f"[OK] Writer lock acquired (PID {__import__('os').getpid()})")
+    
+    try:
+        # Open database in read-write mode
+        conn = get_connection()
+        init_qbuilder_schema(conn)
+        
+        # Fresh reset if requested
+        if args.fresh:
+            print("Resetting all data for fresh build...")
+            with BuilderSession(conn, "daemon_fresh_reset"):
+                for table in ['asts', 'symbols', 'refs', 'localization_entries', 
+                              'trait_lookups', 'event_lookups', 'decision_lookups']:
+                    try:
+                        conn.execute(f"DELETE FROM {table}")
+                    except sqlite3.OperationalError:
+                        pass
+                conn.execute("DELETE FROM files")
+                conn.execute("DELETE FROM content_versions")
+                conn.execute("DELETE FROM mod_packages")
+                conn.commit()
+            reset_qbuilder_tables(conn)
+            print("[OK] Data reset complete")
+        
+        # Start IPC server
+        port = get_ipc_port()
+        ipc_server = DaemonIPCServer(conn, port=port)
+        ipc_server.start()
+        print(f"[OK] IPC server listening on port {port}")
+        
+        # Handle shutdown signals
+        shutdown_requested = False
+        
+        def handle_signal(signum, frame):
+            nonlocal shutdown_requested
+            print(f"\nReceived signal {signum}, shutting down...")
+            shutdown_requested = True
+        
+        signal.signal(signal.SIGINT, handle_signal)
+        signal.signal(signal.SIGTERM, handle_signal)
+        
+        # Log startup
+        counts = get_queue_counts(conn)
+        pending = counts.get('build', {}).get('pending', 0)
+        print(f"\n=== Daemon Started ===")
+        print(f"  run_id: {run_id}")
+        print(f"  db: {db_path}")
+        print(f"  ipc_port: {port}")
+        print(f"  pending: {pending}")
+        print(f"  poll_interval: {args.poll_interval}s")
+        print(f"  log: {logger.log_file}")
+        print(f"\nPress Ctrl+C to stop\n")
+        
+        logger.run_start(total_items=pending)
+        start_time = time.time()
+        
+        # Run build worker loop
+        result = run_build_worker(
+            conn,
+            max_items=args.max_items,
+            logger=logger,
+            continuous=True,
+            poll_interval=args.poll_interval,
+        )
+        
+        elapsed = time.time() - start_time
+        
+        # Shutdown
+        print("\nShutting down...")
+        ipc_server.stop()
+        
+        logger.run_complete(
+            processed=result['items_processed'],
+            errors=result['errors'],
+            duration_ms=elapsed * 1000
+        )
+        
+        print(f"\n[OK] Daemon shutdown complete:")
+        print(f"  Processed: {result['items_processed']}")
+        print(f"  Completed: {result['completed']}")
+        print(f"  Errors: {result['errors']}")
+        print(f"  Uptime: {elapsed:.1f}s")
+        
+        return 0
+        
+    finally:
+        lock.release()
+        print("[OK] Writer lock released")
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -381,6 +517,17 @@ def main():
         description='Crash-safe queue-based builder for CK3 mod processing'
     )
     subparsers = parser.add_subparsers(dest='command', required=True)
+    
+    # daemon (the primary command for single-writer architecture)
+    daemon_parser = subparsers.add_parser('daemon', 
+        help='Start the single-writer daemon (recommended)')
+    daemon_parser.add_argument('--fresh', action='store_true',
+                               help='Reset ALL data and start fresh')
+    daemon_parser.add_argument('--max-items', type=int, default=None,
+                               help='Maximum build items to process (for testing)')
+    daemon_parser.add_argument('--poll-interval', type=float, default=5.0,
+                               help='Seconds between polls when queue empty (default: 5)')
+    daemon_parser.set_defaults(func=cmd_daemon)
     
     # init
     init_parser = subparsers.add_parser('init', help='Initialize QBuilder schema')

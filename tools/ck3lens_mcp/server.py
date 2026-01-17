@@ -5152,15 +5152,16 @@ def ck3_qbuilder(
     """
     Unified QBuilder tool for build system operations.
 
-    This is a THIN wrapper that calls the queue pipeline.
-    It does NOT introduce new scheduling or eligibility logic.
+    ARCHITECTURE: MCP servers are READ-ONLY clients.
+    All mutations go through the QBuilder daemon via IPC.
+    See docs/SINGLE_WRITER_ARCHITECTURE.md for details.
 
     Commands:
 
-    command=status   -> Get queue statistics and build status
-    command=build    -> Launch background build subprocess
-    command=discover -> Enqueue discovery tasks from active playset
-    command=reset    -> Reset queues (fresh=True clears all data)
+    command=status   -> Get queue statistics and daemon status (via IPC)
+    command=build    -> Launch background build daemon (subprocess)
+    command=discover -> Request daemon to enqueue discovery tasks (via IPC)
+    command=reset    -> Request queue reset (via IPC to daemon)
 
     Args:
         command: Operation to perform
@@ -5171,55 +5172,85 @@ def ck3_qbuilder(
         Dict with command-specific results
 
     Background builds:
-        The build command launches `python -m qbuilder.cli build` as a subprocess.
-        It tracks run_id and logs to ~/.ck3raven/logs/qbuilder_YYYY-MM-DD.jsonl
-        Leases handle crash recovery/resume.
+        The build command launches `python -m qbuilder.cli daemon` as a subprocess.
+        The daemon holds the writer lock and processes all enqueued work.
+        It also runs the IPC server for client requests.
     """
     import subprocess
     import sys
     
-    # Import qbuilder library - direct import, no subprocess for status/discover/reset
-    from qbuilder import lib as qbuilder_lib
+    from ck3lens.daemon_client import daemon, DaemonNotAvailableError
     
     trace = _get_trace()
     ck3raven_root = str(Path(__file__).parent.parent.parent)
     python_exe = sys.executable
     
     if command == "status":
-        # Use library API directly
-        status = qbuilder_lib.get_queue_status()
-        result = status.to_dict()
-        trace.log("ck3_qbuilder.status", {}, result)
-        return result
+        # Query daemon status via IPC
+        try:
+            if daemon.is_available():
+                status = daemon.get_queue_status()
+                status["daemon_available"] = True
+                trace.log("ck3_qbuilder.status", {}, status)
+                return status
+            else:
+                result = {
+                    "daemon_available": False,
+                    "message": "Daemon not running. Use ck3_qbuilder(command='build') to start.",
+                    "hint": "The daemon is the single writer - it must be running for builds.",
+                }
+                trace.log("ck3_qbuilder.status", {}, result)
+                return result
+        except Exception as e:
+            return {"error": f"Failed to get status: {e}", "daemon_available": False}
     
     elif command == "build":
-        # Launch background daemon - still uses subprocess for long-running daemon
-        # This is intentional: the daemon runs continuously and should be separate
+        # Launch background daemon
+        # The daemon is the ONLY process that writes to the database
         log_dir = Path.home() / ".ck3raven" / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         
         from datetime import datetime
-        log_file = log_dir / f"build_stdout_{datetime.now().strftime('%Y-%m-%d')}.log"
+        log_file = log_dir / f"daemon_{datetime.now().strftime('%Y-%m-%d')}.log"
+        
+        # Check if daemon already running
+        if daemon.is_available():
+            health = daemon.health()
+            result = {
+                "success": True,
+                "already_running": True,
+                "daemon_pid": health.daemon_pid,
+                "state": health.state,
+                "queue_pending": health.queue_pending,
+                "message": "Daemon already running",
+            }
+            trace.log("ck3_qbuilder.build", {}, result)
+            return result
         
         try:
             with open(log_file, "a", encoding="utf-8") as log_handle:
-                log_handle.write(f"\n\n=== Build started at {datetime.now().isoformat()} ===\n")
+                log_handle.write(f"\n\n=== Daemon started at {datetime.now().isoformat()} ===\n")
                 log_handle.flush()
                 
+                # Start daemon with IPC server
                 proc = subprocess.Popen(
-                    [python_exe, "-m", "qbuilder.cli", "build"],
+                    [python_exe, "-m", "qbuilder.cli", "daemon"],
                     cwd=ck3raven_root,
                     stdout=log_handle,
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
                 )
             
+            # Wait briefly for daemon to start IPC server
+            import time
+            time.sleep(1.0)
+            
             result = {
                 "success": True,
                 "pid": proc.pid,
-                "message": f"Build daemon started (PID {proc.pid})",
+                "message": f"Daemon started (PID {proc.pid})",
                 "log_file": str(log_file),
-                "note": "Daemon runs continuously. Check log file for progress. Ctrl+C to stop.",
+                "note": "Daemon is the single DB writer. Use 'discover' to enqueue work.",
             }
         except Exception as e:
             result = {"success": False, "error": str(e)}
@@ -5228,27 +5259,38 @@ def ck3_qbuilder(
         return result
     
     elif command == "discover":
-        # Use library API directly
-        enqueue_result = qbuilder_lib.enqueue_discovery()
-        result = enqueue_result.to_dict()
-        
-        if enqueue_result.success:
-            result["next_step"] = "Run ck3_qbuilder(command='build') to process the queue"
-        
-        trace.log("ck3_qbuilder.discover", {}, result)
-        return result
+        # Request daemon to enqueue discovery tasks via IPC
+        try:
+            if not daemon.is_available():
+                return {
+                    "success": False,
+                    "error": "Daemon not running",
+                    "hint": "Start daemon first with ck3_qbuilder(command='build')",
+                }
+            
+            result = daemon.enqueue_scan()
+            result["note"] = "Discovery tasks enqueued. Daemon will process them."
+            trace.log("ck3_qbuilder.discover", {}, result)
+            return result
+            
+        except DaemonNotAvailableError as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "hint": "Start daemon first with ck3_qbuilder(command='build')",
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
     
     elif command == "reset":
-        # Use library API directly
-        reset_result = qbuilder_lib.reset_queues(fresh=fresh)
-        result = reset_result.to_dict()
-        
-        if reset_result.success:
-            result["fresh"] = fresh
-            result["next_step"] = "Run ck3_qbuilder(command='discover') to repopulate"
-        
-        trace.log("ck3_qbuilder.reset", {"fresh": fresh}, result)
-        return result
+        # Reset is a write operation - must go through daemon
+        # For now, this requires manual intervention since reset is destructive
+        return {
+            "success": False,
+            "error": "Reset requires daemon restart with --fresh flag",
+            "hint": "Stop daemon, then run: python -m qbuilder.cli daemon --fresh",
+            "note": "This is intentionally gated to prevent accidental data loss.",
+        }
     
     else:
         return {"error": f"Unknown command: {command}"}

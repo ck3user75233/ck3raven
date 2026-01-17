@@ -1,20 +1,30 @@
 """
 Database API - The ONLY interface for MCP tools to access the database.
 
-ARCHITECTURAL RULE: Tools MUST use this module. Direct DBQueries access is BANNED.
+ARCHITECTURAL RULE: 
+- MCP tools MUST use this module for database access
+- MCP tools are READ-ONLY clients
+- All writes go through the QBuilder daemon via IPC
+
+See docs/SINGLE_WRITER_ARCHITECTURE.md for the canonical design.
 
 This module provides:
-1. Single point of database access control
-2. Enable/disable mechanism for maintenance operations  
+1. Read-only database access (mode=ro enforced at SQLite level)
+2. Enable/disable mechanism for maintenance operations
 3. Graceful error returns (never raises when disabled)
-4. WAL mode release for file deletion
+4. Daemon client integration for write operations
 
 Usage in MCP tools:
     from ck3lens.db_api import db
     
+    # READ operations - direct DB access
     result = db.search(query="brave", ...)
     if "error" in result:
-        return result  # Gracefully handle disabled state
+        return result
+    
+    # WRITE operations - must go through daemon
+    from ck3lens.daemon_client import daemon
+    daemon.enqueue_files([path])
 """
 
 from __future__ import annotations
@@ -32,7 +42,10 @@ class DatabaseAPI:
     Singleton database access controller.
     
     All MCP tools access the database through this API.
-    The server can disable access for maintenance (e.g., deleting DB files).
+    
+    CRITICAL: This opens the database in READ-ONLY mode.
+    Any attempt to execute INSERT/UPDATE/DELETE will fail at the SQLite layer.
+    Write operations must go through the daemon via IPC.
     """
     
     _instance: Optional["DatabaseAPI"] = None
@@ -51,6 +64,7 @@ class DatabaseAPI:
         self._db: Optional["DBQueries"] = None
         self._db_path: Optional[Path] = None
         self._session = None  # Will hold session reference for cvid resolution
+        self._read_only = True  # ALWAYS read-only for MCP
     
     # =========================================================================
     # Control Methods (called by server.py only)
@@ -62,35 +76,50 @@ class DatabaseAPI:
         
         IMPORTANT: This also re-enables the database if it was disabled.
         A new session should always start with DB enabled.
+        
+        The connection is ALWAYS opened in read-only mode for MCP.
         """
         self._db_path = db_path
         self._session = session
         # Re-enable on new session (fixes persistence bug across MCP restarts)
         self._enabled = True
+        # Force reconnect to pick up new path
+        if self._db is not None:
+            try:
+                self._db.close()
+            except Exception:
+                pass
+            self._db = None
     
     def disable(self) -> dict:
         """
         Close DB connection and block all operations until enable() called.
         
-        This switches SQLite out of WAL mode to release memory-mapped file locks,
-        allowing the database files to be deleted on Windows.
+        For read-only MCP connections, we just close the connection.
+        No need to switch WAL mode since we're not holding write locks.
         """
         self._enabled = False
         if self._db is not None:
             try:
-                # Switch out of WAL mode to release memory-mapped locks (Windows fix)
-                self._db.conn.execute("PRAGMA journal_mode = DELETE")
-                self._db.conn.commit()
                 self._db.close()
             except Exception:
-                pass  # Best effort
+                pass
             self._db = None
-        return {"success": True, "status": "disabled", "message": "Database disabled. Files can now be deleted."}
+        return {
+            "success": True, 
+            "status": "disabled", 
+            "message": "Database disabled. Read-only connection closed.",
+            "note": "Write operations always go through daemon IPC.",
+        }
     
     def enable(self) -> dict:
         """Re-enable database access."""
         self._enabled = True
-        return {"success": True, "status": "enabled", "message": "Database access re-enabled."}
+        return {
+            "success": True, 
+            "status": "enabled", 
+            "message": "Database access re-enabled (read-only).",
+        }
     
     def is_available(self) -> bool:
         """Check if database access is currently enabled."""
@@ -98,10 +127,27 @@ class DatabaseAPI:
     
     def status(self) -> dict:
         """Get current database status."""
+        # Also check daemon status
+        daemon_status = {"connected": False, "state": "unknown"}
+        try:
+            from ck3lens.daemon_client import daemon
+            if daemon.is_available():
+                health = daemon.health()
+                daemon_status = {
+                    "connected": True,
+                    "state": health.state,
+                    "pid": health.daemon_pid,
+                    "queue_pending": health.queue_pending,
+                }
+        except Exception:
+            pass
+        
         return {
             "enabled": self._enabled,
             "connected": self._db is not None,
             "db_path": str(self._db_path) if self._db_path else None,
+            "read_only": self._read_only,
+            "daemon": daemon_status,
         }
     
     # =========================================================================
@@ -129,6 +175,7 @@ class DatabaseAPI:
         Get or create database connection.
         
         INTERNAL USE ONLY - tools should use the wrapper methods.
+        Opens connection in READ-ONLY mode.
         Raises RuntimeError if disabled.
         """
         if not self._enabled:
@@ -138,12 +185,13 @@ class DatabaseAPI:
         
         if self._db is None:
             from ck3lens.db_queries import DBQueries
-            self._db = DBQueries(db_path=self._db_path)
+            # Open in read-only mode
+            self._db = DBQueries(db_path=self._db_path, read_only=True)
         
         return self._db
     
     # =========================================================================
-    # Database Operations (wrapped with graceful error handling)
+    # Database Operations (READ-ONLY, wrapped with graceful error handling)
     # =========================================================================
     
     def unified_search(self, **kwargs) -> dict:
@@ -192,15 +240,18 @@ class DatabaseAPI:
             return {"error": f"CVID resolution failed: {e}"}
     
     # =========================================================================
-    # Raw Connection Access (for tools that need direct SQL)
+    # Raw Connection Access (READ-ONLY)
     # =========================================================================
     
     @property
     def conn(self) -> Optional[sqlite3.Connection]:
         """
-        Get raw database connection.
+        Get raw database connection (READ-ONLY).
         
         Returns None if disabled. Tools should check for None before use.
+        
+        WARNING: This connection is read-only. Any mutation will raise
+        sqlite3.OperationalError: attempt to write a readonly database
         """
         if not self._enabled or self._db_path is None:
             return None
@@ -211,12 +262,22 @@ class DatabaseAPI:
     
     def execute(self, sql: str, params: tuple = ()) -> Optional[sqlite3.Cursor]:
         """
-        Execute SQL with graceful handling.
+        Execute SQL with graceful handling (READ-ONLY).
         
         Returns None if disabled or on error.
+        
+        WARNING: Only SELECT queries are allowed. Mutations will fail.
         """
         if err := self._check_available():
             return None
+        
+        # Validate query is read-only
+        sql_upper = sql.strip().upper()
+        if not sql_upper.startswith("SELECT") and not sql_upper.startswith("PRAGMA"):
+            # Log warning but let SQLite enforce (belt and suspenders)
+            import logging
+            logging.warning(f"db_api.execute() received mutation query (will fail): {sql[:50]}")
+        
         try:
             return self._get_db().conn.execute(sql, params)
         except Exception:
@@ -224,16 +285,34 @@ class DatabaseAPI:
     
     def execute_safe(self, sql: str, params: tuple = ()) -> dict:
         """
-        Execute SQL and return result dict.
+        Execute SQL and return result dict (READ-ONLY).
         
         Always returns a dict with either 'rows' or 'error'.
+        
+        WARNING: Only SELECT queries are allowed. Mutations will fail.
         """
         if err := self._check_available():
             return err
+        
+        # Validate query is read-only
+        sql_upper = sql.strip().upper()
+        if not sql_upper.startswith("SELECT") and not sql_upper.startswith("PRAGMA"):
+            return {
+                "error": "Write operations not allowed from MCP",
+                "hint": "Use daemon IPC for mutations. See docs/SINGLE_WRITER_ARCHITECTURE.md",
+            }
+        
         try:
             cursor = self._get_db().conn.execute(sql, params)
             rows = cursor.fetchall()
             return {"success": True, "rows": rows, "rowcount": len(rows)}
+        except sqlite3.OperationalError as e:
+            if "readonly" in str(e).lower():
+                return {
+                    "error": "Database is read-only (as designed)",
+                    "hint": "Use daemon IPC for mutations",
+                }
+            return {"error": f"SQL execution failed: {e}"}
         except Exception as e:
             return {"error": f"SQL execution failed: {e}"}
 
