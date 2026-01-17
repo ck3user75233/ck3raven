@@ -8,7 +8,9 @@ Design documents and specifications for the CK3 Game State Emulator.
 | Doc | Description |
 |-----|-------------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Full system architecture, data flow, module details |
-| [DATABASE_BUILDER.md](DATABASE_BUILDER.md) | Database builder and incremental rebuild roadmap |
+| [CANONICAL_ARCHITECTURE.md](CANONICAL_ARCHITECTURE.md) | Authoritative rules: enforcement, resolution, banned terms |
+| [SINGLE_WRITER_ARCHITECTURE.md](SINGLE_WRITER_ARCHITECTURE.md) | QBuilder daemon as sole DB writer, read-only MCP |
+| [MCP_ARCHITECTURE.md](MCP_ARCHITECTURE.md) | Per-instance MCP servers, dynamic registration |
 
 ### Design Documents
 | Doc | Description |

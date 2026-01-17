@@ -1,7 +1,7 @@
 # CK3Raven / CK3Lens Ã¢â‚¬â€ Canonical Architecture
 
 > **Status:** AUTHORITATIVE  
-> **Last Updated:** December 30, 2025  
+> **Last Updated:** January 17, 2026  
 > **Purpose:** Single source of truth for all architectural decisions
 
 ---
@@ -41,12 +41,14 @@ Every agent working on this codebase MUST understand these 5 rules:
 | **4. Path Resolution** | Canonical path normalization pipeline | [Ã¢â€ â€™ Details](#4-path-resolution) |
 | **5. MCP Tools** | Canonical pattern for all MCP tool implementations | [Ã¢â€ â€™ Details](#5-mcp-tool-architecture) |
 | **6. Banned Terms** | Hard-banned naming patterns | [Ã¢â€ â€™ Details](#6-banned-terms) |
-| **7. File Locations** | Where canonical implementations live | [â†’ Details](#7-file-locations) |
-| **8. Capability Handles** | DbHandle/FsHandle + _CAP_TOKEN pattern | [â†’ Details](#8-capability-handles-pattern-december-2025) |
-| **9. Mode-Aware Addressing** | ck3lens vs ck3raven-dev addressing | [â†’ Details](#9-mode-aware-addressing) |
-| **10. Single WorldAdapter** | One class with mode-specific behavior | [â†’ Details](#10-single-worldadapter-architecture) |
-| **11. arch_lint v2.2** | Automated architecture linter | [â†’ Details](#11-arch_lint-v22) |
-| **12. _*_internal Convention** | Internal method naming pattern | [â†’ Details](#12-_internal-method-naming-convention) || **13. AST Identity Invariant** | Content-identity model for ASTs | [→ Details](#13-ast-identity-invariant-january-2026) |
+| **7. File Locations** | Where canonical implementations live | [→ Details](#7-file-locations) |
+| **8. Capability Handles** | DbHandle/FsHandle + _CAP_TOKEN pattern | [→ Details](#8-capability-handles-pattern-december-2025) |
+| **9. Mode-Aware Addressing** | ck3lens vs ck3raven-dev addressing | [→ Details](#9-mode-aware-addressing) |
+| **10. Single WorldAdapter** | One class with mode-specific behavior | [→ Details](#10-single-worldadapter-architecture) |
+| **11. arch_lint v2.2** | Automated architecture linter | [→ Details](#11-arch_lint-v22) |
+| **12. _*_internal Convention** | Internal method naming pattern | [→ Details](#12-_internal-method-naming-convention) |
+| **13. AST Identity Invariant** | Content-identity model for ASTs | [→ Details](#13-ast-identity-invariant-january-2026) |
+| **14. Single-Writer DB** | QBuilder daemon as sole DB writer | [→ Details](#14-single-writer-db-architecture-january-2026) |
 ---
 
 ## 1. Enforcement Architecture
@@ -926,4 +928,71 @@ This invariant must be:
 1. Documented here (canonical architecture)
 2. Reflected in worker logic
 3. Treated as non-negotiable in future refactors
+
+---
+
+## 14. Single-Writer DB Architecture (January 2026)
+
+**STATUS: CANONICAL LAW — Database write authority**
+
+### Core Principle
+
+**Exactly one process may write to the ck3raven SQLite DB: the QBuilder Daemon.**
+
+All MCP servers must open the DB in read-only mode (`mode=ro`).
+
+### Implications
+
+| Rule | Explanation |
+|------|-------------|
+| MCP servers are query-only | All SELECT, no INSERT/UPDATE/DELETE |
+| Mutations go through IPC | MCP calls daemon via `daemon_client.py` |
+| Daemon owns derived tables | ASTs, symbols, refs, diagnostics, conflicts |
+| Writer lock prevents duplicates | OS-level lock at `{db_path}.writer.lock` |
+
+### Why This Matters
+
+Without single-writer architecture:
+- Multiple VS Code windows cause "database locked" errors
+- Build processes and MCP tools contend for write locks
+- SQLite WAL mode helps reads but writes still serialize
+
+With single-writer architecture:
+- Multiple MCP servers can read concurrently (WAL mode)
+- All writes go through one serialized daemon
+- File mutations trigger IPC notification, not direct DB writes
+
+### Canonical File Locations
+
+| Component | Path |
+|-----------|------|
+| Full specification | `docs/SINGLE_WRITER_ARCHITECTURE.md` |
+| Daemon IPC server | `qbuilder/ipc_server.py` |
+| IPC client for MCP | `tools/ck3lens_mcp/ck3lens/daemon_client.py` |
+| Writer lock | `qbuilder/writer_lock.py` |
+| Read-only DB API | `tools/ck3lens_mcp/ck3lens/db_api.py` |
+
+### MCP Tool Pattern
+
+```python
+# ✅ CORRECT - read-only DB, mutations via IPC
+db = _get_db()  # Opens in mode=ro
+result = db.query(...)  # SELECT only
+
+# If file was changed, notify daemon
+from ck3lens.daemon_client import daemon
+daemon.notify_file_changed(mod_name, rel_path)
+
+# ❌ WRONG - direct DB write from MCP
+db.conn.execute("INSERT INTO symbols ...")
+```
+
+### Non-Negotiable
+
+No MCP tool may:
+1. Execute INSERT/UPDATE/DELETE on the database
+2. Bypass the daemon for queue operations
+3. Write to derived tables (symbols, refs, ASTs)
+
+**See [SINGLE_WRITER_ARCHITECTURE.md](SINGLE_WRITER_ARCHITECTURE.md) for full specification.**
 

@@ -54,6 +54,11 @@ Queues
 
 No component may perform another component’s role.
 
+> **Implementation Note (January 2026):** The "enqueue requests only" model is
+> enforced via IPC. MCP servers connect to the database in read-only mode and
+> must use the daemon IPC client for any state changes.
+> See [SINGLE_WRITER_ARCHITECTURE.md](SINGLE_WRITER_ARCHITECTURE.md).
+
 ---
 
 ## 2. Queue Singularity Law

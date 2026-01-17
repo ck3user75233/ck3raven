@@ -1,13 +1,35 @@
 # Proposed Fix for MCP DB Lock Bug
 
-> **Status:** PROPOSAL  
-> **Date:** January 10, 2026  
+> **Status:** ✅ IMPLEMENTED (see [SINGLE_WRITER_ARCHITECTURE.md](SINGLE_WRITER_ARCHITECTURE.md))  
+> **Date:** January 10, 2026 (Proposed) → January 17, 2026 (Implemented)  
 > **Author:** Agent (ck3raven-dev mode)  
 > **Problem:** When the daemon holds a database lock, MCP tools hang indefinitely instead of failing gracefully
 
 ---
 
-## Problem Statement
+## ✅ Resolution
+
+**This proposal was implemented on January 17, 2026 using "Option C: Reader/Writer Split".**
+
+The implemented solution:
+- **QBuilder daemon** is the ONLY process that writes to SQLite
+- **MCP servers** connect with `mode=ro` (read-only at SQLite level)
+- Mutations are requested via **IPC** (NDJSON over TCP, port 19876)
+- **Writer lock** (`{db_path}.writer.lock`) prevents duplicate daemons
+
+### Implementation Files
+
+| Component | Path |
+|-----------|------|
+| Architecture spec | `docs/SINGLE_WRITER_ARCHITECTURE.md` |
+| Daemon IPC server | `qbuilder/ipc_server.py` |
+| IPC client for MCP | `tools/ck3lens_mcp/ck3lens/daemon_client.py` |
+| Writer lock | `qbuilder/writer_lock.py` |
+| Read-only DB API | `tools/ck3lens_mcp/ck3lens/db_api.py` |
+
+---
+
+## Original Problem Statement (Historical)
 
 When the build daemon (builder/daemon.py) is running, it holds a long-running SQLite connection with WAL mode enabled. If the daemon is executing an expensive query or has uncommitted transactions, MCP tools that attempt to access the database will:
 

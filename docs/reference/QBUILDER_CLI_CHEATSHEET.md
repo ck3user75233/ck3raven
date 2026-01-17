@@ -1,14 +1,31 @@
 # QBuilder CLI Cheatsheet
 
 > **Reference for QBuilder CLI Tools**  
-> Last extracted: January 15, 2026
+> Last updated: January 17, 2026
 
 ---
 
 ## CLI Commands
 
+### `qbuilder daemon` ⭐ PRIMARY
+Start the QBuilder daemon with IPC server. **This is the primary entry point for production.**
+
+```bash
+python -m qbuilder.cli daemon
+python -m qbuilder.cli daemon --port 19877  # Custom port
+```
+
+The daemon:
+- Acquires exclusive writer lock (`{db_path}.writer.lock`)
+- Starts IPC server on `localhost:19876` (default)
+- Opens database in read-write mode
+- Processes queue items continuously
+- Releases lock on shutdown (Ctrl+C)
+
+**Note:** Only one daemon can run per database. Multiple VS Code windows connect via IPC.
+
 ### `qbuilder build`
-Process pending items in queue (runs as subprocess).
+Process pending items in queue (runs as subprocess). **Use `daemon` for production.**
 
 ```bash
 python -m qbuilder.cli build
@@ -125,3 +142,20 @@ Log entry types:
 | `E_LOC` | Localization files (.yml) | Parse → Loc entries |
 | `E_GUI` | GUI files (.gui) | Parse |
 | `E_SKIP` | Skip processing | None |
+
+---
+
+## Performance
+
+| Operation | Typical Time |
+|-----------|--------------|
+| Full rebuild (vanilla + 648 mods) | ~2-4 hours |
+| Incremental (10 files changed) | ~10-30 seconds |
+| Single file (flash priority) | <1 second |
+
+### Optimizations
+
+- **WAL mode**: Concurrent reads while daemon writes
+- **Content dedup**: Same content = same hash = shared storage
+- **Priority queue**: Flash items processed immediately
+- **mtime filtering**: Skip unchanged files without reading
