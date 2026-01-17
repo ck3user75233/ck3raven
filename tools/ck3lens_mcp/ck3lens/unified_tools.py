@@ -851,9 +851,9 @@ def _file_write(mod_name, rel_path, content, validate_syntax, session, trace):
             except Exception as e:
                 result = {"success": False, "error": str(e)}
     
-    # Auto-refresh in database
+    # Auto-refresh in database via daemon IPC
     if result.get("success"):
-        db_refresh = _refresh_file_in_db_internal(mod_name, rel_path, content=content)
+        db_refresh = _refresh_file_in_db_internal(result.get("full_path"), mod_name, rel_path)
         result["db_refresh"] = db_refresh
     
     if trace:
@@ -1042,7 +1042,8 @@ def _file_edit(mod_name, rel_path, old_content, new_content, validate_syntax, se
                 pass
         
         if updated_content:
-            db_refresh = _refresh_file_in_db_internal(mod_name, rel_path, content=updated_content)
+            abs_path = str(mod.path / rel_path) if mod else None
+            db_refresh = _refresh_file_in_db_internal(abs_path, mod_name, rel_path)
             result["db_refresh"] = db_refresh
     
     if trace:
@@ -1080,7 +1081,8 @@ def _file_delete(mod_name, rel_path, session, trace):
                     result = {"success": False, "error": str(e)}
     
     if result.get("success"):
-        db_refresh = _refresh_file_in_db_internal(mod_name, rel_path, deleted=True)
+        abs_path = str(mod.path / rel_path) if mod else None
+        db_refresh = _refresh_file_in_db_internal(abs_path, mod_name, rel_path, deleted=True)
         result["db_refresh"] = db_refresh
     
     if trace:
@@ -1127,10 +1129,12 @@ def _file_rename(mod_name, old_path, new_path, session, trace):
                         result = {"success": False, "error": str(e)}
     
     if result.get("success"):
-        _refresh_file_in_db_internal(mod_name, old_path, deleted=True)
+        old_abs = str(mod.path / old_path) if mod else None
+        _refresh_file_in_db_internal(old_abs, mod_name, old_path, deleted=True)
         try:
             new_content = (mod.path / new_path).read_text(encoding="utf-8-sig")
-            db_refresh = _refresh_file_in_db_internal(mod_name, new_path, content=new_content)
+            new_abs = str(mod.path / new_path)
+            db_refresh = _refresh_file_in_db_internal(new_abs, mod_name, new_path)
             result["db_refresh"] = db_refresh
         except Exception:
             pass
@@ -1156,11 +1160,11 @@ def _file_refresh(mod_name, rel_path, session, trace):
         else:
             file_path = mod.path / rel_path
             if not file_path.exists():
-                result = _refresh_file_in_db_internal(mod_name, rel_path, deleted=True)
+                result = _refresh_file_in_db_internal(str(file_path), mod_name, rel_path, deleted=True)
             else:
                 try:
                     content = file_path.read_text(encoding="utf-8-sig")
-                    result = _refresh_file_in_db_internal(mod_name, rel_path, content=content)
+                    result = _refresh_file_in_db_internal(str(file_path), mod_name, rel_path)
                 except Exception as e:
                     result = {"success": False, "error": str(e)}
     
@@ -1452,65 +1456,124 @@ def _file_create_patch(mod_name, source_mod, source_path, patch_mode, initial_co
     return write_result
 
 
-def _refresh_file_in_db_internal(mod_name, rel_path, content=None, deleted=False):
-    """Internal helper to refresh file in database via qbuilder CLI.
+def _refresh_file_in_db_internal(absolute_path, mod_name=None, rel_path=None, deleted=False):
+    """Internal helper to notify daemon of file changes via IPC.
     
-    NOTE: Uses subprocess to avoid import dependency (January 2026)
-    The qbuilder imports were causing MCP tools to hang when qbuilder had DB locked.
+    Uses the daemon IPC client (daemon_client.py) to notify the QBuilder daemon
+    that a file needs re-indexing. The daemon handles all database writes.
+    
+    If daemon is not running, attempts to auto-start it as a background process.
+    
+    Args:
+        absolute_path: Full filesystem path to the file
+        mod_name: Optional mod name for context
+        rel_path: Optional relative path within mod
+        deleted: True if file was deleted
     
     Design decisions:
-    - Uses CLI subprocess instead of direct qbuilder.api imports
-    - Non-blocking for file writes (subprocess handles queue)
-    - Priority is handled by the CLI command
+    - Uses IPC instead of subprocess CLI calls
+    - Daemon handles all database mutations (Single-Writer architecture)
+    - Non-blocking: just notifies daemon, doesn't wait for indexing
+    - Auto-starts daemon if not running (spawns in background)
+    """
+    from pathlib import Path as P
+    from ck3lens.daemon_client import daemon, DaemonNotAvailableError
+    
+    if not absolute_path:
+        return {"success": False, "error": "No absolute_path provided"}
+    
+    file_path = str(absolute_path)
+    
+    try:
+        
+        # Check if daemon is running, auto-start if not
+        if not daemon.is_available(force_check=True):
+            # Attempt to auto-start the daemon
+            started = _auto_start_daemon()
+            if not started:
+                return {
+                    "success": False,
+                    "error": "Daemon not running and auto-start failed",
+                    "hint": "Start daemon manually: python -m qbuilder.cli daemon",
+                }
+        
+        # Notify daemon of the file change
+        if deleted:
+            # For deletion, still use enqueue but the file won't exist
+            result = daemon.enqueue_files(
+                paths=[file_path],
+                mod_name=mod_name,
+                priority="high",
+                reason="file_deleted",
+            )
+        else:
+            result = daemon.notify_file_changed(file_path, mod_name)
+        
+        return {
+            "success": True,
+            "queued": True,
+            "daemon_response": result,
+            "message": f"File {mod_name}/{rel_path} queued for {'deletion' if deleted else 'processing'}",
+        }
+        
+    except DaemonNotAvailableError as e:
+        return {
+            "success": False,
+            "error": f"Daemon not available: {e}",
+            "hint": "Start daemon with: python -m qbuilder.cli daemon",
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def _auto_start_daemon():
+    """Attempt to auto-start the QBuilder daemon as a background process.
+    
+    Returns True if daemon started successfully, False otherwise.
     """
     import subprocess
     import sys
-    import json
+    import time
     from pathlib import Path as P
+    from ck3lens.daemon_client import daemon
     
     project_root = P(__file__).parent.parent.parent.parent
     python_exe = sys.executable
     
     try:
-        if deleted:
-            # For deletion, we use the qbuilder CLI
-            proc = subprocess.run(
-                [python_exe, "-m", "qbuilder.cli", "delete-file", mod_name, rel_path],
+        # Start daemon as detached subprocess (Windows-compatible)
+        # Use CREATE_NO_WINDOW to avoid console window popup
+        import platform
+        
+        if platform.system() == "Windows":
+            # Windows: use DETACHED_PROCESS flag
+            CREATE_NO_WINDOW = 0x08000000
+            DETACHED_PROCESS = 0x00000008
+            subprocess.Popen(
+                [python_exe, "-m", "qbuilder.cli", "daemon"],
                 cwd=str(project_root),
-                capture_output=True,
-                text=True,
-                timeout=30,
+                creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
-            if proc.returncode == 0:
-                return {
-                    "success": True,
-                    "queued": True,
-                    "message": f"File {mod_name}/{rel_path} marked for deletion",
-                }
-            else:
-                return {"success": False, "error": proc.stderr or proc.stdout}
         else:
-            # For file updates, use the qbuilder CLI with flash priority
-            args = [python_exe, "-m", "qbuilder.cli", "enqueue-file", mod_name, rel_path, "--flash"]
-            
-            proc = subprocess.run(
-                args,
+            # Unix: use nohup equivalent
+            subprocess.Popen(
+                [python_exe, "-m", "qbuilder.cli", "daemon"],
                 cwd=str(project_root),
-                capture_output=True,
-                text=True,
-                timeout=30,
+                start_new_session=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
-            if proc.returncode == 0:
-                return {
-                    "success": True,
-                    "queued": True,
-                    "message": f"File {mod_name}/{rel_path} queued for processing",
-                }
-            else:
-                return {"success": False, "error": proc.stderr or proc.stdout}
-            
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+        
+        # Wait a moment for daemon to start
+        time.sleep(2)
+        
+        # Check if it's now available
+        return daemon.is_available(force_check=True)
+        
+    except Exception:
+        return False
 
 
 # ============================================================================

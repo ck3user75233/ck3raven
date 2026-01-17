@@ -1391,7 +1391,9 @@ class DBQueries:
     def get_file(self, *, visibility=None, relpath: str = None, file_id: int = None, include_ast: bool = False) -> Optional[dict]:
         """DEPRECATED: Use DbHandle.get_file() instead."""
         cvids = self._extract_cvids_from_visibility(visibility)
-        return self._get_file_internal(relpath or "", visible_cvids=cvids, file_id=file_id, include_ast=include_ast)
+        # Convert include_ast to expand parameter expected by _get_file_internal
+        expand = ["ast"] if include_ast else None
+        return self._get_file_internal(relpath or "", visible_cvids=cvids, file_id=file_id, expand=expand)
     
     def confirm_not_exists(self, query: str, symbol_type: str = None, *, visibility=None) -> dict:
         """DEPRECATED: Use DbHandle.confirm_not_exists() instead."""
