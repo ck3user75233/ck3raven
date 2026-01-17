@@ -21,6 +21,46 @@
       "envelope": "E_LOOKUP_DYNASTIES"
     },
     {
+      "match": "licenses/",
+      "envelope": "E_SKIP",
+      "comment": "License text files are not CK3 scripts"
+    },
+    {
+      "match": "credits.txt",
+      "envelope": "E_SKIP",
+      "comment": "Credits file is not a CK3 script"
+    },
+    {
+      "match": "CHANGES.txt",
+      "envelope": "E_SKIP",
+      "comment": "Changelog file is not a CK3 script"
+    },
+    {
+      "match": "Notes.txt",
+      "envelope": "E_SKIP",
+      "comment": "Notes file is not a CK3 script"
+    },
+    {
+      "match": "intr.txt",
+      "envelope": "E_SKIP",
+      "comment": "Intro file is not a CK3 script"
+    },
+    {
+      "match": "SpecialThanksContributors.txt",
+      "envelope": "E_SKIP",
+      "comment": "Credits file is not a CK3 script"
+    },
+    {
+      "match": "House_Traditions.txt",
+      "envelope": "E_SKIP",
+      "comment": "Documentation file is not a CK3 script"
+    },
+    {
+      "match": "README",
+      "envelope": "E_SKIP",
+      "comment": "README files are not CK3 scripts"
+    },
+    {
       "match": "gui/",
       "envelope": "E_SKIP"
     },

@@ -1224,10 +1224,13 @@ def _is_ck3raven_source_path(path: str) -> bool:
     path = path.replace("\\", "/").lower()
     source_patterns = [
         "src/",
-        "builder/",
+        "qbuilder/",           # Queue-based builder (was incorrectly "builder/")
         "tools/ck3lens_mcp/",
+        "tools/ck3lens-explorer/",
         "scripts/",
         "tests/",
+        "docs/",
+        "playsets/",
     ]
     return any(path.startswith(p) or f"/{p}" in path for p in source_patterns)
 

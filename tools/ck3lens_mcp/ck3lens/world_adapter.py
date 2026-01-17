@@ -779,8 +779,15 @@ class WorldAdapter:
         """Parse canonical address or translate raw path."""
         input_str = input_str.strip()
         
-        # Check for canonical address format
-        if ":" in input_str and not input_str[1:3] == ":\\":  # Not a Windows path
+        # Check for canonical address format vs Windows paths
+        # Windows paths: C:\ or C:/ should be treated as raw paths, not canonical
+        if ":" in input_str:
+            # Check if this looks like a Windows drive letter path (e.g., C:/, D:\)
+            if len(input_str) >= 2 and input_str[1] == ":" and (
+                len(input_str) == 2 or input_str[2] in "\\/"
+            ):
+                return self._translate_raw_path(input_str)
+            # Otherwise it's a canonical address like "mod:Name/path" or "wip:/file"
             return self._parse_canonical(input_str)
         
         return self._translate_raw_path(input_str)

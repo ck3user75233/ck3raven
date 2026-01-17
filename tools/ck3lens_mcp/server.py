@@ -5151,74 +5151,50 @@ def ck3_qbuilder(
 ) -> dict:
     """
     Unified QBuilder tool for build system operations.
-    
+
     This is a THIN wrapper that calls the queue pipeline.
     It does NOT introduce new scheduling or eligibility logic.
-    
+
     Commands:
-    
+
     command=status   -> Get queue statistics and build status
     command=build    -> Launch background build subprocess
     command=discover -> Enqueue discovery tasks from active playset
     command=reset    -> Reset queues (fresh=True clears all data)
-    
+
     Args:
         command: Operation to perform
         max_tasks: Execution throttle (caps work per invocation, not eligibility)
         fresh: For reset command - clear ALL data for fresh build
-    
+
     Returns:
         Dict with command-specific results
-    
+
     Background builds:
         The build command launches `python -m qbuilder.cli build` as a subprocess.
         It tracks run_id and logs to ~/.ck3raven/logs/qbuilder_YYYY-MM-DD.jsonl
         Leases handle crash recovery/resume.
     """
-    # NOTE: NO qbuilder imports here (January 2026)
-    # All operations use subprocess or pure SQL to avoid blocking MCP
     import subprocess
     import sys
-    import json
     
-    db = _get_db()
+    # Import qbuilder library - direct import, no subprocess for status/discover/reset
+    from qbuilder import lib as qbuilder_lib
+    
     trace = _get_trace()
     ck3raven_root = str(Path(__file__).parent.parent.parent)
     python_exe = sys.executable
     
     if command == "status":
-        # Pure SQL - no qbuilder imports
-        queue_stats = {"pending": 0, "processing": 0, "completed": 0, "error": 0}
-        try:
-            for row in db.conn.execute("""
-                SELECT status, COUNT(*) as cnt FROM build_queue GROUP BY status
-            """):
-                if row[0] in queue_stats:
-                    queue_stats[row[0]] = row[1]
-        except:
-            pass  # Table might not exist
-        
-        # Add database counts
-        db_counts = {}
-        for table in ['files', 'asts', 'symbols', 'refs']:
-            try:
-                row = db.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
-                db_counts[table] = row[0] if row else 0
-            except:
-                db_counts[table] = 0
-        
-        result = {
-            "queue": queue_stats,
-            "database": db_counts,
-            "has_pending_work": queue_stats["pending"] > 0 or queue_stats["processing"] > 0,
-        }
+        # Use library API directly
+        status = qbuilder_lib.get_queue_status()
+        result = status.to_dict()
         trace.log("ck3_qbuilder.status", {}, result)
         return result
     
     elif command == "build":
-        # Launch background daemon - writes logs to file, not stdout
-        # CRITICAL: Do NOT use PIPE - it causes buffer blocking and deadlocks
-        # Instead, redirect to log file for daemon-style operation
+        # Launch background daemon - still uses subprocess for long-running daemon
+        # This is intentional: the daemon runs continuously and should be separate
         log_dir = Path.home() / ".ck3raven" / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         
@@ -5226,18 +5202,16 @@ def ck3_qbuilder(
         log_file = log_dir / f"build_stdout_{datetime.now().strftime('%Y-%m-%d')}.log"
         
         try:
-            # Open log file for stdout/stderr redirect
             with open(log_file, "a", encoding="utf-8") as log_handle:
                 log_handle.write(f"\n\n=== Build started at {datetime.now().isoformat()} ===\n")
                 log_handle.flush()
                 
-                # Launch with stdout/stderr to FILE, not PIPE
                 proc = subprocess.Popen(
                     [python_exe, "-m", "qbuilder.cli", "build"],
                     cwd=ck3raven_root,
                     stdout=log_handle,
-                    stderr=subprocess.STDOUT,  # Merge stderr into stdout
-                    start_new_session=True,  # Detach from parent
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
                 )
             
             result = {
@@ -5254,54 +5228,24 @@ def ck3_qbuilder(
         return result
     
     elif command == "discover":
-        # Use subprocess - NO IMPORTS
-        try:
-            proc = subprocess.run(
-                [python_exe, "-m", "qbuilder.cli", "discover"],
-                cwd=ck3raven_root,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-            if proc.returncode == 0:
-                result = {
-                    "success": True,
-                    "output": proc.stdout,
-                    "next_step": "Run ck3_qbuilder(command='build') to process the queue",
-                }
-            else:
-                result = {"success": False, "error": proc.stderr or proc.stdout}
-        except Exception as e:
-            result = {"success": False, "error": str(e)}
+        # Use library API directly
+        enqueue_result = qbuilder_lib.enqueue_discovery()
+        result = enqueue_result.to_dict()
+        
+        if enqueue_result.success:
+            result["next_step"] = "Run ck3_qbuilder(command='build') to process the queue"
         
         trace.log("ck3_qbuilder.discover", {}, result)
         return result
     
     elif command == "reset":
-        # Use subprocess - NO IMPORTS
-        args = [python_exe, "-m", "qbuilder.cli", "reset"]
-        if fresh:
-            args.append("--fresh")
+        # Use library API directly
+        reset_result = qbuilder_lib.reset_queues(fresh=fresh)
+        result = reset_result.to_dict()
         
-        try:
-            proc = subprocess.run(
-                args,
-                cwd=ck3raven_root,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-            if proc.returncode == 0:
-                result = {
-                    "success": True,
-                    "fresh": fresh,
-                    "output": proc.stdout,
-                    "next_step": "Run ck3_qbuilder(command='discover') to repopulate",
-                }
-            else:
-                result = {"success": False, "error": proc.stderr or proc.stdout}
-        except Exception as e:
-            result = {"success": False, "error": str(e)}
+        if reset_result.success:
+            result["fresh"] = fresh
+            result["next_step"] = "Run ck3_qbuilder(command='discover') to repopulate"
         
         trace.log("ck3_qbuilder.reset", {"fresh": fresh}, result)
         return result
