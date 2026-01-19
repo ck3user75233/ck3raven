@@ -115,22 +115,8 @@ class Ck3RavenDevScopeDomain(str, Enum):
 # Authorization is based solely on root_category, not intent semantics
 # Intent is declared as free-text in work_declaration (for audit only)
 
-
-class Ck3RavenDevWipIntent(str, Enum):
-    """
-    Intent types for WIP workspace scripts in ck3raven-dev mode.
-    
-    These are STRICTLY constrained - WIP scripts cannot substitute
-    for proper code fixes.
-    
-    Key constraints:
-    - ANALYSIS_ONLY: Read-only analysis, no side effects
-    - REFACTOR_ASSIST: Generate refactoring patches (requires core_change_plan)
-    - MIGRATION_HELPER: Generate migration scripts (requires core_change_plan)
-    """
-    ANALYSIS_ONLY = "analysis_only"          # Read-only analysis, no writes
-    REFACTOR_ASSIST = "refactor_assist"      # Generate patches for review
-    MIGRATION_HELPER = "migration_helper"    # Generate migration scripts
+# Ck3RavenDevWipIntent REMOVED - BANNED per Phase 1 cleanup (January 2026)
+# WIP workspace constraints are documented in policy, not enforced via enum
 
 
 class Ck3RavenDevTokenType(str, Enum):

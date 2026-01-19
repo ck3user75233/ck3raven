@@ -983,7 +983,6 @@ def ck3_db_delete(
             tool_name="ck3_db_delete",
             target_path=f"db:{target}",  # Use db: prefix for DB operations
             contract_id=contract.contract_id if contract else None,
-            repo_domains=contract.canonical_domains if contract else [],
         )
         
         # Enforce policy
