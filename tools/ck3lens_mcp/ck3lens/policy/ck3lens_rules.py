@@ -713,53 +713,7 @@ def enforce_contract_completeness(
     # intent_type checks REMOVED - BANNED per canonical spec
     # Write detection now based on operations[] in contract
     return  # Skip this rule - needs rewrite for V1 contracts
-    
-    # Check targets
-    targets = getattr(bundle, "targets", None)
-    if not targets and len(bundle.artifacts) > 0:
-        violations.append(Violation(
-            severity=Severity.ERROR,
-            code="CONTRACT_MISSING_TARGETS",
-            message="Write contract must specify targets [{mod_id, rel_path}].",
-            details={
-                "hard_gate": True,
-                "artifact_count": len(bundle.artifacts),
-            },
-        ))
-    
-    # Check snippets
-    snippets = getattr(bundle, "before_after_snippets", None) or getattr(bundle, "snippets", None)
-    if not snippets and len(bundle.artifacts) > 0:
-        violations.append(Violation(
-            severity=Severity.ERROR,
-            code="CONTRACT_MISSING_SNIPPETS",
-            message="Write contract must include before/after snippets.",
-            details={
-                "hard_gate": True,
-                "artifact_count": len(bundle.artifacts),
-                "hint": "Provide up to 3 before_after_snippets blocks showing changes",
-            },
-        ))
-    
-    # Check acceptance tests
-    acceptance_tests = getattr(bundle, "acceptance_tests", None)
-    tests_set = set(acceptance_tests or [])
-    
-    if AcceptanceTest.DIFF_SANITY.value not in tests_set and "DIFF_SANITY" not in tests_set:
-        violations.append(Violation(
-            severity=Severity.ERROR,
-            code="CONTRACT_MISSING_DIFF_SANITY",
-            message="Write contract must include DIFF_SANITY acceptance test.",
-            details={
-                "hard_gate": True,
-                "declared_tests": list(tests_set),
-                "required": AcceptanceTest.DIFF_SANITY.value,
-            },
-        ))
-    
-    summary["contract_targets_count"] = len(targets) if targets else 0
-    summary["contract_snippets_count"] = len(snippets) if snippets else 0
-    summary["contract_acceptance_tests"] = list(tests_set)
+
 
 
 def enforce_delete_requirements(

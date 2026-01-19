@@ -29,7 +29,6 @@ import re
 if TYPE_CHECKING:
     from ..world_adapter import PathDomain
 
-
 # =============================================================================
 # OPERATION TYPES
 # =============================================================================
@@ -914,7 +913,7 @@ def _enforce_git_push(
         scope_check_details={
             "branch": branch,
             "staged_files_count": len(request.staged_files),
-            "repo_domains": repo_domains,
+            # repo_domains removed - was undefined variable
         },
     )
 
