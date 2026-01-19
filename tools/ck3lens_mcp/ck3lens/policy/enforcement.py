@@ -246,7 +246,7 @@ def get_required_token_type(command: str) -> Optional[str]:
 
 
 # =============================================================================
-# CONTRACT PATH SCOPE (temporary home - may move to work_contracts.py)
+# CONTRACT PATH SCOPE
 # =============================================================================
 
 def check_path_in_contract_scope(
@@ -256,7 +256,7 @@ def check_path_in_contract_scope(
     """
     Check if a path is within the contract's allowed scope.
     
-    NOTE: This may be relocated to work_contracts.py in a future refactor.
+    
     
     Args:
         path: Path to check
