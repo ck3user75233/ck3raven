@@ -482,7 +482,7 @@ def ck3_file_impl(
     from ck3lens.policy.enforcement import (
         OperationType, Decision, EnforcementRequest, enforce_and_log
     )
-    from ck3lens.work_contracts import get_active_contract
+    from ck3lens.policy.contract_v1 import get_active_contract
     from ck3lens.world_adapter import normalize_path_input
     
     mode = get_agent_mode()
@@ -895,7 +895,7 @@ def _file_write_raw(path, content, validate_syntax, token_id, trace, world=None)
         # Track core source change for WIP workaround detection
         if mode == "ck3raven-dev":
             from ck3lens.policy.wip_workspace import record_core_source_change
-            from ck3lens.work_contracts import get_active_contract
+            from ck3lens.policy.contract_v1 import get_active_contract
             contract = get_active_contract()
             if contract:
                 # Check if this is a core source file (not WIP)
@@ -967,7 +967,7 @@ def _file_edit_raw(path, old_content, new_content, validate_syntax, token_id, tr
         # Track core source change for WIP workaround detection
         if mode == "ck3raven-dev":
             from ck3lens.policy.wip_workspace import record_core_source_change
-            from ck3lens.work_contracts import get_active_contract
+            from ck3lens.policy.contract_v1 import get_active_contract
             contract = get_active_contract()
             if contract:
                 path_str = str(file_path).replace("\\", "/").lower()
@@ -2070,7 +2070,7 @@ def ck3_git_impl(
     from ck3lens.policy.enforcement import (
         OperationType, Decision, EnforcementRequest, enforce_and_log
     )
-    from ck3lens.work_contracts import get_active_contract
+    from ck3lens.policy.contract_v1 import get_active_contract
     from pathlib import Path as P
     
     # Validate session

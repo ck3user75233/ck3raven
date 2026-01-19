@@ -24,10 +24,20 @@ class NodeType(Enum):
 
 @dataclass
 class ASTNode:
-    """Base class for AST nodes."""
+    """Base class for AST nodes.
+    
+    Attributes:
+        node_type: Type of node
+        line: 1-based line number
+        column: 1-based column number  
+        start_offset: Character offset (inclusive) into source string
+        end_offset: Character offset (exclusive) into source string
+    """
     node_type: NodeType = None  # Set by subclasses in __post_init__
     line: int = 0
     column: int = 0
+    start_offset: int = 0  # Character index (inclusive) into source
+    end_offset: int = 0    # Character index (exclusive) into source
 
 
 @dataclass
@@ -55,7 +65,9 @@ class ValueNode(ASTNode):
             'value': self.value,
             'value_type': self.value_type,
             'line': self.line,
-            'column': self.column
+            'column': self.column,
+            'start_offset': self.start_offset,
+            'end_offset': self.end_offset
         }
 
 
@@ -105,7 +117,9 @@ class AssignmentNode(ASTNode):
             'operator': self.operator,
             'value': value_dict,
             'line': self.line,
-            'column': self.column
+            'column': self.column,
+            'start_offset': self.start_offset,
+            'end_offset': self.end_offset
         }
 
 
@@ -156,7 +170,9 @@ class ListNode(ASTNode):
             '_type': 'list',
             'items': items_list,
             'line': self.line,
-            'column': self.column
+            'column': self.column,
+            'start_offset': self.start_offset,
+            'end_offset': self.end_offset
         }
 
 
@@ -218,6 +234,8 @@ class BlockNode(ASTNode):
             'name': self.name,
             'line': self.line,
             'column': self.column,
+            'start_offset': self.start_offset,
+            'end_offset': self.end_offset,
             'children': children_list,
         }
 
@@ -271,7 +289,9 @@ class RootNode(ASTNode):
             'filename': self.filename,
             'children': children_list,
             'line': self.line,
-            'column': self.column
+            'column': self.column,
+            'start_offset': self.start_offset,
+            'end_offset': self.end_offset
         }
 
 
@@ -498,7 +518,8 @@ class Parser:
         
         # Handle standalone brace (anonymous block / list)
         if token.type == TokenType.LBRACE:
-            return self._parse_block_contents()
+            list_node, _ = self._parse_block_contents()
+            return list_node
         
         # Handle closing brace at top level - this is a syntax error
         # (unbalanced braces, likely from commented-out opening brace)
@@ -538,13 +559,15 @@ class Parser:
             
             if value_token.type == TokenType.LBRACE:
                 # Block: key = { ... }
-                block_contents = self._parse_block_contents()
+                block_contents, block_end_offset = self._parse_block_contents()
                 return BlockNode(
                     name=key,
                     operator=operator,
                     children=block_contents.items if isinstance(block_contents, ListNode) else [block_contents],
                     line=key_token.line,
-                    column=key_token.column
+                    column=key_token.column,
+                    start_offset=key_token.start_offset,
+                    end_offset=block_end_offset
                 )
             elif value_token.type == TokenType.AT:
                 # Scripted value: key = @value or key = @[expression]
@@ -700,11 +723,18 @@ class Parser:
         else:
             raise ParseError(f"Expected value, got {token.type.name}", token)
     
-    def _parse_block_contents(self) -> ListNode:
-        """Parse the contents of a block (inside braces)."""
-        self._expect(TokenType.LBRACE, "Expected '{'")
+    def _parse_block_contents(self) -> tuple[ListNode, int]:
+        """Parse the contents of a block (inside braces).
+        
+        Returns:
+            Tuple of (ListNode, end_offset) where end_offset is the character
+            position after the closing brace.
+        """
+        lbrace = self._expect(TokenType.LBRACE, "Expected '{'")
+        start_offset = lbrace.start_offset
         
         items = []
+        end_offset = lbrace.end_offset  # Default if empty block
         
         while True:
             token = self._current()
@@ -713,6 +743,7 @@ class Parser:
                 raise ParseError("Unexpected end of file in block")
             
             if token.type == TokenType.RBRACE:
+                end_offset = token.end_offset
                 self._advance()
                 break
             
@@ -725,7 +756,14 @@ class Parser:
             if element:
                 items.append(element)
         
-        return ListNode(items=items, line=token.line if token else 0, column=token.column if token else 0)
+        list_node = ListNode(
+            items=items, 
+            line=lbrace.line, 
+            column=lbrace.column,
+            start_offset=start_offset,
+            end_offset=end_offset
+        )
+        return list_node, end_offset
 
 
 class RecoveringParser(Parser):
@@ -845,19 +883,21 @@ class RecoveringParser(Parser):
         except ParseError:
             raise  # Let parse() handle it
     
-    def _parse_block_contents(self) -> ListNode:
+    def _parse_block_contents(self) -> tuple[ListNode, int]:
         """Parse block contents with error recovery."""
-        open_brace = self._current()
+        lbrace = self._current()
+        lbrace_offset = lbrace.start_offset if lbrace else 0
         try:
             self._expect(TokenType.LBRACE, "Expected '{'")
         except ParseError as e:
             self._add_error(e.message, e.token, "MISSING_BRACE")
             # Try to continue anyway
             if self._current() and self._current().type != TokenType.LBRACE:
-                return ListNode(items=[], line=open_brace.line if open_brace else 0, column=open_brace.column if open_brace else 0)
+                return ListNode(items=[], line=lbrace.line if lbrace else 0, column=lbrace.column if lbrace else 0), lbrace_offset
             self._advance()
         
         items = []
+        rbrace_end_offset = lbrace_offset  # fallback
         
         while self.error_count < self.MAX_ERRORS:
             token = self._current()
@@ -871,6 +911,7 @@ class RecoveringParser(Parser):
                 break
             
             if token.type == TokenType.RBRACE:
+                rbrace_end_offset = token.end_offset
                 self._advance()
                 break
             
@@ -886,7 +927,13 @@ class RecoveringParser(Parser):
                 self._add_error(e.message, e.token)
                 self._skip_to_next_statement()
         
-        return ListNode(items=items, line=open_brace.line if open_brace else 0, column=open_brace.column if open_brace else 0)
+        return ListNode(
+            items=items,
+            line=lbrace.line if lbrace else 0,
+            column=lbrace.column if lbrace else 0,
+            start_offset=lbrace_offset,
+            end_offset=rbrace_end_offset
+        ), rbrace_end_offset
 
 
 def parse_source(source: str, filename: str = "<unknown>") -> RootNode:

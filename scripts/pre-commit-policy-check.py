@@ -30,14 +30,23 @@ if sys.platform == "win32":
 # Determine mode from environment or default
 MODE = os.environ.get("CK3LENS_MODE", "ck3raven-dev")
 
-# Trace file location
-TRACE_FILE = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod" / "ck3lens_trace.jsonl"
-
-# Add ck3raven to path
+# Add ck3raven to path (must be before trace file)
 SCRIPT_DIR = Path(__file__).parent
 CK3RAVEN_ROOT = SCRIPT_DIR.parent
 MCP_ROOT = CK3RAVEN_ROOT / "tools" / "ck3lens_mcp"
 SRC_ROOT = CK3RAVEN_ROOT / "src"
+
+# Trace file location (mode-aware)
+def _get_trace_file() -> Path:
+    """Get trace file path based on mode."""
+    if MODE == "ck3raven-dev":
+        # Dev mode: traces in repo .wip directory
+        return CK3RAVEN_ROOT / ".wip" / "traces" / "ck3lens_trace.jsonl"
+    else:
+        # Lens mode: traces in ~/.ck3raven
+        return Path.home() / ".ck3raven" / "traces" / "ck3lens_trace.jsonl"
+
+TRACE_FILE = _get_trace_file()
 
 sys.path.insert(0, str(MCP_ROOT))
 sys.path.insert(0, str(SRC_ROOT))

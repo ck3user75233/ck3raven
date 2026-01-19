@@ -44,16 +44,27 @@ class TokenType(Enum):
 
 @dataclass
 class Token:
-    """A single token from the lexer."""
+    """A single token from the lexer.
+    
+    Attributes:
+        type: Token type
+        value: Token text
+        line: 1-based line number
+        column: 1-based column number
+        start_offset: Character offset (inclusive) into source string
+        end_offset: Character offset (exclusive) into source string
+    """
     type: TokenType
     value: str
     line: int
     column: int
+    start_offset: int = 0  # Character index (inclusive) into source
+    end_offset: int = 0    # Character index (exclusive) into source
     
     def __repr__(self):
         if self.type == TokenType.NEWLINE:
-            return f"Token({self.type.name}, '\\n', L{self.line}:{self.column})"
-        return f"Token({self.type.name}, {self.value!r}, L{self.line}:{self.column})"
+            return f"Token({self.type.name}, '\\n', L{self.line}:{self.column}, [{self.start_offset}:{self.end_offset}])"
+        return f"Token({self.type.name}, {self.value!r}, L{self.line}:{self.column}, [{self.start_offset}:{self.end_offset}])"
 
 
 class LexerError(Exception):
@@ -240,6 +251,8 @@ class Lexer:
         Args:
             include_comments: If True, emit COMMENT tokens. Otherwise skip them.
             include_newlines: If True, emit NEWLINE tokens. Otherwise skip them.
+        
+        Each token includes start_offset and end_offset (character indices into source).
         """
         while True:
             self._skip_whitespace()
@@ -247,34 +260,35 @@ class Lexer:
             ch = self._current()
             start_line = self.line
             start_col = self.column
+            start_offset = self.pos  # Character offset into source string
             
             if ch is None:
-                yield Token(TokenType.EOF, '', start_line, start_col)
+                yield Token(TokenType.EOF, '', start_line, start_col, start_offset, start_offset)
                 break
             
             # Newline
             if ch == '\n':
                 self._advance()
                 if include_newlines:
-                    yield Token(TokenType.NEWLINE, '\n', start_line, start_col)
+                    yield Token(TokenType.NEWLINE, '\n', start_line, start_col, start_offset, self.pos)
                 continue
             
             # Comment
             if ch == '#':
                 comment = self._read_comment()
                 if include_comments:
-                    yield Token(TokenType.COMMENT, comment, start_line, start_col)
+                    yield Token(TokenType.COMMENT, comment, start_line, start_col, start_offset, self.pos)
                 continue
             
             # String (double or single quoted)
             if ch == '"':
                 value = self._read_string('"')
-                yield Token(TokenType.STRING, value, start_line, start_col)
+                yield Token(TokenType.STRING, value, start_line, start_col, start_offset, self.pos)
                 continue
             
             if ch == "'":
                 value = self._read_string("'")
-                yield Token(TokenType.STRING, value, start_line, start_col)
+                yield Token(TokenType.STRING, value, start_line, start_col, start_offset, self.pos)
                 continue
             
             # Operators (multi-char first)
@@ -282,25 +296,25 @@ class Lexer:
                 self._advance()
                 if self._current() == '=':
                     self._advance()
-                    yield Token(TokenType.LESS_EQUAL, '<=', start_line, start_col)
+                    yield Token(TokenType.LESS_EQUAL, '<=', start_line, start_col, start_offset, self.pos)
                 else:
-                    yield Token(TokenType.LESS_THAN, '<', start_line, start_col)
+                    yield Token(TokenType.LESS_THAN, '<', start_line, start_col, start_offset, self.pos)
                 continue
             
             if ch == '>':
                 self._advance()
                 if self._current() == '=':
                     self._advance()
-                    yield Token(TokenType.GREATER_EQUAL, '>=', start_line, start_col)
+                    yield Token(TokenType.GREATER_EQUAL, '>=', start_line, start_col, start_offset, self.pos)
                 else:
-                    yield Token(TokenType.GREATER_THAN, '>', start_line, start_col)
+                    yield Token(TokenType.GREATER_THAN, '>', start_line, start_col, start_offset, self.pos)
                 continue
             
             if ch == '!':
                 self._advance()
                 if self._current() == '=':
                     self._advance()
-                    yield Token(TokenType.NOT_EQUAL, '!=', start_line, start_col)
+                    yield Token(TokenType.NOT_EQUAL, '!=', start_line, start_col, start_offset, self.pos)
                 else:
                     # Standalone ! is not valid in CK3 script syntax
                     raise LexerError(f"Unexpected character '!'", start_line, start_col)
@@ -310,20 +324,20 @@ class Lexer:
                 self._advance()
                 if self._current() == '=':
                     self._advance()
-                    yield Token(TokenType.COMPARE_EQUAL, '==', start_line, start_col)
+                    yield Token(TokenType.COMPARE_EQUAL, '==', start_line, start_col, start_offset, self.pos)
                 else:
-                    yield Token(TokenType.EQUALS, '=', start_line, start_col)
+                    yield Token(TokenType.EQUALS, '=', start_line, start_col, start_offset, self.pos)
                 continue
             
             # Single-char operators
             if ch == '{':
                 self._advance()
-                yield Token(TokenType.LBRACE, '{', start_line, start_col)
+                yield Token(TokenType.LBRACE, '{', start_line, start_col, start_offset, self.pos)
                 continue
             
             if ch == '}':
                 self._advance()
-                yield Token(TokenType.RBRACE, '}', start_line, start_col)
+                yield Token(TokenType.RBRACE, '}', start_line, start_col, start_offset, self.pos)
                 continue
             
             if ch == '?':
@@ -331,62 +345,62 @@ class Lexer:
                 # Check for ?= (null-coalescing equals)
                 if self._current() == '=':
                     self._advance()
-                    yield Token(TokenType.QUESTION_EQUALS, '?=', start_line, start_col)
+                    yield Token(TokenType.QUESTION_EQUALS, '?=', start_line, start_col, start_offset, self.pos)
                 else:
-                    yield Token(TokenType.QUESTION, '?', start_line, start_col)
+                    yield Token(TokenType.QUESTION, '?', start_line, start_col, start_offset, self.pos)
                 continue
             
             if ch == ':':
                 self._advance()
-                yield Token(TokenType.COLON, ':', start_line, start_col)
+                yield Token(TokenType.COLON, ':', start_line, start_col, start_offset, self.pos)
                 continue
             
             if ch == '@':
                 self._advance()
-                yield Token(TokenType.AT, '@', start_line, start_col)
+                yield Token(TokenType.AT, '@', start_line, start_col, start_offset, self.pos)
                 continue
             
             # Brackets for inline expressions like @[value + 10]
             if ch == '[':
                 self._advance()
-                yield Token(TokenType.LBRACKET, '[', start_line, start_col)
+                yield Token(TokenType.LBRACKET, '[', start_line, start_col, start_offset, self.pos)
                 continue
             
             if ch == ']':
                 self._advance()
-                yield Token(TokenType.RBRACKET, ']', start_line, start_col)
+                yield Token(TokenType.RBRACKET, ']', start_line, start_col, start_offset, self.pos)
                 continue
             
             # Math operators for inline expressions
             if ch == '+':
                 self._advance()
-                yield Token(TokenType.PLUS, '+', start_line, start_col)
+                yield Token(TokenType.PLUS, '+', start_line, start_col, start_offset, self.pos)
                 continue
             
             if ch == '-':
                 # Check if this is a negative number or standalone minus
                 if self._peek() and self._peek().isdigit():
                     value = self._read_number()
-                    yield Token(TokenType.NUMBER, value, start_line, start_col)
+                    yield Token(TokenType.NUMBER, value, start_line, start_col, start_offset, self.pos)
                 else:
                     self._advance()
-                    yield Token(TokenType.MINUS, '-', start_line, start_col)
+                    yield Token(TokenType.MINUS, '-', start_line, start_col, start_offset, self.pos)
                 continue
             
             if ch == '*':
                 self._advance()
-                yield Token(TokenType.STAR, '*', start_line, start_col)
+                yield Token(TokenType.STAR, '*', start_line, start_col, start_offset, self.pos)
                 continue
             
             if ch == '/':
                 self._advance()
-                yield Token(TokenType.SLASH, '/', start_line, start_col)
+                yield Token(TokenType.SLASH, '/', start_line, start_col, start_offset, self.pos)
                 continue
             
             # Comma (used in some defines like { "friend", "rival" })
             if ch == ',':
                 self._advance()
-                yield Token(TokenType.COMMA, ',', start_line, start_col)
+                yield Token(TokenType.COMMA, ',', start_line, start_col, start_offset, self.pos)
                 continue
             
             # Parameter substitution: $PARAM$
@@ -397,7 +411,7 @@ class Lexer:
                     param_name.append(self._advance())
                 if self._current() == '$':
                     self._advance()
-                yield Token(TokenType.PARAM, '$' + ''.join(param_name) + '$', start_line, start_col)
+                yield Token(TokenType.PARAM, '$' + ''.join(param_name) + '$', start_line, start_col, start_offset, self.pos)
                 continue
             
             # Number OR identifier starting with digit
@@ -408,11 +422,11 @@ class Lexer:
                 if peek and (peek == '_' or peek.isalpha()):
                     # Identifier starting with digit - read as identifier
                     value = self._read_identifier()
-                    yield Token(TokenType.IDENTIFIER, value, start_line, start_col)
+                    yield Token(TokenType.IDENTIFIER, value, start_line, start_col, start_offset, self.pos)
                 else:
                     # Pure number
                     value = self._read_number()
-                    yield Token(TokenType.NUMBER, value, start_line, start_col)
+                    yield Token(TokenType.NUMBER, value, start_line, start_col, start_offset, self.pos)
                 continue
             
             # Identifier (or yes/no boolean)
@@ -425,9 +439,9 @@ class Lexer:
                     # Standalone dot - treat as continuation marker for scope chain
                     value = '.' + self._read_identifier()
                 if value in ('yes', 'no'):
-                    yield Token(TokenType.BOOL, value, start_line, start_col)
+                    yield Token(TokenType.BOOL, value, start_line, start_col, start_offset, self.pos)
                 else:
-                    yield Token(TokenType.IDENTIFIER, value, start_line, start_col)
+                    yield Token(TokenType.IDENTIFIER, value, start_line, start_col, start_offset, self.pos)
                 continue
             
             # Unknown character

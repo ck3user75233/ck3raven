@@ -198,8 +198,9 @@ class CK3LensBridge:
             }
         
         try:
-            # Create DBQueries instance
-            self._db = DBQueries(db_path=self.db_path)
+            # Create DBQueries instance in READ-ONLY mode
+            # Per single-writer architecture, only qbuilder daemon can write
+            self._db = DBQueries(db_path=self.db_path, read_only=True)
             
             # Get mods from playset_ops (THE source)
             mods = []

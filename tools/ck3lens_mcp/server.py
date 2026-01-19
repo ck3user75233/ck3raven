@@ -21,6 +21,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Literal
 
+from ck3lens.policy.capability_matrix import validate_operations
+
 # =============================================================================
 # STARTUP TRIPWIRE - Verify running from correct Python environment
 # =============================================================================
@@ -959,7 +961,7 @@ def ck3_db_delete(
     from ck3lens.policy.enforcement import (
         OperationType, Decision, EnforcementRequest, enforce_and_log
     )
-    from ck3lens.work_contracts import get_active_contract
+    from ck3lens.policy.contract_v1 import get_active_contract
     
     db = _get_db()
     trace = _get_trace()
@@ -2098,11 +2100,12 @@ def ck3_playset(
                     venv_python = repo_root / ".venv" / "bin" / "python"  # Linux/Mac
                 
                 if qbuilder_module.exists() and venv_python.exists():
-                    # Start qbuilder: python -m qbuilder build (runs discovery + build)
+                    # Start qbuilder daemon (single-writer architecture)
+                    # The daemon runs discovery + build workers with IPC server
                     cmd = [
                         str(venv_python),
                         "-m", "qbuilder",
-                        "build",
+                        "daemon",
                     ]
                     
                     # Run detached (background mode)
@@ -2938,19 +2941,28 @@ def _diagnose_launcher_db(launcher_db: Path) -> dict:
 
 
 # ============================================================================
-# Work Contract Management (CLW)
+# Work Contract Management V1 (CANONICAL CONTRACT SYSTEM)
+# ============================================================================
+# Schema: Contract V1 (geographic-only authorization)
+# Capability Matrix: policy/capability_matrix.py (standalone truth table)
+# Contract Storage: policy/contract_v1.py
+# 
+# BANNED: canonical_domains, semantic domains (active_local_mods, etc.)
+# REQUIRED: root_category (one per contract)
 # ============================================================================
 
 @mcp.tool()
 def ck3_contract(
-    command: Literal["open", "close", "cancel", "status", "list", "flush"] = "status",
-    # For open
+    command: Literal["open", "close", "cancel", "status", "list", "flush", "archive_legacy"] = "status",
+    # For open - REQUIRED
     intent: str | None = None,
-    canonical_domains: list[str] | None = None,
-    allowed_paths: list[str] | None = None,
-    capabilities: list[str] | None = None,
+    root_category: str | None = None,
+    # For open - REQUIRED in ck3lens mode
+    # For open - OPTIONAL
+    operations: list[str] | None = None,
+    targets: list[dict] | None = None,
+    work_declaration: dict | None = None,
     expires_hours: float = 8.0,
-    notes: str | None = None,
     # For close/cancel
     contract_id: str | None = None,
     closure_commit: str | None = None,
@@ -2960,30 +2972,30 @@ def ck3_contract(
     include_archived: bool = False,
 ) -> dict:
     """
-    Manage work contracts (WCP) for CLI wrapping.
+    Manage work contracts (Contract V1 schema).
     
-    Work contracts define scope and constraints for agent tasks.
-    Required for any write or destructive operations.
+    Contract V1 uses geographic-only authorization via the capability matrix.
+    Each contract has exactly ONE root_category (geographic scope).
     
     Commands:
     
-    command=open      ? Open new contract (intent, canonical_domains required)
-    command=close     ? Close contract after work complete (contract_id or uses active)
-    command=cancel    ? Cancel contract without completing (contract_id or uses active)
-    command=status    ? Get current active contract status
-    command=list      ? List contracts (status_filter, include_archived optional)
-    command=flush     ? Archive old contracts from previous days
+    command=open           → Open new contract (intent, root_category required)
+    command=close          → Close contract after work complete
+    command=cancel         → Cancel contract without completing
+    command=status         → Get current active contract status
+    command=list           → List contracts
+    command=flush          → Archive old contracts from previous days
+    command=archive_legacy → Move pre-v1 contracts to legacy folder
     
     Args:
         command: Action to perform
         intent: Description of work to be done (for open)
-        canonical_domains: Domains this work touches. Product domains: parser, routing,
-            builder, extraction, query, cli. Repo domains: docs, tools, tests, policy,
-            config, wip, ci, scripts, src
-        allowed_paths: Glob patterns for allowed file paths
-        capabilities: Requested capabilities (defaults to standard tier)
+        root_category: Geographic scope (ONE of: ROOT_REPO, ROOT_USER_DOCS, ROOT_WIP,
+            ROOT_STEAM, ROOT_GAME, ROOT_UTILITIES, ROOT_LAUNCHER)
+        operations: List of operations (READ, WRITE, DELETE, etc.)
+        targets: List of target dicts with target_type, path, description
+        work_declaration: Dict with work_summary, work_plan (3-15 items), out_of_scope
         expires_hours: Hours until expiry (default 8)
-        notes: Optional notes
         contract_id: Contract ID for close/cancel (uses active if not specified)
         closure_commit: Git commit SHA for close
         cancel_reason: Reason for cancellation
@@ -2992,11 +3004,22 @@ def ck3_contract(
     
     Returns:
         Contract info or operation result
+    
+    Examples:
+        # ck3lens mode 
+        ck3_contract(command="open", intent="Fix trait conflicts", 
+                     root_category="ROOT_USER_DOCS",)
+        
+        # ck3raven-dev mode 
+        ck3_contract(command="open", intent="Refactor parser", root_category="ROOT_REPO")
     """
-    from ck3lens.work_contracts import (
+    from ck3lens.policy.contract_v1 import (
         open_contract, close_contract, cancel_contract,
-        get_active_contract, list_contracts, flush_old_contracts,
-        CANONICAL_DOMAINS, CK3LENS_DOMAINS, CAPABILITIES,
+        get_active_contract, list_contracts, archive_legacy_contracts,
+        ContractV1,
+    )
+    from ck3lens.policy.capability_matrix import (
+        RootCategory, Operation, AgentMode, is_authorized, validate_operations,
     )
     from ck3lens.agent_mode import get_agent_mode
     
@@ -3007,60 +3030,80 @@ def ck3_contract(
     if agent_mode is None and command == "open":
         return {
             "error": "Agent mode not initialized",
-            "guidance": "Ask the user which mode to use, then call ck3_get_mode_instructions() with their choice.",
+            "guidance": "Call ck3_get_mode_instructions() first to initialize.",
             "modes": {
                 "ck3lens": "CK3 modding - search database, edit mods, resolve conflicts",
                 "ck3raven-dev": "Infrastructure development - modify ck3raven source code",
             },
-            "example_prompt": "Which mode should I operate in? 'ck3lens' for CK3 modding or 'ck3raven-dev' for infrastructure work?",
         }
     
     if command == "open":
+        # =====================================================================
+        # CONTRACT V1: STRICT VALIDATION
+        # =====================================================================
         if not intent:
             return {"error": "intent required for open command"}
-        if not canonical_domains:
-            return {"error": "canonical_domains required for open command"}
-        
-        # Validate domains - MODE-AWARE (Bug #1 fix)
-        # Use appropriate domain set based on current agent mode
-        if agent_mode == "ck3lens":
-            valid_domains = CK3LENS_DOMAINS
-        elif agent_mode == "ck3raven-dev":
-            valid_domains = CANONICAL_DOMAINS
-        else:
-            # Fallback - allow both for uninitialized mode
-            valid_domains = CANONICAL_DOMAINS | CK3LENS_DOMAINS
-        
-        invalid = set(canonical_domains) - valid_domains
-        if invalid:
+        if not root_category:
             return {
-                "error": f"Invalid canonical domains for {agent_mode or 'unknown'} mode: {invalid}",
-                "valid_domains": sorted(valid_domains),
-                "current_mode": agent_mode,
+                "error": "root_category required for open command",
+                "valid_root_categories": [r.value for r in RootCategory],
+            }
+        
+        # Validate root_category is a valid enum value
+        try:
+            root_cat = RootCategory(root_category)
+        except ValueError:
+            return {
+                "error": f"Invalid root_category: {root_category}",
+                "valid_root_categories": [r.value for r in RootCategory],
+            }
+        
+        # Convert agent mode string to enum
+        mode_enum = AgentMode.CK3LENS if agent_mode == "ck3lens" else AgentMode.CK3RAVEN_DEV
+        
+        # Validate operations against capability matrix
+        ops_list = operations or ["READ", "WRITE"]
+        try:
+            op_enums = [Operation(op) for op in ops_list]
+        except ValueError as e:
+            return {
+                "error": f"Invalid operation: {e}",
+                "valid_operations": [o.value for o in Operation],
+            }
+        
+        # Check authorization via capability matrix (SOLE SOURCE OF TRUTH)
+        valid, denied = validate_operations(mode_enum, root_cat, ops_list)
+        if not valid:
+            return {
+                "error": "Operations not authorized by capability matrix",
+                "denied_operations": denied,
+                "root_category": root_category,
+                "mode": agent_mode,
             }
         
         try:
             contract = open_contract(
+                mode=mode_enum,
+                root_category=root_category,
                 intent=intent,
-                canonical_domains=canonical_domains,
-                allowed_paths=allowed_paths,
-                capabilities=capabilities,
+                operations=ops_list,
+                targets=targets or [],
+                work_declaration=work_declaration or {},
                 expires_hours=expires_hours,
-                agent_mode=agent_mode,
-                notes=notes,
             )
             
             trace.log("ck3lens.contract.open", {
                 "intent": intent,
-                "canonical_domains": canonical_domains,
+                "root_category": root_category,
             }, {"contract_id": contract.contract_id})
             
             return {
                 "success": True,
                 "contract_id": contract.contract_id,
+                "root_category": contract.root_category,
+                "operations": contract.operations,
                 "expires_at": contract.expires_at,
-                "capabilities": contract.capabilities,
-                "allowed_paths": contract.allowed_paths,
+                "schema_version": "v1",
             }
         except Exception as e:
             return {"error": str(e)}
@@ -3084,7 +3127,7 @@ def ck3_contract(
                 "success": True,
                 "contract_id": contract.contract_id,
                 "closed_at": contract.closed_at,
-                "closure_commit": contract.closure_commit,
+                "status": contract.status,
             }
         except Exception as e:
             return {"error": str(e)}
@@ -3121,11 +3164,11 @@ def ck3_contract(
                 "has_active_contract": True,
                 "contract_id": active.contract_id,
                 "intent": active.intent,
-                "canonical_domains": active.canonical_domains,
-                "capabilities": active.capabilities,
-                "allowed_paths": active.allowed_paths,
+                "root_category": active.root_category,
+                "operations": active.operations,
                 "expires_at": active.expires_at,
                 "created_at": active.created_at,
+                "schema_version": "v1",
             }
         else:
             return {
@@ -3146,7 +3189,7 @@ def ck3_contract(
                     "contract_id": c.contract_id,
                     "intent": c.intent,
                     "status": c.status,
-                    "canonical_domains": c.canonical_domains,
+                    "root_category": c.root_category,
                     "created_at": c.created_at,
                     "closed_at": c.closed_at,
                 }
@@ -3155,7 +3198,26 @@ def ck3_contract(
         }
     
     elif command == "flush":
-        archived = flush_old_contracts()
+        # Archive contracts from previous days
+        import os
+        from pathlib import Path
+        from datetime import datetime
+        
+        contracts_dir = Path.home() / ".ck3raven" / "contracts"
+        if not contracts_dir.exists():
+            return {"success": True, "archived": 0}
+        
+        today = datetime.now().strftime("%Y-%m-%d")
+        archive_dir = contracts_dir / "archive" / today
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        
+        archived = 0
+        for f in contracts_dir.glob("wcp-*.json"):
+            # Only archive if not from today
+            if today not in f.name:
+                import shutil
+                shutil.move(str(f), str(archive_dir / f.name))
+                archived += 1
         
         trace.log("ck3lens.contract.flush", {}, {"archived": archived})
         
@@ -3163,6 +3225,18 @@ def ck3_contract(
             "success": True,
             "archived": archived,
             "message": f"Archived {archived} contracts from previous days",
+        }
+    
+    elif command == "archive_legacy":
+        # Move all pre-v1 contracts to legacy folder
+        archived = archive_legacy_contracts()
+        
+        trace.log("ck3lens.contract.archive_legacy", {}, {"archived": archived})
+        
+        return {
+            "success": True,
+            "archived": archived,
+            "message": f"Archived {archived} legacy pre-v1 contracts",
         }
     
     return {"error": f"Unknown command: {command}"}
@@ -3235,7 +3309,7 @@ def ck3_exec(
         classify_command, CommandCategory,  # Shell command classification
     )
     from ck3lens.policy.audit import get_audit_logger
-    from ck3lens.work_contracts import get_active_contract
+    from ck3lens.policy.contract_v1 import get_active_contract
     from ck3lens.world_adapter import normalize_path_input
     import subprocess
     
@@ -3695,7 +3769,7 @@ def ck3_token(
         issue_token, validate_token, list_tokens, revoke_token,
         TOKEN_TYPES, ApprovalToken,
     )
-    from ck3lens.work_contracts import get_active_contract
+    from ck3lens.policy.contract_v1 import get_active_contract
     
     trace = _get_trace()
     
@@ -4614,8 +4688,8 @@ def _get_mode_policy_context(mode: str) -> dict:
     Build policy context for a mode showing boundaries and capabilities.
     """
     from ck3lens.policy import (
-        ScopeDomain, IntentType, CK3LensTokenType,
-        Ck3RavenDevScopeDomain, Ck3RavenDevIntentType, Ck3RavenDevWipIntent,
+        ScopeDomain, CK3LensTokenType,
+        Ck3RavenDevScopeDomain, Ck3RavenDevWipIntent,
         Ck3RavenDevTokenType, CK3RAVEN_DEV_TOKEN_TIER_A, CK3RAVEN_DEV_TOKEN_TIER_B,
     )
     
@@ -4645,10 +4719,8 @@ def _get_mode_policy_context(mode: str) -> dict:
                     "write to CK3RAVEN_SOURCE",
                 ],
             },
-            "intent_types": [it.value for it in IntentType],
             "available_tokens": [tt.value for tt in CK3LensTokenType],
             "hard_rules": [
-                "Intent type required for all operations",
                 "Python files only allowed in WIP workspace",
                 "Delete requires explicit token with user prompt evidence",
             ],
@@ -4687,7 +4759,6 @@ def _get_mode_policy_context(mode: str) -> dict:
                     "run_in_terminal (use ck3_exec instead)",
                 ],
             },
-            "intent_types": [it.value for it in Ck3RavenDevIntentType],
             "wip_intents": [wi.value for wi in Ck3RavenDevWipIntent],
             "available_tokens": {
                 "tier_a_auto_grant": [tt.value for tt in CK3RAVEN_DEV_TOKEN_TIER_A],

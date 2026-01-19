@@ -51,10 +51,14 @@ def _safe_print(msg: str) -> None:
     """
     try:
         print(msg)
-    except UnicodeEncodeError:
-        # Fall back to encoding with replacement characters
-        encoded = msg.encode(sys.stdout.encoding or 'utf-8', errors='replace')
-        print(encoded.decode(sys.stdout.encoding or 'utf-8', errors='replace'))
+    except (UnicodeEncodeError, OSError):
+        # UnicodeEncodeError: Windows console can't display Unicode
+        # OSError: stdout is DEVNULL/invalid (daemonized process)
+        try:
+            encoded = msg.encode(sys.stdout.encoding or 'utf-8', errors='replace')
+            print(encoded.decode(sys.stdout.encoding or 'utf-8', errors='replace'))
+        except OSError:
+            pass  # Stdout completely unavailable, silently skip
 
 
 def _read_ck3_text(path: Path) -> str:
@@ -228,9 +232,14 @@ class EnvelopeExecutor:
             # Symbols already extracted for this AST - skip (content dedup)
             return
         
+        # Read source text for node span extraction and hashing
+        source_text = ""
+        if ctx.abspath.exists():
+            source_text = _read_ck3_text(ctx.abspath)
+        
         # extract_symbols_from_ast returns iterator of ExtractedSymbol dataclass
-        # Signature: (ast_dict, relpath, content_hash) -> Iterator[ExtractedSymbol]
-        symbols = list(extract_symbols_from_ast(ast_data, ctx.relpath, ctx.work_hash or ''))
+        # Signature: (ast_dict, relpath, content_hash, source_text) -> Iterator[ExtractedSymbol]
+        symbols = list(extract_symbols_from_ast(ast_data, ctx.relpath, ctx.work_hash or '', source_text))
         
         # Use BuilderSession to allow writes to protected symbols table
         with BuilderSession(self.conn, f"extract_symbols:{ast_id}"):
@@ -238,9 +247,11 @@ class EnvelopeExecutor:
             for sym in symbols:
                 self.conn.execute("""
                     INSERT INTO symbols (ast_id, name, symbol_type, 
-                                         line_number, column_number)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (ast_id, sym.name, sym.kind, sym.line, sym.column))
+                                         line_number, column_number,
+                                         node_hash_norm, node_start_offset, node_end_offset)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (ast_id, sym.name, sym.kind, sym.line, sym.column,
+                      sym.node_hash_norm, sym.node_start_offset, sym.node_end_offset))
             self.conn.commit()
     
     def _step_extract_refs(self, ctx: BuildContext) -> None:
@@ -362,7 +373,7 @@ class BuildWorker:
         now = time.time()
         
         # First, mark items that have been reclaimed too many times as errors
-        self.conn.execute("""
+        cursor = self.conn.execute("""
             UPDATE build_queue
             SET status = 'error',
                 error_message = 'Exceeded max reclaims (' || reclaim_count || ') - likely causing worker crashes',
@@ -373,10 +384,10 @@ class BuildWorker:
               AND reclaim_count >= ?
         """, (now, MAX_RECLAIMS))
         
-        marked_as_error = self.conn.total_changes
+        marked_as_error = cursor.rowcount
         
         # Reset remaining expired items to pending and increment reclaim_count
-        self.conn.execute("""
+        cursor = self.conn.execute("""
             UPDATE build_queue
             SET status = 'pending',
                 reclaim_count = COALESCE(reclaim_count, 0) + 1,
@@ -386,7 +397,7 @@ class BuildWorker:
               AND lease_expires_at < ?
         """, (now,))
         
-        recovered = self.conn.total_changes
+        recovered = cursor.rowcount
         self.conn.commit()
         
         if marked_as_error > 0:

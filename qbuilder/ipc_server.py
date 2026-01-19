@@ -85,18 +85,56 @@ class DaemonIPCServer:
         conn: sqlite3.Connection,
         port: int = DEFAULT_IPC_PORT,
         host: str = "127.0.0.1",
+        db_path: Optional[Path] = None,
     ):
-        self.conn = conn
+        self.conn = conn  # Main thread connection (not used in handlers)
         self.port = port
         self.host = host
+        self.db_path = db_path  # Store for thread-local connections
         
         self._server_socket: Optional[socket.socket] = None
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._handlers: dict[str, Callable] = {}
+        self._thread_local = threading.local()  # Thread-local storage
         
         # Register built-in handlers
         self._register_handlers()
+    
+    def _get_handler_conn(self) -> sqlite3.Connection:
+        """Get thread-local read-only connection for handler queries.
+        
+        IPC handlers run in a different thread than the main daemon.
+        SQLite connections are not thread-safe, so we create a dedicated
+        read-only connection for the handler thread.
+        """
+        if not hasattr(self._thread_local, 'conn') or self._thread_local.conn is None:
+            if self.db_path:
+                # Open read-only - handlers only query, never write
+                db_uri = f"file:{self.db_path}?mode=ro"
+                self._thread_local.conn = sqlite3.connect(db_uri, uri=True, timeout=30.0)
+            else:
+                # Fallback: try to get path from main conn (may not work)
+                raise RuntimeError("db_path not set - cannot create handler connection")
+        return self._thread_local.conn
+    
+    def _get_handler_write_conn(self) -> sqlite3.Connection:
+        """Get a NEW read-write connection for handler operations that need to write.
+        
+        Unlike _get_handler_conn(), this creates a fresh connection each call.
+        The caller MUST close this connection when done (use context manager).
+        
+        This follows the per-request connection model for write operations,
+        which is simpler and safer than thread-local caching for writes.
+        
+        Uses busy_timeout to handle concurrent access during rebuilds.
+        """
+        if not self.db_path:
+            raise RuntimeError("db_path not set - cannot create write connection")
+        
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0)
+        conn.execute("PRAGMA busy_timeout = 30000")  # 30 second busy wait
+        return conn
     
     def _register_handlers(self) -> None:
         """Register IPC method handlers."""
@@ -139,6 +177,7 @@ class DaemonIPCServer:
     
     def _accept_loop(self) -> None:
         """Main accept loop running in background thread."""
+        assert self._server_socket is not None, "start() must be called first"
         while self._running:
             try:
                 client_sock, addr = self._server_socket.accept()
@@ -234,11 +273,12 @@ class DaemonIPCServer:
         """Handle health check request."""
         from qbuilder.schema import get_queue_counts
         
-        counts = get_queue_counts(self.conn)
+        handler_conn = self._get_handler_conn()
+        counts = get_queue_counts(handler_conn)
         
         return {
             "daemon_pid": os.getpid(),
-            "db_path": str(getattr(self.conn, '_db_path', 'unknown')),
+            "db_path": str(self.db_path) if self.db_path else 'unknown',
             "writer_lock": "held",
             "state": "idle",  # TODO: track actual state
             "queue": {
@@ -255,7 +295,8 @@ class DaemonIPCServer:
         """Handle status query."""
         from qbuilder.schema import get_queue_counts
         
-        counts = get_queue_counts(self.conn)
+        handler_conn = self._get_handler_conn()
+        counts = get_queue_counts(handler_conn)
         
         return {
             "state": "idle",  # TODO: track actual state
@@ -324,9 +365,26 @@ class DaemonIPCServer:
         if not playset_path.exists():
             return {"scheduled": False, "error": f"Playset file not found: {playset_path}"}
         
-        count = enqueue_playset_roots(self.conn, playset_path)
-        
-        return {"scheduled": True, "discovery_tasks_enqueued": count}
+        # Use write connection for enqueuing AND discovery (per-request, closed after use)
+        write_conn = self._get_handler_write_conn()
+        try:
+            # Step 1: Enqueue discovery tasks (mod roots → discovery_queue)
+            count = enqueue_playset_roots(write_conn, playset_path)
+            write_conn.commit()
+            
+            # Step 2: Run discovery to convert discovery_queue → build_queue
+            # This is critical - without this, build worker has nothing to process
+            from qbuilder.discovery import run_discovery
+            discovery_result = run_discovery(write_conn)
+            files_discovered = discovery_result.get('files_discovered', 0)
+            
+            return {
+                "scheduled": True, 
+                "discovery_tasks_enqueued": count,
+                "files_discovered": files_discovered,
+            }
+        finally:
+            write_conn.close()
     
     def _handle_await_idle(self, request: IPCRequest) -> dict:
         """Handle await_idle request - waits for queue to drain."""
@@ -335,8 +393,10 @@ class DaemonIPCServer:
         timeout_ms = request.params.get("timeout_ms", 30000)
         deadline = time.time() + (timeout_ms / 1000.0)
         
+        handler_conn = self._get_handler_conn()
+        
         while time.time() < deadline:
-            counts = get_queue_counts(self.conn)
+            counts = get_queue_counts(handler_conn)
             pending = counts.get('build', {}).get('pending', 0)
             leased = counts.get('build', {}).get('processing', 0)
             
@@ -345,7 +405,7 @@ class DaemonIPCServer:
             
             time.sleep(0.5)  # Poll interval
         
-        counts = get_queue_counts(self.conn)
+        counts = get_queue_counts(handler_conn)
         pending = counts.get('build', {}).get('pending', 0)
         return {"idle": False, "queue_pending": pending, "timeout": True}
     

@@ -11,15 +11,16 @@ DESIGN PHILOSOPHY:
 - Extract scripted values (@name = value) everywhere
 - Better to have "too many" symbols than miss definitions
 
-SCHEMA v4 COLUMN NAMES:
-- symbols: file_id, ast_id, content_version_id, line_number, column_number, symbol_type
-- refs: file_id, ast_id, content_version_id, line_number, column_number, ref_type
+SCHEMA v6 COLUMN NAMES (January 2026):
+- symbols: ast_id, line_number, column_number, symbol_type, node_hash_norm
+- refs: ast_id, line_number, column_number, ref_type
 """
 
 import sqlite3
 import json
 import logging
 import re
+import hashlib
 from typing import Optional, List, Dict, Any, Tuple, Set, Iterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -219,6 +220,11 @@ class ExtractedSymbol:
     scope: Optional[str] = None
     signature: Optional[str] = None
     doc: Optional[str] = None
+    # Node identity for conflict detection (Phase 0, January 2026)
+    # These are NOT NULL in schema - extraction must always provide them
+    node_hash_norm: str = ""  # SHA-256 of normalized node text
+    node_start_offset: int = 0  # Character offset (Python string index)
+    node_end_offset: int = 0  # Character offset (exclusive)
 
 
 @dataclass
@@ -259,6 +265,66 @@ _RESERVED_KEYWORDS = {
     # GFX post-effect and map object structural blocks
     'posteffect_values', 'game_object_locator',
 }
+
+
+# Regex for stripping comments and normalizing whitespace
+_COMMENT_PATTERN = re.compile(r'#[^\n]*')  # Line comments
+_WHITESPACE_PATTERN = re.compile(r'[ \t]+')  # Horizontal whitespace runs
+
+
+def normalize_node_text(text: str) -> str:
+    """
+    Normalize CK3 script text for hashing.
+    
+    Normalization ensures identical semantic content produces the same hash
+    regardless of cosmetic differences like trailing whitespace or comment style.
+    
+    Steps:
+    1. Normalize line endings to \n
+    2. Remove comments (# to end of line)
+    3. Collapse horizontal whitespace runs to single space
+    4. Strip leading/trailing whitespace from each line
+    5. Remove empty lines
+    6. Strip leading/trailing whitespace from result
+    
+    Args:
+        text: Raw source text of the symbol node
+        
+    Returns:
+        Normalized text suitable for hashing
+    """
+    # 1. Normalize line endings
+    text = text.replace('\r\n', '\n').replace('\r', '\n')
+    
+    # 2. Remove comments
+    text = _COMMENT_PATTERN.sub('', text)
+    
+    # 3. Process line by line
+    lines = []
+    for line in text.split('\n'):
+        # Collapse whitespace runs
+        line = _WHITESPACE_PATTERN.sub(' ', line)
+        # Strip leading/trailing
+        line = line.strip()
+        # Keep non-empty lines
+        if line:
+            lines.append(line)
+    
+    return '\n'.join(lines)
+
+
+def compute_node_hash(text: str) -> str:
+    """
+    Compute SHA-256 hash of normalized node text.
+    
+    Args:
+        text: Raw source text of the symbol node
+        
+    Returns:
+        Hex-encoded SHA-256 hash of normalized text
+    """
+    normalized = normalize_node_text(text)
+    return hashlib.sha256(normalized.encode('utf-8')).hexdigest()
 
 
 def _is_valid_symbol_name(name) -> bool:
@@ -331,7 +397,8 @@ def get_symbol_kind_from_path(relpath: str) -> str:
 def extract_symbols_from_ast(
     ast_dict: Dict[str, Any],
     relpath: str,
-    content_hash: str
+    content_hash: str,
+    source_text: str = ""
 ) -> Iterator[ExtractedSymbol]:
     """
     Extract symbol definitions from serialized AST.
@@ -340,6 +407,12 @@ def extract_symbols_from_ast(
     - Every top-level block is a symbol
     - Scripted values (@name = value) are symbols
     - Type is inferred from path, never filtered
+    
+    Args:
+        ast_dict: Serialized AST (from RootNode.to_dict())
+        relpath: Relative path of the source file
+        content_hash: Hash of the original content
+        source_text: Original source text for node span extraction and hashing
     """
     # Skip non-game-content files
     relpath_lower = relpath.replace('\\', '/').lower()
@@ -390,13 +463,27 @@ def extract_symbols_from_ast(
                                 doc = str(val.get('value', ''))
                                 break
                 
+                # Extract offsets and compute hash
+                start_offset = child.get('start_offset', 0)
+                end_offset = child.get('end_offset', 0)
+                
+                if source_text and end_offset > start_offset:
+                    node_span = source_text[start_offset:end_offset]
+                    node_hash = compute_node_hash(node_span)
+                else:
+                    # Fallback: use content_hash as placeholder
+                    node_hash = content_hash
+                
                 yield ExtractedSymbol(
                     name=name,
                     kind=kind,
                     line=line,
                     column=column,
                     signature=signature,
-                    doc=doc
+                    doc=doc,
+                    node_hash_norm=node_hash,
+                    node_start_offset=start_offset,
+                    node_end_offset=end_offset
                 )
         
         elif child_type == 'assignment':
@@ -427,12 +514,26 @@ def extract_symbols_from_ast(
                 if value.get('_type') == 'value':
                     val_str = str(value.get('value', ''))
                 
+                # Extract offsets and compute hash
+                start_offset = child.get('start_offset', 0)
+                end_offset = child.get('end_offset', 0)
+                
+                if source_text and end_offset > start_offset:
+                    node_span = source_text[start_offset:end_offset]
+                    node_hash = compute_node_hash(node_span)
+                else:
+                    # Fallback: use content_hash as placeholder
+                    node_hash = content_hash
+                
                 yield ExtractedSymbol(
                     name=sym_name,
                     kind=sym_kind,
                     line=line,
                     column=column,
-                    signature=val_str
+                    signature=val_str,
+                    node_hash_norm=node_hash,
+                    node_start_offset=start_offset,
+                    node_end_offset=end_offset
                 )
 
 

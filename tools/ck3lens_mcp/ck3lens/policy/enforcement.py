@@ -334,9 +334,6 @@ class EnforcementRequest:
     rel_path: Optional[str] = None         # For ck3lens mod ops (from resolution)
     command: Optional[str] = None          # For shell ops
     
-    # Scope domains from contract
-    repo_domains: List[str] = field(default_factory=list)
-    
     # Existing auth
     contract_id: Optional[str] = None
     token_id: Optional[str] = None
@@ -490,10 +487,9 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
     Returns:
         EnforcementResult with decision and requirements
     """
-    from ..work_contracts import (
-        WorkContract, get_active_contract, 
-        validate_path_in_repo_domains, REPO_DOMAINS
-    )
+    # Import from contract_v1 for new schema
+    from .contract_v1 import get_active_contract, ContractV1, load_contract
+    from .capability_matrix import RootCategory
     
         # STEP 0: Normalize all paths ONCE at entry point
     _normalize_request_paths(request)
@@ -542,7 +538,7 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
     
     contract = None
     if request.contract_id:
-        contract = WorkContract.load(request.contract_id)
+        contract = load_contract(request.contract_id)
     else:
         contract = get_active_contract()
     
@@ -567,49 +563,38 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
         )
     
     # ==========================================================================
-    # STEP 4: Scope validation (repo_domains + allowed_paths)
+    # STEP 4: Scope validation via contract targets
     # ==========================================================================
     
     scope_details = {}
     
     if mode == "ck3raven-dev" and contract:
-        # Validate all target paths are in scope
+        # Validate all target paths are in scope using contract.targets
         paths_to_check = []
         if request.target_path:
             paths_to_check.append(request.target_path)
         paths_to_check.extend(request.target_paths)
         paths_to_check.extend(request.staged_files)
         
-        # Filter to only repo domains (not product domains)
-        repo_domains = [d for d in contract.canonical_domains if d in REPO_DOMAINS]
+        # Get allowed paths from contract targets
+        allowed_paths = [t.path for t in contract.targets] if contract.targets else None
         
-        for path in paths_to_check:
-            if path:
-                # Extract relative path from canonical address (e.g., 'ck3raven:/tools/...' -> 'tools/...')
-                # Check if canonical address type directly matches a repo domain
-                # e.g., 'wip:/test.txt' with 'wip' in repo_domains -> auto-allow
-                if ':/' in path and not path[1:3] == ':\\':
-                    addr_type = path.split(':/', 1)[0]
-                    if addr_type in repo_domains:
-                        continue  # Address type matches domain, skip pattern check
-                
-                rel_path = path.split(':/', 1)[1] if ':/' in path and not path[1:3] == ':\\' else path
-                allowed, reason = validate_path_in_repo_domains(
-                    rel_path, 
-                    repo_domains,
-                    contract.allowed_paths if contract.allowed_paths else None
-                )
-                if not allowed:
-                    scope_details["failed_path"] = path
-                    scope_details["repo_domains"] = repo_domains
-                    scope_details["allowed_paths"] = contract.allowed_paths
-                    return EnforcementResult(
-                        decision=Decision.DENY,
-                        reason=reason,
-                        contract_id=contract.contract_id,
-                        scope_check_details=scope_details,
-                    )
-    
+        if allowed_paths:
+            for path in paths_to_check:
+                if path:
+                    # Extract relative path from canonical address
+                    rel_path = path.split(':/', 1)[1] if ':/' in path and not (len(path) > 2 and path[1] == ':') else path
+                    
+                    # Check if path matches any target pattern
+                    if not check_path_in_contract_scope(rel_path, allowed_paths):
+                        scope_details['out_of_scope_path'] = rel_path
+                        return EnforcementResult(
+                            decision=Decision.DENY,
+                            reason=f"Path '{rel_path}' is outside contract target scope",
+                            contract_id=contract.contract_id,
+                            scope_check_details=scope_details,
+                        )
+
     # ==========================================================================
     # STEP 5: Operation-specific rules
     # ==========================================================================
@@ -868,7 +853,6 @@ def _enforce_git_push(
     5. All staged files are within contract scope
     6. Optional: commit message includes [CONTRACT:<id>]
     """
-    from ..work_contracts import validate_path_in_repo_domains, REPO_DOMAINS
     
     if contract is None:
         return EnforcementResult(
@@ -909,24 +893,16 @@ def _enforce_git_push(
             contract_id=contract.contract_id,
         )
     
-    # Validate staged files are in scope
-    repo_domains = [d for d in contract.canonical_domains if d in REPO_DOMAINS]
+    # Get allowed paths from contract targets
+    allowed_paths = [t.path for t in contract.targets] if contract.targets else None
     
+    # Validate staged files are in contract scope
     for staged_file in request.staged_files:
-        allowed, reason = validate_path_in_repo_domains(
-            staged_file,
-            repo_domains,
-            contract.allowed_paths,
-        )
-        if not allowed:
+        if allowed_paths and not check_path_in_contract_scope(staged_file, allowed_paths):
             return EnforcementResult(
                 decision=Decision.DENY,
-                reason=f"Staged file '{staged_file}' is outside contract scope: {reason}",
+                reason=f"Staged file '{staged_file}' is outside contract target scope",
                 contract_id=contract.contract_id,
-                scope_check_details={
-                    "failed_file": staged_file,
-                    "repo_domains": repo_domains,
-                },
             )
     
     # All conditions met - SAFE PUSH auto-grant

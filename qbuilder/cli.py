@@ -107,6 +107,24 @@ def get_connection(auto_init: bool = True) -> sqlite3.Connection:
     return conn
 
 
+def _process_discovery_if_pending(conn: sqlite3.Connection) -> int:
+    """Process discovery queue if there are pending items.
+    
+    Called by the build worker during idle periods to check for
+    new discovery tasks that were enqueued via IPC.
+    
+    Returns:
+        Number of files discovered (0 if no discovery tasks)
+    """
+    counts = get_queue_counts(conn)
+    discovery_pending = counts.get('discovery', {}).get('pending', 0)
+    
+    if discovery_pending > 0:
+        result = run_discovery(conn)
+        return result.get('files_discovered', 0)
+    return 0
+
+
 def cmd_daemon(args: argparse.Namespace) -> int:
     """
     Start the single-writer daemon.
@@ -173,7 +191,7 @@ def cmd_daemon(args: argparse.Namespace) -> int:
         
         # Start IPC server
         port = get_ipc_port()
-        ipc_server = DaemonIPCServer(conn, port=port)
+        ipc_server = DaemonIPCServer(conn, port=port, db_path=db_path)
         ipc_server.start()
         print(f"[OK] IPC server listening on port {port}")
         
@@ -202,6 +220,19 @@ def cmd_daemon(args: argparse.Namespace) -> int:
         
         logger.run_start(total_items=pending)
         start_time = time.time()
+        
+        # Process any pending discovery tasks first
+        # This converts discovery_queue items → build_queue items
+        discovery_counts = counts.get('discovery', {})
+        discovery_pending = discovery_counts.get('pending', 0)
+        if discovery_pending > 0:
+            print(f"Processing {discovery_pending} discovery tasks...")
+            discovery_result = run_discovery(conn)
+            print(f"  Discovered: {discovery_result.get('files_discovered', 0)} files")
+            # Refresh build queue count after discovery
+            counts = get_queue_counts(conn)
+            pending = counts.get('build', {}).get('pending', 0)
+            print(f"  Build queue now has: {pending} items")
         
         # Run build worker loop
         result = run_build_worker(

@@ -44,29 +44,13 @@ class ScopeDomain(str, Enum):
     LAUNCHER_REGISTRY = "launcher_registry"
 
 
-class IntentType(str, Enum):
-    """
-    Intent types for ck3lens contracts.
-    
-    Every contract must declare exactly one intent_type.
-    Missing intent_type → AUTO_DENY.
-    """
-    # Write intents
-    COMPATCH = "compatch"                # Modify active local mods for compatibility
-    BUGPATCH = "bugpatch"                # Patch a bug in another mod via local override
-    
-    # Read-only intents
-    RESEARCH_MOD_ISSUES = "research_mod_issues"    # Research mod conflicts/errors
-    RESEARCH_BUGREPORT = "research_bugreport"      # Research to file bug report
-    
-    # Script intents
-    SCRIPT_WIP = "script_wip"            # Draft/run scripts in WIP workspace
+# IntentType REMOVED - BANNED per CANONICAL CONTRACT SYSTEM
+# Authorization is based solely on root_category, not intent semantics
+# See contract_v1.py for the canonical contract schema
 
 
-class AcceptanceTest(str, Enum):
-    """Acceptance tests that can be required for contract completion."""
-    DIFF_SANITY = "diff_sanity"          # Proposed scope matches actual touched files (MANDATORY)
-    VALIDATION = "validation"            # CK3 syntax/reference validation (best-effort)
+# AcceptanceTest REMOVED - Part of legacy contract schema
+# Contract V1 uses work_declaration for audit, not acceptance tests
 
 
 # =============================================================================
@@ -127,19 +111,9 @@ class Ck3RavenDevScopeDomain(str, Enum):
     CK3_UTILITY_FILES = "ck3_utility_files"          # Read-only (logs, saves, debug)
 
 
-class Ck3RavenDevIntentType(str, Enum):
-    """
-    Intent types for ck3raven-dev contracts.
-    
-    These declare the PURPOSE of infrastructure work.
-    Every contract must declare exactly one intent_type.
-    """
-    BUGFIX = "bugfix"              # Fix a bug in ck3raven infrastructure
-    REFACTOR = "refactor"          # Refactor/reorganize code structure
-    FEATURE = "feature"            # Implement new feature/capability
-    MIGRATION = "migration"        # Database or config migration
-    TEST_ONLY = "test_only"        # Add/modify tests only
-    DOCS_ONLY = "docs_only"        # Documentation changes only
+# Ck3RavenDevIntentType REMOVED - BANNED per CANONICAL CONTRACT SYSTEM
+# Authorization is based solely on root_category, not intent semantics
+# Intent is declared as free-text in work_declaration (for audit only)
 
 
 class Ck3RavenDevWipIntent(str, Enum):
@@ -384,7 +358,7 @@ class ValidationContext:
     ck3raven_root: Optional[Path] = None
     
     # Contract context (for write operations)
-    intent_type: Optional[IntentType] = None
+    # intent_type REMOVED - BANNED per canonical spec
     contract_id: Optional[str] = None
     
     @classmethod

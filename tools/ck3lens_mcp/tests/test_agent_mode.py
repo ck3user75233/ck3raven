@@ -232,10 +232,10 @@ class TestModePolicyEnforcement:
     
     def test_ck3raven_dev_requires_contract_for_writes(self):
         """ck3raven-dev writes should require active contract."""
-        from ck3lens.work_contracts import WorkContract
+        from ck3lens.policy.contract_v1 import ContractV1
         
-        # WorkContract class should exist for contract management
-        assert WorkContract is not None
+        # ContractV1 class should exist for contract management
+        assert ContractV1 is not None
 
 
 # =============================================================================

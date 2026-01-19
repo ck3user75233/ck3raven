@@ -23,7 +23,7 @@ from typing import Any, TYPE_CHECKING
 
 from .types import (
     Severity, Violation, ValidationContext,
-    ScopeDomain, IntentType, AcceptanceTest,
+    ScopeDomain,  # IntentType and AcceptanceTest REMOVED - BANNED
 )
 # REMOVED: hard_gates imports - this module was archived Dec 2025
 # All enforcement decisions should go through enforcement.py
@@ -693,63 +693,6 @@ def enforce_conflict_alignment(
 # NEW: INTENT TYPE AND CONTRACT ENFORCEMENT
 # =============================================================================
 
-def enforce_intent_type_required(
-    ctx: ValidationContext,
-    bundle: "ArtifactBundle",
-    violations: list[Violation],
-    summary: dict[str, Any],
-) -> None:
-    """
-    Enforce: Write contracts must have valid intent_type.
-    
-    Rule: intent_type_required
-    Severity: ERROR (HARD GATE)
-    
-    Missing intent_type → AUTO_DENY
-    """
-    # Check if bundle has any write operations
-    has_writes = len(bundle.artifacts) > 0
-    
-    if not has_writes:
-        summary["intent_type_enforcement"] = "no_writes"
-        return
-    
-    # Check intent_type from context
-    intent_type = ctx.intent_type
-    
-    if intent_type is None:
-        violations.append(Violation(
-            severity=Severity.ERROR,
-            code="INTENT_TYPE_MISSING",
-            message="Write contract must specify intent_type.",
-            details={
-                "hard_gate": True,
-                "valid_types": [t.value for t in IntentType],
-                "suggestion": "Declare intent_type: COMPATCH, BUGPATCH, RESEARCH_MOD_ISSUES, RESEARCH_BUGREPORT, or SCRIPT_WIP",
-            },
-        ))
-        return
-    
-    # Check if intent_type allows writes
-    write_intents = {IntentType.COMPATCH, IntentType.BUGPATCH}
-    
-    if intent_type not in write_intents:
-        violations.append(Violation(
-            severity=Severity.ERROR,
-            code="INTENT_TYPE_FORBIDS_WRITES",
-            message=f"Intent type {intent_type.value} does not allow write operations.",
-            details={
-                "hard_gate": True,
-                "intent_type": intent_type.value,
-                "allowed_for_writes": [i.value for i in write_intents],
-            },
-        ))
-        return
-    
-    summary["intent_type"] = intent_type.value
-    summary["intent_type_enforcement"] = "passed"
-
-
 def enforce_contract_completeness(
     ctx: ValidationContext,
     bundle: "ArtifactBundle",
@@ -767,8 +710,9 @@ def enforce_contract_completeness(
     Severity: ERROR (HARD GATE)
     """
     # Only applies to write intents
-    if ctx.intent_type not in {IntentType.COMPATCH, IntentType.BUGPATCH}:
-        return
+    # intent_type checks REMOVED - BANNED per canonical spec
+    # Write detection now based on operations[] in contract
+    return  # Skip this rule - needs rewrite for V1 contracts
     
     # Check targets
     targets = getattr(bundle, "targets", None)
@@ -898,7 +842,7 @@ def validate_ck3lens_rules(
     
     # Record validation metadata
     summary["mode"] = ctx.mode.value
-    summary["intent_type"] = ctx.intent_type.value if ctx.intent_type else None
+    # intent_type removed from summary - BANNED per canonical spec
     summary["contract_id"] = ctx.contract_id
     
     # Scope enforcement (always)
@@ -908,10 +852,7 @@ def validate_ck3lens_rules(
     enforce_database_first(ctx, violations, summary)
     
     # ArtifactBundle-specific rules
-    if bundle is not None:
-        # HARD GATE: Intent type required for writes
-        enforce_intent_type_required(ctx, bundle, violations, summary)
-        
+    if bundle is not None:        
         # HARD GATE: Contract completeness (targets, snippets, DIFF_SANITY)
         enforce_contract_completeness(ctx, bundle, violations, summary)
         

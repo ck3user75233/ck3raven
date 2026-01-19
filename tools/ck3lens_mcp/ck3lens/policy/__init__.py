@@ -6,7 +6,6 @@ CANONICAL SOURCES (Dec 2025):
 - WorldAdapter.is_visible(): THE single source for path visibility
 
 Supporting modules:
-- types.py: Core types for policy validation (includes ScopeDomain, IntentType, etc.)
 - loader.py: Policy file loading
 - validator.py: Policy validation logic
 - tokens.py: HMAC-signed approval tokens for risky operations
@@ -30,8 +29,6 @@ from .types import (
     PolicyOutcome,
     # CK3LENS types (from CK3LENS_POLICY_ARCHITECTURE)
     ScopeDomain,
-    IntentType,
-    AcceptanceTest,
     CK3LensTokenType,
     CK3LENS_TOKEN_TTLS,
     WipWorkspaceInfo,
@@ -40,7 +37,6 @@ from .types import (
     get_ck3raven_dev_wip_path,
     # CK3RAVEN-DEV types (from CK3RAVEN_DEV_POLICY_ARCHITECTURE)
     Ck3RavenDevScopeDomain,
-    Ck3RavenDevIntentType,
     Ck3RavenDevWipIntent,
     Ck3RavenDevTokenType,
     CK3RAVEN_DEV_TOKEN_TIER_A,
@@ -97,15 +93,6 @@ from .wip_workspace import (
     validate_script_syntax,
     ScriptDeclaration,
     validate_script_declarations,
-)
-from .contract_schema import (
-    ContractTarget,
-    BeforeAfterSnippet,
-    WriteContract,
-    ResearchContract,
-    ScriptContract,
-    create_contract,
-    validate_contract,
 )
 from .ck3lens_rules import (
     validate_ck3lens_rules,
@@ -181,8 +168,6 @@ __all__ = [
     "server_delivery_gate",
     # CK3Lens scope and intent types
     "ScopeDomain",
-    "IntentType",
-    "AcceptanceTest",
     "CK3LensTokenType",
     "CK3LENS_TOKEN_TTLS",
     "WipWorkspaceInfo",
@@ -191,7 +176,6 @@ __all__ = [
     "get_ck3raven_dev_wip_path",
     # CK3Raven-dev scope and intent types
     "Ck3RavenDevScopeDomain",
-    "Ck3RavenDevIntentType",
     "Ck3RavenDevWipIntent",
     "Ck3RavenDevTokenType",
     "CK3RAVEN_DEV_TOKEN_TIER_A",
@@ -248,13 +232,6 @@ __all__ = [
     "ScriptDeclaration",
     "validate_script_declarations",
     # Contract Schema
-    "ContractTarget",
-    "BeforeAfterSnippet",
-    "WriteContract",
-    "ResearchContract",
-    "ScriptContract",
-    "create_contract",
-    "validate_contract",
     # CK3Lens Rules
     "validate_ck3lens_rules",
     "classify_path_domain",

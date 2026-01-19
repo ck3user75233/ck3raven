@@ -24,7 +24,7 @@ import threading
 import time
 
 # Schema version - bump when schema changes
-DATABASE_VERSION = 5  # Content-keyed symbols/refs (flag-day migration)
+DATABASE_VERSION = 6  # Added node_hash_norm, node_start_offset, node_end_offset to symbols
 
 # Thread-local storage for connections
 _local = threading.local()
@@ -180,6 +180,13 @@ CREATE TABLE IF NOT EXISTS symbols (
     symbol_type TEXT NOT NULL,               -- 'trait', 'event', 'decision', etc.
     scope TEXT,                              -- Namespace (e.g., event namespace)
     
+    -- Node identity for conflict detection (Phase 0, January 2026)
+    -- These are character offsets (Python string indices) into content_text
+    -- node_hash_norm = SHA-256 of normalized text from [start_offset:end_offset]
+    node_hash_norm TEXT NOT NULL,            -- SHA-256 of normalized node text
+    node_start_offset INTEGER NOT NULL,      -- Character offset (inclusive) into content_text
+    node_end_offset INTEGER NOT NULL,        -- Character offset (exclusive) into content_text
+    
     -- Metadata
     metadata_json TEXT,                      -- Extensible additional data
     
@@ -189,6 +196,7 @@ CREATE TABLE IF NOT EXISTS symbols (
 CREATE INDEX IF NOT EXISTS idx_symbols_ast ON symbols(ast_id);
 CREATE INDEX IF NOT EXISTS idx_symbols_lookup ON symbols(symbol_type, name);
 CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
+CREATE INDEX IF NOT EXISTS idx_symbols_hash ON symbols(node_hash_norm);
 
 -- References - places that use symbols
 -- Bound to AST (content identity), NOT to files

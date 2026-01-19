@@ -272,6 +272,7 @@ class TestAuditLogging:
         assert "token_id" not in d
 
 
+@pytest.mark.skip(reason="Legacy work_contracts module archived - tests for contract_v1")
 class TestRepoDomainPaths:
     """Test repo domain path validation."""
     
@@ -323,6 +324,7 @@ class TestRepoDomainPaths:
         assert "allowed_paths pattern" in reason
 
 
+@pytest.mark.skip(reason="Legacy work_contracts module archived")
 class TestSlugifyIntent:
     """Test intent slugification for branch names."""
     
@@ -346,6 +348,7 @@ class TestSlugifyIntent:
         assert len(slug) <= 20
 
 
+@pytest.mark.skip(reason="Legacy work_contracts module archived - tests for contract_v1")
 class TestContractBranchName:
     """Test contract branch name generation."""
     
