@@ -539,7 +539,6 @@ def ck3_file_impl(
             mod_name=enforcement_target.mod_name if enforcement_target else mod_name,
             rel_path=enforcement_target.rel_path if enforcement_target else rel_path,
             contract_id=contract.contract_id if contract else None,
-            repo_domains=contract.canonical_domains if contract else [],
             token_id=token_id,
         )
         
@@ -2163,7 +2162,6 @@ def ck3_git_impl(
             tool_name="ck3_git",
             mod_name=target_mod,
             contract_id=contract.contract_id if contract else None,
-            repo_domains=contract.canonical_domains if contract else [],
             branch_name=branch_name,
             staged_files=staged_files,
             is_force_push=False,  # Force push not supported via this tool

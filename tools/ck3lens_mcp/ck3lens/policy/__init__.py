@@ -37,7 +37,6 @@ from .types import (
     get_ck3raven_dev_wip_path,
     # CK3RAVEN-DEV types (from CK3RAVEN_DEV_POLICY_ARCHITECTURE)
     Ck3RavenDevScopeDomain,
-    Ck3RavenDevWipIntent,
     Ck3RavenDevTokenType,
     CK3RAVEN_DEV_TOKEN_TIER_A,
     CK3RAVEN_DEV_TOKEN_TIER_B,
@@ -166,24 +165,6 @@ __all__ = [
     "validate_policy",
     "validate_for_mode",
     "server_delivery_gate",
-    # CK3Lens scope and intent types
-    "ScopeDomain",
-    "CK3LensTokenType",
-    "CK3LENS_TOKEN_TTLS",
-    "WipWorkspaceInfo",
-    "get_wip_workspace_path",
-    "get_ck3lens_wip_path",
-    "get_ck3raven_dev_wip_path",
-    # CK3Raven-dev scope and intent types
-    "Ck3RavenDevScopeDomain",
-    "Ck3RavenDevWipIntent",
-    "Ck3RavenDevTokenType",
-    "CK3RAVEN_DEV_TOKEN_TIER_A",
-    "CK3RAVEN_DEV_TOKEN_TIER_B",
-    "CK3RAVEN_DEV_TOKEN_TTLS",
-    "GIT_COMMANDS_SAFE",
-    "GIT_COMMANDS_RISKY",
-    "GIT_COMMANDS_DANGEROUS",
     # Approval tokens
     "ApprovalToken",
     "TOKEN_TYPES",

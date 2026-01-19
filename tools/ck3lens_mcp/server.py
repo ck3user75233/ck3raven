@@ -1,4 +1,4 @@
-﻿"""
+"""
 CK3 Lens MCP Server
 
 An MCP server providing CK3 modding tools:
@@ -827,9 +827,9 @@ def ck3_db(
     
     Commands:
     
-    command=status   → Check if database is enabled/connected
-    command=disable  → Close connection and block reconnection (for file operations)
-    command=enable   → Re-enable database access
+    command=status   ? Check if database is enabled/connected
+    command=disable  ? Close connection and block reconnection (for file operations)
+    command=enable   ? Re-enable database access
     
     Use disable before deleting database files to ensure file locks are released.
     Use enable to restore normal operation.
@@ -1163,7 +1163,7 @@ def ck3_db_delete(
                     cur.execute(f"DELETE FROM playset_mods WHERE content_version_id IN ({placeholders})", cv_ids)
                     playset_mods_deleted = cur.rowcount
                     
-                    # Delete files - CASCADE handles asts → symbols/refs
+                    # Delete files - CASCADE handles asts ? symbols/refs
                     cur.execute(f"DELETE FROM files WHERE content_version_id IN ({placeholders})", cv_ids)
                     files_deleted = cur.rowcount
                     
@@ -1300,7 +1300,7 @@ def ck3_get_policy_status() -> dict:
     """
     Check if policy enforcement is working.
     
-    âš ï¸ CRITICAL: If this returns healthy=False, the agent MUST stop work
+    ⚠️ CRITICAL: If this returns healthy=False, the agent MUST stop work
     and fix the policy system before continuing.
     
     Returns:
@@ -1325,9 +1325,9 @@ def ck3_get_policy_status() -> dict:
     }
     
     if health["healthy"]:
-        result["message"] = "âœ… Policy enforcement is ACTIVE"
+        result["message"] = "✅ Policy enforcement is ACTIVE"
     else:
-        result["message"] = f"ðŸš¨ POLICY ENFORCEMENT IS DOWN: {health['error']}"
+        result["message"] = f"🚨 POLICY ENFORCEMENT IS DOWN: {health['error']}"
         result["action_required"] = "Agent must stop work. Fix policy module or restart MCP server."
     
     trace.log("ck3lens.get_policy_status", {}, result)
@@ -1450,9 +1450,9 @@ def ck3_conflicts(
     
     Commands:
     
-    command=symbols  â†’ Find symbols defined by multiple mods (default)
-    command=files    â†’ Find files that multiple mods override
-    command=summary  â†’ Get conflict statistics
+    command=symbols  → Find symbols defined by multiple mods (default)
+    command=files    → Find files that multiple mods override
+    command=summary  → Get conflict statistics
     
     Args:
         command: Operation to perform
@@ -1701,15 +1701,15 @@ def ck3_file(
     
     Commands:
     
-    command=get          â†’ Get file content from database (path required)
-    command=read         â†’ Read file from filesystem (path or target+rel_path)
-    command=write        â†’ Write file (path for raw write, or target+rel_path)
-    command=edit         â†’ Search-replace edit (target, rel_path, old_content, new_content)
-    command=delete       â†’ Delete file (target, rel_path required)
-    command=rename       â†’ Rename/move file (target, rel_path, new_path required)
-    command=refresh      â†’ Re-sync file to database (target, rel_path required)
-    command=list         â†’ List files (target required, path_prefix/pattern optional)
-    command=create_patch â†’ Create override patch file (ck3lens mode only)
+    command=get          → Get file content from database (path required)
+    command=read         → Read file from filesystem (path or target+rel_path)
+    command=write        → Write file (path for raw write, or target+rel_path)
+    command=edit         → Search-replace edit (target, rel_path, old_content, new_content)
+    command=delete       → Delete file (target, rel_path required)
+    command=rename       → Rename/move file (target, rel_path, new_path required)
+    command=refresh      → Re-sync file to database (target, rel_path required)
+    command=list         → List files (target required, path_prefix/pattern optional)
+    command=create_patch → Create override patch file (ck3lens mode only)
     
     For write command with raw path:
     - ck3lens mode: DENIED (must use target+rel_path)
@@ -1719,9 +1719,9 @@ def ck3_file(
         command: Operation to perform
         path: File path (for get/read from filesystem)
         mod_name: Target for file operations. Can be:
-            - "wip" â†’ WIP workspace (~/.ck3raven/wip/) - always writable
-            - "vanilla" â†’ Vanilla game files (read-only)
-            - Mod name â†’ Mod from active playset (writable if under local_mods_folder)
+            - "wip" → WIP workspace (~/.ck3raven/wip/) - always writable
+            - "vanilla" → Vanilla game files (read-only)
+            - Mod name → Mod from active playset (writable if under local_mods_folder)
         rel_path: Relative path within target
         include_ast: Include parsed AST (for get)
         content: File content (for write)
@@ -2135,13 +2135,13 @@ def ck3_playset(
                     if mods_needing_build:
                         result["builder_started"] = True
                         result["builder_message"] = (
-                            f"🔨 QBuilder started for {len(mods_needing_build)} mod(s) needing processing. "
+                            f"?? QBuilder started for {len(mods_needing_build)} mod(s) needing processing. "
                             f"Check status with: python -m qbuilder status"
                         )
                     else:
                         result["builder_started"] = True
                         result["builder_message"] = (
-                            "🔨 Database not available or empty. QBuilder started to index all playset mods. "
+                            "?? Database not available or empty. QBuilder started to index all playset mods. "
                             "Check status with: python -m qbuilder status"
                         )
             except Exception as e:
@@ -2979,13 +2979,13 @@ def ck3_contract(
     
     Commands:
     
-    command=open           → Open new contract (intent, root_category required)
-    command=close          → Close contract after work complete
-    command=cancel         → Cancel contract without completing
-    command=status         → Get current active contract status
-    command=list           → List contracts
-    command=flush          → Archive old contracts from previous days
-    command=archive_legacy → Move pre-v1 contracts to legacy folder
+    command=open           ? Open new contract (intent, root_category required)
+    command=close          ? Close contract after work complete
+    command=cancel         ? Cancel contract without completing
+    command=status         ? Get current active contract status
+    command=list           ? List contracts
+    command=flush          ? Archive old contracts from previous days
+    command=archive_legacy ? Move pre-v1 contracts to legacy folder
     
     Args:
         command: Action to perform
@@ -4025,9 +4025,9 @@ def ck3_search(
 # Symbol Tools - ARCHIVED January 2, 2026
 # ============================================================================
 # The following tools have been DELETED:
-# - ck3_confirm_not_exists() â†’ Functionality moved to ck3_search with exhaustive mode
-# - ck3_qr_conflicts() â†’ Use ck3_conflicts(command="symbols") when implemented
-# - ck3_get_symbol_conflicts() â†’ Use ck3_conflicts(command="symbols") when implemented
+# - ck3_confirm_not_exists() → Functionality moved to ck3_search with exhaustive mode
+# - ck3_qr_conflicts() → Use ck3_conflicts(command="symbols") when implemented
+# - ck3_get_symbol_conflicts() → Use ck3_conflicts(command="symbols") when implemented
 #
 # The unified ck3_conflicts tool will replace all conflict detection functionality.
 # ============================================================================
@@ -4570,7 +4570,7 @@ def ck3_get_mode_instructions(
     """
     from pathlib import Path
     from ck3lens.policy import (
-        ScopeDomain, IntentType, CK3LensTokenType, AgentMode,
+        ScopeDomain, CK3LensTokenType, AgentMode,
         get_wip_workspace_path, initialize_workspace,
     )
     from ck3lens.agent_mode import set_agent_mode, VALID_MODES
@@ -4689,7 +4689,7 @@ def _get_mode_policy_context(mode: str) -> dict:
     """
     from ck3lens.policy import (
         ScopeDomain, CK3LensTokenType,
-        Ck3RavenDevScopeDomain, Ck3RavenDevWipIntent,
+        Ck3RavenDevScopeDomain,
         Ck3RavenDevTokenType, CK3RAVEN_DEV_TOKEN_TIER_A, CK3RAVEN_DEV_TOKEN_TIER_B,
     )
     
@@ -4759,7 +4759,6 @@ def _get_mode_policy_context(mode: str) -> dict:
                     "run_in_terminal (use ck3_exec instead)",
                 ],
             },
-            "wip_intents": [wi.value for wi in Ck3RavenDevWipIntent],
             "available_tokens": {
                 "tier_a_auto_grant": [tt.value for tt in CK3RAVEN_DEV_TOKEN_TIER_A],
                 "tier_b_approval_required": [tt.value for tt in CK3RAVEN_DEV_TOKEN_TIER_B],
