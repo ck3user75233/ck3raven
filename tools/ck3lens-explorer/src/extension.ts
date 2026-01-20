@@ -31,6 +31,7 @@ import { Logger } from './utils/logger';
 import { SetupWizard, showSetupStatus } from './setup/setupWizard';
 import { registerMcpServerProvider, CK3LensMcpServerProvider } from './mcp/mcpServerProvider';
 import { DiagnosticsServer } from './ipc/diagnosticsServer';
+import { TokenWatcher } from './tokens/tokenWatcher';
 
 // Global extension state
 let session: CK3LensSession | undefined;
@@ -38,6 +39,7 @@ let pythonBridge: PythonBridge | undefined;
 let statusBar: LensStatusBar | undefined;
 let mcpServerProvider: CK3LensMcpServerProvider | undefined;
 let diagnosticsServer: DiagnosticsServer | undefined;
+let tokenWatcher: TokenWatcher | undefined;
 let logger: Logger;
 let outputChannel: vscode.OutputChannel;
 let diagnosticCollection: vscode.DiagnosticCollection;
@@ -238,6 +240,32 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }).catch(err => {
         logger.error('Failed to start IPC diagnostics server', err);
     });
+
+    // Initialize Token Watcher for Phase 1.5C token approval UX
+    const ck3ravenPath = vscode.workspace.getConfiguration('ck3lens').get<string>('ck3ravenPath');
+    if (ck3ravenPath && fs.existsSync(ck3ravenPath)) {
+        // Find Python path for the CLI
+        let pythonPath = vscode.workspace.getConfiguration('ck3lens').get<string>('pythonPath');
+        if (!pythonPath) {
+            const venvPaths = [
+                path.join(ck3ravenPath, '.venv', 'Scripts', 'python.exe'),
+                path.join(ck3ravenPath, '.venv', 'bin', 'python'),
+            ];
+            for (const venvPython of venvPaths) {
+                if (fs.existsSync(venvPython)) {
+                    pythonPath = venvPython;
+                    break;
+                }
+            }
+        }
+
+        tokenWatcher = new TokenWatcher(ck3ravenPath, outputChannel, pythonPath || 'python');
+        context.subscriptions.push(tokenWatcher);
+        tokenWatcher.start();
+        logger.info('Token watcher started for Phase 1.5C approval UX');
+    } else {
+        logger.debug('Token watcher skipped: ck3ravenPath not configured');
+    }
 
     logger.info('CK3 Lens Explorer activated successfully');
 

@@ -1,0 +1,76 @@
+{
+  "schema_version": "v1",
+  "lock_hash": "17aff142a29634532286313090b8fe1af1fdcded4f741ac63444dc7e9fbf21d2",
+  "created_at": "2026-01-20T18:37:44.280312",
+  "created_by": "system",
+  "description": "arch_lint ruleset lock for ck3raven",
+  "manifests": [
+    {
+      "glob": "tools/arch_lint/*.py",
+      "description": "arch_lint Python source files"
+    },
+    {
+      "glob": "tools/arch_lint/requirements.txt",
+      "description": "arch_lint dependencies"
+    }
+  ],
+  "files": [
+    {
+      "path": "tools/arch_lint/__init__.py",
+      "sha256": "7de6c0098c932db6abfd46df00d9277e5fcca7427542417686b73a20d816de79",
+      "size_bytes": 688
+    },
+    {
+      "path": "tools/arch_lint/__main__.py",
+      "sha256": "2f7fb3fd3aae64b97c95dccd49958ef0d85a88bdd9fd0ea4ec75095e93854df7",
+      "size_bytes": 120
+    },
+    {
+      "path": "tools/arch_lint/analysis.py",
+      "sha256": "e1ce7fa12aaebdaac66e8e222182dbfa72d3b29a1be26484552f595622c27344",
+      "size_bytes": 4810
+    },
+    {
+      "path": "tools/arch_lint/config.py",
+      "sha256": "a801e0c7933a2097e3ae56e13f1ac305464a2e592f5ea84d55247ef652f95061",
+      "size_bytes": 2191
+    },
+    {
+      "path": "tools/arch_lint/daemon.py",
+      "sha256": "1ac9dfc5982bb9927d161adf422fd1e88677268a4a5231fbdbcefb0f42f0adb2",
+      "size_bytes": 10271
+    },
+    {
+      "path": "tools/arch_lint/patterns.py",
+      "sha256": "88c395fd4e086de3bc15f595ff4c55fc9e56659a95639ca7c3eebb83fa380841",
+      "size_bytes": 13695
+    },
+    {
+      "path": "tools/arch_lint/reporting.py",
+      "sha256": "c87b6eb8bfb0b65b517301d00fb689bf5c2672f4880fd58ffb85747c8c71ef4d",
+      "size_bytes": 2476
+    },
+    {
+      "path": "tools/arch_lint/requirements.txt",
+      "sha256": "5e079b4b68d1494aa6a95c749023314ba4cf16adc86a5d45af2cd36c8910965c",
+      "size_bytes": 17
+    },
+    {
+      "path": "tools/arch_lint/rules.py",
+      "sha256": "f9428a1bce96e51783b120b9a3c2b886a55938768513ec95cd12d013ac1da5ab",
+      "size_bytes": 33763
+    },
+    {
+      "path": "tools/arch_lint/runner.py",
+      "sha256": "566618fd035be42791c47e66ef25bbe3fc788974c0eb094271883648d7ff75b5",
+      "size_bytes": 7798
+    },
+    {
+      "path": "tools/arch_lint/scanner.py",
+      "sha256": "160bf05c44f745b812321d0f098ffa68032f7835e9f75cd43d0fc19c060298e4",
+      "size_bytes": 5960
+    }
+  ],
+  "file_count": 11,
+  "total_bytes": 81789
+}

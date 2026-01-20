@@ -1,5 +1,5 @@
-"""
-arch_lint v2.35 — Configuration.
+﻿"""
+arch_lint v2.35 â€” Configuration.
 
 Runtime configuration and CLI-derived settings.
 For pattern definitions, see patterns.py.
@@ -57,6 +57,9 @@ class LintConfig:
     # Output settings
     json_output: bool = False
     errors_only: bool = False
+    
+    # Explicit file list (overrides directory scanning when set)
+    explicit_files: tuple[Path, ...] | None = None
     
     # Unused symbol allowlists
     unused_name_allowlist_prefixes: tuple[str, ...] = ("_", "test_")

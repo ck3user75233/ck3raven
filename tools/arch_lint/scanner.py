@@ -1,5 +1,5 @@
-"""
-arch_lint v2.35 — File scanning and source loading.
+﻿"""
+arch_lint v2.35 â€” File scanning and source loading.
 
 Handles:
 - Directory walking with exclusions
@@ -42,7 +42,14 @@ def load_source(path: Path) -> SourceFile:
 
 
 def iter_files(cfg: LintConfig) -> Iterator[Path]:
-    """Iterate over all relevant files under root."""
+    """Iterate over all relevant files under root (or explicit list)."""
+    # If explicit_files provided, use that instead of scanning
+    if cfg.explicit_files is not None:
+        for path in cfg.explicit_files:
+            if path.is_file():
+                yield path
+        return
+    
     all_exts = set(cfg.python_exts) | set(cfg.docs_exts)
     
     for path in cfg.root.rglob("*"):

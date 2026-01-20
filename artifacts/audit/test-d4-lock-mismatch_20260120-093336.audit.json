@@ -1,0 +1,59 @@
+{
+  "contract_id": "test-d4-lock-mismatch",
+  "audit_timestamp": "2026-01-20T09:33:34.867768+00:00",
+  "all_passed": false,
+  "can_close": false,
+  "failure_reason": "linter_lock: Proposed linter lock exists - must be promoted or deleted before closure",
+  "baseline_snapshot_id": "proof-b0-test-1",
+  "current_snapshot_id": null,
+  "playset_hash_baseline": "sha256:d643953660fddf9433c0f2072bc703ba9f7e7004b46497c1879f2b47aea08e75",
+  "playset_hash_current": "sha256:d643953660fddf9433c0f2072bc703ba9f7e7004b46497c1879f2b47aea08e75",
+  "checks": [
+    {
+      "check_name": "linter_lock",
+      "passed": false,
+      "message": "Proposed linter lock exists - must be promoted or deleted before closure",
+      "details": {
+        "proposed_path": "C:\\Users\\nateb\\Documents\\CK3 Mod Project 1.18\\ck3raven\\artifacts\\locks\\proposed\\linter.lock.json",
+        "action_required": "User must promote proposed lock to policy/locks/ or delete it"
+      }
+    },
+    {
+      "check_name": "arch_lint",
+      "passed": false,
+      "message": "Skipped - linter lock failed",
+      "details": {
+        "skipped": true
+      }
+    },
+    {
+      "check_name": "playset_drift",
+      "passed": true,
+      "message": "Playset unchanged",
+      "details": {
+        "playset_hash": "sha256:d643953660fddf9433c0f2072..."
+      }
+    },
+    {
+      "check_name": "symbols_diff",
+      "passed": true,
+      "message": "No new symbol identities",
+      "details": {
+        "baseline_id": "proof-b0-test-1_2026-01-20T08-42-41",
+        "current_hash": "sha256:23401bd20bee3e0cbcb52cbda..."
+      }
+    },
+    {
+      "check_name": "nst_validation",
+      "passed": true,
+      "message": "No NST required (no new symbols)",
+      "details": {}
+    },
+    {
+      "check_name": "lxe_validation",
+      "passed": true,
+      "message": "No LXE required (no lint errors)",
+      "details": {}
+    }
+  ]
+}

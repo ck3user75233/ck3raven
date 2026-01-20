@@ -1,5 +1,5 @@
-"""
-Contract v1 Schema — Hard Law Implementation
+﻿"""
+Contract v1 Schema â€” Hard Law Implementation
 
 This module implements the EXACT contract schema from CANONICAL CONTRACT SYSTEM.
 
@@ -63,6 +63,11 @@ _V1_OPTIONAL_FIELDS = frozenset({
     "closed_at",
     "notes",
     "schema_version",
+    # Phase 1.5 compliance fields
+    "baseline_snapshot_path",  # Path to symbol snapshot at contract open
+    "baseline_playset_hash",   # Playset hash captured at contract open
+    "audit_result_path",       # Path to audit result on close
+    "base_commit",              # Git commit SHA at contract open (for scoped lint)
 })
 
 _V1_ALL_FIELDS = _V1_REQUIRED_FIELDS | _V1_OPTIONAL_FIELDS
@@ -227,7 +232,7 @@ class WorkDeclaration:
 @dataclass
 class ContractV1:
     """
-    Contract v1 — The canonical contract schema.
+    Contract v1 â€” The canonical contract schema.
     
     Every field must match Section 5 exactly.
     Unknown fields are rejected.
@@ -248,7 +253,14 @@ class ContractV1:
     status: Literal["open", "closed", "expired", "cancelled"] = "open"
     closed_at: Optional[str] = None
     notes: Optional[str] = None
-    schema_version: str = CONTRACT_SCHEMA_VERSION    
+    schema_version: str = CONTRACT_SCHEMA_VERSION
+    
+    # Phase 1.5 compliance fields
+    baseline_snapshot_path: Optional[str] = None  # Symbol snapshot at open
+    baseline_playset_hash: Optional[str] = None   # Playset hash at open
+    audit_result_path: Optional[str] = None       # Audit result on close
+    base_commit: Optional[str] = None             # Git commit SHA at contract open
+    
     def __post_init__(self):
         # Normalize mode
         if isinstance(self.mode, str):
@@ -340,6 +352,11 @@ class ContractV1:
             "status": self.status,
             "closed_at": self.closed_at,
             "notes": self.notes,
+            # Phase 1.5 compliance fields
+            "baseline_snapshot_path": self.baseline_snapshot_path,
+            "baseline_playset_hash": self.baseline_playset_hash,
+            "audit_result_path": self.audit_result_path,
+            "base_commit": self.base_commit,
         }
     
     @classmethod
@@ -386,6 +403,11 @@ class ContractV1:
             closed_at=data.get("closed_at"),
             notes=data.get("notes"),
             schema_version=data.get("schema_version", CONTRACT_SCHEMA_VERSION),
+            # Phase 1.5 compliance fields
+            baseline_snapshot_path=data.get("baseline_snapshot_path"),
+            baseline_playset_hash=data.get("baseline_playset_hash"),
+            audit_result_path=data.get("audit_result_path"),
+            base_commit=data.get("base_commit"),
         )
 
 
@@ -533,8 +555,57 @@ def open_contract(
     if isinstance(work_declaration, dict):
         work_declaration = WorkDeclaration.from_dict(work_declaration)
     
+    # Phase 1.5: Capture baseline symbol snapshot and playset hash
+    baseline_snapshot_path = None
+    baseline_playset_hash = None
+    base_commit = None
+    
+    # Capture git base commit for scoped lint
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(repo_root) if 'repo_root' in dir() else str(Path(__file__).resolve().parents[4]),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            base_commit = result.stdout.strip()
+    except Exception as e:
+        import sys
+        print(f"Warning: Failed to capture git base_commit: {e}", file=sys.stderr)
+    
+    try:
+        # Add repo root to path for imports
+        import sys
+        repo_root = Path(__file__).resolve().parents[4]  # contract_v1.py -> policy -> ck3lens -> ck3lens_mcp -> tools -> repo
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+        
+        from tools.compliance.symbols_lock import (
+            create_symbols_snapshot,
+            get_active_playset_identity,
+        )
+        
+        # Create baseline snapshot
+        contract_id = ContractV1.generate_id()
+        snapshot = create_symbols_snapshot(f"baseline_{contract_id}")
+        snapshot_saved_path = snapshot.save()
+        baseline_snapshot_path = str(snapshot_saved_path)
+        
+        # Capture playset hash
+        baseline_playset_hash = snapshot.playset.playset_hash
+        
+    except Exception as e:
+        # Phase 1.5 metadata capture failed - log but continue
+        # The audit will fail on close if this is required
+        import sys
+        print(f"Warning: Failed to capture Phase 1.5 baseline: {e}", file=sys.stderr)
+        contract_id = ContractV1.generate_id()
+    
     contract = ContractV1(
-        contract_id=ContractV1.generate_id(),
+        contract_id=contract_id,
         mode=mode,
         root_category=root_category,
         intent=intent,
@@ -545,6 +616,9 @@ def open_contract(
         author=author,
         expires_at=(datetime.now() + timedelta(hours=expires_hours)).isoformat(),
         notes=notes,
+        baseline_snapshot_path=baseline_snapshot_path,
+        baseline_playset_hash=baseline_playset_hash,
+        base_commit=base_commit,
     )
     
     # Validate before saving
@@ -557,13 +631,61 @@ def open_contract(
 
 
 def close_contract(contract_id: str, notes: Optional[str] = None) -> ContractV1:
-    """Close a contract."""
+    """
+    Close a contract with Phase 1.5 compliance audit.
+    
+    The audit checks:
+    1. Linter lock eligibility
+    2. arch_lint passes (or LXE tokens)
+    3. Playset hasn't drifted
+    4. No new symbol identities (or NST tokens)
+    
+    Raises:
+        ValueError: If audit fails (closure blocked)
+    """
     contract = load_contract(contract_id)
     if contract is None:
         raise ValueError(f"Contract not found: {contract_id}")
     
     if contract.status != "open":
         raise ValueError(f"Contract is not open: {contract.status}")
+    
+    # Phase 1.5: Run compliance audit
+    audit_result = None
+    try:
+        # Add repo root to path for imports
+        import sys
+        repo_root = Path(__file__).resolve().parents[4]
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+        
+        from tools.compliance.audit_contract_close import run_contract_close_audit
+        
+        audit_result = run_contract_close_audit(
+            contract_id=contract_id,
+            baseline_snapshot_path=contract.baseline_snapshot_path,
+            baseline_playset_hash=contract.baseline_playset_hash,
+            base_commit=contract.base_commit,
+        )
+        
+        # Always save the audit artifact
+        audit_path = audit_result.save()
+        contract.audit_result_path = str(audit_path)
+        
+        # If audit failed, block closure
+        if not audit_result.can_close:
+            # Save updated contract with audit path (but still open)
+            save_contract(contract)
+            raise ValueError(
+                f"Contract closure blocked by Phase 1.5 audit:\n"
+                f"  {audit_result.failure_reason}\n"
+                f"  Audit artifact: {audit_path}"
+            )
+            
+    except ImportError as e:
+        # Audit tool not available - this is a development scenario
+        import sys
+        print(f"Warning: Phase 1.5 audit not available: {e}", file=sys.stderr)
     
     contract.status = "closed"
     contract.closed_at = datetime.now().isoformat()

@@ -1,21 +1,18 @@
 """
-CK3 Lens Rules
+CK3 Lens Rules - Artifact Validation
 
-Policy validation rules specific to the ck3lens agent mode.
-Implements the CK3LENS_POLICY_ARCHITECTURE.md specification.
+Validation rules for artifacts submitted by ck3lens mode agents.
+See CK3LENS_POLICY_ARCHITECTURE.md for full specification.
 
-Core Invariants:
-1. Mods must be ingested into the database to be visible
-2. Only mods in the active playset are visible by default
-3. Only active local mods are mutable
-4. Vanilla and workshop mods are always immutable
-5. Filesystem access never expands mod discovery
-6. ck3lens cannot write Python except to the WIP workspace
-7. ck3raven source is read-only (no writes even with contract)
+Scope Rules:
+1. All DB queries are filtered to playset content versions only
+2. Write operations target ROOT_USER_DOCS domain (user mod folder)
+3. ROOT_STEAM and ROOT_GAME domains are read-only (immutable)
+4. ROOT_WIP allows Python scripts for analysis work
+5. ROOT_REPO is forbidden in ck3lens mode
 
-CRITICAL: ck3lens agents can ONLY edit CK3 mod files in configured local_mods.
-They CANNOT edit Python code, core ck3raven code, or any infrastructure files
-(except Python in the WIP workspace for temporary scripts).
+Note: Enforcement decisions are made by enforcement.py, not this module.
+This module validates artifact structure and trace compliance.
 """
 from __future__ import annotations
 from pathlib import Path
@@ -170,7 +167,7 @@ def _looks_like_mod_path(path_str: str) -> bool:
 
 
 # =============================================================================
-# CK3LENS PATH ENFORCEMENT (CRITICAL SECURITY RULE)
+# CK3LENS FILE RESTRICTION VALIDATION
 # =============================================================================
 
 def enforce_ck3lens_file_restrictions(
@@ -180,20 +177,14 @@ def enforce_ck3lens_file_restrictions(
     summary: dict[str, Any],
 ) -> None:
     """
-    Enforce: ck3lens agents can ONLY edit CK3 mod files (plus Python in WIP).
+    Validate artifact paths against ck3lens mode restrictions.
     
-    Rule: no_python_editing (except WIP), local_mods_only
-    Severity: ERROR (HARD GATE)
+    ROOT_WIP: Python files permitted (.py in WIP workspace)
+    ROOT_USER_DOCS: CK3 mod files only (no .py, no config)
+    ROOT_REPO: Forbidden (use ck3raven-dev mode)
+    ROOT_STEAM/ROOT_GAME: Immutable (write attempts rejected)
     
-    ck3lens is for CK3 modding ONLY. It cannot:
-    - Edit Python files (.py) EXCEPT in WIP workspace
-    - Edit infrastructure code (src/, builder/, tools/, etc.)
-    - Edit configuration files (.json, .yaml, .toml)
-    - Edit documentation (.md, .rst)
-    - Write to ck3raven source (NEVER, even with contract)
-    
-    This prevents ck3lens agents from modifying the ck3raven codebase itself.
-    Infrastructure changes require ck3raven-dev mode.
+    Severity: ERROR (HARD GATE) for forbidden paths
     """
     forbidden_files = []
     forbidden_extensions = []

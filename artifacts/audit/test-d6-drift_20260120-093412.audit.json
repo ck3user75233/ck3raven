@@ -1,0 +1,60 @@
+{
+  "contract_id": "test-d6-drift",
+  "audit_timestamp": "2026-01-20T09:34:03.840592+00:00",
+  "all_passed": false,
+  "can_close": false,
+  "failure_reason": "playset_drift: Playset has changed since contract open",
+  "baseline_snapshot_id": "proof-b0-test-1",
+  "current_snapshot_id": null,
+  "playset_hash_baseline": "sha256:FAKE_WRONG_HASH_TO_TRIGGER_DRIFT",
+  "playset_hash_current": "sha256:d643953660fddf9433c0f2072bc703ba9f7e7004b46497c1879f2b47aea08e75",
+  "checks": [
+    {
+      "check_name": "linter_lock",
+      "passed": true,
+      "message": "Linter lock verified (11 files)",
+      "details": {
+        "lock_hash": "8454fe20a5d0eb3e026c542b72ecb12c"
+      }
+    },
+    {
+      "check_name": "arch_lint",
+      "passed": true,
+      "message": "arch_lint passed (0 warnings)",
+      "details": {
+        "warning_count": 0,
+        "watermark": "8454fe20a5d0eb3e026c542b72ecb12c"
+      }
+    },
+    {
+      "check_name": "playset_drift",
+      "passed": false,
+      "message": "Playset has changed since contract open",
+      "details": {
+        "baseline_hash": "sha256:FAKE_WRONG_HASH_TO_TRIGGE...",
+        "current_hash": "sha256:d643953660fddf9433c0f2072...",
+        "action_required": "Cancel contract and reopen with current playset"
+      }
+    },
+    {
+      "check_name": "symbols_diff",
+      "passed": false,
+      "message": "Skipped - playset drift detected",
+      "details": {
+        "skipped": true
+      }
+    },
+    {
+      "check_name": "nst_validation",
+      "passed": true,
+      "message": "No NST required (no new symbols)",
+      "details": {}
+    },
+    {
+      "check_name": "lxe_validation",
+      "passed": true,
+      "message": "No LXE required (no lint errors)",
+      "details": {}
+    }
+  ]
+}

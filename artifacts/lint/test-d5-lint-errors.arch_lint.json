@@ -1,0 +1,20 @@
+﻿{
+    "exit_code":  1,
+    "lock_verified":  true,
+    "warning_count":  2,
+    "timestamp":  "2026-01-20T18:39:01.119569+08:00",
+    "tool_path":  "tools/arch_lint",
+    "tool_version":  "v2.35",
+    "lock_hash":  "17aff142a29634532286313090b8fe1af1fdcded4f741ac63444dc7e9fbf21d2",
+    "stderr":  "",
+    "stdout":  "[ERROR] tools/test.py:10: Banned term \u0027can_write\u0027 detected",
+    "base_commit":  "9168387",
+    "contract_id":  "test-d5-lint-errors",
+    "files_linted":  [
+                         "tools/compliance/audit_contract_close.py",
+                         "tools/compliance/run_arch_lint_locked.py"
+                     ],
+    "hash_algorithm":  "sha256",
+    "error_count":  5,
+    "head_commit":  "e20716b7d83a9623b1742d1d1a25c0b2dc57b405"
+}

@@ -1,5 +1,5 @@
-"""
-arch_lint v2.35 — Main runner and CLI.
+﻿"""
+arch_lint v2.35 â€” Main runner and CLI.
 
 Orchestrates all lint checks and handles CLI arguments.
 """
@@ -122,7 +122,7 @@ def main() -> int:
             pass
     
     parser = argparse.ArgumentParser(
-        description=f"arch_lint v{__version__} — CK3Raven canonical architecture linter"
+        description=f"arch_lint v{__version__} â€” CK3Raven canonical architecture linter"
     )
     parser.add_argument(
         "root",
@@ -167,6 +167,17 @@ def main() -> int:
         help="Daemon poll interval in seconds (default: 0.75)",
     )
     parser.add_argument(
+        "--files",
+        nargs="*",
+        metavar="FILE",
+        help="Lint only these specific files (disables directory scan)",
+    )
+    parser.add_argument(
+        "--files-from",
+        metavar="MANIFEST",
+        help="Read file list from JSON manifest (array of paths)",
+    )
+    parser.add_argument(
         "--full-scan-mins",
         type=int,
         default=45,
@@ -192,6 +203,20 @@ def main() -> int:
             print(f"Error: {e}")
             return 1
     
+    # Resolve explicit files if provided
+    explicit_files = None
+    if args.files:
+        explicit_files = tuple(Path(f).resolve() for f in args.files)
+    elif args.files_from:
+        import json
+        manifest_path = Path(args.files_from)
+        if manifest_path.exists():
+            manifest_data = json.loads(manifest_path.read_text())
+            if isinstance(manifest_data, list):
+                explicit_files = tuple(Path(f).resolve() for f in manifest_data)
+            elif isinstance(manifest_data, dict) and "files" in manifest_data:
+                explicit_files = tuple(Path(f).resolve() for f in manifest_data["files"])
+    
     # Normal mode
     cfg = LintConfig(
         root=root,
@@ -200,6 +225,7 @@ def main() -> int:
         check_comments=not args.no_comments,
         json_output=args.json,
         errors_only=args.errors_only,
+        explicit_files=explicit_files,
     )
     
     reporter = run(root, cfg)

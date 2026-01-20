@@ -1,0 +1,20 @@
+{
+  "contract_id": "test-d5-scoped",
+  "lock_hash": "17aff142a29634532286313090b8fe1af1fdcded4f741ac63444dc7e9fbf21d2",
+  "lock_verified": true,
+  "timestamp": "2026-01-20T10:38:13.578825+00:00",
+  "hash_algorithm": "sha256",
+  "tool_path": "tools/arch_lint",
+  "tool_version": "v2.35",
+  "exit_code": 0,
+  "stdout": "Scanned: 2 files under C:\\Users\\nateb\\Documents\\CK3 Mod Project 1.18\\ck3raven\r\narch_lint v2.35\r\nErrors: 0  Warnings: 1\r\n\r\nWARN SUSPECT_COMMENT tools/arch_lint/runner.py:87:8 \u2014 Explicit fallback logic detected. Verify architectural compliance. (keyword: 'fallback')\r\n    # Fallback pattern checks\r\n",
+  "stderr": "",
+  "error_count": 0,
+  "warning_count": 0,
+  "files_linted": [
+    "tools/arch_lint/config.py",
+    "tools/arch_lint/runner.py"
+  ],
+  "base_commit": null,
+  "head_commit": "e20716b7d83a9623b1742d1d1a25c0b2dc57b405"
+}

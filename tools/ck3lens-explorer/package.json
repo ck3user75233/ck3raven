@@ -143,6 +143,16 @@
     ],
     "commands": [
       {
+        "command": "ck3lens.approveToken",
+        "title": "CK3 Lens: Approve Token",
+        "icon": "$(verified)"
+      },
+      {
+        "command": "ck3lens.approveTokenFile",
+        "title": "CK3 Lens: Approve This Token",
+        "icon": "$(verified)"
+      },
+      {
         "command": "ck3lens.initSession",
         "title": "CK3 Lens: Initialize Session",
         "icon": "$(database)"

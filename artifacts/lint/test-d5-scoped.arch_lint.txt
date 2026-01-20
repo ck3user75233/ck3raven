@@ -1,0 +1,38 @@
+============================================================
+arch_lint Report (Scoped)
+============================================================
+Contract: test-d5-scoped
+Timestamp: 2026-01-20T10:38:13.578825+00:00
+Lock Hash: 17aff142a29634532286313090b8fe1af1fdcded4f741ac63444dc7e9fbf21d2
+Lock Verified: True
+Tool: tools/arch_lint v2.35
+Exit Code: 0
+Errors: 0
+Warnings: 0
+
+Base Commit: N/A
+Head Commit: e20716b7d83a9623b1742d1d1a25c0b2dc57b405
+Files Linted: 2
+
+WATERMARK: lock=17aff142a29634532286313090b8fe1af1fdcded4f741ac63444dc7e9fbf21d2 alg=sha256 ts=2026-01-20T10:38:13.578825+00:00
+
+============================================================
+FILES MANIFEST
+============================================================
+  tools/arch_lint/config.py
+  tools/arch_lint/runner.py
+
+============================================================
+STDOUT
+============================================================
+Scanned: 2 files under C:\Users\nateb\Documents\CK3 Mod Project 1.18\ck3raven
+arch_lint v2.35
+Errors: 0  Warnings: 1
+
+WARN SUSPECT_COMMENT tools/arch_lint/runner.py:87:8 — Explicit fallback logic detected. Verify architectural compliance. (keyword: 'fallback')
+    # Fallback pattern checks
+
+
+============================================================
+STDERR
+============================================================

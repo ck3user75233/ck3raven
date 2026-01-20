@@ -1,0 +1,13 @@
+{
+  "contract_id": "proof-b0-exists",
+  "checked_at": "2026-01-20T08:43:18.796834+00:00",
+  "playset_hash": "sha256:d643953660fddf9433c0f2072bc703ba9f7e7004b46497c1879f2b47aea08e75",
+  "identities_checked": 4,
+  "results": {
+    "event::game_start": false,
+    "trait::brave": true,
+    "trait::craven": true,
+    "trait::FAKE_TRAIT_NOT_REAL": false
+  },
+  "result_hash": "sha256:ec8a280ebc26daaedc605e5fcea096e658871c70a5e1fa5f476f4a7f2bd53b2e"
+}

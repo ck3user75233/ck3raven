@@ -1,0 +1,68 @@
+{
+  "contract_id": "test-d5-audit",
+  "audit_timestamp": "2026-01-20T10:38:41.735400+00:00",
+  "all_passed": false,
+  "can_close": false,
+  "failure_reason": "playset_drift: No baseline playset_hash - contract missing Phase 1.5 metadata",
+  "baseline_snapshot_id": null,
+  "current_snapshot_id": null,
+  "playset_hash_baseline": null,
+  "playset_hash_current": "sha256:d643953660fddf9433c0f2072bc703ba9f7e7004b46497c1879f2b47aea08e75",
+  "base_commit": "9168387",
+  "head_commit": "e20716b7d83a9623b1742d1d1a25c0b2dc57b405",
+  "changed_files": [
+    "exports/ck3raven_export_dec30.md",
+    "tools/ck3lens_mcp/ck3lens/policy/__init__.py",
+    "tools/ck3lens_mcp/ck3lens/policy/types.py",
+    "tools/ck3lens_mcp/ck3lens/unified_tools.py",
+    "tools/ck3lens_mcp/server.py"
+  ],
+  "checks": [
+    {
+      "check_name": "linter_lock",
+      "passed": true,
+      "message": "Linter lock verified (11 files)",
+      "details": {
+        "lock_hash": "17aff142a29634532286313090b8fe1a"
+      }
+    },
+    {
+      "check_name": "arch_lint",
+      "passed": true,
+      "message": "arch_lint passed (4 files, 0 warnings)",
+      "details": {
+        "files_linted": 4,
+        "warning_count": 0,
+        "watermark": "17aff142a29634532286313090b8fe1a"
+      }
+    },
+    {
+      "check_name": "playset_drift",
+      "passed": false,
+      "message": "No baseline playset_hash - contract missing Phase 1.5 metadata",
+      "details": {
+        "action_required": "Contract must capture playset_hash at open"
+      }
+    },
+    {
+      "check_name": "symbols_diff",
+      "passed": false,
+      "message": "Skipped - playset drift detected",
+      "details": {
+        "skipped": true
+      }
+    },
+    {
+      "check_name": "nst_validation",
+      "passed": true,
+      "message": "No NST required (no new symbols)",
+      "details": {}
+    },
+    {
+      "check_name": "lxe_validation",
+      "passed": true,
+      "message": "No LXE required (no lint errors)",
+      "details": {}
+    }
+  ]
+}

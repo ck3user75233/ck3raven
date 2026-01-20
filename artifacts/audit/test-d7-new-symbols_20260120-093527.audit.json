@@ -1,0 +1,79 @@
+{
+  "contract_id": "test-d7-new-symbols",
+  "audit_timestamp": "2026-01-20T09:35:17.620481+00:00",
+  "all_passed": false,
+  "can_close": false,
+  "failure_reason": "symbols_diff: New symbol identities detected: 5",
+  "baseline_snapshot_id": "test-d7-fake-baseline",
+  "current_snapshot_id": null,
+  "playset_hash_baseline": "sha256:d643953660fddf9433c0f2072bc703ba9f7e7004b46497c1879f2b47aea08e75",
+  "playset_hash_current": "sha256:d643953660fddf9433c0f2072bc703ba9f7e7004b46497c1879f2b47aea08e75",
+  "checks": [
+    {
+      "check_name": "linter_lock",
+      "passed": true,
+      "message": "Linter lock verified (11 files)",
+      "details": {
+        "lock_hash": "8454fe20a5d0eb3e026c542b72ecb12c"
+      }
+    },
+    {
+      "check_name": "arch_lint",
+      "passed": true,
+      "message": "arch_lint passed (0 warnings)",
+      "details": {
+        "warning_count": 0,
+        "watermark": "8454fe20a5d0eb3e026c542b72ecb12c"
+      }
+    },
+    {
+      "check_name": "playset_drift",
+      "passed": true,
+      "message": "Playset unchanged",
+      "details": {
+        "playset_hash": "sha256:d643953660fddf9433c0f2072..."
+      }
+    },
+    {
+      "check_name": "symbols_diff",
+      "passed": false,
+      "message": "New symbol identities detected: 5",
+      "details": {
+        "added_count": 5,
+        "added_by_type": {
+          "achievement": 5
+        },
+        "samples": [
+          "achievement::a_house_of_my_own_achievement",
+          "achievement::a_legacy_to_last_the_ages_achievement",
+          "achievement::a_name_known_throughout_the_world_achievement",
+          "achievement::a_perfect_circle_achievement",
+          "achievement::above_god_achievement"
+        ],
+        "requires_nst": true
+      }
+    },
+    {
+      "check_name": "nst_validation",
+      "passed": false,
+      "message": "NST required for 5 new symbol(s) but no approved token found",
+      "details": {
+        "new_identities": [
+          "achievement:None:a_house_of_my_own_achievement",
+          "achievement:None:a_legacy_to_last_the_ages_achievement",
+          "achievement:None:a_name_known_throughout_the_world_achievement",
+          "achievement:None:a_perfect_circle_achievement",
+          "achievement:None:above_god_achievement"
+        ],
+        "action_required": "Create NST proposal and get user approval",
+        "proposal_location": "artifacts/tokens_proposed/nst_test-d7-new-symbols.json"
+      }
+    },
+    {
+      "check_name": "lxe_validation",
+      "passed": true,
+      "message": "No LXE required (no lint errors)",
+      "details": {}
+    }
+  ]
+}
