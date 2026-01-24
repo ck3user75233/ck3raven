@@ -547,25 +547,36 @@ def open_contract(
     Raises:
         ValueError: If contract validation fails
     """
-    # Normalize targets
-    if targets and isinstance(targets[0], dict):
-        targets = [ContractTarget.from_dict(t) for t in targets]
+    # Normalize targets to list[ContractTarget]
+    normalized_targets: list[ContractTarget]
+    if targets:
+        if isinstance(targets[0], dict):
+            normalized_targets = [ContractTarget.from_dict(t) for t in targets]  # type: ignore[arg-type]
+        else:
+            normalized_targets = list(targets)  # type: ignore[arg-type]
+    else:
+        normalized_targets = []
     
     # Normalize work_declaration
+    normalized_work: WorkDeclaration
     if isinstance(work_declaration, dict):
-        work_declaration = WorkDeclaration.from_dict(work_declaration)
+        normalized_work = WorkDeclaration.from_dict(work_declaration)
+    else:
+        normalized_work = work_declaration
     
-    # Phase 1.5: Capture baseline symbol snapshot and playset hash
-    baseline_snapshot_path = None
-    baseline_playset_hash = None
-    base_commit = None
+    # Phase 1.5: Evidence capture deferred to contract CLOSE audit.
+    # Contract OPEN must be O(1) - no DB queries, no symbol snapshots.
+    baseline_snapshot_path: Optional[str] = None
+    baseline_playset_hash: Optional[str] = None
+    base_commit: Optional[str] = None
     
-    # Capture git base commit for scoped lint
+    # Capture git base commit for scoped lint (fast, 5s timeout)
     try:
         import subprocess
+        repo_root = Path(__file__).resolve().parents[4]
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            cwd=str(repo_root) if 'repo_root' in dir() else str(Path(__file__).resolve().parents[4]),
+            cwd=str(repo_root),
             capture_output=True,
             text=True,
             timeout=5,
@@ -576,33 +587,8 @@ def open_contract(
         import sys
         print(f"Warning: Failed to capture git base_commit: {e}", file=sys.stderr)
     
-    try:
-        # Add repo root to path for imports
-        import sys
-        repo_root = Path(__file__).resolve().parents[4]  # contract_v1.py -> policy -> ck3lens -> ck3lens_mcp -> tools -> repo
-        if str(repo_root) not in sys.path:
-            sys.path.insert(0, str(repo_root))
-        
-        from tools.compliance.symbols_lock import (
-            create_symbols_snapshot,
-            get_active_playset_identity,
-        )
-        
-        # Create baseline snapshot
-        contract_id = ContractV1.generate_id()
-        snapshot = create_symbols_snapshot(f"baseline_{contract_id}")
-        snapshot_saved_path = snapshot.save()
-        baseline_snapshot_path = str(snapshot_saved_path)
-        
-        # Capture playset hash
-        baseline_playset_hash = snapshot.playset.playset_hash
-        
-    except Exception as e:
-        # Phase 1.5 metadata capture failed - log but continue
-        # The audit will fail on close if this is required
-        import sys
-        print(f"Warning: Failed to capture Phase 1.5 baseline: {e}", file=sys.stderr)
-        contract_id = ContractV1.generate_id()
+    # Generate contract ID (instant)
+    contract_id = ContractV1.generate_id()
     
     contract = ContractV1(
         contract_id=contract_id,
@@ -610,8 +596,8 @@ def open_contract(
         root_category=root_category,
         intent=intent,
         operations=operations,
-        targets=targets,
-        work_declaration=work_declaration,
+        targets=normalized_targets,
+        work_declaration=normalized_work,
         created_at=datetime.now().isoformat(),
         author=author,
         expires_at=(datetime.now() + timedelta(hours=expires_hours)).isoformat(),
@@ -628,8 +614,6 @@ def open_contract(
     
     save_contract(contract)
     return contract
-
-
 def close_contract(contract_id: str, notes: Optional[str] = None) -> ContractV1:
     """
     Close a contract with Phase 1.5 compliance audit.

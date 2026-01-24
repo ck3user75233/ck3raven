@@ -21,7 +21,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Literal
 
-from ck3lens.policy.capability_matrix import validate_operations
+from ck3lens.policy.capability_matrix import Operation, validate_operations
 
 # =============================================================================
 # STARTUP TRIPWIRE - Verify running from correct Python environment
@@ -1134,7 +1134,15 @@ def ck3_db_delete(
                     "asts_deleted": asts_count,        # Cascaded from files
                 }
                 trace.log("ck3lens.db_delete", {"target": target, "scope": scope}, result)
-                return result
+                # DEBUG: Log successful contract open before return
+            debug_log = Path.home() / ".ck3raven" / "contract_debug.log"
+            with open(debug_log, "a") as f:
+                f.write(f"\n=== {datetime.now().isoformat()} ===\n")
+                f.write(f"CONTRACT_OPEN_SUCCESS: {contract.contract_id}\n")
+                f.write(f"  Response size: {len(serialized)} bytes\n")
+                f.write(f"  About to return result dict\n")
+            
+            return result
             
         elif target == "content_versions":
             where, params = get_where_clause("content_versions", "content_version_id")
@@ -3081,6 +3089,12 @@ def ck3_contract(
             }
         
         try:
+            import json
+            from pathlib import Path
+            from datetime import datetime
+            import uuid
+            
+            # Call open_contract (no debug logging in hot path)
             contract = open_contract(
                 mode=mode_enum,
                 root_category=root_category,
@@ -3091,21 +3105,107 @@ def ck3_contract(
                 expires_hours=expires_hours,
             )
             
+            # Trace log (minimal, no large payloads)
             trace.log("ck3lens.contract.open", {
-                "intent": intent,
+                "intent": intent[:100] if intent else "",
                 "root_category": root_category,
             }, {"contract_id": contract.contract_id})
             
-            return {
+            # =========================================================
+            # MINIMAL RESPONSE - transport-safe, strictly serializable
+            # =========================================================
+            
+            # Convert expires_at to ISO string if datetime
+            # Note: ContractV1.expires_at is Optional[str], but handle datetime for robustness
+            if contract.expires_at is None:
+                expires_str = ""
+            elif isinstance(contract.expires_at, str):
+                expires_str = contract.expires_at
+            else:
+                # In case it's a datetime object (shouldn't happen with current schema)
+                expires_str = contract.expires_at.isoformat()  # type: ignore[union-attr]
+            
+            # Convert enums to strings (RootCategory | str, Operation | str)
+            if isinstance(contract.root_category, str):
+                root_cat_str = contract.root_category
+            else:
+                root_cat_str = contract.root_category.value
+            
+            ops_list_str = [
+                op if isinstance(op, str) else op.value
+                for op in contract.operations
+            ]
+            
+            # Build minimal response
+            result = {
                 "success": True,
                 "contract_id": contract.contract_id,
-                "root_category": contract.root_category,
-                "operations": contract.operations,
-                "expires_at": contract.expires_at,
-                "schema_version": "v1",
+                "expires_at": expires_str,
+                "mode": agent_mode,
+                "root_category": root_cat_str,
+                "operations": ops_list_str,
             }
+            
+            # =========================================================
+            # TRANSPORT SAFETY GUARDS
+            # =========================================================
+            
+            # Guard 1: Verify JSON-serializable
+            try:
+                serialized = json.dumps(result)
+            except (TypeError, ValueError) as ser_err:
+                error_id = f"ser-{uuid.uuid4().hex[:8]}"
+                # Log to file for debugging
+                debug_log = Path.home() / ".ck3raven" / "contract_debug.log"
+                with open(debug_log, "a") as f:
+                    f.write(f"\n=== {datetime.now().isoformat()} ===\n")
+                    f.write(f"SERIALIZATION_ERROR: {error_id}\n")
+                    f.write(f"  Error: {ser_err}\n")
+                    f.write(f"  Result keys: {list(result.keys())}\n")
+                return {
+                    "success": False,
+                    "code": "CONTRACT_OPEN_SERIALIZATION_ERROR",
+                    "message": f"Response not JSON-serializable. error_id={error_id}",
+                    "error_id": error_id,
+                }
+            
+            # Guard 2: Response size cap (32KB)
+            MAX_RESPONSE_BYTES = 32 * 1024
+            if len(serialized) > MAX_RESPONSE_BYTES:
+                error_id = f"size-{uuid.uuid4().hex[:8]}"
+                debug_log = Path.home() / ".ck3raven" / "contract_debug.log"
+                with open(debug_log, "a") as f:
+                    f.write(f"\n=== {datetime.now().isoformat()} ===\n")
+                    f.write(f"RESPONSE_TOO_LARGE: {error_id}\n")
+                    f.write(f"  Size: {len(serialized)} bytes\n")
+                return {
+                    "success": False,
+                    "code": "CONTRACT_RESPONSE_TOO_LARGE",
+                    "message": f"Response exceeds {MAX_RESPONSE_BYTES} bytes. error_id={error_id}",
+                    "error_id": error_id,
+                }
+            
+            return result
+            
         except Exception as e:
-            return {"error": str(e)}
+            import traceback
+            import uuid
+            from pathlib import Path
+            from datetime import datetime
+            
+            error_id = f"err-{uuid.uuid4().hex[:8]}"
+            debug_log = Path.home() / ".ck3raven" / "contract_debug.log"
+            with open(debug_log, "a") as f:
+                f.write(f"\n=== {datetime.now().isoformat()} ===\n")
+                f.write(f"CONTRACT_OPEN_ERROR: {error_id}\n")
+                f.write(f"  Exception: {e}\n")
+                f.write(traceback.format_exc())
+            return {
+                "success": False,
+                "code": "CONTRACT_OPEN_ERROR",
+                "message": f"Internal error. Logged as {error_id}",
+                "error_id": error_id,
+            }
     
     elif command == "close":
         target_id = contract_id
@@ -3122,11 +3222,12 @@ def ck3_contract(
                 "contract_id": target_id,
             }, {"closure_commit": closure_commit})
             
+            # Serialize to transport-safe types
             return {
                 "success": True,
                 "contract_id": contract.contract_id,
-                "closed_at": contract.closed_at,
-                "status": contract.status,
+                "closed_at": contract.closed_at if isinstance(contract.closed_at, str) else (contract.closed_at.isoformat() if contract.closed_at else None),
+                "status": contract.status if isinstance(contract.status, str) else str(contract.status),
             }
         except Exception as e:
             return {"error": str(e)}
@@ -3159,14 +3260,23 @@ def ck3_contract(
         active = get_active_contract()
         
         if active:
+            # Serialize enums/datetime to transport-safe strings
+            root_cat_str = active.root_category.value if hasattr(active.root_category, 'value') else str(active.root_category)
+            ops_list_str = [
+                op.value if hasattr(op, 'value') else str(op)
+                for op in active.operations
+            ]
+            expires_str = active.expires_at if isinstance(active.expires_at, str) else (active.expires_at.isoformat() if active.expires_at else None)
+            created_str = active.created_at if isinstance(active.created_at, str) else (active.created_at.isoformat() if active.created_at else None)
+            
             return {
                 "has_active_contract": True,
                 "contract_id": active.contract_id,
                 "intent": active.intent,
-                "root_category": active.root_category,
-                "operations": active.operations,
-                "expires_at": active.expires_at,
-                "created_at": active.created_at,
+                "root_category": root_cat_str,
+                "operations": ops_list_str,
+                "expires_at": expires_str,
+                "created_at": created_str,
                 "schema_version": "v1",
             }
         else:
@@ -3181,19 +3291,24 @@ def ck3_contract(
             include_archived=include_archived,
         )
         
+        # Serialize each contract to transport-safe types
+        def serialize_contract(c):
+            root_cat_str = c.root_category.value if hasattr(c.root_category, 'value') else str(c.root_category)
+            status_str = c.status if isinstance(c.status, str) else str(c.status)
+            created_str = c.created_at if isinstance(c.created_at, str) else (c.created_at.isoformat() if c.created_at else None)
+            closed_str = c.closed_at if isinstance(c.closed_at, str) else (c.closed_at.isoformat() if c.closed_at else None)
+            return {
+                "contract_id": c.contract_id,
+                "intent": c.intent,
+                "status": status_str,
+                "root_category": root_cat_str,
+                "created_at": created_str,
+                "closed_at": closed_str,
+            }
+        
         return {
             "count": len(contracts),
-            "contracts": [
-                {
-                    "contract_id": c.contract_id,
-                    "intent": c.intent,
-                    "status": c.status,
-                    "root_category": c.root_category,
-                    "created_at": c.created_at,
-                    "closed_at": c.closed_at,
-                }
-                for c in contracts
-            ],
+            "contracts": [serialize_contract(c) for c in contracts],
         }
     
     elif command == "flush":
