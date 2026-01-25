@@ -31,6 +31,9 @@ EXCLUDE_DIRS = {
     "exports",  # Don't include previous exports in new exports
     ".wip",     # Agent workspace - transient
     "archive",  # Deprecated/archived code
+    "artifacts",  # Runtime artifacts - lint reports, symbol baselines, etc.
+    "out",      # VS Code extension build output
+    "dist",     # Build distributions
 }
 
 EXCLUDE_FILES = {
