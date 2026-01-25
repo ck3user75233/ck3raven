@@ -1716,10 +1716,11 @@ def ck3_file(
     Args:
         command: Operation to perform
         path: File path (for get/read from filesystem)
-        mod_name: Target for file operations. Can be:
-            - "wip" → WIP workspace (~/.ck3raven/wip/) - always writable
-            - "vanilla" → Vanilla game files (read-only)
-            - Mod name → Mod from active playset (writable if under local_mods_folder)
+        mod_name: Target for file operations (semantic alias for RootCategory domains). Can be:
+            - "wip" → WIP workspace (~/.ck3raven/wip/) - always writable (ROOT_WIP domain)
+            - "vanilla" → Vanilla game files - read-only (ROOT_GAME domain)
+            - Mod name → Mod from active playset (ROOT_USER_DOCS if local, ROOT_STEAM if workshop)
+              Writable only if mod path is under local_mods_folder
         rel_path: Relative path within target
         include_ast: Include parsed AST (for get)
         content: File content (for write)
