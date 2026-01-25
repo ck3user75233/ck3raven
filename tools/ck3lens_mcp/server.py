@@ -3105,27 +3105,77 @@ def ck3_contract(
             
             # =========================================================
             # MINIMAL RESPONSE - transport-safe, strictly serializable
-            # Rule: Only { ok, contract_id, expires_at, instance_id, window_id }
-            # No large JSON, no echoing entire contract, no symbol snapshots
-            # Verbose data goes to artifact file referenced by path
             # =========================================================
             
             # Convert expires_at to ISO string if datetime
+            # Note: ContractV1.expires_at is Optional[str], but handle datetime for robustness
             if contract.expires_at is None:
                 expires_str = ""
             elif isinstance(contract.expires_at, str):
                 expires_str = contract.expires_at
             else:
+                # In case it's a datetime object (shouldn't happen with current schema)
                 expires_str = contract.expires_at.isoformat()  # type: ignore[union-attr]
             
-            # Build MINIMAL response per spec - no extra fields
+            # Convert enums to strings (RootCategory | str, Operation | str)
+            if isinstance(contract.root_category, str):
+                root_cat_str = contract.root_category
+            else:
+                root_cat_str = contract.root_category.value
+            
+            ops_list_str = [
+                op if isinstance(op, str) else op.value
+                for op in contract.operations
+            ]
+            
+            # Build minimal response
             result = {
-                "ok": True,
+                "success": True,
                 "contract_id": contract.contract_id,
                 "expires_at": expires_str,
-                "instance_id": _instance_id,
-                "window_id": f"{_instance_id}-{os.getpid()}",
+                "mode": agent_mode,
+                "root_category": root_cat_str,
+                "operations": ops_list_str,
             }
+            
+            # =========================================================
+            # TRANSPORT SAFETY GUARDS
+            # =========================================================
+            
+            # Guard 1: Verify JSON-serializable
+            try:
+                serialized = json.dumps(result)
+            except (TypeError, ValueError) as ser_err:
+                error_id = f"ser-{uuid.uuid4().hex[:8]}"
+                # Log to file for debugging
+                debug_log = Path.home() / ".ck3raven" / "contract_debug.log"
+                with open(debug_log, "a") as f:
+                    f.write(f"\n=== {datetime.now().isoformat()} ===\n")
+                    f.write(f"SERIALIZATION_ERROR: {error_id}\n")
+                    f.write(f"  Error: {ser_err}\n")
+                    f.write(f"  Result keys: {list(result.keys())}\n")
+                return {
+                    "success": False,
+                    "code": "CONTRACT_OPEN_SERIALIZATION_ERROR",
+                    "message": f"Response not JSON-serializable. error_id={error_id}",
+                    "error_id": error_id,
+                }
+            
+            # Guard 2: Response size cap (32KB)
+            MAX_RESPONSE_BYTES = 32 * 1024
+            if len(serialized) > MAX_RESPONSE_BYTES:
+                error_id = f"size-{uuid.uuid4().hex[:8]}"
+                debug_log = Path.home() / ".ck3raven" / "contract_debug.log"
+                with open(debug_log, "a") as f:
+                    f.write(f"\n=== {datetime.now().isoformat()} ===\n")
+                    f.write(f"RESPONSE_TOO_LARGE: {error_id}\n")
+                    f.write(f"  Size: {len(serialized)} bytes\n")
+                return {
+                    "success": False,
+                    "code": "CONTRACT_RESPONSE_TOO_LARGE",
+                    "message": f"Response exceeds {MAX_RESPONSE_BYTES} bytes. error_id={error_id}",
+                    "error_id": error_id,
+                }
             
             return result
             
