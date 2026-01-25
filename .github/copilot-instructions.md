@@ -143,15 +143,18 @@ For Python scripts and analysis, use the WIP workspace at `~/.ck3raven/wip/`
 
 **How to write to WIP:**
 ```python
-# Use path parameter with wip: prefix for WIP workspace files
-ck3_file(command="write", path="wip:analysis.py", content="...")
-ck3_file(command="read", path="wip:analysis.py")
+# Option 1: Use mod_name="wip" (pseudo-mod-name that routes to WIP)
+ck3_file(command="write", mod_name="wip", rel_path="analysis.py", content="...")
+ck3_file(command="read", mod_name="wip", rel_path="analysis.py")
+
+# Option 2: Use path with canonical address
+ck3_file(command="write", path="wip:/analysis.py", content="...")
 ```
 
-**Note:** `mod_name` is for mod names from the active playset only.
-For other domains, use `path` with canonical prefixes:
-- `wip:` → WIP workspace (always writable, no contract needed)
-- `vanilla:` → Vanilla game files (read-only)
+**mod_name special values:**
+- `"wip"` → routes to WIP workspace (always writable, no contract needed)
+- `"vanilla"` → routes to vanilla game files (read-only)
+- Otherwise → treated as mod name from active playset
 
 **Intent types for WIP:**
 - `script_wip` - Draft/run Python scripts
