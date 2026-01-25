@@ -1134,14 +1134,6 @@ def ck3_db_delete(
                     "asts_deleted": asts_count,        # Cascaded from files
                 }
                 trace.log("ck3lens.db_delete", {"target": target, "scope": scope}, result)
-                # DEBUG: Log successful contract open before return
-            debug_log = Path.home() / ".ck3raven" / "contract_debug.log"
-            with open(debug_log, "a") as f:
-                f.write(f"\n=== {datetime.now().isoformat()} ===\n")
-                f.write(f"CONTRACT_OPEN_SUCCESS: {contract.contract_id}\n")
-                f.write(f"  Response size: {len(serialized)} bytes\n")
-                f.write(f"  About to return result dict\n")
-            
             return result
             
         elif target == "content_versions":
@@ -3261,9 +3253,9 @@ def ck3_contract(
         
         if active:
             # Serialize enums/datetime to transport-safe strings
-            root_cat_str = active.root_category.value if hasattr(active.root_category, 'value') else str(active.root_category)
+            root_cat_str = active.root_category if isinstance(active.root_category, str) else active.root_category.value
             ops_list_str = [
-                op.value if hasattr(op, 'value') else str(op)
+                op if isinstance(op, str) else op.value
                 for op in active.operations
             ]
             expires_str = active.expires_at if isinstance(active.expires_at, str) else (active.expires_at.isoformat() if active.expires_at else None)
@@ -3293,7 +3285,7 @@ def ck3_contract(
         
         # Serialize each contract to transport-safe types
         def serialize_contract(c):
-            root_cat_str = c.root_category.value if hasattr(c.root_category, 'value') else str(c.root_category)
+            root_cat_str = c.root_category if isinstance(c.root_category, str) else c.root_category.value
             status_str = c.status if isinstance(c.status, str) else str(c.status)
             created_str = c.created_at if isinstance(c.created_at, str) else (c.created_at.isoformat() if c.created_at else None)
             closed_str = c.closed_at if isinstance(c.closed_at, str) else (c.closed_at.isoformat() if c.closed_at else None)
