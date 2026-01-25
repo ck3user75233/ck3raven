@@ -443,8 +443,8 @@ class Parser:
         if token is None or token.type == TokenType.EOF:
             return None
         
-        # Skip comments and newlines (shouldn't be in token stream normally)
-        if token.type in (TokenType.COMMENT, TokenType.NEWLINE):
+        # Skip comments, newlines, and non-standard tokens that some mods use
+        if token.type in (TokenType.COMMENT, TokenType.NEWLINE, TokenType.SEMICOLON, TokenType.BACKTICK):
             self._advance()
             return self._parse_element()
         
@@ -988,17 +988,36 @@ def parse_source_recovering(source: str, filename: str = "<unknown>") -> ParseRe
 
 
 def parse_file(filepath: str) -> RootNode:
-    """Parse a file into AST. Handles encoding fallback."""
-    # Try UTF-8 with BOM first, then UTF-8, then latin-1 (which always succeeds)
-    for encoding in ['utf-8-sig', 'utf-8', 'latin-1']:
-        try:
-            with open(filepath, 'r', encoding=encoding) as f:
-                source = f.read()
-            break
-        except UnicodeDecodeError:
-            continue
+    """Parse a file into AST. Handles encoding fallback with error recovery.
+    
+    Mixed-encoding files (UTF-8 with some Windows-1252 characters) are handled
+    gracefully using errors='replace' to substitute invalid bytes with U+FFFD.
+    """
+    # Try UTF-8 with BOM first (with error replacement for mixed-encoding files)
+    # This handles files that start with UTF-8 BOM but contain some non-UTF-8 bytes
+    try:
+        with open(filepath, 'r', encoding='utf-8-sig', errors='replace') as f:
+            source = f.read()
+        return parse_source(source, filepath)
+    except (IOError, OSError):
+        # Only fall back on IO errors, not parse/lexer errors
+        pass
+    
+    # Fallback: Try plain UTF-8 with error replacement
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            source = f.read()
+        return parse_source(source, filepath)
+    except (IOError, OSError):
+        # Only fall back on IO errors, not parse/lexer errors
+        pass
+    
+    # Final fallback: latin-1 (always succeeds for reading)
+    with open(filepath, 'r', encoding='latin-1') as f:
+        source = f.read()
     
     return parse_source(source, filepath)
+
 
 
 if __name__ == "__main__":

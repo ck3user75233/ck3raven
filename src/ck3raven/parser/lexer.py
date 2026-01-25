@@ -40,6 +40,8 @@ class TokenType(Enum):
     EOF = auto()             # End of file
     BOOL = auto()            # yes, no
     COMMA = auto()           # , (used in some defines like { "a", "b" })
+    SEMICOLON = auto()       # ; (not standard CK3, but some mods use it - we ignore it)
+    BACKTICK = auto()        # ` (not standard CK3, but appears in some mods - we ignore it)
 
 
 @dataclass
@@ -403,6 +405,20 @@ class Lexer:
                 yield Token(TokenType.COMMA, ',', start_line, start_col, start_offset, self.pos)
                 continue
             
+            # Semicolon (not standard CK3, but some mods use it as statement terminator)
+            # We emit the token but parser will ignore it
+            if ch == ';':
+                self._advance()
+                yield Token(TokenType.SEMICOLON, ';', start_line, start_col, start_offset, self.pos)
+                continue
+            
+            # Backtick (not standard CK3, appears in some mod typos)
+            # We emit the token but parser will ignore it
+            if ch == '`':
+                self._advance()
+                yield Token(TokenType.BACKTICK, '`', start_line, start_col, start_offset, self.pos)
+                continue
+            
             # Parameter substitution: $PARAM$
             if ch == '$':
                 self._advance()
@@ -453,15 +469,32 @@ class Lexer:
 
 
 def tokenize_file(filepath: str, **kwargs) -> List[Token]:
-    """Tokenize a file and return all tokens. Handles encoding fallback."""
-    # Try UTF-8 with BOM first, then UTF-8, then latin-1 (which always succeeds)
-    for encoding in ['utf-8-sig', 'utf-8', 'latin-1']:
+    """Tokenize a file and return all tokens. Handles encoding fallback with error recovery.
+    
+    Mixed-encoding files (UTF-8 with some Windows-1252 characters) are handled
+    gracefully using errors='replace' to substitute invalid bytes with U+FFFD.
+    """
+    source = None
+    
+    # Try UTF-8 with BOM first (with error replacement for mixed-encoding files)
+    try:
+        with open(filepath, 'r', encoding='utf-8-sig', errors='replace') as f:
+            source = f.read()
+    except Exception:
+        pass
+    
+    # Fallback: Try plain UTF-8 with error replacement  
+    if source is None:
         try:
-            with open(filepath, 'r', encoding=encoding) as f:
+            with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
                 source = f.read()
-            break
-        except UnicodeDecodeError:
-            continue
+        except Exception:
+            pass
+    
+    # Final fallback: latin-1 (always succeeds)
+    if source is None:
+        with open(filepath, 'r', encoding='latin-1') as f:
+            source = f.read()
     
     lexer = Lexer(source, filename=filepath)
     return lexer.tokenize_all(**kwargs)

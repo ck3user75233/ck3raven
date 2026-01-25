@@ -289,11 +289,13 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
     }
 
     dispose(): void {
+        // Signal VS Code that our server definitions are being removed
+        // This helps VS Code's MCP system clean up cached servers
+        this._onDidChangeDefinitions.fire();
         this._onDidChangeDefinitions.dispose();
         this.disposables.forEach(d => d.dispose());
     }
 }
-
 /**
  * Result of registering the MCP server provider.
  * Both disposables must be disposed on deactivate for clean reload.
@@ -352,9 +354,6 @@ export function registerMcpServerProvider(
         );
         
         // Also add to subscriptions as backup, but caller should dispose explicitly
-        context.subscriptions.push(registration);
-        context.subscriptions.push(provider);
-        
         logger.info('MCP Server Definition Provider registered successfully');
         logger.info(`Per-instance isolation enabled with instance ID: ${provider.getInstanceId()}`);
         

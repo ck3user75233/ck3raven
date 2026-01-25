@@ -31,6 +31,36 @@
       "comment": "Credits file is not a CK3 script"
     },
     {
+      "match": "credit.txt",
+      "envelope": "E_SKIP",
+      "comment": "Credits file is not a CK3 script"
+    },
+    {
+      "match": "description.txt",
+      "envelope": "E_SKIP",
+      "comment": "Description file is not a CK3 script"
+    },
+    {
+      "match": "compatibility.txt",
+      "envelope": "E_SKIP",
+      "comment": "Compatibility info file is not a CK3 script"
+    },
+    {
+      "match": "modding_info.txt",
+      "envelope": "E_SKIP",
+      "comment": "Modding info file is not a CK3 script"
+    },
+    {
+      "match": "STEAM_DESCRIPTION.txt",
+      "envelope": "E_SKIP",
+      "comment": "Steam description file is not a CK3 script"
+    },
+    {
+      "match": "changelog",
+      "envelope": "E_SKIP",
+      "comment": "Changelog files are not CK3 scripts"
+    },
+    {
       "match": "CHANGES.txt",
       "envelope": "E_SKIP",
       "comment": "Changelog file is not a CK3 script"
