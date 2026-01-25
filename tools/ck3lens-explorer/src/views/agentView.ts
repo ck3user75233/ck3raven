@@ -52,6 +52,32 @@ export const MODE_DEFINITIONS: Record<string, {
     }
 };
 
+/**
+ * Generate initialization prompt with current MCP instance ID.
+ * 
+ * CRITICAL: The MCP server instance ID changes on window reload.
+ * Tool names are prefixed with mcp_ck3_lens_{instanceId}_
+ * Agents MUST use the current instance ID, not IDs from conversation history.
+ */
+export function generateInitPrompt(mode: LensMode, instanceId: string | undefined): string {
+    const modeDef = MODE_DEFINITIONS[mode];
+    if (!modeDef) {
+        return '';
+    }
+    
+    // If we have an instance ID, inject it prominently into the prompt
+    if (instanceId) {
+        const toolPrefix = `mcp_ck3_lens_${instanceId}_`;
+        return `⚠️ CRITICAL: The current MCP server instance ID is "${instanceId}". ` +
+            `All tool names are prefixed with "${toolPrefix}" (e.g., ${toolPrefix}ck3_get_mode_instructions). ` +
+            `NEVER use tool names from conversation history - the instance ID changes on window reload.\n\n` +
+            modeDef.initPrompt;
+    }
+    
+    // Fallback to static prompt if no instance ID available
+    return modeDef.initPrompt;
+}
+
 class AgentTreeItem extends vscode.TreeItem {
     constructor(
         public readonly label: string,
@@ -745,9 +771,9 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
         this.persistState();
         this.refresh();
 
-        // Open chat with initialization prompt
+        // Open chat with initialization prompt (includes current MCP instance ID)
         await vscode.commands.executeCommand('workbench.action.chat.open', {
-            query: modeDef.initPrompt
+            query: generateInitPrompt(mode, this.instanceId)
         });
 
         vscode.window.showInformationMessage(
@@ -776,11 +802,11 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
         this.persistState();
         this.refresh();
 
-        // Create new chat with initialization prompt
+        // Create new chat with initialization prompt (includes current MCP instance ID)
         await vscode.commands.executeCommand('workbench.action.chat.newChat');
         await new Promise(resolve => setTimeout(resolve, 100));
         await vscode.commands.executeCommand('workbench.action.chat.open', {
-            query: modeDef.initPrompt
+            query: generateInitPrompt(mode, this.instanceId)
         });
 
         vscode.window.showInformationMessage(
