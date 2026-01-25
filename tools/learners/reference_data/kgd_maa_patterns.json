@@ -1,0 +1,101 @@
+[
+  {
+    "category": "archers",
+    "field": "toughness",
+    "multiplier_mean": 0.9444444444444444,
+    "multiplier_stddev": 0.07856742013183865,
+    "absolute_change_mean": -1.0,
+    "absolute_change_stddev": 1.4142135623730951,
+    "sample_count": 2,
+    "min_multiplier": 0.8888888888888888,
+    "max_multiplier": 1.0
+  },
+  {
+    "category": "archers",
+    "field": "stack",
+    "multiplier_mean": 0.4,
+    "multiplier_stddev": 0.0,
+    "absolute_change_mean": -60.0,
+    "absolute_change_stddev": 0.0,
+    "sample_count": 2,
+    "min_multiplier": 0.4,
+    "max_multiplier": 0.4
+  },
+  {
+    "category": "archers",
+    "field": "damage",
+    "multiplier_mean": 0.9247619047619048,
+    "multiplier_stddev": 0.1629712771877567,
+    "absolute_change_mean": -3.5,
+    "absolute_change_stddev": 6.363961030678928,
+    "sample_count": 2,
+    "min_multiplier": 0.8095238095238095,
+    "max_multiplier": 1.04
+  },
+  {
+    "category": "heavy_infantry",
+    "field": "toughness",
+    "multiplier_mean": 1.0,
+    "multiplier_stddev": 0.0,
+    "absolute_change_mean": 0.0,
+    "absolute_change_stddev": 0.0,
+    "sample_count": 2,
+    "min_multiplier": 1.0,
+    "max_multiplier": 1.0
+  },
+  {
+    "category": "heavy_infantry",
+    "field": "stack",
+    "multiplier_mean": 0.45,
+    "multiplier_stddev": 0.07071067811865474,
+    "absolute_change_mean": -55.0,
+    "absolute_change_stddev": 7.0710678118654755,
+    "sample_count": 2,
+    "min_multiplier": 0.4,
+    "max_multiplier": 0.5
+  },
+  {
+    "category": "heavy_infantry",
+    "field": "damage",
+    "multiplier_mean": 1.0,
+    "multiplier_stddev": 0.0,
+    "absolute_change_mean": 0.0,
+    "absolute_change_stddev": 0.0,
+    "sample_count": 2,
+    "min_multiplier": 1.0,
+    "max_multiplier": 1.0
+  },
+  {
+    "category": "siege_weapon",
+    "field": "toughness",
+    "multiplier_mean": 1.0,
+    "multiplier_stddev": 0.0,
+    "absolute_change_mean": 0.0,
+    "absolute_change_stddev": 0.0,
+    "sample_count": 4,
+    "min_multiplier": 1.0,
+    "max_multiplier": 1.0
+  },
+  {
+    "category": "siege_weapon",
+    "field": "siege_value",
+    "multiplier_mean": 1.0,
+    "multiplier_stddev": 0.0,
+    "absolute_change_mean": 0.0,
+    "absolute_change_stddev": 0.0,
+    "sample_count": 4,
+    "min_multiplier": 1.0,
+    "max_multiplier": 1.0
+  },
+  {
+    "category": "siege_weapon",
+    "field": "stack",
+    "multiplier_mean": 1.0,
+    "multiplier_stddev": 0.0,
+    "absolute_change_mean": 0.0,
+    "absolute_change_stddev": 0.0,
+    "sample_count": 4,
+    "min_multiplier": 1.0,
+    "max_multiplier": 1.0
+  }
+]

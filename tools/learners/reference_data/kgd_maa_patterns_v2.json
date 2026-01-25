@@ -1,0 +1,2145 @@
+{
+  "metadata": {
+    "source_mod": "KGD: The Great Rebalance",
+    "workshop_id": "3422759424",
+    "analysis_version": "2.0",
+    "maa_count": 109
+  },
+  "global_variable_changes": {
+    "provisions_cost_special_cheap": {
+      "vanilla": 6.0,
+      "kgd": 10.0
+    },
+    "provisions_cost_infantry_accolade_bankrupting": {
+      "vanilla": null,
+      "kgd": 60.0
+    },
+    "maa_buy_cost": {
+      "vanilla": 150.0,
+      "kgd": 150.0
+    },
+    "provisions_cost_cavalry_accolade_bankrupting": {
+      "vanilla": null,
+      "kgd": 60.0
+    },
+    "provisions_cost_infantry_expensive": {
+      "vanilla": 12.0,
+      "kgd": 18.0
+    },
+    "provisions_cost_special_bankrupting": {
+      "vanilla": 24.0,
+      "kgd": 36.0
+    },
+    "provisions_cost_special_moderate": {
+      "vanilla": 12.0,
+      "kgd": 18.0
+    },
+    "provisions_cost_cavalry_cheap": {
+      "vanilla": 7.0,
+      "kgd": 12.0
+    },
+    "provisions_cost_cavalry_moderate": {
+      "vanilla": 15.0,
+      "kgd": 26.0
+    },
+    "provisions_cost_cavalry_elephants": {
+      "vanilla": null,
+      "kgd": 64.0
+    },
+    "provisions_cost_infantry_cheap": {
+      "vanilla": 3.0,
+      "kgd": 4.0
+    },
+    "maa_high_maintenance_cost": {
+      "vanilla": 5.0,
+      "kgd": 5.0
+    },
+    "provisions_cost_cavalry_bankrupting": {
+      "vanilla": 30.0,
+      "kgd": 48.0
+    },
+    "provisions_cost_infantry_bankrupting": {
+      "vanilla": 15.0,
+      "kgd": 24.0
+    },
+    "cultural_maa_extra_ai_score": {
+      "vanilla": 80.0,
+      "kgd": 60.0
+    },
+    "provisions_cost_infantry_moderate": {
+      "vanilla": 7.0,
+      "kgd": 10.0
+    },
+    "provisions_cost_cavalry_accolade_elephants": {
+      "vanilla": null,
+      "kgd": 72.0
+    },
+    "maa_low_maintenance_cost": {
+      "vanilla": 1.0,
+      "kgd": 1.0
+    },
+    "provisions_cost_cavalry_expensive": {
+      "vanilla": 21.0,
+      "kgd": 34.0
+    },
+    "provisions_cost_special_expensive": {
+      "vanilla": 18.0,
+      "kgd": 28.0
+    }
+  },
+  "patterns_by_category": {
+    "heavy_infantry": [
+      {
+        "field": "stack",
+        "multiplier_mean": 0.40476190476190477,
+        "multiplier_stddev": 0.021821789023599235,
+        "sample_count": 21
+      },
+      {
+        "field": "screen",
+        "multiplier_mean": 1.0,
+        "multiplier_stddev": 0.0,
+        "sample_count": 9
+      },
+      {
+        "field": "damage",
+        "multiplier_mean": 0.9879268666530939,
+        "multiplier_stddev": 0.0818929321093291,
+        "sample_count": 21
+      },
+      {
+        "field": "toughness",
+        "multiplier_mean": 0.9599423195851767,
+        "multiplier_stddev": 0.12804188850642076,
+        "sample_count": 21
+      },
+      {
+        "field": "pursuit",
+        "multiplier_mean": 0.9722222222222222,
+        "multiplier_stddev": 0.06804138174397716,
+        "sample_count": 6
+      }
+    ],
+    "heavy_cavalry": [
+      {
+        "field": "stack",
+        "multiplier_mean": 0.4,
+        "multiplier_stddev": 0.0,
+        "sample_count": 11
+      },
+      {
+        "field": "damage",
+        "multiplier_mean": 0.9928282828282828,
+        "multiplier_stddev": 0.0315499354790428,
+        "sample_count": 11
+      },
+      {
+        "field": "pursuit",
+        "multiplier_mean": 1.018181818181818,
+        "multiplier_stddev": 0.06030226891555271,
+        "sample_count": 11
+      },
+      {
+        "field": "toughness",
+        "multiplier_mean": 1.0,
+        "multiplier_stddev": 0.0,
+        "sample_count": 11
+      },
+      {
+        "field": "screen",
+        "multiplier_mean": 1.1666666666666667,
+        "multiplier_stddev": 0.408248290463863,
+        "sample_count": 6
+      }
+    ],
+    "skirmishers": [
+      {
+        "field": "stack",
+        "multiplier_mean": 0.525,
+        "multiplier_stddev": 0.15447859516333118,
+        "sample_count": 12
+      },
+      {
+        "field": "screen",
+        "multiplier_mean": 1.1435185185185186,
+        "multiplier_stddev": 0.22405598613584762,
+        "sample_count": 12
+      },
+      {
+        "field": "damage",
+        "multiplier_mean": 1.0568732193732193,
+        "multiplier_stddev": 0.09902892493843916,
+        "sample_count": 12
+      },
+      {
+        "field": "toughness",
+        "multiplier_mean": 1.1107142857142858,
+        "multiplier_stddev": 0.10961552719062245,
+        "sample_count": 12
+      },
+      {
+        "field": "pursuit",
+        "multiplier_mean": 1.09375,
+        "multiplier_stddev": 0.13211872366495653,
+        "sample_count": 8
+      },
+      {
+        "field": "siege_value",
+        "multiplier_mean": 1.0,
+        "multiplier_stddev": 0,
+        "sample_count": 1
+      }
+    ],
+    "pikemen": [
+      {
+        "field": "stack",
+        "multiplier_mean": 0.4,
+        "multiplier_stddev": 0.0,
+        "sample_count": 10
+      },
+      {
+        "field": "damage",
+        "multiplier_mean": 1.0410714285714286,
+        "multiplier_stddev": 0.09450986463048003,
+        "sample_count": 10
+      },
+      {
+        "field": "toughness",
+        "multiplier_mean": 1.0555555555555556,
+        "multiplier_stddev": 0.0988618356669566,
+        "sample_count": 10
+      },
+      {
+        "field": "screen",
+        "multiplier_mean": 1.0,
+        "multiplier_stddev": 0.0,
+        "sample_count": 4
+      },
+      {
+        "field": "pursuit",
+        "multiplier_mean": 1.25,
+        "multiplier_stddev": 0.3535533905932738,
+        "sample_count": 2
+      }
+    ],
+    "archers": [
+      {
+        "field": "stack",
+        "multiplier_mean": 0.4375,
+        "multiplier_stddev": 0.15,
+        "sample_count": 16
+      },
+      {
+        "field": "damage",
+        "multiplier_mean": 0.9370801767676767,
+        "multiplier_stddev": 0.1647075639089999,
+        "sample_count": 16
+      },
+      {
+        "field": "toughness",
+        "multiplier_mean": 0.9775297619047619,
+        "multiplier_stddev": 0.10984911383971863,
+        "sample_count": 16
+      },
+      {
+        "field": "screen",
+        "multiplier_mean": 1.0416666666666667,
+        "multiplier_stddev": 0.6406377031260857,
+        "sample_count": 6
+      },
+      {
+        "field": "pursuit",
+        "multiplier_mean": 0.4,
+        "multiplier_stddev": 0.5477225575051661,
+        "sample_count": 5
+      },
+      {
+        "field": "siege_value",
+        "multiplier_mean": 1.0,
+        "multiplier_stddev": 0.0,
+        "sample_count": 2
+      }
+    ],
+    "light_cavalry": [
+      {
+        "field": "stack",
+        "multiplier_mean": 0.4416666666666667,
+        "multiplier_stddev": 0.11645001528813151,
+        "sample_count": 12
+      },
+      {
+        "field": "screen",
+        "multiplier_mean": 1.001111111111111,
+        "multiplier_stddev": 0.04599809687177194,
+        "sample_count": 12
+      },
+      {
+        "field": "damage",
+        "multiplier_mean": 1.043080808080808,
+        "multiplier_stddev": 0.055983169410598305,
+        "sample_count": 12
+      },
+      {
+        "field": "pursuit",
+        "multiplier_mean": 0.9844444444444445,
+        "multiplier_stddev": 0.05536533089686961,
+        "sample_count": 12
+      },
+      {
+        "field": "toughness",
+        "multiplier_mean": 1.038888888888889,
+        "multiplier_stddev": 0.044570528228101425,
+        "sample_count": 12
+      }
+    ],
+    "archer_cavalry": [
+      {
+        "field": "stack",
+        "multiplier_mean": 0.4,
+        "multiplier_stddev": 0.0,
+        "sample_count": 8
+      },
+      {
+        "field": "screen",
+        "multiplier_mean": 1.0,
+        "multiplier_stddev": 0.0,
+        "sample_count": 8
+      },
+      {
+        "field": "damage",
+        "multiplier_mean": 1.0219784278959811,
+        "multiplier_stddev": 0.05546519879719994,
+        "sample_count": 8
+      },
+      {
+        "field": "pursuit",
+        "multiplier_mean": 0.975,
+        "multiplier_stddev": 0.07071067811865474,
+        "sample_count": 8
+      },
+      {
+        "field": "toughness",
+        "multiplier_mean": 1.0595238095238095,
+        "multiplier_stddev": 0.1214052265141139,
+        "sample_count": 8
+      }
+    ],
+    "siege_weapon": [
+      {
+        "field": "stack",
+        "multiplier_mean": 1.0,
+        "multiplier_stddev": 0.0,
+        "sample_count": 9
+      },
+      {
+        "field": "siege_value",
+        "multiplier_mean": 1.0,
+        "multiplier_stddev": 0.0,
+        "sample_count": 9
+      },
+      {
+        "field": "toughness",
+        "multiplier_mean": 1.0,
+        "multiplier_stddev": 0.0,
+        "sample_count": 9
+      },
+      {
+        "field": "damage",
+        "multiplier_mean": 1.0,
+        "multiplier_stddev": 0,
+        "sample_count": 1
+      }
+    ],
+    "peasant_militia": [
+      {
+        "field": "stack",
+        "multiplier_mean": 0.4,
+        "multiplier_stddev": 0,
+        "sample_count": 1
+      },
+      {
+        "field": "damage",
+        "multiplier_mean": 1.1666666666666667,
+        "multiplier_stddev": 0,
+        "sample_count": 1
+      },
+      {
+        "field": "pursuit",
+        "multiplier_mean": 1.2,
+        "multiplier_stddev": 0,
+        "sample_count": 1
+      },
+      {
+        "field": "toughness",
+        "multiplier_mean": 1.0,
+        "multiplier_stddev": 0,
+        "sample_count": 1
+      }
+    ],
+    "gunpowder": [
+      {
+        "field": "stack",
+        "multiplier_mean": 0.4,
+        "multiplier_stddev": 0.0,
+        "sample_count": 3
+      },
+      {
+        "field": "screen",
+        "multiplier_mean": 1.0,
+        "multiplier_stddev": 0.0,
+        "sample_count": 2
+      },
+      {
+        "field": "damage",
+        "multiplier_mean": 1.0,
+        "multiplier_stddev": 0.0,
+        "sample_count": 3
+      },
+      {
+        "field": "toughness",
+        "multiplier_mean": 1.0,
+        "multiplier_stddev": 0.0,
+        "sample_count": 3
+      }
+    ],
+    "elephant_cavalry": [
+      {
+        "field": "stack",
+        "multiplier_mean": 0.4,
+        "multiplier_stddev": 0.0,
+        "sample_count": 3
+      },
+      {
+        "field": "siege_value",
+        "multiplier_mean": 1.3333333333333333,
+        "multiplier_stddev": 0.5773502691896257,
+        "sample_count": 3
+      },
+      {
+        "field": "damage",
+        "multiplier_mean": 0.98,
+        "multiplier_stddev": 0.034641016151377574,
+        "sample_count": 3
+      },
+      {
+        "field": "toughness",
+        "multiplier_mean": 1.0,
+        "multiplier_stddev": 0.0,
+        "sample_count": 3
+      },
+      {
+        "field": "screen",
+        "multiplier_mean": 1.0,
+        "multiplier_stddev": 0,
+        "sample_count": 1
+      },
+      {
+        "field": "pursuit",
+        "multiplier_mean": 1.0,
+        "multiplier_stddev": 0,
+        "sample_count": 1
+      }
+    ],
+    "camel_cavalry": [
+      {
+        "field": "stack",
+        "multiplier_mean": 0.4,
+        "multiplier_stddev": 0.0,
+        "sample_count": 2
+      },
+      {
+        "field": "screen",
+        "multiplier_mean": 1.0,
+        "multiplier_stddev": 0.0,
+        "sample_count": 2
+      },
+      {
+        "field": "damage",
+        "multiplier_mean": 1.0454545454545454,
+        "multiplier_stddev": 0.06428243465332245,
+        "sample_count": 2
+      },
+      {
+        "field": "pursuit",
+        "multiplier_mean": 1.0,
+        "multiplier_stddev": 0.0,
+        "sample_count": 2
+      },
+      {
+        "field": "toughness",
+        "multiplier_mean": 1.0333333333333332,
+        "multiplier_stddev": 0.04714045207910316,
+        "sample_count": 2
+      }
+    ],
+    "nomadic_horde": [
+      {
+        "field": "stack",
+        "multiplier_mean": 1.0,
+        "multiplier_stddev": 0,
+        "sample_count": 1
+      },
+      {
+        "field": "screen",
+        "multiplier_mean": 0.6666666666666666,
+        "multiplier_stddev": 0,
+        "sample_count": 1
+      },
+      {
+        "field": "damage",
+        "multiplier_mean": 1.1666666666666667,
+        "multiplier_stddev": 0,
+        "sample_count": 1
+      },
+      {
+        "field": "pursuit",
+        "multiplier_mean": 0.6,
+        "multiplier_stddev": 0,
+        "sample_count": 1
+      },
+      {
+        "field": "toughness",
+        "multiplier_mean": 1.1666666666666667,
+        "multiplier_stddev": 0,
+        "sample_count": 1
+      }
+    ]
+  },
+  "individual_changes": [
+    {
+      "name": "palace_guards",
+      "category": "heavy_infantry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 38.0,
+          "kgd": 34.0,
+          "multiplier": 0.8947368421052632
+        }
+      }
+    },
+    {
+      "name": "cataphract",
+      "category": "heavy_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 50.0,
+          "kgd": 20.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 125.0,
+          "kgd": 120.0,
+          "multiplier": 0.96
+        }
+      }
+    },
+    {
+      "name": "monaspa",
+      "category": "heavy_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 50.0,
+          "kgd": 20.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "guinea_warrior",
+      "category": "skirmishers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 18.0,
+          "kgd": 22.0,
+          "multiplier": 1.2222222222222223
+        },
+        "toughness": {
+          "vanilla": 14.0,
+          "kgd": 16.0,
+          "multiplier": 1.1428571428571428
+        }
+      }
+    },
+    {
+      "name": "picchieri",
+      "category": "pikemen",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "garudas",
+      "category": "heavy_infantry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 42.0,
+          "kgd": 40.0,
+          "multiplier": 0.9523809523809523
+        },
+        "pursuit": {
+          "vanilla": 24.0,
+          "kgd": 20.0,
+          "multiplier": 0.8333333333333334
+        },
+        "toughness": {
+          "vanilla": 22.0,
+          "kgd": 20.0,
+          "multiplier": 0.9090909090909091
+        }
+      }
+    },
+    {
+      "name": "shenbigong",
+      "category": "archers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 44.0,
+          "kgd": 34.0,
+          "multiplier": 0.7727272727272727
+        },
+        "toughness": {
+          "vanilla": 18.0,
+          "kgd": 14.0,
+          "multiplier": 0.7777777777777778
+        }
+      }
+    },
+    {
+      "name": "chasseur",
+      "category": "light_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 40.0,
+          "kgd": 36.0,
+          "multiplier": 0.9
+        },
+        "toughness": {
+          "vanilla": 15.0,
+          "kgd": 16.0,
+          "multiplier": 1.0666666666666667
+        }
+      }
+    },
+    {
+      "name": "mulaththamun",
+      "category": "light_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 22.0,
+          "kgd": 24.0,
+          "multiplier": 1.0909090909090908
+        },
+        "toughness": {
+          "vanilla": 15.0,
+          "kgd": 16.0,
+          "multiplier": 1.0666666666666667
+        }
+      }
+    },
+    {
+      "name": "mountaineer",
+      "category": "heavy_infantry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "sarawit",
+      "category": "heavy_infantry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "sahel_horsemen",
+      "category": "light_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "toughness": {
+          "vanilla": 15.0,
+          "kgd": 16.0,
+          "multiplier": 1.0666666666666667
+        }
+      }
+    },
+    {
+      "name": "abudrar",
+      "category": "skirmishers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 50.0,
+          "multiplier": 0.5
+        },
+        "pursuit": {
+          "vanilla": 20.0,
+          "kgd": 26.0,
+          "multiplier": 1.3
+        }
+      }
+    },
+    {
+      "name": "hobelar",
+      "category": "light_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "screen": {
+          "vanilla": 30.0,
+          "kgd": 32.0,
+          "multiplier": 1.0666666666666667
+        },
+        "damage": {
+          "vanilla": 22.0,
+          "kgd": 24.0,
+          "multiplier": 1.0909090909090908
+        },
+        "pursuit": {
+          "vanilla": 50.0,
+          "kgd": 44.0,
+          "multiplier": 0.88
+        },
+        "toughness": {
+          "vanilla": 15.0,
+          "kgd": 16.0,
+          "multiplier": 1.0666666666666667
+        }
+      }
+    },
+    {
+      "name": "shomer",
+      "category": "skirmishers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 50.0,
+          "multiplier": 0.5
+        },
+        "screen": {
+          "vanilla": 40.0,
+          "kgd": 60.0,
+          "multiplier": 1.5
+        },
+        "toughness": {
+          "vanilla": 24.0,
+          "kgd": 26.0,
+          "multiplier": 1.0833333333333333
+        }
+      }
+    },
+    {
+      "name": "paiks",
+      "category": "archers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "screen": {
+          "vanilla": 10.0,
+          "kgd": 0.0,
+          "multiplier": 0.0
+        },
+        "damage": {
+          "vanilla": 28.0,
+          "kgd": 22.0,
+          "multiplier": 0.7857142857142857
+        },
+        "pursuit": {
+          "vanilla": 10.0,
+          "kgd": 0.0,
+          "multiplier": 0.0
+        }
+      }
+    },
+    {
+      "name": "ayyar",
+      "category": "heavy_infantry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "guanch_vaulter",
+      "category": "skirmishers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 50.0,
+          "multiplier": 0.5
+        },
+        "toughness": {
+          "vanilla": 12.0,
+          "kgd": 14.0,
+          "multiplier": 1.1666666666666667
+        }
+      }
+    },
+    {
+      "name": "schiltron",
+      "category": "pikemen",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "hussar",
+      "category": "light_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 25.0,
+          "kgd": 26.0,
+          "multiplier": 1.04
+        },
+        "pursuit": {
+          "vanilla": 60.0,
+          "kgd": 52.0,
+          "multiplier": 0.8666666666666667
+        },
+        "toughness": {
+          "vanilla": 15.0,
+          "kgd": 14.0,
+          "multiplier": 0.9333333333333333
+        }
+      }
+    },
+    {
+      "name": "archers_of_the_nile",
+      "category": "archers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "screen": {
+          "vanilla": 10.0,
+          "kgd": 20.0,
+          "multiplier": 2.0
+        },
+        "damage": {
+          "vanilla": 30.0,
+          "kgd": 24.0,
+          "multiplier": 0.8
+        },
+        "pursuit": {
+          "vanilla": 10.0,
+          "kgd": 0.0,
+          "multiplier": 0.0
+        },
+        "toughness": {
+          "vanilla": 14.0,
+          "kgd": 12.0,
+          "multiplier": 0.8571428571428571
+        }
+      }
+    },
+    {
+      "name": "gendarme",
+      "category": "heavy_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 50.0,
+          "kgd": 20.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "mubarizun",
+      "category": "heavy_infantry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 45.0,
+          "kgd": 38.0,
+          "multiplier": 0.8444444444444444
+        },
+        "toughness": {
+          "vanilla": 25.0,
+          "kgd": 24.0,
+          "multiplier": 0.96
+        }
+      }
+    },
+    {
+      "name": "goedendag",
+      "category": "skirmishers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 50.0,
+          "multiplier": 0.5
+        },
+        "damage": {
+          "vanilla": 13.0,
+          "kgd": 14.0,
+          "multiplier": 1.0769230769230769
+        }
+      }
+    },
+    {
+      "name": "landsknecht",
+      "category": "pikemen",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "huscarl",
+      "category": "heavy_infantry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 40.0,
+          "kgd": 36.0,
+          "multiplier": 0.9
+        }
+      }
+    },
+    {
+      "name": "metsanvartija",
+      "category": "archers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 30.0,
+          "kgd": 22.0,
+          "multiplier": 0.7333333333333333
+        }
+      }
+    },
+    {
+      "name": "zbrojnosh",
+      "category": "heavy_infantry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "caballero",
+      "category": "light_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "screen": {
+          "vanilla": 50.0,
+          "kgd": 44.0,
+          "multiplier": 0.88
+        },
+        "damage": {
+          "vanilla": 22.0,
+          "kgd": 24.0,
+          "multiplier": 1.0909090909090908
+        }
+      }
+    },
+    {
+      "name": "praetorian",
+      "category": "heavy_infantry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "horn_warrior",
+      "category": "skirmishers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 50.0,
+          "multiplier": 0.5
+        },
+        "screen": {
+          "vanilla": 20.0,
+          "kgd": 30.0,
+          "multiplier": 1.5
+        },
+        "toughness": {
+          "vanilla": 16.0,
+          "kgd": 20.0,
+          "multiplier": 1.25
+        }
+      }
+    },
+    {
+      "name": "horse_archers",
+      "category": "archer_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "longbowmen",
+      "category": "archers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "toughness": {
+          "vanilla": 8.0,
+          "kgd": 10.0,
+          "multiplier": 1.25
+        }
+      }
+    },
+    {
+      "name": "druzhina",
+      "category": "heavy_infantry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "bush_hunter",
+      "category": "archers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 30.0,
+          "kgd": 24.0,
+          "multiplier": 0.8
+        }
+      }
+    },
+    {
+      "name": "khandayat",
+      "category": "heavy_infantry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "zupin_warrior",
+      "category": "pikemen",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 16.0,
+          "kgd": 18.0,
+          "multiplier": 1.125
+        },
+        "toughness": {
+          "vanilla": 16.0,
+          "kgd": 20.0,
+          "multiplier": 1.25
+        }
+      }
+    },
+    {
+      "name": "asawira",
+      "category": "archer_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 50.0,
+          "kgd": 20.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 90.0,
+          "kgd": 100.0,
+          "multiplier": 1.1111111111111112
+        },
+        "toughness": {
+          "vanilla": 35.0,
+          "kgd": 40.0,
+          "multiplier": 1.1428571428571428
+        }
+      }
+    },
+    {
+      "name": "tarkhan",
+      "category": "heavy_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 50.0,
+          "kgd": 20.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "tawashi",
+      "category": "light_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 25.0,
+          "kgd": 26.0,
+          "multiplier": 1.04
+        },
+        "toughness": {
+          "vanilla": 15.0,
+          "kgd": 16.0,
+          "multiplier": 1.0666666666666667
+        }
+      }
+    },
+    {
+      "name": "teutonic_knights",
+      "category": "heavy_infantry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 36.0,
+          "kgd": 46.0,
+          "multiplier": 1.2777777777777777
+        },
+        "toughness": {
+          "vanilla": 26.0,
+          "kgd": 32.0,
+          "multiplier": 1.2307692307692308
+        }
+      }
+    },
+    {
+      "name": "crossbowmen",
+      "category": "archers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 42.0,
+          "kgd": 34.0,
+          "multiplier": 0.8095238095238095
+        },
+        "toughness": {
+          "vanilla": 18.0,
+          "kgd": 16.0,
+          "multiplier": 0.8888888888888888
+        }
+      }
+    },
+    {
+      "name": "house_guard",
+      "category": "heavy_infantry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 50.0,
+          "multiplier": 0.5
+        }
+      }
+    },
+    {
+      "name": "armored_footmen",
+      "category": "heavy_infantry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "bowmen",
+      "category": "archers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 25.0,
+          "kgd": 26.0,
+          "multiplier": 1.04
+        }
+      }
+    },
+    {
+      "name": "pikemen_militia",
+      "category": "peasant_militia",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 12.0,
+          "kgd": 14.0,
+          "multiplier": 1.1666666666666667
+        },
+        "pursuit": {
+          "vanilla": 10.0,
+          "kgd": 12.0,
+          "multiplier": 1.2
+        }
+      }
+    },
+    {
+      "name": "light_horsemen",
+      "category": "light_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "screen": {
+          "vanilla": 30.0,
+          "kgd": 32.0,
+          "multiplier": 1.0666666666666667
+        },
+        "damage": {
+          "vanilla": 22.0,
+          "kgd": 24.0,
+          "multiplier": 1.0909090909090908
+        },
+        "pursuit": {
+          "vanilla": 30.0,
+          "kgd": 32.0,
+          "multiplier": 1.0666666666666667
+        },
+        "toughness": {
+          "vanilla": 15.0,
+          "kgd": 16.0,
+          "multiplier": 1.0666666666666667
+        }
+      }
+    },
+    {
+      "name": "handgunners",
+      "category": "gunpowder",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "pikemen_unit",
+      "category": "pikemen",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "toughness": {
+          "vanilla": 24.0,
+          "kgd": 26.0,
+          "multiplier": 1.0833333333333333
+        }
+      }
+    },
+    {
+      "name": "armored_horsemen",
+      "category": "heavy_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 50.0,
+          "kgd": 20.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "light_footmen",
+      "category": "skirmishers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 50.0,
+          "multiplier": 0.5
+        },
+        "damage": {
+          "vanilla": 10.0,
+          "kgd": 12.0,
+          "multiplier": 1.2
+        },
+        "pursuit": {
+          "vanilla": 10.0,
+          "kgd": 12.0,
+          "multiplier": 1.2
+        }
+      }
+    },
+    {
+      "name": "war_elephant",
+      "category": "elephant_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 25.0,
+          "kgd": 10.0,
+          "multiplier": 0.4
+        },
+        "siege_value": {
+          "vanilla": 0.1,
+          "kgd": 0.2,
+          "multiplier": 2.0
+        },
+        "damage": {
+          "vanilla": 250.0,
+          "kgd": 235.0,
+          "multiplier": 0.94
+        }
+      }
+    },
+    {
+      "name": "camel_rider",
+      "category": "camel_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 22.0,
+          "kgd": 24.0,
+          "multiplier": 1.0909090909090908
+        },
+        "toughness": {
+          "vanilla": 15.0,
+          "kgd": 16.0,
+          "multiplier": 1.0666666666666667
+        }
+      }
+    },
+    {
+      "name": "accolade_maa_outriders",
+      "category": "light_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 30.0,
+          "kgd": 32.0,
+          "multiplier": 1.0666666666666667
+        }
+      }
+    },
+    {
+      "name": "accolade_maa_skirmishers",
+      "category": "skirmishers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 50.0,
+          "multiplier": 0.5
+        },
+        "screen": {
+          "vanilla": 20.0,
+          "kgd": 30.0,
+          "multiplier": 1.5
+        },
+        "pursuit": {
+          "vanilla": 16.0,
+          "kgd": 20.0,
+          "multiplier": 1.25
+        },
+        "toughness": {
+          "vanilla": 20.0,
+          "kgd": 24.0,
+          "multiplier": 1.2
+        }
+      }
+    },
+    {
+      "name": "accolade_maa_crossbowers",
+      "category": "archers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "accolade_maa_archers",
+      "category": "archers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "accolade_maa_elephantiers",
+      "category": "elephant_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 25.0,
+          "kgd": 10.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "accolade_maa_horse_archers",
+      "category": "archer_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "accolade_maa_handgunners",
+      "category": "gunpowder",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "accolade_maa_cameliers",
+      "category": "camel_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "accolade_maa_vanguards",
+      "category": "heavy_infantry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "accolade_maa_pikes",
+      "category": "pikemen",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "accolade_maa_lancers",
+      "category": "heavy_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 50.0,
+          "kgd": 20.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "vigmen",
+      "category": "archers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "jomsviking_pirates",
+      "category": "skirmishers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "varangian_veterans",
+      "category": "heavy_infantry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "toughness": {
+          "vanilla": 30.0,
+          "kgd": 18.0,
+          "multiplier": 0.6
+        }
+      }
+    },
+    {
+      "name": "bondi",
+      "category": "pikemen",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 14.0,
+          "kgd": 18.0,
+          "multiplier": 1.2857142857142858
+        },
+        "pursuit": {
+          "vanilla": 12.0,
+          "kgd": 18.0,
+          "multiplier": 1.5
+        },
+        "toughness": {
+          "vanilla": 18.0,
+          "kgd": 22.0,
+          "multiplier": 1.2222222222222223
+        }
+      }
+    },
+    {
+      "name": "ayrudzi",
+      "category": "light_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 50.0,
+          "kgd": 20.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 50.0,
+          "kgd": 52.0,
+          "multiplier": 1.04
+        }
+      }
+    },
+    {
+      "name": "skoutatoi",
+      "category": "pikemen",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "maa_marauders",
+      "category": "light_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 50.0,
+          "kgd": 40.0,
+          "multiplier": 0.8
+        },
+        "damage": {
+          "vanilla": 30.0,
+          "kgd": 32.0,
+          "multiplier": 1.0666666666666667
+        },
+        "toughness": {
+          "vanilla": 15.0,
+          "kgd": 16.0,
+          "multiplier": 1.0666666666666667
+        }
+      }
+    },
+    {
+      "name": "maa_bandits",
+      "category": "skirmishers",
+      "changes": {
+        "damage": {
+          "vanilla": 15.0,
+          "kgd": 16.0,
+          "multiplier": 1.0666666666666667
+        }
+      }
+    },
+    {
+      "name": "maa_thieves",
+      "category": "pikemen",
+      "changes": {
+        "stack": {
+          "vanilla": 50.0,
+          "kgd": 20.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "varangian_guards",
+      "category": "heavy_infantry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "toughness": {
+          "vanilla": 32.0,
+          "kgd": 22.0,
+          "multiplier": 0.6875
+        }
+      }
+    },
+    {
+      "name": "ballistrai",
+      "category": "archers",
+      "changes": {
+        "stack": {
+          "vanilla": 50.0,
+          "kgd": 20.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 35.0,
+          "kgd": 48.0,
+          "multiplier": 1.3714285714285714
+        }
+      }
+    },
+    {
+      "name": "maa_poachers",
+      "category": "archers",
+      "changes": {
+        "damage": {
+          "vanilla": 30.0,
+          "kgd": 26.0,
+          "multiplier": 0.8666666666666667
+        },
+        "pursuit": {
+          "vanilla": 10.0,
+          "kgd": 0.0,
+          "multiplier": 0.0
+        },
+        "toughness": {
+          "vanilla": 15.0,
+          "kgd": 12.0,
+          "multiplier": 0.8
+        }
+      }
+    },
+    {
+      "name": "handpicked_faithful",
+      "category": "heavy_infantry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "akritai",
+      "category": "skirmishers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 50.0,
+          "multiplier": 0.5
+        },
+        "screen": {
+          "vanilla": 18.0,
+          "kgd": 22.0,
+          "multiplier": 1.2222222222222223
+        },
+        "damage": {
+          "vanilla": 10.0,
+          "kgd": 12.0,
+          "multiplier": 1.2
+        },
+        "toughness": {
+          "vanilla": 14.0,
+          "kgd": 18.0,
+          "multiplier": 1.2857142857142858
+        }
+      }
+    },
+    {
+      "name": "conrois",
+      "category": "heavy_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 50.0,
+          "kgd": 20.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "cataphract_archers",
+      "category": "heavy_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 50.0,
+          "kgd": 20.0,
+          "multiplier": 0.4
+        },
+        "screen": {
+          "vanilla": 10.0,
+          "kgd": 20.0,
+          "multiplier": 2.0
+        },
+        "damage": {
+          "vanilla": 90.0,
+          "kgd": 94.0,
+          "multiplier": 1.0444444444444445
+        },
+        "pursuit": {
+          "vanilla": 20.0,
+          "kgd": 24.0,
+          "multiplier": 1.2
+        }
+      }
+    },
+    {
+      "name": "steppe_raiders",
+      "category": "light_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 50.0,
+          "multiplier": 0.5
+        },
+        "toughness": {
+          "vanilla": 15.0,
+          "kgd": 16.0,
+          "multiplier": 1.0666666666666667
+        }
+      }
+    },
+    {
+      "name": "heavy_horse_archers",
+      "category": "archer_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 50.0,
+          "kgd": 20.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "nomad_lancers",
+      "category": "heavy_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 50.0,
+          "kgd": 20.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 120.0,
+          "kgd": 110.0,
+          "multiplier": 0.9166666666666666
+        }
+      }
+    },
+    {
+      "name": "nomadic_riders",
+      "category": "nomadic_horde",
+      "changes": {
+        "screen": {
+          "vanilla": 15.0,
+          "kgd": 10.0,
+          "multiplier": 0.6666666666666666
+        },
+        "damage": {
+          "vanilla": 12.0,
+          "kgd": 14.0,
+          "multiplier": 1.1666666666666667
+        },
+        "pursuit": {
+          "vanilla": 10.0,
+          "kgd": 6.0,
+          "multiplier": 0.6
+        },
+        "toughness": {
+          "vanilla": 12.0,
+          "kgd": 14.0,
+          "multiplier": 1.1666666666666667
+        }
+      }
+    },
+    {
+      "name": "kheshig",
+      "category": "archer_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 50.0,
+          "kgd": 20.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 94.0,
+          "kgd": 104.0,
+          "multiplier": 1.1063829787234043
+        }
+      }
+    },
+    {
+      "name": "mangudai",
+      "category": "archer_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "maturkan_warriors",
+      "category": "archers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "screen": {
+          "vanilla": 16.0,
+          "kgd": 20.0,
+          "multiplier": 1.25
+        },
+        "damage": {
+          "vanilla": 16.0,
+          "kgd": 18.0,
+          "multiplier": 1.125
+        },
+        "toughness": {
+          "vanilla": 15.0,
+          "kgd": 16.0,
+          "multiplier": 1.0666666666666667
+        }
+      }
+    },
+    {
+      "name": "samurai",
+      "category": "heavy_infantry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 45.0,
+          "kgd": 40.0,
+          "multiplier": 0.8888888888888888
+        },
+        "toughness": {
+          "vanilla": 25.0,
+          "kgd": 20.0,
+          "multiplier": 0.8
+        }
+      }
+    },
+    {
+      "name": "rocket_carts",
+      "category": "archers",
+      "changes": {
+        "stack": {
+          "vanilla": 50.0,
+          "kgd": 20.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 45.0,
+          "kgd": 40.0,
+          "multiplier": 0.8888888888888888
+        }
+      }
+    },
+    {
+      "name": "tiefutu",
+      "category": "heavy_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 50.0,
+          "kgd": 20.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "warrior_monks",
+      "category": "pikemen",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "zhanmadao_infantry",
+      "category": "heavy_infantry",
+      "changes": {
+        "stack": {
+          "vanilla": 50.0,
+          "kgd": 20.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 85.0,
+          "kgd": 84.0,
+          "multiplier": 0.9882352941176471
+        },
+        "toughness": {
+          "vanilla": 35.0,
+          "kgd": 34.0,
+          "multiplier": 0.9714285714285714
+        }
+      }
+    },
+    {
+      "name": "ballista_elephant",
+      "category": "elephant_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 25.0,
+          "kgd": 10.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "gakgung_archers",
+      "category": "archers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "japanese_horse_archers",
+      "category": "archer_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 50.0,
+          "kgd": 20.0,
+          "multiplier": 0.4
+        },
+        "damage": {
+          "vanilla": 96.0,
+          "kgd": 92.0,
+          "multiplier": 0.9583333333333334
+        },
+        "pursuit": {
+          "vanilla": 40.0,
+          "kgd": 32.0,
+          "multiplier": 0.8
+        }
+      }
+    },
+    {
+      "name": "burenjia",
+      "category": "heavy_infantry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "emishi_horse_archers",
+      "category": "archer_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        },
+        "toughness": {
+          "vanilla": 12.0,
+          "kgd": 16.0,
+          "multiplier": 1.3333333333333333
+        }
+      }
+    },
+    {
+      "name": "fire_lancers",
+      "category": "gunpowder",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "black_armor_cavalry",
+      "category": "heavy_cavalry",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 40.0,
+          "multiplier": 0.4
+        }
+      }
+    },
+    {
+      "name": "pesilat_warriors",
+      "category": "skirmishers",
+      "changes": {
+        "stack": {
+          "vanilla": 100.0,
+          "kgd": 50.0,
+          "multiplier": 0.5
+        },
+        "damage": {
+          "vanilla": 24.0,
+          "kgd": 22.0,
+          "multiplier": 0.9166666666666666
+        },
+        "toughness": {
+          "vanilla": 10.0,
+          "kgd": 12.0,
+          "multiplier": 1.2
+        }
+      }
+    }
+  ]
+}

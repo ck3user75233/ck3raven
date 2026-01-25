@@ -1,0 +1,783 @@
+{
+  "metadata": {
+    "source_mod": "KGD: The Great Rebalance",
+    "workshop_id": "3422759424",
+    "analysis_type": "building_values",
+    "vanilla_file": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Crusader Kings III\\game\\common\\script_values\\00_building_values.txt",
+    "kgd_file": "C:\\Program Files (x86)\\Steam\\steamapps\\workshop\\content\\1158310\\3422759424\\common\\script_values\\BKT_building_values.txt"
+  },
+  "summary": {
+    "total_variables_compared": 147,
+    "changed": 64,
+    "unchanged": 83,
+    "kgd_only": 0
+  },
+  "category_stats": {
+    "tax": {
+      "count": 18,
+      "avg_multiplier": 0.6037698412698413,
+      "min_multiplier": 0.5,
+      "max_multiplier": 1.142857142857143,
+      "examples": [
+        {
+          "name": "poor_tax_base",
+          "vanilla": 0.25,
+          "kgd": 0.125,
+          "multiplier": 0.5
+        },
+        {
+          "name": "normal_tax_base",
+          "vanilla": 0.175,
+          "kgd": 0.2,
+          "multiplier": 1.142857142857143
+        },
+        {
+          "name": "good_tax_base",
+          "vanilla": 0.5,
+          "kgd": 0.25,
+          "multiplier": 0.5
+        },
+        {
+          "name": "excellent_tax_base",
+          "vanilla": 0.7,
+          "kgd": 0.35,
+          "multiplier": 0.5
+        },
+        {
+          "name": "copper_mine_tax_base",
+          "vanilla": 2.0,
+          "kgd": 1.25,
+          "multiplier": 0.625
+        }
+      ]
+    },
+    "levy": {
+      "count": 10,
+      "avg_multiplier": 0.43533333333333335,
+      "min_multiplier": 0.19999999999999998,
+      "max_multiplier": 0.9666666666666667,
+      "examples": [
+        {
+          "name": "excellent_levy_base",
+          "vanilla": 150.0,
+          "kgd": 145.0,
+          "multiplier": 0.9666666666666667
+        },
+        {
+          "name": "poor_levy_scale_addition_per_tier",
+          "vanilla": 25.0,
+          "kgd": 10.0,
+          "multiplier": 0.4
+        },
+        {
+          "name": "small_levy_scale_addition_per_tier",
+          "vanilla": 50.0,
+          "kgd": 25.0,
+          "multiplier": 0.5
+        },
+        {
+          "name": "normal_levy_scale_addition_per_tier",
+          "vanilla": 75.0,
+          "kgd": 35.0,
+          "multiplier": 0.4666666666666667
+        },
+        {
+          "name": "good_levy_scale_addition_per_tier",
+          "vanilla": 100.0,
+          "kgd": 50.0,
+          "multiplier": 0.5
+        }
+      ]
+    },
+    "maa_maintenance": {
+      "count": 2,
+      "avg_multiplier": 0.5,
+      "min_multiplier": 0.5,
+      "max_multiplier": 0.5,
+      "examples": [
+        {
+          "name": "normal_maa_maintenance_addition_per_tier",
+          "vanilla": -0.008,
+          "kgd": -0.004,
+          "multiplier": 0.5
+        },
+        {
+          "name": "good_maa_maintenance_addition_per_tier",
+          "vanilla": -0.016,
+          "kgd": -0.008,
+          "multiplier": 0.5
+        }
+      ]
+    },
+    "development": {
+      "count": 8,
+      "avg_multiplier": 0.5,
+      "min_multiplier": 0.5,
+      "max_multiplier": 0.5,
+      "examples": [
+        {
+          "name": "low_development_growth_base",
+          "vanilla": 0.01,
+          "kgd": 0.0,
+          "multiplier": 0.0
+        },
+        {
+          "name": "normal_development_growth_base",
+          "vanilla": 0.02,
+          "kgd": 0.0,
+          "multiplier": 0.0
+        },
+        {
+          "name": "good_development_growth_base",
+          "vanilla": 0.04,
+          "kgd": 0.0,
+          "multiplier": 0.0
+        },
+        {
+          "name": "low_development_growth_addition_per_tier",
+          "vanilla": 0.01,
+          "kgd": 0.0,
+          "multiplier": 0.0
+        },
+        {
+          "name": "normal_development_growth_addition_per_tier",
+          "vanilla": 0.02,
+          "kgd": 0.0,
+          "multiplier": 0.0
+        }
+      ]
+    },
+    "other": {
+      "count": 18,
+      "avg_multiplier": 0.7222222222222222,
+      "min_multiplier": 0.5,
+      "max_multiplier": 0.8333333333333334,
+      "examples": [
+        {
+          "name": "low_damage_mult_base",
+          "vanilla": 0.1,
+          "kgd": 0.075,
+          "multiplier": 0.7499999999999999
+        },
+        {
+          "name": "normal_damage_mult_base",
+          "vanilla": 0.15,
+          "kgd": 0.1,
+          "multiplier": 0.6666666666666667
+        },
+        {
+          "name": "high_damage_mult_base",
+          "vanilla": 0.2,
+          "kgd": 0.15,
+          "multiplier": 0.7499999999999999
+        },
+        {
+          "name": "very_high_damage_mult_base",
+          "vanilla": 0.3,
+          "kgd": 0.25,
+          "multiplier": 0.8333333333333334
+        },
+        {
+          "name": "low_toughness_mult_base",
+          "vanilla": 0.1,
+          "kgd": 0.075,
+          "multiplier": 0.7499999999999999
+        }
+      ]
+    },
+    "garrison": {
+      "count": 6,
+      "avg_multiplier": 0.5111111111111111,
+      "min_multiplier": 0.3,
+      "max_multiplier": 0.6666666666666667,
+      "examples": [
+        {
+          "name": "normal_max_garrison_base",
+          "vanilla": 150.0,
+          "kgd": 100.0,
+          "multiplier": 0.6666666666666666
+        },
+        {
+          "name": "good_max_garrison_base",
+          "vanilla": 250.0,
+          "kgd": 150.0,
+          "multiplier": 0.6
+        },
+        {
+          "name": "normal_max_garrison_scale_addition_per_tier",
+          "vanilla": 150.0,
+          "kgd": 50.0,
+          "multiplier": 0.3333333333333333
+        },
+        {
+          "name": "good_max_garrison_scale_addition_per_tier",
+          "vanilla": 250.0,
+          "kgd": 75.0,
+          "multiplier": 0.3
+        },
+        {
+          "name": "base_garrison_reinforcement_factor",
+          "vanilla": 0.03,
+          "kgd": 0.02,
+          "multiplier": 0.6666666666666667
+        }
+      ]
+    },
+    "cost": {
+      "count": 2,
+      "avg_multiplier": 1.4166666666666665,
+      "min_multiplier": 1.3333333333333333,
+      "max_multiplier": 1.5,
+      "examples": [
+        {
+          "name": "main_cost_base",
+          "vanilla": 400.0,
+          "kgd": 600.0,
+          "multiplier": 1.5
+        },
+        {
+          "name": "main_cost_scale_addition_per_tier",
+          "vanilla": 150.0,
+          "kgd": 200.0,
+          "multiplier": 1.3333333333333333
+        }
+      ]
+    }
+  },
+  "all_changes": [
+    {
+      "name": "main_cost_base",
+      "category": "cost",
+      "vanilla": 400.0,
+      "kgd": 600.0,
+      "multiplier": 1.5
+    },
+    {
+      "name": "main_cost_scale_addition_per_tier",
+      "category": "cost",
+      "vanilla": 150.0,
+      "kgd": 200.0,
+      "multiplier": 1.3333333333333333
+    },
+    {
+      "name": "good_development_growth_addition_per_tier",
+      "category": "development",
+      "vanilla": 0.04,
+      "kgd": 0.0,
+      "multiplier": 0.0
+    },
+    {
+      "name": "good_development_growth_base",
+      "category": "development",
+      "vanilla": 0.04,
+      "kgd": 0.0,
+      "multiplier": 0.0
+    },
+    {
+      "name": "good_development_growth_factor_addition_per_tier",
+      "category": "development",
+      "vanilla": 0.06,
+      "kgd": 0.03,
+      "multiplier": 0.5
+    },
+    {
+      "name": "low_development_growth_addition_per_tier",
+      "category": "development",
+      "vanilla": 0.01,
+      "kgd": 0.0,
+      "multiplier": 0.0
+    },
+    {
+      "name": "low_development_growth_base",
+      "category": "development",
+      "vanilla": 0.01,
+      "kgd": 0.0,
+      "multiplier": 0.0
+    },
+    {
+      "name": "normal_development_growth_addition_per_tier",
+      "category": "development",
+      "vanilla": 0.02,
+      "kgd": 0.0,
+      "multiplier": 0.0
+    },
+    {
+      "name": "normal_development_growth_base",
+      "category": "development",
+      "vanilla": 0.02,
+      "kgd": 0.0,
+      "multiplier": 0.0
+    },
+    {
+      "name": "normal_development_growth_factor_addition_per_tier",
+      "category": "development",
+      "vanilla": 0.04,
+      "kgd": 0.02,
+      "multiplier": 0.5
+    },
+    {
+      "name": "base_garrison_reinforcement_factor",
+      "category": "garrison",
+      "vanilla": 0.03,
+      "kgd": 0.02,
+      "multiplier": 0.6666666666666667
+    },
+    {
+      "name": "garrison_reinforcement_factor_addition_per_tier",
+      "category": "garrison",
+      "vanilla": 0.01,
+      "kgd": 0.005,
+      "multiplier": 0.5
+    },
+    {
+      "name": "good_max_garrison_base",
+      "category": "garrison",
+      "vanilla": 250.0,
+      "kgd": 150.0,
+      "multiplier": 0.6
+    },
+    {
+      "name": "good_max_garrison_scale_addition_per_tier",
+      "category": "garrison",
+      "vanilla": 250.0,
+      "kgd": 75.0,
+      "multiplier": 0.3
+    },
+    {
+      "name": "normal_max_garrison_base",
+      "category": "garrison",
+      "vanilla": 150.0,
+      "kgd": 100.0,
+      "multiplier": 0.6666666666666666
+    },
+    {
+      "name": "normal_max_garrison_scale_addition_per_tier",
+      "category": "garrison",
+      "vanilla": 150.0,
+      "kgd": 50.0,
+      "multiplier": 0.3333333333333333
+    },
+    {
+      "name": "excellent_levy_base",
+      "category": "levy",
+      "vanilla": 150.0,
+      "kgd": 145.0,
+      "multiplier": 0.9666666666666667
+    },
+    {
+      "name": "excellent_levy_scale_addition_per_tier",
+      "category": "levy",
+      "vanilla": 125.0,
+      "kgd": 65.0,
+      "multiplier": 0.52
+    },
+    {
+      "name": "good_levy_scale_addition_per_tier",
+      "category": "levy",
+      "vanilla": 100.0,
+      "kgd": 50.0,
+      "multiplier": 0.5
+    },
+    {
+      "name": "high_levy_reinforcement_rate_addition_per_tier",
+      "category": "levy",
+      "vanilla": 0.1,
+      "kgd": 0.025,
+      "multiplier": 0.25
+    },
+    {
+      "name": "high_levy_reinforcement_rate_base",
+      "category": "levy",
+      "vanilla": 0.2,
+      "kgd": 0.05,
+      "multiplier": 0.25
+    },
+    {
+      "name": "normal_levy_reinforcement_rate_addition_per_tier",
+      "category": "levy",
+      "vanilla": 0.05,
+      "kgd": 0.01,
+      "multiplier": 0.19999999999999998
+    },
+    {
+      "name": "normal_levy_reinforcement_rate_base",
+      "category": "levy",
+      "vanilla": 0.1,
+      "kgd": 0.03,
+      "multiplier": 0.3
+    },
+    {
+      "name": "normal_levy_scale_addition_per_tier",
+      "category": "levy",
+      "vanilla": 75.0,
+      "kgd": 35.0,
+      "multiplier": 0.4666666666666667
+    },
+    {
+      "name": "poor_levy_scale_addition_per_tier",
+      "category": "levy",
+      "vanilla": 25.0,
+      "kgd": 10.0,
+      "multiplier": 0.4
+    },
+    {
+      "name": "small_levy_scale_addition_per_tier",
+      "category": "levy",
+      "vanilla": 50.0,
+      "kgd": 25.0,
+      "multiplier": 0.5
+    },
+    {
+      "name": "good_maa_maintenance_addition_per_tier",
+      "category": "maa_maintenance",
+      "vanilla": -0.016,
+      "kgd": -0.008,
+      "multiplier": 0.5
+    },
+    {
+      "name": "normal_maa_maintenance_addition_per_tier",
+      "category": "maa_maintenance",
+      "vanilla": -0.008,
+      "kgd": -0.004,
+      "multiplier": 0.5
+    },
+    {
+      "name": "high_damage_mult_base",
+      "category": "other",
+      "vanilla": 0.2,
+      "kgd": 0.15,
+      "multiplier": 0.7499999999999999
+    },
+    {
+      "name": "high_knight_effectiveness_mult_addition_per_tier",
+      "category": "other",
+      "vanilla": 0.02,
+      "kgd": 0.01,
+      "multiplier": 0.5
+    },
+    {
+      "name": "high_pursuit_mult_base",
+      "category": "other",
+      "vanilla": 0.2,
+      "kgd": 0.15,
+      "multiplier": 0.7499999999999999
+    },
+    {
+      "name": "high_screen_mult_base",
+      "category": "other",
+      "vanilla": 0.2,
+      "kgd": 0.15,
+      "multiplier": 0.7499999999999999
+    },
+    {
+      "name": "high_toughness_mult_base",
+      "category": "other",
+      "vanilla": 0.2,
+      "kgd": 0.15,
+      "multiplier": 0.7499999999999999
+    },
+    {
+      "name": "low_damage_mult_base",
+      "category": "other",
+      "vanilla": 0.1,
+      "kgd": 0.075,
+      "multiplier": 0.7499999999999999
+    },
+    {
+      "name": "low_pursuit_mult_base",
+      "category": "other",
+      "vanilla": 0.1,
+      "kgd": 0.075,
+      "multiplier": 0.7499999999999999
+    },
+    {
+      "name": "low_screen_mult_base",
+      "category": "other",
+      "vanilla": 0.1,
+      "kgd": 0.075,
+      "multiplier": 0.7499999999999999
+    },
+    {
+      "name": "low_toughness_mult_base",
+      "category": "other",
+      "vanilla": 0.1,
+      "kgd": 0.075,
+      "multiplier": 0.7499999999999999
+    },
+    {
+      "name": "normal_damage_mult_base",
+      "category": "other",
+      "vanilla": 0.15,
+      "kgd": 0.1,
+      "multiplier": 0.6666666666666667
+    },
+    {
+      "name": "normal_knight_effectiveness_mult_addition_per_tier",
+      "category": "other",
+      "vanilla": 0.01,
+      "kgd": 0.005,
+      "multiplier": 0.5
+    },
+    {
+      "name": "normal_pursuit_mult_base",
+      "category": "other",
+      "vanilla": 0.15,
+      "kgd": 0.1,
+      "multiplier": 0.6666666666666667
+    },
+    {
+      "name": "normal_screen_mult_base",
+      "category": "other",
+      "vanilla": 0.15,
+      "kgd": 0.1,
+      "multiplier": 0.6666666666666667
+    },
+    {
+      "name": "normal_toughness_mult_base",
+      "category": "other",
+      "vanilla": 0.15,
+      "kgd": 0.1,
+      "multiplier": 0.6666666666666667
+    },
+    {
+      "name": "very_high_damage_mult_base",
+      "category": "other",
+      "vanilla": 0.3,
+      "kgd": 0.25,
+      "multiplier": 0.8333333333333334
+    },
+    {
+      "name": "very_high_pursuit_mult_base",
+      "category": "other",
+      "vanilla": 0.3,
+      "kgd": 0.25,
+      "multiplier": 0.8333333333333334
+    },
+    {
+      "name": "very_high_screen_mult_base",
+      "category": "other",
+      "vanilla": 0.3,
+      "kgd": 0.25,
+      "multiplier": 0.8333333333333334
+    },
+    {
+      "name": "very_high_toughness_mult_base",
+      "category": "other",
+      "vanilla": 0.3,
+      "kgd": 0.25,
+      "multiplier": 0.8333333333333334
+    },
+    {
+      "name": "copper_mine_tax_base",
+      "category": "tax",
+      "vanilla": 2.0,
+      "kgd": 1.25,
+      "multiplier": 0.625
+    },
+    {
+      "name": "copper_mine_tax_scale_addition_per_tier",
+      "category": "tax",
+      "vanilla": 1.5,
+      "kgd": 0.75,
+      "multiplier": 0.5
+    },
+    {
+      "name": "excellent_tax_base",
+      "category": "tax",
+      "vanilla": 0.7,
+      "kgd": 0.35,
+      "multiplier": 0.5
+    },
+    {
+      "name": "excellent_tax_scale_addition_per_tier",
+      "category": "tax",
+      "vanilla": 0.45,
+      "kgd": 0.225,
+      "multiplier": 0.5
+    },
+    {
+      "name": "good_tax_base",
+      "category": "tax",
+      "vanilla": 0.5,
+      "kgd": 0.25,
+      "multiplier": 0.5
+    },
+    {
+      "name": "good_tax_mult_addition_per_tier",
+      "category": "tax",
+      "vanilla": 0.06,
+      "kgd": 0.04,
+      "multiplier": 0.6666666666666667
+    },
+    {
+      "name": "good_tax_mult_base",
+      "category": "tax",
+      "vanilla": 0.06,
+      "kgd": 0.04,
+      "multiplier": 0.6666666666666667
+    },
+    {
+      "name": "good_tax_scale_addition_per_tier",
+      "category": "tax",
+      "vanilla": 0.3,
+      "kgd": 0.15,
+      "multiplier": 0.5
+    },
+    {
+      "name": "normal_tax_base",
+      "category": "tax",
+      "vanilla": 0.175,
+      "kgd": 0.2,
+      "multiplier": 1.142857142857143
+    },
+    {
+      "name": "normal_tax_mult_addition_per_tier",
+      "category": "tax",
+      "vanilla": 0.04,
+      "kgd": 0.03,
+      "multiplier": 0.75
+    },
+    {
+      "name": "normal_tax_mult_base",
+      "category": "tax",
+      "vanilla": 0.04,
+      "kgd": 0.03,
+      "multiplier": 0.75
+    },
+    {
+      "name": "normal_tax_scale_addition_per_tier",
+      "category": "tax",
+      "vanilla": 0.2,
+      "kgd": 0.1,
+      "multiplier": 0.5
+    },
+    {
+      "name": "poor_tax_base",
+      "category": "tax",
+      "vanilla": 0.25,
+      "kgd": 0.125,
+      "multiplier": 0.5
+    },
+    {
+      "name": "poor_tax_scale_addition_per_tier",
+      "category": "tax",
+      "vanilla": 0.15,
+      "kgd": 0.075,
+      "multiplier": 0.5
+    },
+    {
+      "name": "silver_mine_tax_base",
+      "category": "tax",
+      "vanilla": 3.0,
+      "kgd": 2.0,
+      "multiplier": 0.6666666666666666
+    },
+    {
+      "name": "silver_mine_tax_scale_addition_per_tier",
+      "category": "tax",
+      "vanilla": 2.0,
+      "kgd": 1.0,
+      "multiplier": 0.5
+    },
+    {
+      "name": "special_mine_tax_base",
+      "category": "tax",
+      "vanilla": 5.0,
+      "kgd": 3.0,
+      "multiplier": 0.6
+    },
+    {
+      "name": "special_mine_tax_scale_addition_per_tier",
+      "category": "tax",
+      "vanilla": 3.0,
+      "kgd": 1.5,
+      "multiplier": 0.5
+    }
+  ],
+  "unchanged_variables": [
+    "poor_levy_base",
+    "small_levy_base",
+    "normal_levy_base",
+    "good_levy_base",
+    "poor_supply_limit_base",
+    "small_supply_limit_base",
+    "normal_supply_limit_base",
+    "good_supply_limit_base",
+    "excellent_supply_limit_base",
+    "poor_supply_limit_scale_addition_per_tier",
+    "small_supply_limit_scale_addition_per_tier",
+    "normal_supply_limit_scale_addition_per_tier",
+    "good_supply_limit_scale_addition_per_tier",
+    "excellent_supply_limit_scale_addition_per_tier",
+    "normal_maa_maintenance_base",
+    "good_maa_maintenance_base",
+    "normal_development_growth_factor_base",
+    "good_development_growth_factor_base",
+    "low_tax_mult_base",
+    "low_tax_mult_addition_per_tier",
+    "low_damage_mult_addition_per_tier",
+    "normal_damage_mult_addition_per_tier",
+    "high_damage_mult_addition_per_tier",
+    "very_high_damage_mult_addition_per_tier",
+    "low_toughness_mult_addition_per_tier",
+    "normal_toughness_mult_addition_per_tier",
+    "high_toughness_mult_addition_per_tier",
+    "very_high_toughness_mult_addition_per_tier",
+    "low_screen_mult_addition_per_tier",
+    "normal_screen_mult_addition_per_tier",
+    "high_screen_mult_addition_per_tier",
+    "very_high_screen_mult_addition_per_tier",
+    "low_pursuit_mult_addition_per_tier",
+    "normal_pursuit_mult_addition_per_tier",
+    "high_pursuit_mult_addition_per_tier",
+    "very_high_pursuit_mult_addition_per_tier",
+    "low_siege_value_mult_base",
+    "normal_siege_value_mult_base",
+    "high_siege_value_mult_base",
+    "very_high_siege_value_mult_base",
+    "low_siege_value_mult_addition_per_tier",
+    "normal_siege_value_mult_addition_per_tier",
+    "high_siege_value_mult_addition_per_tier",
+    "very_high_siege_value_mult_addition_per_tier",
+    "normal_movement_speed_base",
+    "high_movement_speed_base",
+    "normal_movement_speed_addition_per_tier",
+    "high_movement_speed_addition_per_tier",
+    "normal_knight_effectiveness_mult_base",
+    "high_knight_effectiveness_mult_base",
+    "normal_fort_level_base",
+    "good_fort_level_base",
+    "great_fort_level_base",
+    "normal_fort_level_scale_addition_per_tier",
+    "good_fort_level_scale_addition_per_tier",
+    "great_fort_level_scale_addition_per_tier",
+    "poor_advantage_base",
+    "normal_advantage_base",
+    "good_advantage_base",
+    "normal_advantage_scale_addition_per_tier",
+    "good_advantage_scale_addition_per_tier",
+    "cheap_cost_base",
+    "normal_cost_base",
+    "expensive_cost_base",
+    "tribal_cost_base",
+    "building_cost_scaling_modifier_cheap",
+    "building_cost_scaling_modifier_normal",
+    "building_cost_scaling_modifier_expensive",
+    "cheap_cost_scale_addition_per_tier",
+    "normal_cost_scale_addition_per_tier",
+    "expensive_cost_scale_addition_per_tier",
+    "tribal_cost_scale_addition_per_tier",
+    "very_quick_construction_time_base",
+    "quick_construction_time_base",
+    "standard_construction_time_base",
+    "slow_construction_time_base",
+    "very_slow_construction_time_base",
+    "normal_build_speed_base",
+    "good_build_speed_base",
+    "great_build_speed_base",
+    "normal_build_speed_scale_addition_per_tier",
+    "good_build_speed_scale_addition_per_tier",
+    "great_build_speed_scale_addition_per_tier"
+  ],
+  "kgd_only_variables": []
+}

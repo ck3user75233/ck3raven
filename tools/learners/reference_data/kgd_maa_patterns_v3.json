@@ -1,0 +1,3235 @@
+{
+  "metadata": {
+    "source_mod": "KGD: The Great Rebalance",
+    "workshop_id": "3422759424",
+    "analysis_version": "3.0",
+    "maa_count": 109
+  },
+  "global_variables": {
+    "vanilla": {
+      "maa_buy_cost": 150.0,
+      "maa_low_maintenance_cost": 1.0,
+      "maa_high_maintenance_cost": 5.0,
+      "cultural_maa_extra_ai_score": 80.0,
+      "provisions_cost_infantry_cheap": 3.0,
+      "provisions_cost_infantry_moderate": 7.0,
+      "provisions_cost_infantry_expensive": 12.0,
+      "provisions_cost_infantry_bankrupting": 15.0,
+      "provisions_cost_cavalry_cheap": 7.0,
+      "provisions_cost_cavalry_moderate": 15.0,
+      "provisions_cost_cavalry_expensive": 21.0,
+      "provisions_cost_cavalry_bankrupting": 30.0,
+      "provisions_cost_special_cheap": 6.0,
+      "provisions_cost_special_moderate": 12.0,
+      "provisions_cost_special_expensive": 18.0,
+      "provisions_cost_special_bankrupting": 24.0
+    },
+    "kgd": {
+      "maa_buy_cost": 150.0,
+      "maa_low_maintenance_cost": 1.0,
+      "maa_high_maintenance_cost": 5.0,
+      "cultural_maa_extra_ai_score": 60.0,
+      "provisions_cost_infantry_cheap": 4.0,
+      "provisions_cost_infantry_moderate": 10.0,
+      "provisions_cost_infantry_expensive": 18.0,
+      "provisions_cost_infantry_bankrupting": 24.0,
+      "provisions_cost_infantry_accolade_bankrupting": 60.0,
+      "provisions_cost_cavalry_cheap": 12.0,
+      "provisions_cost_cavalry_moderate": 26.0,
+      "provisions_cost_cavalry_expensive": 34.0,
+      "provisions_cost_cavalry_bankrupting": 48.0,
+      "provisions_cost_cavalry_accolade_bankrupting": 60.0,
+      "provisions_cost_cavalry_elephants": 64.0,
+      "provisions_cost_cavalry_accolade_elephants": 72.0,
+      "provisions_cost_special_cheap": 10.0,
+      "provisions_cost_special_moderate": 18.0,
+      "provisions_cost_special_expensive": 28.0,
+      "provisions_cost_special_bankrupting": 36.0
+    }
+  },
+  "numeric_changes": [
+    {
+      "name": "ayyar",
+      "type": "heavy_infantry",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          12.0,
+          24.0,
+          2.0
+        ]
+      }
+    },
+    {
+      "name": "metsanvartija",
+      "type": "archers",
+      "changes": {
+        "damage": [
+          30.0,
+          22.0,
+          0.7333333333333333
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          3.0,
+          10.0,
+          3.3333333333333335
+        ]
+      }
+    },
+    {
+      "name": "hobelar",
+      "type": "light_cavalry",
+      "changes": {
+        "damage": [
+          22.0,
+          24.0,
+          1.0909090909090908
+        ],
+        "toughness": [
+          15.0,
+          16.0,
+          1.0666666666666667
+        ],
+        "pursuit": [
+          50.0,
+          44.0,
+          0.88
+        ],
+        "screen": [
+          30.0,
+          32.0,
+          1.0666666666666667
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          26.0,
+          3.7142857142857144
+        ]
+      }
+    },
+    {
+      "name": "mubarizun",
+      "type": "heavy_infantry",
+      "changes": {
+        "damage": [
+          45.0,
+          38.0,
+          0.8444444444444444
+        ],
+        "toughness": [
+          25.0,
+          24.0,
+          0.96
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          24.0,
+          3.4285714285714284
+        ]
+      }
+    },
+    {
+      "name": "monaspa",
+      "type": "heavy_cavalry",
+      "changes": {
+        "stack": [
+          50.0,
+          20.0,
+          0.4
+        ],
+        "provision_cost": [
+          15.0,
+          34.0,
+          2.2666666666666666
+        ]
+      }
+    },
+    {
+      "name": "schiltron",
+      "type": "pikemen",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          18.0,
+          2.5714285714285716
+        ]
+      }
+    },
+    {
+      "name": "zbrojnosh",
+      "type": "heavy_infantry",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          12.0,
+          24.0,
+          2.0
+        ]
+      }
+    },
+    {
+      "name": "guanch_vaulter",
+      "type": "skirmishers",
+      "changes": {
+        "toughness": [
+          12.0,
+          14.0,
+          1.1666666666666667
+        ],
+        "stack": [
+          100.0,
+          50.0,
+          0.5
+        ],
+        "provision_cost": [
+          7.0,
+          4.0,
+          0.5714285714285714
+        ]
+      }
+    },
+    {
+      "name": "caballero",
+      "type": "light_cavalry",
+      "changes": {
+        "damage": [
+          22.0,
+          24.0,
+          1.0909090909090908
+        ],
+        "screen": [
+          50.0,
+          44.0,
+          0.88
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          26.0,
+          3.7142857142857144
+        ]
+      }
+    },
+    {
+      "name": "mulaththamun",
+      "type": "light_cavalry",
+      "changes": {
+        "damage": [
+          22.0,
+          24.0,
+          1.0909090909090908
+        ],
+        "toughness": [
+          15.0,
+          16.0,
+          1.0666666666666667
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          26.0,
+          3.7142857142857144
+        ]
+      }
+    },
+    {
+      "name": "khandayat",
+      "type": "heavy_infantry",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          15.0,
+          24.0,
+          1.6
+        ]
+      }
+    },
+    {
+      "name": "abudrar",
+      "type": "skirmishers",
+      "changes": {
+        "pursuit": [
+          20.0,
+          26.0,
+          1.3
+        ],
+        "stack": [
+          100.0,
+          50.0,
+          0.5
+        ],
+        "provision_cost": [
+          3.0,
+          10.0,
+          3.3333333333333335
+        ]
+      }
+    },
+    {
+      "name": "mountaineer",
+      "type": "heavy_infantry",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          24.0,
+          3.4285714285714284
+        ]
+      }
+    },
+    {
+      "name": "chasseur",
+      "type": "light_cavalry",
+      "changes": {
+        "damage": [
+          40.0,
+          36.0,
+          0.9
+        ],
+        "toughness": [
+          15.0,
+          16.0,
+          1.0666666666666667
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          15.0,
+          26.0,
+          1.7333333333333334
+        ]
+      }
+    },
+    {
+      "name": "praetorian",
+      "type": "heavy_infantry",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          15.0,
+          24.0,
+          1.6
+        ]
+      }
+    },
+    {
+      "name": "longbowmen",
+      "type": "archers",
+      "changes": {
+        "toughness": [
+          8.0,
+          10.0,
+          1.25
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          10.0,
+          1.4285714285714286
+        ]
+      }
+    },
+    {
+      "name": "shenbigong",
+      "type": "archers",
+      "changes": {
+        "damage": [
+          44.0,
+          34.0,
+          0.7727272727272727
+        ],
+        "toughness": [
+          18.0,
+          14.0,
+          0.7777777777777778
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          12.0,
+          18.0,
+          1.5
+        ]
+      }
+    },
+    {
+      "name": "archers_of_the_nile",
+      "type": "archers",
+      "changes": {
+        "damage": [
+          30.0,
+          24.0,
+          0.8
+        ],
+        "toughness": [
+          14.0,
+          12.0,
+          0.8571428571428571
+        ],
+        "pursuit": [
+          10.0,
+          0.0,
+          0.0
+        ],
+        "screen": [
+          10.0,
+          20.0,
+          2.0
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          10.0,
+          1.4285714285714286
+        ]
+      }
+    },
+    {
+      "name": "horse_archers",
+      "type": "archer_cavalry",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          34.0,
+          4.857142857142857
+        ]
+      }
+    },
+    {
+      "name": "druzhina",
+      "type": "heavy_infantry",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          24.0,
+          3.4285714285714284
+        ]
+      }
+    },
+    {
+      "name": "sarawit",
+      "type": "heavy_infantry",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          24.0,
+          3.4285714285714284
+        ]
+      }
+    },
+    {
+      "name": "sahel_horsemen",
+      "type": "light_cavalry",
+      "changes": {
+        "toughness": [
+          15.0,
+          16.0,
+          1.0666666666666667
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          12.0,
+          1.7142857142857142
+        ]
+      }
+    },
+    {
+      "name": "garudas",
+      "type": "heavy_infantry",
+      "changes": {
+        "damage": [
+          42.0,
+          40.0,
+          0.9523809523809523
+        ],
+        "toughness": [
+          22.0,
+          20.0,
+          0.9090909090909091
+        ],
+        "pursuit": [
+          24.0,
+          20.0,
+          0.8333333333333334
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          12.0,
+          24.0,
+          2.0
+        ]
+      }
+    },
+    {
+      "name": "picchieri",
+      "type": "pikemen",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          3.0,
+          18.0,
+          6.0
+        ]
+      }
+    },
+    {
+      "name": "gendarme",
+      "type": "heavy_cavalry",
+      "changes": {
+        "stack": [
+          50.0,
+          20.0,
+          0.4
+        ],
+        "provision_cost": [
+          21.0,
+          34.0,
+          1.619047619047619
+        ]
+      }
+    },
+    {
+      "name": "huscarl",
+      "type": "heavy_infantry",
+      "changes": {
+        "damage": [
+          40.0,
+          36.0,
+          0.9
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          3.0,
+          24.0,
+          8.0
+        ]
+      }
+    },
+    {
+      "name": "cataphract",
+      "type": "heavy_cavalry",
+      "changes": {
+        "damage": [
+          125.0,
+          120.0,
+          0.96
+        ],
+        "stack": [
+          50.0,
+          20.0,
+          0.4
+        ],
+        "provision_cost": [
+          30.0,
+          34.0,
+          1.1333333333333333
+        ]
+      }
+    },
+    {
+      "name": "landsknecht",
+      "type": "pikemen",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          3.0,
+          18.0,
+          6.0
+        ]
+      }
+    },
+    {
+      "name": "hussar",
+      "type": "light_cavalry",
+      "changes": {
+        "damage": [
+          25.0,
+          26.0,
+          1.04
+        ],
+        "toughness": [
+          15.0,
+          14.0,
+          0.9333333333333333
+        ],
+        "pursuit": [
+          60.0,
+          52.0,
+          0.8666666666666667
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          34.0,
+          4.857142857142857
+        ]
+      }
+    },
+    {
+      "name": "bush_hunter",
+      "type": "archers",
+      "changes": {
+        "damage": [
+          30.0,
+          24.0,
+          0.8
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          3.0,
+          10.0,
+          3.3333333333333335
+        ]
+      }
+    },
+    {
+      "name": "goedendag",
+      "type": "skirmishers",
+      "changes": {
+        "damage": [
+          13.0,
+          14.0,
+          1.0769230769230769
+        ],
+        "stack": [
+          100.0,
+          50.0,
+          0.5
+        ],
+        "provision_cost": [
+          3.0,
+          4.0,
+          1.3333333333333333
+        ]
+      }
+    },
+    {
+      "name": "shomer",
+      "type": "skirmishers",
+      "changes": {
+        "toughness": [
+          24.0,
+          26.0,
+          1.0833333333333333
+        ],
+        "screen": [
+          40.0,
+          60.0,
+          1.5
+        ],
+        "stack": [
+          100.0,
+          50.0,
+          0.5
+        ],
+        "provision_cost": [
+          7.0,
+          4.0,
+          0.5714285714285714
+        ]
+      }
+    },
+    {
+      "name": "paiks",
+      "type": "archers",
+      "changes": {
+        "damage": [
+          28.0,
+          22.0,
+          0.7857142857142857
+        ],
+        "pursuit": [
+          10.0,
+          0.0,
+          0.0
+        ],
+        "screen": [
+          10.0,
+          0.0,
+          0.0
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          18.0,
+          2.5714285714285716
+        ]
+      }
+    },
+    {
+      "name": "guinea_warrior",
+      "type": "skirmishers",
+      "changes": {
+        "damage": [
+          18.0,
+          22.0,
+          1.2222222222222223
+        ],
+        "toughness": [
+          14.0,
+          16.0,
+          1.1428571428571428
+        ],
+        "pursuit": [
+          0.0,
+          12.0,
+          null
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          3.0,
+          4.0,
+          1.3333333333333333
+        ]
+      }
+    },
+    {
+      "name": "horn_warrior",
+      "type": "skirmishers",
+      "changes": {
+        "toughness": [
+          16.0,
+          20.0,
+          1.25
+        ],
+        "screen": [
+          20.0,
+          30.0,
+          1.5
+        ],
+        "stack": [
+          100.0,
+          50.0,
+          0.5
+        ],
+        "provision_cost": [
+          7.0,
+          4.0,
+          0.5714285714285714
+        ]
+      }
+    },
+    {
+      "name": "palace_guards",
+      "type": "heavy_infantry",
+      "changes": {
+        "damage": [
+          38.0,
+          34.0,
+          0.8947368421052632
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          15.0,
+          24.0,
+          1.6
+        ]
+      }
+    },
+    {
+      "name": "zupin_warrior",
+      "type": "pikemen",
+      "changes": {
+        "damage": [
+          16.0,
+          18.0,
+          1.125
+        ],
+        "toughness": [
+          16.0,
+          20.0,
+          1.25
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          10.0,
+          1.4285714285714286
+        ]
+      }
+    },
+    {
+      "name": "tawashi",
+      "type": "light_cavalry",
+      "changes": {
+        "damage": [
+          25.0,
+          26.0,
+          1.04
+        ],
+        "toughness": [
+          15.0,
+          16.0,
+          1.0666666666666667
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          15.0,
+          26.0,
+          1.7333333333333334
+        ]
+      }
+    },
+    {
+      "name": "tarkhan",
+      "type": "heavy_cavalry",
+      "changes": {
+        "stack": [
+          50.0,
+          20.0,
+          0.4
+        ],
+        "provision_cost": [
+          21.0,
+          34.0,
+          1.619047619047619
+        ]
+      }
+    },
+    {
+      "name": "asawira",
+      "type": "archer_cavalry",
+      "changes": {
+        "damage": [
+          90.0,
+          100.0,
+          1.1111111111111112
+        ],
+        "toughness": [
+          35.0,
+          40.0,
+          1.1428571428571428
+        ],
+        "stack": [
+          50.0,
+          20.0,
+          0.4
+        ],
+        "provision_cost": [
+          12.0,
+          34.0,
+          2.8333333333333335
+        ]
+      }
+    },
+    {
+      "name": "teutonic_knights",
+      "type": "heavy_infantry",
+      "changes": {
+        "damage": [
+          36.0,
+          46.0,
+          1.2777777777777777
+        ],
+        "toughness": [
+          26.0,
+          32.0,
+          1.2307692307692308
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          12.0,
+          18.0,
+          1.5
+        ]
+      }
+    },
+    {
+      "name": "bombard",
+      "type": "siege_weapon",
+      "changes": {
+        "provision_cost": [
+          24.0,
+          36.0,
+          1.5
+        ]
+      }
+    },
+    {
+      "name": "armored_horsemen",
+      "type": "heavy_cavalry",
+      "changes": {
+        "stack": [
+          50.0,
+          20.0,
+          0.4
+        ],
+        "provision_cost": [
+          21.0,
+          34.0,
+          1.619047619047619
+        ]
+      }
+    },
+    {
+      "name": "crossbowmen",
+      "type": "archers",
+      "changes": {
+        "damage": [
+          42.0,
+          34.0,
+          0.8095238095238095
+        ],
+        "toughness": [
+          18.0,
+          16.0,
+          0.8888888888888888
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          18.0,
+          2.5714285714285716
+        ]
+      }
+    },
+    {
+      "name": "light_horsemen",
+      "type": "light_cavalry",
+      "changes": {
+        "damage": [
+          22.0,
+          24.0,
+          1.0909090909090908
+        ],
+        "toughness": [
+          15.0,
+          16.0,
+          1.0666666666666667
+        ],
+        "pursuit": [
+          30.0,
+          32.0,
+          1.0666666666666667
+        ],
+        "screen": [
+          30.0,
+          32.0,
+          1.0666666666666667
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          26.0,
+          3.7142857142857144
+        ]
+      }
+    },
+    {
+      "name": "bowmen",
+      "type": "archers",
+      "changes": {
+        "damage": [
+          25.0,
+          26.0,
+          1.04
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          10.0,
+          1.4285714285714286
+        ]
+      }
+    },
+    {
+      "name": "pikemen_unit",
+      "type": "pikemen",
+      "changes": {
+        "toughness": [
+          24.0,
+          26.0,
+          1.0833333333333333
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          12.0,
+          18.0,
+          1.5
+        ]
+      }
+    },
+    {
+      "name": "trebuchet",
+      "type": "siege_weapon",
+      "changes": {
+        "provision_cost": [
+          18.0,
+          28.0,
+          1.5555555555555556
+        ]
+      }
+    },
+    {
+      "name": "pikemen_militia",
+      "type": "peasant_militia",
+      "changes": {
+        "damage": [
+          12.0,
+          14.0,
+          1.1666666666666667
+        ],
+        "pursuit": [
+          10.0,
+          12.0,
+          1.2
+        ],
+        "screen": [
+          0.0,
+          6.0,
+          null
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          12.0,
+          18.0,
+          1.5
+        ]
+      }
+    },
+    {
+      "name": "onager",
+      "type": "siege_weapon",
+      "changes": {
+        "provision_cost": [
+          6.0,
+          10.0,
+          1.6666666666666667
+        ]
+      }
+    },
+    {
+      "name": "mangonel",
+      "type": "siege_weapon",
+      "changes": {
+        "provision_cost": [
+          12.0,
+          18.0,
+          1.5
+        ]
+      }
+    },
+    {
+      "name": "armored_footmen",
+      "type": "heavy_infantry",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          24.0,
+          3.4285714285714284
+        ]
+      }
+    },
+    {
+      "name": "handgunners",
+      "type": "gunpowder",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          10.0,
+          1.4285714285714286
+        ]
+      }
+    },
+    {
+      "name": "light_footmen",
+      "type": "skirmishers",
+      "changes": {
+        "damage": [
+          10.0,
+          12.0,
+          1.2
+        ],
+        "pursuit": [
+          10.0,
+          12.0,
+          1.2
+        ],
+        "stack": [
+          100.0,
+          50.0,
+          0.5
+        ],
+        "provision_cost": [
+          3.0,
+          4.0,
+          1.3333333333333333
+        ]
+      }
+    },
+    {
+      "name": "house_guard",
+      "type": "heavy_infantry",
+      "changes": {
+        "stack": [
+          100.0,
+          50.0,
+          0.5
+        ],
+        "provision_cost": [
+          12.0,
+          24.0,
+          2.0
+        ]
+      }
+    },
+    {
+      "name": "camel_rider",
+      "type": "camel_cavalry",
+      "changes": {
+        "damage": [
+          22.0,
+          24.0,
+          1.0909090909090908
+        ],
+        "toughness": [
+          15.0,
+          16.0,
+          1.0666666666666667
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          21.0,
+          12.0,
+          0.5714285714285714
+        ]
+      }
+    },
+    {
+      "name": "war_elephant",
+      "type": "elephant_cavalry",
+      "changes": {
+        "damage": [
+          250.0,
+          235.0,
+          0.94
+        ],
+        "siege_value": [
+          0.1,
+          0.2,
+          2.0
+        ],
+        "stack": [
+          25.0,
+          10.0,
+          0.4
+        ],
+        "provision_cost": [
+          30.0,
+          64.0,
+          2.1333333333333333
+        ]
+      }
+    },
+    {
+      "name": "accolade_maa_cameliers",
+      "type": "camel_cavalry",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          15.0,
+          26.0,
+          1.7333333333333334
+        ]
+      }
+    },
+    {
+      "name": "accolade_maa_pikes",
+      "type": "pikemen",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          3.0,
+          24.0,
+          8.0
+        ]
+      }
+    },
+    {
+      "name": "accolade_maa_vanguards",
+      "type": "heavy_infantry",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          12.0,
+          60.0,
+          5.0
+        ]
+      }
+    },
+    {
+      "name": "accolade_maa_outriders",
+      "type": "light_cavalry",
+      "changes": {
+        "damage": [
+          30.0,
+          32.0,
+          1.0666666666666667
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          34.0,
+          4.857142857142857
+        ]
+      }
+    },
+    {
+      "name": "accolade_maa_horse_archers",
+      "type": "archer_cavalry",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          48.0,
+          6.857142857142857
+        ]
+      }
+    },
+    {
+      "name": "accolade_maa_skirmishers",
+      "type": "skirmishers",
+      "changes": {
+        "toughness": [
+          20.0,
+          24.0,
+          1.2
+        ],
+        "pursuit": [
+          16.0,
+          20.0,
+          1.25
+        ],
+        "screen": [
+          20.0,
+          30.0,
+          1.5
+        ],
+        "stack": [
+          100.0,
+          50.0,
+          0.5
+        ],
+        "provision_cost": [
+          3.0,
+          18.0,
+          6.0
+        ]
+      }
+    },
+    {
+      "name": "accolade_maa_handgunners",
+      "type": "gunpowder",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          24.0,
+          3.4285714285714284
+        ]
+      }
+    },
+    {
+      "name": "accolade_maa_elephantiers",
+      "type": "elephant_cavalry",
+      "changes": {
+        "stack": [
+          25.0,
+          10.0,
+          0.4
+        ],
+        "provision_cost": [
+          30.0,
+          72.0,
+          2.4
+        ]
+      }
+    },
+    {
+      "name": "accolade_maa_archers",
+      "type": "archers",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          3.0,
+          4.0,
+          1.3333333333333333
+        ]
+      }
+    },
+    {
+      "name": "accolade_maa_crossbowers",
+      "type": "archers",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          24.0,
+          3.4285714285714284
+        ]
+      }
+    },
+    {
+      "name": "accolade_maa_lancers",
+      "type": "heavy_cavalry",
+      "changes": {
+        "stack": [
+          50.0,
+          20.0,
+          0.4
+        ],
+        "provision_cost": [
+          21.0,
+          48.0,
+          2.2857142857142856
+        ]
+      }
+    },
+    {
+      "name": "jomsviking_pirates",
+      "type": "skirmishers",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          3.0,
+          18.0,
+          6.0
+        ]
+      }
+    },
+    {
+      "name": "varangian_veterans",
+      "type": "heavy_infantry",
+      "changes": {
+        "toughness": [
+          30.0,
+          18.0,
+          0.6
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          3.0,
+          24.0,
+          8.0
+        ]
+      }
+    },
+    {
+      "name": "vigmen",
+      "type": "archers",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          3.0,
+          10.0,
+          3.3333333333333335
+        ]
+      }
+    },
+    {
+      "name": "bondi",
+      "type": "pikemen",
+      "changes": {
+        "damage": [
+          14.0,
+          18.0,
+          1.2857142857142858
+        ],
+        "toughness": [
+          18.0,
+          22.0,
+          1.2222222222222223
+        ],
+        "pursuit": [
+          12.0,
+          18.0,
+          1.5
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          3.0,
+          10.0,
+          3.3333333333333335
+        ]
+      }
+    },
+    {
+      "name": "akritai",
+      "type": "skirmishers",
+      "changes": {
+        "damage": [
+          10.0,
+          12.0,
+          1.2
+        ],
+        "toughness": [
+          14.0,
+          18.0,
+          1.2857142857142858
+        ],
+        "screen": [
+          18.0,
+          22.0,
+          1.2222222222222223
+        ],
+        "stack": [
+          100.0,
+          50.0,
+          0.5
+        ],
+        "provision_cost": [
+          3.0,
+          4.0,
+          1.3333333333333333
+        ]
+      }
+    },
+    {
+      "name": "maa_bandits",
+      "type": "skirmishers",
+      "changes": {
+        "damage": [
+          15.0,
+          16.0,
+          1.0666666666666667
+        ],
+        "provision_cost": [
+          3.0,
+          4.0,
+          1.3333333333333333
+        ]
+      }
+    },
+    {
+      "name": "handpicked_faithful",
+      "type": "heavy_infantry",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          18.0,
+          2.5714285714285716
+        ]
+      }
+    },
+    {
+      "name": "maa_thieves",
+      "type": "pikemen",
+      "changes": {
+        "stack": [
+          50.0,
+          20.0,
+          0.4
+        ],
+        "provision_cost": [
+          3.0,
+          10.0,
+          3.3333333333333335
+        ]
+      }
+    },
+    {
+      "name": "varangian_guards",
+      "type": "heavy_infantry",
+      "changes": {
+        "toughness": [
+          32.0,
+          22.0,
+          0.6875
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          24.0,
+          3.4285714285714284
+        ]
+      }
+    },
+    {
+      "name": "maa_marauders",
+      "type": "light_cavalry",
+      "changes": {
+        "damage": [
+          30.0,
+          32.0,
+          1.0666666666666667
+        ],
+        "toughness": [
+          15.0,
+          16.0,
+          1.0666666666666667
+        ],
+        "stack": [
+          50.0,
+          40.0,
+          0.8
+        ],
+        "provision_cost": [
+          7.0,
+          4.0,
+          0.5714285714285714
+        ]
+      }
+    },
+    {
+      "name": "skoutatoi",
+      "type": "pikemen",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          18.0,
+          2.5714285714285716
+        ]
+      }
+    },
+    {
+      "name": "maa_poachers",
+      "type": "archers",
+      "changes": {
+        "damage": [
+          30.0,
+          26.0,
+          0.8666666666666667
+        ],
+        "toughness": [
+          15.0,
+          12.0,
+          0.8
+        ],
+        "pursuit": [
+          10.0,
+          0.0,
+          0.0
+        ],
+        "provision_cost": [
+          3.0,
+          4.0,
+          1.3333333333333333
+        ]
+      }
+    },
+    {
+      "name": "ballistrai",
+      "type": "archers",
+      "changes": {
+        "damage": [
+          35.0,
+          48.0,
+          1.3714285714285714
+        ],
+        "stack": [
+          50.0,
+          20.0,
+          0.4
+        ],
+        "provision_cost": [
+          12.0,
+          18.0,
+          1.5
+        ]
+      }
+    },
+    {
+      "name": "conrois",
+      "type": "heavy_cavalry",
+      "changes": {
+        "stack": [
+          50.0,
+          20.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          34.0,
+          4.857142857142857
+        ]
+      }
+    },
+    {
+      "name": "ayrudzi",
+      "type": "light_cavalry",
+      "changes": {
+        "damage": [
+          50.0,
+          52.0,
+          1.04
+        ],
+        "stack": [
+          50.0,
+          20.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          26.0,
+          3.7142857142857144
+        ]
+      }
+    },
+    {
+      "name": "torch_bearers",
+      "type": "siege_weapon",
+      "changes": {
+        "provision_cost": [
+          6.0,
+          10.0,
+          1.6666666666666667
+        ]
+      }
+    },
+    {
+      "name": "heavy_horse_archers",
+      "type": "archer_cavalry",
+      "changes": {
+        "stack": [
+          50.0,
+          20.0,
+          0.4
+        ],
+        "provision_cost": [
+          21.0,
+          34.0,
+          1.619047619047619
+        ]
+      }
+    },
+    {
+      "name": "mangudai",
+      "type": "archer_cavalry",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          12.0,
+          1.7142857142857142
+        ]
+      }
+    },
+    {
+      "name": "cataphract_archers",
+      "type": "heavy_cavalry",
+      "changes": {
+        "damage": [
+          90.0,
+          94.0,
+          1.0444444444444445
+        ],
+        "pursuit": [
+          20.0,
+          24.0,
+          1.2
+        ],
+        "screen": [
+          10.0,
+          20.0,
+          2.0
+        ],
+        "stack": [
+          50.0,
+          20.0,
+          0.4
+        ],
+        "provision_cost": [
+          21.0,
+          34.0,
+          1.619047619047619
+        ]
+      }
+    },
+    {
+      "name": "steppe_raiders",
+      "type": "light_cavalry",
+      "changes": {
+        "toughness": [
+          15.0,
+          16.0,
+          1.0666666666666667
+        ],
+        "stack": [
+          100.0,
+          50.0,
+          0.5
+        ],
+        "provision_cost": [
+          7.0,
+          12.0,
+          1.7142857142857142
+        ]
+      }
+    },
+    {
+      "name": "maturkan_warriors",
+      "type": "archers",
+      "changes": {
+        "damage": [
+          16.0,
+          18.0,
+          1.125
+        ],
+        "toughness": [
+          15.0,
+          16.0,
+          1.0666666666666667
+        ],
+        "screen": [
+          16.0,
+          20.0,
+          1.25
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          3.0,
+          4.0,
+          1.3333333333333333
+        ]
+      }
+    },
+    {
+      "name": "nomadic_riders",
+      "type": "nomadic_horde",
+      "changes": {
+        "damage": [
+          12.0,
+          14.0,
+          1.1666666666666667
+        ],
+        "toughness": [
+          12.0,
+          14.0,
+          1.1666666666666667
+        ],
+        "pursuit": [
+          10.0,
+          6.0,
+          0.6
+        ],
+        "screen": [
+          15.0,
+          10.0,
+          0.6666666666666666
+        ],
+        "provision_cost": [
+          7.0,
+          12.0,
+          1.7142857142857142
+        ]
+      }
+    },
+    {
+      "name": "nomad_lancers",
+      "type": "heavy_cavalry",
+      "changes": {
+        "damage": [
+          120.0,
+          110.0,
+          0.9166666666666666
+        ],
+        "stack": [
+          50.0,
+          20.0,
+          0.4
+        ],
+        "provision_cost": [
+          21.0,
+          34.0,
+          1.619047619047619
+        ]
+      }
+    },
+    {
+      "name": "kheshig",
+      "type": "archer_cavalry",
+      "changes": {
+        "damage": [
+          94.0,
+          104.0,
+          1.1063829787234043
+        ],
+        "stack": [
+          50.0,
+          20.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          12.0,
+          1.7142857142857142
+        ]
+      }
+    },
+    {
+      "name": "cannon",
+      "type": "siege_weapon",
+      "changes": {
+        "provision_cost": [
+          24.0,
+          36.0,
+          1.5
+        ]
+      }
+    },
+    {
+      "name": "fire_lancers",
+      "type": "gunpowder",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          24.0,
+          3.4285714285714284
+        ]
+      }
+    },
+    {
+      "name": "warrior_monks",
+      "type": "pikemen",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          10.0,
+          1.4285714285714286
+        ]
+      }
+    },
+    {
+      "name": "rocket_carts",
+      "type": "archers",
+      "changes": {
+        "damage": [
+          45.0,
+          40.0,
+          0.8888888888888888
+        ],
+        "stack": [
+          50.0,
+          20.0,
+          0.4
+        ],
+        "provision_cost": [
+          12.0,
+          18.0,
+          1.5
+        ]
+      }
+    },
+    {
+      "name": "japanese_horse_archers",
+      "type": "archer_cavalry",
+      "changes": {
+        "damage": [
+          96.0,
+          92.0,
+          0.9583333333333334
+        ],
+        "pursuit": [
+          40.0,
+          32.0,
+          0.8
+        ],
+        "stack": [
+          50.0,
+          20.0,
+          0.4
+        ],
+        "provision_cost": [
+          15.0,
+          34.0,
+          2.2666666666666666
+        ]
+      }
+    },
+    {
+      "name": "emishi_horse_archers",
+      "type": "archer_cavalry",
+      "changes": {
+        "toughness": [
+          12.0,
+          16.0,
+          1.3333333333333333
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          34.0,
+          4.857142857142857
+        ]
+      }
+    },
+    {
+      "name": "cloud_ladder",
+      "type": "siege_weapon",
+      "changes": {
+        "provision_cost": [
+          12.0,
+          18.0,
+          1.5
+        ]
+      }
+    },
+    {
+      "name": "gakgung_archers",
+      "type": "archers",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          7.0,
+          10.0,
+          1.4285714285714286
+        ]
+      }
+    },
+    {
+      "name": "ballista_elephant",
+      "type": "elephant_cavalry",
+      "changes": {
+        "stack": [
+          25.0,
+          10.0,
+          0.4
+        ],
+        "provision_cost": [
+          30.0,
+          64.0,
+          2.1333333333333333
+        ]
+      }
+    },
+    {
+      "name": "ballista",
+      "type": "siege_weapon",
+      "changes": {
+        "provision_cost": [
+          6.0,
+          10.0,
+          1.6666666666666667
+        ]
+      }
+    },
+    {
+      "name": "burenjia",
+      "type": "heavy_infantry",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          12.0,
+          24.0,
+          2.0
+        ]
+      }
+    },
+    {
+      "name": "pesilat_warriors",
+      "type": "skirmishers",
+      "changes": {
+        "damage": [
+          24.0,
+          22.0,
+          0.9166666666666666
+        ],
+        "toughness": [
+          10.0,
+          12.0,
+          1.2
+        ],
+        "stack": [
+          100.0,
+          50.0,
+          0.5
+        ],
+        "provision_cost": [
+          3.0,
+          4.0,
+          1.3333333333333333
+        ]
+      }
+    },
+    {
+      "name": "siege_tower",
+      "type": "siege_weapon",
+      "changes": {
+        "provision_cost": [
+          18.0,
+          28.0,
+          1.5555555555555556
+        ]
+      }
+    },
+    {
+      "name": "tiefutu",
+      "type": "heavy_cavalry",
+      "changes": {
+        "stack": [
+          50.0,
+          20.0,
+          0.4
+        ],
+        "provision_cost": [
+          30.0,
+          34.0,
+          1.1333333333333333
+        ]
+      }
+    },
+    {
+      "name": "black_armor_cavalry",
+      "type": "heavy_cavalry",
+      "changes": {
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          30.0,
+          48.0,
+          1.6
+        ]
+      }
+    },
+    {
+      "name": "samurai",
+      "type": "heavy_infantry",
+      "changes": {
+        "damage": [
+          45.0,
+          40.0,
+          0.8888888888888888
+        ],
+        "toughness": [
+          25.0,
+          20.0,
+          0.8
+        ],
+        "stack": [
+          100.0,
+          40.0,
+          0.4
+        ],
+        "provision_cost": [
+          12.0,
+          24.0,
+          2.0
+        ]
+      }
+    },
+    {
+      "name": "zhanmadao_infantry",
+      "type": "heavy_infantry",
+      "changes": {
+        "damage": [
+          85.0,
+          84.0,
+          0.9882352941176471
+        ],
+        "toughness": [
+          35.0,
+          34.0,
+          0.9714285714285714
+        ],
+        "stack": [
+          50.0,
+          20.0,
+          0.4
+        ],
+        "provision_cost": [
+          12.0,
+          24.0,
+          2.0
+        ]
+      }
+    }
+  ],
+  "terrain_changes": [
+    {
+      "name": "ayyar",
+      "type": "heavy_infantry",
+      "changes": [
+        {
+          "terrain": "wetlands",
+          "vanilla": null,
+          "kgd": {
+            "damage": -18.0,
+            "toughness": -6.0,
+            "pursuit": -12.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "mubarizun",
+      "type": "heavy_infantry",
+      "changes": [
+        {
+          "terrain": "wetlands",
+          "vanilla": null,
+          "kgd": {
+            "damage": -22.0,
+            "toughness": -10.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "khandayat",
+      "type": "heavy_infantry",
+      "changes": [
+        {
+          "terrain": "wetlands",
+          "vanilla": null,
+          "kgd": {
+            "damage": -14.0,
+            "toughness": -4.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "mountaineer",
+      "type": "heavy_infantry",
+      "changes": [
+        {
+          "terrain": "wetlands",
+          "vanilla": null,
+          "kgd": {
+            "damage": -28.0,
+            "toughness": -10.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "praetorian",
+      "type": "heavy_infantry",
+      "changes": [
+        {
+          "terrain": "wetlands",
+          "vanilla": null,
+          "kgd": {
+            "damage": -28.0,
+            "toughness": -12.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "archers_of_the_nile",
+      "type": "archers",
+      "changes": [
+        {
+          "terrain": "floodplains",
+          "vanilla": {
+            "damage": 15.0,
+            "toughness": 15.0,
+            "pursuit": 10.0,
+            "screen": 10.0
+          },
+          "kgd": {
+            "damage": 15.0,
+            "toughness": 15.0,
+            "screen": 10.0
+          },
+          "field_changes": {
+            "pursuit": {
+              "vanilla": 10.0,
+              "kgd": null
+            }
+          }
+        },
+        {
+          "terrain": "oasis",
+          "vanilla": {
+            "damage": 15.0,
+            "pursuit": 5.0,
+            "screen": 5.0
+          },
+          "kgd": {
+            "damage": 15.0,
+            "screen": 5.0
+          },
+          "field_changes": {
+            "pursuit": {
+              "vanilla": 5.0,
+              "kgd": null
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "horse_archers",
+      "type": "archer_cavalry",
+      "changes": [
+        {
+          "terrain": "steppe",
+          "vanilla": {
+            "damage": 45.0
+          },
+          "kgd": {
+            "damage": 36.0
+          },
+          "field_changes": {
+            "damage": {
+              "vanilla": 45.0,
+              "kgd": 36.0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "druzhina",
+      "type": "heavy_infantry",
+      "changes": [
+        {
+          "terrain": "wetlands",
+          "vanilla": null,
+          "kgd": {
+            "damage": -16.0,
+            "toughness": -6.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "garudas",
+      "type": "heavy_infantry",
+      "changes": [
+        {
+          "terrain": "wetlands",
+          "vanilla": null,
+          "kgd": {
+            "damage": -24.0,
+            "toughness": -6.0,
+            "pursuit": -24.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "huscarl",
+      "type": "heavy_infantry",
+      "changes": [
+        {
+          "terrain": "wetlands",
+          "vanilla": null,
+          "kgd": {
+            "damage": -18.0,
+            "toughness": -8.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "palace_guards",
+      "type": "heavy_infantry",
+      "changes": [
+        {
+          "terrain": "wetlands",
+          "vanilla": null,
+          "kgd": {
+            "damage": -16.0,
+            "toughness": -6.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "zupin_warrior",
+      "type": "pikemen",
+      "changes": [
+        {
+          "terrain": "desert_mountains",
+          "vanilla": {
+            "toughness": 12.0
+          },
+          "kgd": {
+            "toughness": 16.0
+          },
+          "field_changes": {
+            "toughness": {
+              "vanilla": 12.0,
+              "kgd": 16.0
+            }
+          }
+        },
+        {
+          "terrain": "forest",
+          "vanilla": {
+            "damage": 4.0,
+            "toughness": 8.0,
+            "pursuit": 4.0
+          },
+          "kgd": {
+            "damage": 12.0,
+            "toughness": 16.0,
+            "pursuit": 12.0
+          },
+          "field_changes": {
+            "damage": {
+              "vanilla": 4.0,
+              "kgd": 12.0
+            },
+            "toughness": {
+              "vanilla": 8.0,
+              "kgd": 16.0
+            },
+            "pursuit": {
+              "vanilla": 4.0,
+              "kgd": 12.0
+            }
+          }
+        },
+        {
+          "terrain": "hills",
+          "vanilla": {
+            "damage": 4.0,
+            "toughness": 8.0
+          },
+          "kgd": {
+            "damage": 12.0,
+            "toughness": 16.0
+          },
+          "field_changes": {
+            "damage": {
+              "vanilla": 4.0,
+              "kgd": 12.0
+            },
+            "toughness": {
+              "vanilla": 8.0,
+              "kgd": 16.0
+            }
+          }
+        },
+        {
+          "terrain": "mountains",
+          "vanilla": {
+            "toughness": 12.0
+          },
+          "kgd": {
+            "toughness": 16.0
+          },
+          "field_changes": {
+            "toughness": {
+              "vanilla": 12.0,
+              "kgd": 16.0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "teutonic_knights",
+      "type": "heavy_infantry",
+      "changes": [
+        {
+          "terrain": "wetlands",
+          "vanilla": null,
+          "kgd": {
+            "damage": -26.0,
+            "toughness": -16.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "armored_footmen",
+      "type": "heavy_infantry",
+      "changes": [
+        {
+          "terrain": "wetlands",
+          "vanilla": null,
+          "kgd": {
+            "damage": -16.0,
+            "toughness": -6.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "house_guard",
+      "type": "heavy_infantry",
+      "changes": [
+        {
+          "terrain": "wetlands",
+          "vanilla": null,
+          "kgd": {
+            "damage": -20.0,
+            "toughness": -8.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "accolade_maa_vanguards",
+      "type": "heavy_infantry",
+      "changes": [
+        {
+          "terrain": "wetlands",
+          "vanilla": null,
+          "kgd": {
+            "damage": -16.0,
+            "toughness": -6.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "varangian_veterans",
+      "type": "heavy_infantry",
+      "changes": [
+        {
+          "terrain": "wetlands",
+          "vanilla": null,
+          "kgd": {
+            "damage": -28.0,
+            "toughness": -8.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "handpicked_faithful",
+      "type": "heavy_infantry",
+      "changes": [
+        {
+          "terrain": "wetlands",
+          "vanilla": null,
+          "kgd": {
+            "damage": -20.0,
+            "toughness": -8.0,
+            "pursuit": -5.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "varangian_guards",
+      "type": "heavy_infantry",
+      "changes": [
+        {
+          "terrain": "wetlands",
+          "vanilla": null,
+          "kgd": {
+            "damage": -34.0,
+            "toughness": -12.0,
+            "pursuit": -10.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "ballistrai",
+      "type": "archers",
+      "changes": [
+        {
+          "terrain": "farmlands",
+          "vanilla": {
+            "damage": 8.0,
+            "toughness": 6.0
+          },
+          "kgd": {
+            "damage": 16.0,
+            "toughness": 6.0
+          },
+          "field_changes": {
+            "damage": {
+              "vanilla": 8.0,
+              "kgd": 16.0
+            }
+          }
+        },
+        {
+          "terrain": "hills",
+          "vanilla": {
+            "damage": 8.0
+          },
+          "kgd": {
+            "damage": 16.0
+          },
+          "field_changes": {
+            "damage": {
+              "vanilla": 8.0,
+              "kgd": 16.0
+            }
+          }
+        },
+        {
+          "terrain": "plains",
+          "vanilla": {
+            "damage": 8.0
+          },
+          "kgd": {
+            "damage": 16.0
+          },
+          "field_changes": {
+            "damage": {
+              "vanilla": 8.0,
+              "kgd": 16.0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "maturkan_warriors",
+      "type": "archers",
+      "changes": [
+        {
+          "terrain": "forest",
+          "vanilla": {
+            "damage": 10.0,
+            "toughness": 4.0
+          },
+          "kgd": {
+            "damage": 10.0,
+            "toughness": 8.0
+          },
+          "field_changes": {
+            "toughness": {
+              "vanilla": 4.0,
+              "kgd": 8.0
+            }
+          }
+        },
+        {
+          "terrain": "taiga",
+          "vanilla": {
+            "damage": 12.0,
+            "toughness": 6.0
+          },
+          "kgd": {
+            "damage": 18.0,
+            "toughness": 16.0
+          },
+          "field_changes": {
+            "damage": {
+              "vanilla": 12.0,
+              "kgd": 18.0
+            },
+            "toughness": {
+              "vanilla": 6.0,
+              "kgd": 16.0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "burenjia",
+      "type": "heavy_infantry",
+      "changes": [
+        {
+          "terrain": "wetlands",
+          "vanilla": null,
+          "kgd": {
+            "damage": -10.0,
+            "toughness": -16.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "samurai",
+      "type": "heavy_infantry",
+      "changes": [
+        {
+          "terrain": "wetlands",
+          "vanilla": null,
+          "kgd": {
+            "damage": -20.0,
+            "toughness": -6.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "zhanmadao_infantry",
+      "type": "heavy_infantry",
+      "changes": [
+        {
+          "terrain": "wetlands",
+          "vanilla": null,
+          "kgd": {
+            "damage": -32.0,
+            "toughness": -12.0
+          }
+        }
+      ]
+    }
+  ],
+  "counter_changes": [
+    {
+      "name": "monaspa",
+      "type": "heavy_cavalry",
+      "changes": {
+        "vanilla": {
+          "archers": 1.0,
+          "gunpowder": 1.0
+        },
+        "kgd": {
+          "archers": 1.0,
+          "gunpowder": 1.0,
+          "archer_cavalry": 0.5
+        },
+        "added": {
+          "archer_cavalry": 0.5
+        },
+        "removed": {},
+        "changed": {}
+      }
+    },
+    {
+      "name": "abudrar",
+      "type": "skirmishers",
+      "changes": {
+        "vanilla": {
+          "light_cavalry": 1.0,
+          "heavy_infantry": 1.0
+        },
+        "kgd": {
+          "light_cavalry": 1.0,
+          "heavy_infantry": 0.5
+        },
+        "added": {},
+        "removed": {},
+        "changed": {
+          "heavy_infantry": {
+            "vanilla": 1.0,
+            "kgd": 0.5
+          }
+        }
+      }
+    },
+    {
+      "name": "shenbigong",
+      "type": "archers",
+      "changes": {
+        "vanilla": {
+          "heavy_infantry": 1.25,
+          "heavy_cavalry": 1.25,
+          "pikemen": 1.0,
+          "peasant_militia": 2.0
+        },
+        "kgd": {
+          "heavy_infantry": 1.0,
+          "heavy_cavalry": 1.0,
+          "pikemen": 1.0,
+          "peasant_militia": 2.0
+        },
+        "added": {},
+        "removed": {},
+        "changed": {
+          "heavy_infantry": {
+            "vanilla": 1.25,
+            "kgd": 1.0
+          },
+          "heavy_cavalry": {
+            "vanilla": 1.25,
+            "kgd": 1.0
+          }
+        }
+      }
+    },
+    {
+      "name": "gendarme",
+      "type": "heavy_cavalry",
+      "changes": {
+        "vanilla": {
+          "archers": 1.0,
+          "gunpowder": 1.0
+        },
+        "kgd": {
+          "archers": 1.0,
+          "gunpowder": 1.0,
+          "archer_cavalry": 0.5
+        },
+        "added": {
+          "archer_cavalry": 0.5
+        },
+        "removed": {},
+        "changed": {}
+      }
+    },
+    {
+      "name": "cataphract",
+      "type": "heavy_cavalry",
+      "changes": {
+        "vanilla": {
+          "archers": 1.0,
+          "gunpowder": 1.0
+        },
+        "kgd": {
+          "archers": 1.0,
+          "gunpowder": 1.0,
+          "archer_cavalry": 0.5
+        },
+        "added": {
+          "archer_cavalry": 0.5
+        },
+        "removed": {},
+        "changed": {}
+      }
+    },
+    {
+      "name": "paiks",
+      "type": "archers",
+      "changes": {
+        "vanilla": {
+          "elephant_cavalry": 1.0
+        },
+        "kgd": {
+          "elephant_cavalry": 0.5,
+          "skirmishers": 0.5
+        },
+        "added": {
+          "skirmishers": 0.5
+        },
+        "removed": {},
+        "changed": {
+          "elephant_cavalry": {
+            "vanilla": 1.0,
+            "kgd": 0.5
+          }
+        }
+      }
+    },
+    {
+      "name": "armored_horsemen",
+      "type": "heavy_cavalry",
+      "changes": {
+        "vanilla": {
+          "archers": 1.0,
+          "gunpowder": 1.0
+        },
+        "kgd": {
+          "archers": 1.0,
+          "gunpowder": 1.0,
+          "archer_cavalry": 0.5
+        },
+        "added": {
+          "archer_cavalry": 0.5
+        },
+        "removed": {},
+        "changed": {}
+      }
+    },
+    {
+      "name": "crossbowmen",
+      "type": "archers",
+      "changes": {
+        "vanilla": {
+          "heavy_infantry": 1.0,
+          "heavy_cavalry": 1.0,
+          "archer_cavalry": 0.5
+        },
+        "kgd": {
+          "heavy_infantry": 0.5,
+          "heavy_cavalry": 0.5,
+          "archer_cavalry": 0.5
+        },
+        "added": {},
+        "removed": {},
+        "changed": {
+          "heavy_infantry": {
+            "vanilla": 1.0,
+            "kgd": 0.5
+          },
+          "heavy_cavalry": {
+            "vanilla": 1.0,
+            "kgd": 0.5
+          }
+        }
+      }
+    },
+    {
+      "name": "house_guard",
+      "type": "heavy_infantry",
+      "changes": {
+        "vanilla": {
+          "pikemen": 2.0,
+          "peasant_militia": 4.0,
+          "archers": 2.0
+        },
+        "kgd": {
+          "pikemen": 2.0,
+          "peasant_militia": 4.0,
+          "archers": 1.0
+        },
+        "added": {},
+        "removed": {},
+        "changed": {
+          "archers": {
+            "vanilla": 2.0,
+            "kgd": 1.0
+          }
+        }
+      }
+    },
+    {
+      "name": "accolade_maa_crossbowers",
+      "type": "archers",
+      "changes": {
+        "vanilla": {
+          "heavy_infantry": 2.0,
+          "heavy_cavalry": 2.0,
+          "archer_cavalry": 1.0
+        },
+        "kgd": {
+          "heavy_infantry": 1.0,
+          "heavy_cavalry": 1.0,
+          "archer_cavalry": 1.0
+        },
+        "added": {},
+        "removed": {},
+        "changed": {
+          "heavy_infantry": {
+            "vanilla": 2.0,
+            "kgd": 1.0
+          },
+          "heavy_cavalry": {
+            "vanilla": 2.0,
+            "kgd": 1.0
+          }
+        }
+      }
+    },
+    {
+      "name": "accolade_maa_lancers",
+      "type": "heavy_cavalry",
+      "changes": {
+        "vanilla": {
+          "archers": 2.0,
+          "gunpowder": 2.0
+        },
+        "kgd": {
+          "archers": 2.0,
+          "gunpowder": 2.0,
+          "archer_cavalry": 1.0
+        },
+        "added": {
+          "archer_cavalry": 1.0
+        },
+        "removed": {},
+        "changed": {}
+      }
+    },
+    {
+      "name": "cataphract_archers",
+      "type": "heavy_cavalry",
+      "changes": {
+        "vanilla": {
+          "archer_cavalry": 1.0,
+          "archers": 1.0,
+          "gunpowder": 0.5
+        },
+        "kgd": {
+          "archer_cavalry": 1.0,
+          "archers": 1.0
+        },
+        "added": {},
+        "removed": {
+          "gunpowder": 0.5
+        },
+        "changed": {}
+      }
+    },
+    {
+      "name": "maturkan_warriors",
+      "type": "archers",
+      "changes": {
+        "vanilla": {
+          "skirmishers": 1.0
+        },
+        "kgd": {
+          "skirmishers": 1.0,
+          "light_cavalry": 0.5
+        },
+        "added": {
+          "light_cavalry": 0.5
+        },
+        "removed": {},
+        "changed": {}
+      }
+    },
+    {
+      "name": "nomad_lancers",
+      "type": "heavy_cavalry",
+      "changes": {
+        "vanilla": {
+          "archers": 0.5,
+          "gunpowder": 0.5
+        },
+        "kgd": {
+          "archers": 0.5,
+          "gunpowder": 0.5,
+          "archer_cavalry": 0.5
+        },
+        "added": {
+          "archer_cavalry": 0.5
+        },
+        "removed": {},
+        "changed": {}
+      }
+    },
+    {
+      "name": "tiefutu",
+      "type": "heavy_cavalry",
+      "changes": {
+        "vanilla": {
+          "archers": 1.0,
+          "pikemen": 1.0,
+          "gunpowder": 1.0
+        },
+        "kgd": {
+          "archers": 1.0,
+          "pikemen": 1.0,
+          "gunpowder": 1.0,
+          "archer_cavalry": 0.5
+        },
+        "added": {
+          "archer_cavalry": 0.5
+        },
+        "removed": {},
+        "changed": {}
+      }
+    }
+  ],
+  "terrain_patterns": {
+    "archer_cavalry": {
+      "steppe": {
+        "damage": {
+          "mean_delta": -9.0,
+          "samples": 1
+        }
+      }
+    },
+    "pikemen": {
+      "desert_mountains": {
+        "toughness": {
+          "mean_delta": 4.0,
+          "samples": 1
+        }
+      },
+      "forest": {
+        "damage": {
+          "mean_delta": 8.0,
+          "samples": 1
+        },
+        "toughness": {
+          "mean_delta": 8.0,
+          "samples": 1
+        },
+        "pursuit": {
+          "mean_delta": 8.0,
+          "samples": 1
+        }
+      },
+      "hills": {
+        "damage": {
+          "mean_delta": 8.0,
+          "samples": 1
+        },
+        "toughness": {
+          "mean_delta": 8.0,
+          "samples": 1
+        }
+      },
+      "mountains": {
+        "toughness": {
+          "mean_delta": 4.0,
+          "samples": 1
+        }
+      }
+    },
+    "archers": {
+      "farmlands": {
+        "damage": {
+          "mean_delta": 8.0,
+          "samples": 1
+        }
+      },
+      "hills": {
+        "damage": {
+          "mean_delta": 8.0,
+          "samples": 1
+        }
+      },
+      "plains": {
+        "damage": {
+          "mean_delta": 8.0,
+          "samples": 1
+        }
+      },
+      "forest": {
+        "toughness": {
+          "mean_delta": 4.0,
+          "samples": 1
+        }
+      },
+      "taiga": {
+        "damage": {
+          "mean_delta": 6.0,
+          "samples": 1
+        },
+        "toughness": {
+          "mean_delta": 10.0,
+          "samples": 1
+        }
+      }
+    }
+  }
+}
