@@ -431,7 +431,6 @@ def ck3_file_impl(
     start_line: int = 1,
     end_line: int | None = None,
     max_bytes: int = 200000,
-    justification: str | None = None,
     # For edit
     old_content: str | None = None,
     new_content: str | None = None,
@@ -591,7 +590,7 @@ def ck3_file_impl(
     elif command == "read":
         if path:
             # Use WorldAdapter for visibility check if available
-            return _file_read_raw(path, justification or "file read", start_line, end_line, trace, world)
+            return _file_read_raw(path, start_line, end_line, trace, world)
         elif mod_name and rel_path:
             return _file_read_live(mod_name, rel_path, max_bytes, session, trace)
         else:
@@ -706,10 +705,9 @@ def _file_get(path, include_ast, max_bytes, db, trace, visibility):
     return {"error": f"File not found: {path}"}
 
 
-def _file_read_raw(path, justification, start_line, end_line, trace, world=None):
+def _file_read_raw(path, start_line, end_line, trace, world=None):
     """Read file from filesystem with WorldAdapter visibility enforcement."""
     from pathlib import Path as P
-    from ck3lens.agent_mode import get_agent_mode
     
     file_path = P(path)
     
@@ -736,7 +734,7 @@ def _file_read_raw(path, justification, start_line, end_line, trace, world=None)
     file_path = resolution.absolute_path
     
     if trace:
-        trace.log("ck3lens.file.read", {"path": str(file_path), "justification": justification}, {})
+        trace.log("ck3lens.file.read", {"path": str(file_path)}, {})
     
     if not file_path.exists():
         return {"success": False, "error": f"File not found: {path}"}
@@ -1585,7 +1583,6 @@ def ck3_folder_impl(
     command: FolderCommand = "list",
     # For list/contents
     path: str | None = None,
-    justification: str | None = None,
     # For mod_folders
     content_version_id: int | None = None,
     # For contents
@@ -1617,7 +1614,7 @@ def ck3_folder_impl(
     if command == "list":
         if not path:
             return {"error": "path required for list command"}
-        return _folder_list_raw(path, justification or "folder listing", trace, world)
+        return _folder_list_raw(path, trace, world)
     
     elif command == "contents":
         if not path:
@@ -1636,7 +1633,7 @@ def ck3_folder_impl(
     return {"error": f"Unknown command: {command}"}
 
 
-def _folder_list_raw(path, justification, trace, world=None):
+def _folder_list_raw(path, trace, world=None):
     """List directory from filesystem with WorldAdapter visibility enforcement."""
     from pathlib import Path as P
     
@@ -1655,7 +1652,7 @@ def _folder_list_raw(path, justification, trace, world=None):
         dir_path = resolution.absolute_path
     
     if trace:
-        trace.log("ck3lens.folder.list", {"path": str(dir_path), "justification": justification}, {})
+        trace.log("ck3lens.folder.list", {"path": str(dir_path)}, {})
     
     if not dir_path.exists():
         return {"success": False, "error": f"Directory not found: {path}"}

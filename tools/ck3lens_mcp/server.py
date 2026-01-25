@@ -1678,7 +1678,6 @@ def ck3_file(
     start_line: int = 1,
     end_line: int | None = None,
     max_bytes: int = 200000,
-    justification: str | None = None,
     # For edit
     old_content: str | None = None,
     new_content: str | None = None,
@@ -1727,7 +1726,6 @@ def ck3_file(
         start_line: Start line for read (1-indexed)
         end_line: End line for read (inclusive)
         max_bytes: Max bytes to return
-        justification: Audit justification for filesystem reads
         old_content: Content to find (for edit)
         new_content: Replacement content (for edit)
         new_path: New path (for rename)
@@ -1759,7 +1757,6 @@ def ck3_file(
         start_line=start_line,
         end_line=end_line,
         max_bytes=max_bytes,
-        justification=justification,
         old_content=old_content,
         new_content=new_content,
         new_path=new_path,
@@ -1785,7 +1782,6 @@ def ck3_folder(
     command: Literal["list", "contents", "top_level", "mod_folders"] = "contents",
     # For list/contents
     path: str | None = None,
-    justification: str | None = None,
     # For mod_folders
     content_version_id: int | None = None,
     # For contents
@@ -1812,7 +1808,6 @@ def ck3_folder(
     Args:
         command: Operation to perform
         path: Folder path (for list/contents)
-        justification: Audit justification for filesystem access
         content_version_id: Mod content version ID (for mod_folders)
         folder_pattern: Filter by folder pattern
         text_search: Filter by content text (FTS)
@@ -1839,7 +1834,6 @@ def ck3_folder(
     return ck3_folder_impl(
         command=command,
         path=path,
-        justification=justification,
         content_version_id=content_version_id,
         folder_pattern=folder_pattern,
         text_search=text_search,
@@ -4148,7 +4142,6 @@ def ck3_search(
 def ck3_grep_raw(
     path: str,
     query: str,
-    justification: str,
     is_regex: bool = False,
     include_pattern: Optional[str] = None
 ) -> dict:
@@ -4164,7 +4157,6 @@ def ck3_grep_raw(
     Args:
         path: Absolute path to search in (file or directory)
         query: Text or regex pattern to search for
-        justification: Why this search is needed (for audit trail)
         is_regex: If True, treat query as regex
         include_pattern: Glob pattern to filter files (e.g., "*.txt")
     
@@ -4195,7 +4187,6 @@ def ck3_grep_raw(
     trace.log("ck3lens.grep_raw", {
         "path": str(search_path),
         "query": query,
-        "justification": justification,
         "is_regex": is_regex,
         "include_pattern": include_pattern,
     }, {})
@@ -4263,7 +4254,6 @@ def ck3_grep_raw(
 @mcp.tool()
 def ck3_file_search(
     pattern: str,
-    justification: str,
     base_path: Optional[str] = None
 ) -> dict:
     """
@@ -4283,7 +4273,6 @@ def ck3_file_search(
     
     Args:
         pattern: Glob pattern to match (e.g., "**/*.txt", "common/traits/*.txt")
-        justification: Why this search is needed (for audit trail)
         base_path: Base directory to search in. If not provided:
                    - ck3raven-dev: repo root
                    - ck3lens: vanilla game path
@@ -4328,7 +4317,6 @@ def ck3_file_search(
     trace.log("ck3lens.file_search", {
         "pattern": pattern,
         "base_path": str(search_base),
-        "justification": justification,
     }, {})
     
     if not search_base.exists():
