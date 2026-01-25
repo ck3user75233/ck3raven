@@ -726,9 +726,8 @@ def _file_read_raw(path, justification, start_line, end_line, trace, world=None)
     if not resolution.found:
         return {
             "success": False,
-            "error": resolution.error_message or f"Path not visible in {world.mode} mode: {path}",
+            "error": f"Path not found: {path}",
             "mode": world.mode,
-            "hint": "This path is outside the visibility scope for the current agent mode",
         }
     
     # Use resolved absolute path (always set when resolution.found is True)
@@ -1649,9 +1648,8 @@ def _folder_list_raw(path, justification, trace, world=None):
         if not resolution.found:
             return {
                 "success": False,
-                "error": resolution.error_message or f"Path not visible in {world.mode} mode: {path}",
+                "error": f"Path not found: {path}",
                 "mode": world.mode,
-                "hint": "This path is outside the visibility scope for the current agent mode",
             }
         # Use resolved absolute path
         dir_path = resolution.absolute_path

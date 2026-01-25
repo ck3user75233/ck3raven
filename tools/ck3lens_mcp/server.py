@@ -3444,9 +3444,8 @@ def ck3_exec(
                     "executed": False,
                     "output": None,
                     "exit_code": None,
-                    "policy": {"decision": "NOT_FOUND", "reason": f"Working directory not visible in {world.mode} mode"},
-                    "error": resolution.error_message or f"Reference not found: {working_dir}",
-                    "hint": "This path is outside the visibility scope for the current agent mode",
+                    "policy": {"decision": "PATH_NOT_FOUND", "reason": f"Working directory not found"},
+                    "error": resolution.error_message or f"Path not found: {working_dir}",
                 }
         
         # Check target paths visibility
@@ -3459,9 +3458,8 @@ def ck3_exec(
                         "executed": False,
                         "output": None,
                         "exit_code": None,
-                        "policy": {"decision": "NOT_FOUND", "reason": f"Target path not visible in {world.mode} mode"},
-                        "error": resolution.error_message or f"Reference not found: {target}",
-                        "hint": "This path is outside the visibility scope for the current agent mode",
+                        "policy": {"decision": "PATH_NOT_FOUND", "reason": f"Target path not found"},
+                        "error": resolution.error_message or f"Path not found: {target}",
                     }
     
     # Get active contract
@@ -4185,9 +4183,8 @@ def ck3_grep_raw(
     if not resolution.found:
         return {
             "success": False,
-            "error": resolution.error_message or f"Path not visible in {world.mode} mode: {path}",
+            "error": f"Path not found: {path}",
             "mode": world.mode,
-            "hint": "This path is outside the visibility scope for the current agent mode",
         }
     # Use resolved absolute path (always set when resolution.found is True)
     if resolution.absolute_path is None:
@@ -4319,9 +4316,8 @@ def ck3_file_search(
     if not resolution.found:
         return {
             "success": False,
-            "error": resolution.error_message or f"Path not visible in {world.mode} mode: {base_path}",
+            "error": f"Path not found: {base_path or search_base}",
             "mode": world.mode,
-            "hint": "This path is outside the visibility scope for the current agent mode",
         }
     # Always set when resolution.found is True
     if resolution.absolute_path is None:

@@ -842,7 +842,21 @@ class WorldAdapter:
     
     def _translate_raw_path(self, raw_path: str) -> CanonicalAddress:
         """Translate a raw filesystem path to canonical address (mode-aware)."""
-        path = Path(raw_path).resolve()
+        raw = Path(raw_path)
+        
+        # In ck3raven-dev mode, resolve relative paths against ck3raven_root first
+        if self._mode == "ck3raven-dev" and not raw.is_absolute() and self._ck3raven_root:
+            # Try to resolve against ck3raven_root
+            candidate = self._ck3raven_root / raw_path
+            if candidate.exists():
+                return CanonicalAddress(
+                    address_type=AddressType.CK3RAVEN,
+                    identifier=None,
+                    relative_path=str(raw).replace("\\", "/"),
+                    raw_input=raw_path,
+                )
+        
+        path = raw.resolve()
         
         if self._mode == "ck3raven-dev":
             # Dev mode: prioritize ck3raven source
