@@ -1669,7 +1669,7 @@ def ck3_file(
     command: Literal["get", "read", "write", "edit", "delete", "rename", "refresh", "list", "create_patch"],
     # Path identification
     path: str | None = None,
-    mod_name: str | None = None,  # Mod name OR domain ("wip", "vanilla")
+    mod_name: str | None = None,  # Mod name from active playset
     rel_path: str | None = None,
     # For get (from DB)
     include_ast: bool = False,
@@ -1716,10 +1716,9 @@ def ck3_file(
     Args:
         command: Operation to perform
         path: File path (for get/read from filesystem)
-        mod_name: Target for file operations. Can be:
-            - "wip" → WIP workspace (~/.ck3raven/wip/) - always writable
-            - "vanilla" → Vanilla game files (read-only)
-            - Mod name → Mod from active playset (writable if under local_mods_folder)
+        mod_name: Mod name from active playset. Writable only if mod path is under
+            local_mods_folder. For WIP workspace or vanilla files, use path parameter
+            with appropriate domain prefix.
         rel_path: Relative path within target
         include_ast: Include parsed AST (for get)
         content: File content (for write)
