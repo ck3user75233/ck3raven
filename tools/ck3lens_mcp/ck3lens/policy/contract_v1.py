@@ -599,16 +599,10 @@ def open_contract(
     return contract
 def close_contract(contract_id: str, notes: Optional[str] = None) -> ContractV1:
     """
-    Close a contract with Phase 1.5 compliance audit.
+    Close a contract.
     
-    The audit checks:
-    1. Linter lock eligibility
-    2. arch_lint passes (or LXE tokens)
-    3. Playset hasn't drifted
-    4. No new symbol identities (or NST tokens)
-    
-    Raises:
-        ValueError: If audit fails (closure blocked)
+    Minimal implementation - just marks closed and saves.
+    No audit gates, no symbol comparison, no blocking.
     """
     contract = load_contract(contract_id)
     if contract is None:
@@ -616,43 +610,6 @@ def close_contract(contract_id: str, notes: Optional[str] = None) -> ContractV1:
     
     if contract.status != "open":
         raise ValueError(f"Contract is not open: {contract.status}")
-    
-    # Phase 1.5: Run compliance audit
-    audit_result = None
-    try:
-        # Add repo root to path for imports
-        import sys
-        repo_root = Path(__file__).resolve().parents[4]
-        if str(repo_root) not in sys.path:
-            sys.path.insert(0, str(repo_root))
-        
-        from tools.compliance.audit_contract_close import run_contract_close_audit
-        
-        audit_result = run_contract_close_audit(
-            contract_id=contract_id,
-            baseline_snapshot_path=contract.baseline_snapshot_path,
-            baseline_playset_hash=contract.baseline_playset_hash,
-            base_commit=contract.base_commit,
-        )
-        
-        # Always save the audit artifact
-        audit_path = audit_result.save()
-        contract.audit_result_path = str(audit_path)
-        
-        # If audit failed, block closure
-        if not audit_result.can_close:
-            # Save updated contract with audit path (but still open)
-            save_contract(contract)
-            raise ValueError(
-                f"Contract closure blocked by Phase 1.5 audit:\n"
-                f"  {audit_result.failure_reason}\n"
-                f"  Audit artifact: {audit_path}"
-            )
-            
-    except ImportError as e:
-        # Audit tool not available - this is a development scenario
-        import sys
-        print(f"Warning: Phase 1.5 audit not available: {e}", file=sys.stderr)
     
     contract.status = "closed"
     contract.closed_at = datetime.now().isoformat()

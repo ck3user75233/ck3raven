@@ -139,3 +139,6 @@ playsets/
 
 # Temp fix scripts
 tools/ck3lens_mcp/fix_*.py
+
+# Runtime artifacts
+artifacts/
