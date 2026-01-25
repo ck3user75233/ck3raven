@@ -1525,7 +1525,12 @@ def _refresh_file_in_db_internal(absolute_path, mod_name=None, rel_path=None, de
 def _auto_start_daemon():
     """Attempt to auto-start the QBuilder daemon as a background process.
     
-    Returns True if daemon started successfully, False otherwise.
+    RACE CONDITION PROTECTION:
+    - Checks writer lock BEFORE spawning to prevent multiple daemon instances
+    - If lock is held but IPC not available, waits for daemon to finish starting
+    - Only spawns if no lock holder exists
+    
+    Returns True if daemon started/available, False otherwise.
     """
     import subprocess
     import sys
@@ -1536,9 +1541,36 @@ def _auto_start_daemon():
     project_root = P(__file__).parent.parent.parent.parent
     python_exe = sys.executable
     
+    # Add qbuilder to path for writer_lock import
+    sys.path.insert(0, str(project_root))
     try:
-        # Start daemon as detached subprocess (Windows-compatible)
-        # Use CREATE_NO_WINDOW to avoid console window popup
+        from qbuilder.writer_lock import check_writer_lock
+    except ImportError:
+        # If qbuilder not available, fall back to basic spawn
+        pass
+    else:
+        # CRITICAL: Check writer lock BEFORE spawning to prevent race condition
+        # The lock file exists immediately when daemon starts, before IPC is ready
+        db_path = P.home() / ".ck3raven" / "ck3raven.db"
+        try:
+            lock_status = check_writer_lock(db_path)
+            
+            if lock_status.get("lock_exists") and lock_status.get("holder_alive"):
+                # Another daemon holds the lock - wait for IPC to become available
+                # Don't spawn a new process, just wait for the existing one
+                for _ in range(20):  # Wait up to 10 seconds
+                    time.sleep(0.5)
+                    if daemon.is_available(force_check=True):
+                        return True
+                # Lock holder exists but IPC not responding after 10s - something is wrong
+                # Still don't spawn - the lock holder will eventually timeout or be killed
+                return False
+        except Exception:
+            # If we can't check the lock, fall back to basic spawn
+            pass
+    
+    # No lock holder detected - safe to spawn
+    try:
         import platform
         
         if platform.system() == "Windows":

@@ -2078,11 +2078,13 @@ def ck3_playset(
         
         # Automatically start qbuilder if mods need processing
         # NOTE: Updated January 2026 - builder/daemon.py replaced by qbuilder
+        # RACE CONDITION FIX: Check writer lock before spawning
         builder_started = False
         if mods_needing_build or not db_available:
             try:
                 import subprocess
                 import sys
+                import time
                 
                 # Find the qbuilder CLI and venv python
                 repo_root = Path(__file__).parent.parent.parent
@@ -2093,50 +2095,75 @@ def ck3_playset(
                     venv_python = repo_root / ".venv" / "bin" / "python"  # Linux/Mac
                 
                 if qbuilder_module.exists() and venv_python.exists():
-                    # Start qbuilder daemon (single-writer architecture)
-                    # The daemon runs discovery + build workers with IPC server
-                    cmd = [
-                        str(venv_python),
-                        "-m", "qbuilder",
-                        "daemon",
-                    ]
+                    # CRITICAL: Check writer lock BEFORE spawning to prevent race condition
+                    # This prevents multiple daemons from being spawned simultaneously
+                    should_spawn = True
+                    try:
+                        sys.path.insert(0, str(repo_root))
+                        from qbuilder.writer_lock import check_writer_lock
+                        from ck3lens.daemon_client import daemon as daemon_client
+                        
+                        db_path = Path.home() / ".ck3raven" / "ck3raven.db"
+                        lock_status = check_writer_lock(db_path)
+                        
+                        if lock_status.get("lock_exists") and lock_status.get("holder_alive"):
+                            # Another daemon is starting or running - wait for IPC
+                            should_spawn = False
+                            for _ in range(20):  # Wait up to 10 seconds
+                                time.sleep(0.5)
+                                if daemon_client.is_available(force_check=True):
+                                    builder_started = True
+                                    result["builder_started"] = True
+                                    result["builder_message"] = "QBuilder daemon already running"
+                                    break
+                    except ImportError:
+                        pass  # Fall back to basic spawn
                     
-                    # Run detached (background mode)
-                    if sys.platform == "win32":
-                        DETACHED_PROCESS = 0x00000008
-                        CREATE_NEW_PROCESS_GROUP = 0x00000200
-                        CREATE_NO_WINDOW = 0x08000000
-                        subprocess.Popen(
-                            cmd,
-                            cwd=str(repo_root),  # qbuilder needs repo context
-                            creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
-                            close_fds=True,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                        )
-                    else:
-                        subprocess.Popen(
-                            cmd,
-                            cwd=str(repo_root),
-                            start_new_session=True,
-                            close_fds=True,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                        )
-                    
-                    builder_started = True
-                    if mods_needing_build:
-                        result["builder_started"] = True
-                        result["builder_message"] = (
-                            f"?? QBuilder started for {len(mods_needing_build)} mod(s) needing processing. "
-                            f"Check status with: python -m qbuilder status"
-                        )
-                    else:
-                        result["builder_started"] = True
-                        result["builder_message"] = (
-                            "?? Database not available or empty. QBuilder started to index all playset mods. "
-                            "Check status with: python -m qbuilder status"
-                        )
+                    if should_spawn:
+                        # Start qbuilder daemon (single-writer architecture)
+                        # The daemon runs discovery + build workers with IPC server
+                        cmd = [
+                            str(venv_python),
+                            "-m", "qbuilder",
+                            "daemon",
+                        ]
+                        
+                        # Run detached (background mode)
+                        if sys.platform == "win32":
+                            DETACHED_PROCESS = 0x00000008
+                            CREATE_NEW_PROCESS_GROUP = 0x00000200
+                            CREATE_NO_WINDOW = 0x08000000
+                            subprocess.Popen(
+                                cmd,
+                                cwd=str(repo_root),  # qbuilder needs repo context
+                                creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
+                                close_fds=True,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                            )
+                        else:
+                            subprocess.Popen(
+                                cmd,
+                                cwd=str(repo_root),
+                                start_new_session=True,
+                                close_fds=True,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                            )
+                        
+                        builder_started = True
+                        if mods_needing_build:
+                            result["builder_started"] = True
+                            result["builder_message"] = (
+                                f"🔨 QBuilder started for {len(mods_needing_build)} mod(s) needing processing. "
+                                f"Check status with: python -m qbuilder status"
+                            )
+                        else:
+                            result["builder_started"] = True
+                            result["builder_message"] = (
+                                "🔨 Database not available or empty. QBuilder started to index all playset mods. "
+                                "Check status with: python -m qbuilder status"
+                            )
             except Exception as e:
                 result["builder_error"] = f"Failed to start qbuilder: {e}"
                 result["build_command"] = "python -m qbuilder build"
@@ -5371,9 +5398,10 @@ def ck3_qbuilder(
         log_dir.mkdir(parents=True, exist_ok=True)
         
         from datetime import datetime
+        import time
         log_file = log_dir / f"daemon_{datetime.now().strftime('%Y-%m-%d')}.log"
         
-        # Check if daemon already running
+        # Check if daemon already running via IPC
         if daemon.is_available():
             health = daemon.health()
             result = {
@@ -5386,6 +5414,41 @@ def ck3_qbuilder(
             }
             trace.log("ck3_qbuilder.build", {}, result)
             return result
+        
+        # RACE CONDITION FIX: Check writer lock before spawning
+        # The lock file exists immediately when daemon starts, before IPC is ready
+        try:
+            from qbuilder.writer_lock import check_writer_lock
+            db_path = Path.home() / ".ck3raven" / "ck3raven.db"
+            lock_status = check_writer_lock(db_path)
+            
+            if lock_status.get("lock_exists") and lock_status.get("holder_alive"):
+                # Another daemon is starting - wait for IPC to become available
+                for _ in range(20):  # Wait up to 10 seconds
+                    time.sleep(0.5)
+                    if daemon.is_available(force_check=True):
+                        health = daemon.health()
+                        result = {
+                            "success": True,
+                            "already_running": True,
+                            "daemon_pid": health.daemon_pid,
+                            "state": health.state,
+                            "queue_pending": health.queue_pending,
+                            "message": "Daemon already running (connected after lock wait)",
+                        }
+                        trace.log("ck3_qbuilder.build", {}, result)
+                        return result
+                
+                # Lock holder exists but IPC not responding
+                result = {
+                    "success": False,
+                    "error": f"Daemon lock held by PID {lock_status.get('holder_pid')} but IPC not responding",
+                    "hint": "Kill the stale daemon process or wait for it to finish",
+                }
+                trace.log("ck3_qbuilder.build", {}, result)
+                return result
+        except ImportError:
+            pass  # Fall back to basic spawn
         
         try:
             with open(log_file, "a", encoding="utf-8") as log_handle:
@@ -5402,7 +5465,6 @@ def ck3_qbuilder(
                 )
             
             # Wait briefly for daemon to start IPC server
-            import time
             time.sleep(1.0)
             
             result = {
