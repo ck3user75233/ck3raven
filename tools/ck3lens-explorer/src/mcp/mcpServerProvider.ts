@@ -295,6 +295,15 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
 }
 
 /**
+ * Result of registering the MCP server provider.
+ * Both disposables must be disposed on deactivate for clean reload.
+ */
+export interface McpProviderRegistration {
+    provider: CK3LensMcpServerProvider;
+    registration: vscode.Disposable;
+}
+
+/**
  * Registers the MCP server provider with VS Code.
  * 
  * Note: As of VS Code 1.96, McpServerDefinitionProvider is a proposed API.
@@ -303,11 +312,14 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
  * CRITICAL: This is REQUIRED for per-instance isolation. Without it, all VS Code
  * windows share a single MCP server and mode state gets corrupted across windows.
  * We do NOT fall back to static mcp.json - that breaks the architecture.
+ * 
+ * Returns both provider and registration so caller can dispose them explicitly
+ * during deactivate() - this ensures clean disposal on window reload.
  */
 export function registerMcpServerProvider(
     context: vscode.ExtensionContext,
     logger: Logger
-): CK3LensMcpServerProvider | undefined {
+): McpProviderRegistration | undefined {
     // Check if the API is available - REQUIRED, not optional
     if (!vscode.lm || typeof vscode.lm.registerMcpServerDefinitionProvider !== 'function') {
         const errorMsg = 'CRITICAL: MCP Server Definition Provider API not available. ' +
@@ -334,17 +346,20 @@ export function registerMcpServerProvider(
     try {
         const provider = new CK3LensMcpServerProvider(context, logger);
         
-        const disposable = vscode.lm.registerMcpServerDefinitionProvider(
+        const registration = vscode.lm.registerMcpServerDefinitionProvider(
             'ck3lens',  // provider ID matching package.json contribution
             provider
         );
         
-        context.subscriptions.push(disposable);
+        // Also add to subscriptions as backup, but caller should dispose explicitly
+        context.subscriptions.push(registration);
         context.subscriptions.push(provider);
         
         logger.info('MCP Server Definition Provider registered successfully');
         logger.info(`Per-instance isolation enabled with instance ID: ${provider.getInstanceId()}`);
-        return provider;
+        
+        // Return both so caller can dispose explicitly on deactivate
+        return { provider, registration };
     } catch (error) {
         logger.error('Failed to register MCP Server Definition Provider:', error);
         vscode.window.showErrorMessage(

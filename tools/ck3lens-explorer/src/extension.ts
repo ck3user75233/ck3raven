@@ -29,7 +29,7 @@ import { PythonBridge } from './bridge/pythonBridge';
 import { LensStatusBar } from './widget/statusBar';
 import { Logger } from './utils/logger';
 import { SetupWizard, showSetupStatus } from './setup/setupWizard';
-import { registerMcpServerProvider, CK3LensMcpServerProvider } from './mcp/mcpServerProvider';
+import { registerMcpServerProvider, CK3LensMcpServerProvider, McpProviderRegistration } from './mcp/mcpServerProvider';
 import { DiagnosticsServer } from './ipc/diagnosticsServer';
 import { TokenWatcher } from './tokens/tokenWatcher';
 
@@ -38,6 +38,7 @@ let session: CK3LensSession | undefined;
 let pythonBridge: PythonBridge | undefined;
 let statusBar: LensStatusBar | undefined;
 let mcpServerProvider: CK3LensMcpServerProvider | undefined;
+let mcpRegistration: vscode.Disposable | undefined;
 let diagnosticsServer: DiagnosticsServer | undefined;
 let tokenWatcher: TokenWatcher | undefined;
 let logger: Logger;
@@ -105,7 +106,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Register MCP Server Provider for per-window instance isolation
     // This replaces the static mcp.json approach and allows multiple VS Code windows
     // to have independent MCP server instances
-    mcpServerProvider = registerMcpServerProvider(context, logger);
+    const mcpResult = registerMcpServerProvider(context, logger);
+    if (mcpResult) {
+        mcpServerProvider = mcpResult.provider;
+        mcpRegistration = mcpResult.registration;
+    }
     
     // CRITICAL: Per-instance mode blanking
     // Must happen AFTER mcpServerProvider is created so we have the instance ID
@@ -1071,8 +1076,14 @@ export function deactivate(): void {
     // Stop IPC diagnostics server
     diagnosticsServer?.dispose();
     
-    // Dispose MCP server provider to prevent duplicate instances on reload
+    // Dispose MCP registration FIRST (unregisters from VS Code API)
+    // This must happen before disposing the provider itself
+    mcpRegistration?.dispose();
+    mcpRegistration = undefined;
+    
+    // Then dispose MCP server provider (cleans up server resources)
     mcpServerProvider?.dispose();
+    mcpServerProvider = undefined;
     
     session?.dispose();
     pythonBridge?.dispose();
