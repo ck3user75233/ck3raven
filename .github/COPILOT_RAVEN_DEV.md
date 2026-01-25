@@ -92,18 +92,17 @@ Declare ONE per contract:
 - `TEST_ONLY`: Add/modify tests only
 - `DOCS_ONLY`: Documentation changes only
 
-### Token Tiers
-**Tier A (Auto-Grant with Logging):**
-- `TEST_EXECUTE` (5 min) - Run pytest
-- `SCRIPT_RUN_WIP` (15 min) - Execute WIP analysis script
-- `READ_SAFE` (60 min) - Read non-sensitive paths
+### Canonical Token Types
 
-**Tier B (Approval Required):**
-- `DELETE_SOURCE` (15 min) - Delete source files
-- `GIT_PUSH` (15 min) - git push
-- `GIT_FORCE_PUSH` (5 min) - git push --force
-- `GIT_HISTORY_REWRITE` (15 min) - rebase, amend
-- `DB_MIGRATION_DESTRUCTIVE` (30 min) - Schema destructive ops
+**Only TWO token types exist in the canonical system:**
+
+| Token | Purpose | TTL |
+|-------|---------|-----|
+| **NST** (New Symbol Token) | Required when creating new symbol identities not in baseline | 30 min |
+| **LXE** (Lint Exception) | Required when arch_lint violations exist at contract close | 15 min |
+
+All other token types (DELETE_SOURCE, GIT_PUSH, etc.) have been deprecated.
+Tokens are requested via `ck3_token(command="request", token_type="NST", reason="...")`.
 
 ---
 

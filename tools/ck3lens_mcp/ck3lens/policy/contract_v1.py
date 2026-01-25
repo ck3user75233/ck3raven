@@ -570,23 +570,6 @@ def open_contract(
     baseline_playset_hash: Optional[str] = None
     base_commit: Optional[str] = None
     
-    # Capture git base commit for scoped lint (fast, 5s timeout)
-    try:
-        import subprocess
-        repo_root = Path(__file__).resolve().parents[4]
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0:
-            base_commit = result.stdout.strip()
-    except Exception as e:
-        import sys
-        print(f"Warning: Failed to capture git base_commit: {e}", file=sys.stderr)
-    
     # Generate contract ID (instant)
     contract_id = ContractV1.generate_id()
     

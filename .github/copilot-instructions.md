@@ -156,14 +156,17 @@ ck3_file(command="read", mod_name="wip", rel_path="analysis.py")
 **Intent types for WIP:**
 - `script_wip` - Draft/run Python scripts
 
-### Operations Requiring Tokens
+### Canonical Token Types
 
-| Operation | Token Type | TTL |
-|-----------|-----------|-----|
-| Delete mod file | DELETE_MOD_FILE | 30 min |
-| Access inactive mods | INACTIVE_MOD_ACCESS | 60 min |
-| Execute scripts | SCRIPT_EXECUTE | 15 min |
-| Git push | GIT_PUSH_MOD | 60 min |
+**Only TWO token types exist in the canonical system:**
+
+| Token | Purpose | TTL |
+|-------|---------|-----|
+| **NST** (New Symbol Token) | Required when creating new symbol identities not in baseline | 30 min |
+| **LXE** (Lint Exception) | Required when arch_lint violations exist at contract close | 15 min |
+
+All other token types have been deprecated. Tokens are requested via:
+`ck3_token(command="request", token_type="NST", reason="...")`
 
 ### Git Operations
 

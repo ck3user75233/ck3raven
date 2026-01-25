@@ -1071,6 +1071,9 @@ export function deactivate(): void {
     // Stop IPC diagnostics server
     diagnosticsServer?.dispose();
     
+    // Dispose MCP server provider to prevent duplicate instances on reload
+    mcpServerProvider?.dispose();
+    
     session?.dispose();
     pythonBridge?.dispose();
     statusBar?.dispose();

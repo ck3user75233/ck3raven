@@ -1,0 +1,60 @@
+{
+  "contract_id": "v1-2026-01-24-423413",
+  "audit_timestamp": "2026-01-24T15:04:38.682040+00:00",
+  "all_passed": false,
+  "can_close": false,
+  "failure_reason": "arch_lint: No base_commit - cannot determine lint scope",
+  "baseline_snapshot_id": null,
+  "current_snapshot_id": null,
+  "playset_hash_baseline": null,
+  "playset_hash_current": "sha256:d643953660fddf9433c0f2072bc703ba9f7e7004b46497c1879f2b47aea08e75",
+  "base_commit": null,
+  "head_commit": null,
+  "changed_files": null,
+  "checks": [
+    {
+      "check_name": "linter_lock",
+      "passed": true,
+      "message": "Linter lock verified (11 files)",
+      "details": {
+        "lock_hash": "17aff142a29634532286313090b8fe1a"
+      }
+    },
+    {
+      "check_name": "arch_lint",
+      "passed": false,
+      "message": "No base_commit - cannot determine lint scope",
+      "details": {
+        "action_required": "Contract must capture base_commit at open"
+      }
+    },
+    {
+      "check_name": "playset_drift",
+      "passed": false,
+      "message": "No baseline playset_hash - contract missing Phase 1.5 metadata",
+      "details": {
+        "action_required": "Contract must capture playset_hash at open"
+      }
+    },
+    {
+      "check_name": "symbols_diff",
+      "passed": false,
+      "message": "Skipped - playset drift detected",
+      "details": {
+        "skipped": true
+      }
+    },
+    {
+      "check_name": "nst_validation",
+      "passed": true,
+      "message": "No NST required (no new symbols)",
+      "details": {}
+    },
+    {
+      "check_name": "lxe_validation",
+      "passed": true,
+      "message": "No LXE required (no lint errors)",
+      "details": {}
+    }
+  ]
+}
