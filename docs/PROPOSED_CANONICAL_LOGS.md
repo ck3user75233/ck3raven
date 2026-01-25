@@ -353,6 +353,289 @@ Both are complementary, not replacements.
 
 ---
 
+## QBuilder Logging (OUT OF SCOPE)
+
+QBuilder daemon logging is **not documented** in existing qbuilder docs. It uses:
+
+| File | Destination | Purpose |
+|------|-------------|---------|
+| `builder/daemon.py` | `~/.ck3raven/daemon/daemon.log` | Daemon lifecycle, phase progress |
+| `builder/daemon.py` | `~/.ck3raven/qbuilder_build.log` | Build run details |
+
+This proposal leaves QBuilder logging as-is. A separate effort should document QBuilder logging in `docs/QBUILDER_LOGGING.md` if needed.
+
+---
+
+## Appendix: Current Logging Inventory
+
+**All existing logging events in ck3raven (excluding QBuilder `builder/` directory).**
+
+Use this inventory to plan migration to the new structured logging.
+
+### A. MCP Server - Trace Log (`trace.log()`)
+
+**Destination:** `~/.ck3raven/ck3lens_trace.jsonl`
+
+| File | Line | Event Name | Purpose |
+|------|------|------------|---------|
+| `tools/ck3lens_mcp/server.py` | 807 | `ck3lens.close_db` | DB connection closed successfully |
+| `tools/ck3lens_mcp/server.py` | 814 | `ck3lens.close_db` | DB close failed |
+| `tools/ck3lens_mcp/server.py` | 854 | `ck3lens.db.status` | DB status query |
+| `tools/ck3lens_mcp/server.py` | 875 | `ck3lens.db.disable` | DB disabled for maintenance |
+| `tools/ck3lens_mcp/server.py` | 880 | `ck3lens.db.enable` | DB re-enabled |
+| `tools/ck3lens_mcp/server.py` | 1136-1293 | `ck3lens.db_delete` | DB delete operations (8 call sites) |
+| `tools/ck3lens_mcp/server.py` | 1332 | `ck3lens.get_policy_status` | Policy health check |
+| `tools/ck3lens_mcp/server.py` | 1421 | `ck3lens.logs` | Log query |
+| `tools/ck3lens_mcp/server.py` | 1538 | `ck3lens.conflicts.symbols` | Symbol conflicts query |
+| `tools/ck3lens_mcp/server.py` | 1593 | `ck3lens.conflicts.files` | File conflicts query |
+| `tools/ck3lens_mcp/server.py` | 1647 | `ck3lens.conflicts.summary` | Conflict summary |
+| `tools/ck3lens_mcp/server.py` | 2655 | `ck3lens.repair` | Repair query |
+| `tools/ck3lens_mcp/server.py` | 2665 | `ck3lens.repair` | Launcher diagnosis |
+| `tools/ck3lens_mcp/server.py` | 2682 | `ck3lens.repair` | Launcher backup |
+| `tools/ck3lens_mcp/server.py` | 2749 | `ck3lens.repair` | Cache delete |
+| `tools/ck3lens_mcp/server.py` | 2842 | `ck3lens.repair` | Path migration |
+| `tools/ck3lens_mcp/server.py` | 3095 | `ck3lens.contract.open` | Contract opened |
+| `tools/ck3lens_mcp/server.py` | 3207 | `ck3lens.contract.close` | Contract closed |
+| `tools/ck3lens_mcp/server.py` | 3232 | `ck3lens.contract.cancel` | Contract cancelled |
+| `tools/ck3lens_mcp/server.py` | 3322 | `ck3lens.contract.flush` | Old contracts archived |
+| `tools/ck3lens_mcp/server.py` | 3334 | `ck3lens.contract.archive_legacy` | Legacy contracts archived |
+| `tools/ck3lens_mcp/server.py` | 3548 | `ck3lens.exec.sandbox_start` | Shell command execution |
+| `tools/ck3lens_mcp/server.py` | 3905 | `ck3lens.token.issue` | Token issued |
+| `tools/ck3lens_mcp/server.py` | 3966 | `ck3lens.token.revoke` | Token revoked |
+| `tools/ck3lens_mcp/server.py` | 4105 | `ck3lens.search` | Symbol/content search |
+| `tools/ck3lens_mcp/server.py` | 4187 | `ck3lens.grep_raw` | Raw grep start |
+| `tools/ck3lens_mcp/server.py` | 4243 | `ck3lens.grep_raw.result` | Raw grep result |
+| `tools/ck3lens_mcp/server.py` | 4317 | `ck3lens.file_search` | File search start |
+| `tools/ck3lens_mcp/server.py` | 4341 | `ck3lens.file_search.result` | File search result |
+| `tools/ck3lens_mcp/server.py` | 4402 | `ck3lens.parse_content` | Parse CK3 content |
+| `tools/ck3lens_mcp/server.py` | 4469 | `ck3lens.report_validation_issue` | Validation issue reported |
+| `tools/ck3lens_mcp/server.py` | 4537 | `ck3lens.get_agent_briefing` | Agent briefing fetched |
+| `tools/ck3lens_mcp/server.py` | 4628 | `ck3lens.search_mods` | Mod search |
+| `tools/ck3lens_mcp/server.py` | 4735 | `ck3lens.mode_initialized` | Agent mode set |
+| `tools/ck3lens_mcp/server.py` | 5354 | `ck3_qbuilder.status` | QBuilder status |
+| `tools/ck3lens_mcp/server.py` | 5387 | `ck3_qbuilder.build` | QBuilder build started |
+| `tools/ck3lens_mcp/server.py` | 5433 | `ck3_qbuilder.discover` | QBuilder discovery |
+
+### B. MCP Server - Unified Tools Trace
+
+| File | Line | Event Name | Purpose |
+|------|------|------------|---------|
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 699 | `ck3lens.file.get` | Get file from DB |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 737 | `ck3lens.file.read` | Read file from FS |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 798 | `ck3lens.file.read_live` | Read live mod file |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 819 | `ck3lens.file.write` | Write file (policy deny) |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 856 | `ck3lens.file.write` | Write file (success) |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 903 | `ck3lens.file.write_raw` | Raw file write |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 974 | `ck3lens.file.edit_raw` | Raw file edit |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 1046 | `ck3lens.file.edit` | File edit |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 1085 | `ck3lens.file.delete` | File delete |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 1139 | `ck3lens.file.rename` | File rename |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 1168 | `ck3lens.file.refresh` | File refresh |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 1221 | `ck3lens.file.list` | List files |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 1254 | `ck3lens.file.delete_raw` | Raw file delete |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 1281 | `ck3lens.file.rename_raw` | Raw file rename |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 1321 | `ck3lens.file.list_raw` | Raw file list |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 1445 | `ck3lens.file.create_patch` | Create override patch |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 1655 | `ck3lens.folder.list` | List folder |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 1741 | `ck3lens.folder.contents` | Folder contents from DB |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 1776 | `ck3lens.folder.top_level` | Top-level folders |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 1797 | `ck3lens.folder.mod_folders` | Mod folders |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 2205 | `ck3lens.git.safe_push_autogrant` | Git push auto-granted |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 2222 | `ck3lens.git.*` | Git command (ck3raven) |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 2274 | `ck3lens.git.*` | Git command (mod) |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 2349 | `ck3lens.validate.syntax` | Syntax validation |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 2403 | `ck3lens.validate.python` | Python validation (OK) |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 2408 | `ck3lens.validate.python` | Python validation (fail) |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 2436 | `ck3lens.validate.references` | Reference validation |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 2463 | `ck3lens.validate.bundle` | Bundle validation |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 2564 | `ck3lens.vscode.ping` | VS Code IPC ping |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 2572 | `ck3lens.vscode.diagnostics` | VS Code diagnostics |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 2583 | `ck3lens.vscode.all_diagnostics` | All VS Code diagnostics |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 2591 | `ck3lens.vscode.errors_summary` | VS Code errors summary |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 2600 | `ck3lens.vscode.validate_file` | VS Code file validation |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 2607 | `ck3lens.vscode.open_files` | VS Code open files |
+| `tools/ck3lens_mcp/ck3lens/unified_tools.py` | 2614 | `ck3lens.vscode.active_file` | VS Code active file |
+
+### C. MCP Server - Python Standard Logging
+
+**Destination:** `stderr` (not persisted)
+
+| File | Line | Level | Purpose |
+|------|------|-------|---------|
+| `tools/ck3lens_mcp/server.py` | 159 | WARN | Session cache issue |
+| `tools/ck3lens_mcp/server.py` | 203 | WARN | Playset detection issue |
+| `tools/ck3lens_mcp/ck3lens/daemon_client.py` | 43 | (logger) | Daemon client module |
+| `tools/ck3lens_mcp/ck3lens/db_api.py` | 279 | WARN | Mutation query in read-only mode |
+| `tools/ck3lens_mcp/ck3lens/runtime_env.py` | 40 | (logger) | Runtime environment module |
+| `tools/ck3lens_mcp/ck3lens/runtime_env.py` | 89 | WARN | CWD fallback warning |
+| `tools/ck3lens_mcp/ck3lens/workspace.py` | 55 | (logger) | Workspace module |
+| `tools/ck3lens_mcp/ck3lens/workspace.py` | 184 | WARN | JSON parse failure |
+| `tools/ck3lens_mcp/ck3lens/workspace.py` | 187 | WARN | Config load failure |
+| `tools/ck3lens_mcp/ck3lens/workspace.py` | 255 | WARN | Config load error |
+| `tools/ck3lens_mcp/ck3lens/workspace.py` | 283 | WARN | Playset file not found |
+| `tools/ck3lens_mcp/ck3lens/world_router.py` | 49 | (logger) | World router module |
+| `tools/ck3lens_mcp/ck3lens/world_router.py` | 157 | WARN | Resolution fallback |
+| `tools/ck3lens_mcp/ck3lens/world_router.py` | 163 | INFO | Resolution success |
+
+### D. MCP Server - Policy Audit Trail
+
+| File | Line | Event Name | Purpose |
+|------|------|------------|---------|
+| `tools/ck3lens_mcp/ck3lens/policy/audit.py` | 197 | `policy.operation_start` | Operation beginning |
+| `tools/ck3lens_mcp/ck3lens/policy/audit.py` | 212 | `policy.enforcement_result` | Enforcement decision |
+| `tools/ck3lens_mcp/ck3lens/policy/audit.py` | 237 | `policy.validation_result` | Validation result |
+| `tools/ck3lens_mcp/ck3lens/policy/audit.py` | 261 | `policy.operation_complete` | Operation finished |
+
+### E. VS Code Extension - Logger Output Channel
+
+**Destination:** "CK3 Lens" Output Channel (not persisted to disk)
+
+#### extension.ts (Core Lifecycle)
+
+| Line | Level | Purpose |
+|------|-------|---------|
+| 86 | INFO | Cleaned up stale mode files |
+| 89 | DEBUG | Mode file cleanup error |
+| 100 | INFO | Extension activating |
+| 120 | INFO | MCP instance ID |
+| 132 | INFO | Blanked agent mode |
+| 134 | ERROR | Failed to blank agent mode |
+| 244 | INFO | IPC server started |
+| 246 | ERROR | IPC server start failed |
+| 270 | INFO | Token watcher started |
+| 272 | DEBUG | Token watcher skipped |
+| 275 | INFO | Extension activated |
+| 282 | INFO | Auto-initializing session |
+| 285 | ERROR | Auto-init failed |
+| 324 | ERROR | Session init failed |
+| 485 | ERROR | Database rebuild failed |
+| 651 | ERROR | Navigation failed |
+| 693 | ERROR | Conflict detail failed |
+| 1029 | DEBUG | DB cleanup skipped (no Python) |
+| 1047 | INFO | Running DB cleanup |
+| 1055 | INFO | DB cleanup result |
+| 1058 | DEBUG | DB cleanup stderr |
+| 1061 | DEBUG | DB cleanup failed |
+
+#### mcpServerProvider.ts (MCP Registration)
+
+| Line | Level | Purpose |
+|------|-------|---------|
+| 79 | DEBUG | Using configured Python |
+| 86-93 | DEBUG | Using venv Python |
+| 98-102 | ERROR | No Python found (FATAL) |
+| 114 | DEBUG | Using configured ck3ravenPath |
+| 125-165 | DEBUG | Found ck3raven root (various paths) |
+| 170 | INFO | Could not find ck3raven root |
+| 194 | INFO | MCP provider initialized |
+| 201 | INFO | Configuration changed |
+| 217-229 | INFO | Cannot provide MCP server (various reasons) |
+| 248 | DEBUG | Injected venv into PATH |
+| 259-263 | INFO/DEBUG | Providing MCP server |
+| 278 | ERROR | Failed to create McpStdioServerDefinition |
+| 331 | ERROR | MCP API not available |
+| 357-358 | INFO | MCP provider registered |
+| 363 | ERROR | MCP registration failed |
+
+#### session.ts (Session Operations)
+
+| Line | Level | Purpose |
+|------|-------|---------|
+| 108 | INFO | Initializing session |
+| 125 | INFO | Session initialized |
+| 129 | ERROR | Session init failed |
+| 152-655 | ERROR | Various operation failures (15 error handlers) |
+
+#### pythonBridge.ts (Python Process)
+
+| Line | Level | Purpose |
+|------|-------|---------|
+| 46-47 | INFO | Config paths |
+| 67-75 | INFO | Dev mode bridge found |
+| 108-109 | WARN | Configured path doesn't exist |
+| 122 | INFO | Auto-detected venv Python |
+| 128-131 | ERROR | No Python found (FATAL) |
+| 138 | ERROR | Python path invalid |
+| 142-144 | INFO | Starting Python bridge |
+| 163 | ERROR | Python stderr |
+| 167 | ERROR | Python process error |
+| 172 | INFO | Python process exited |
+| 205 | ERROR | Python process failed to start |
+| 233 | DEBUG | Non-JSON output |
+| 255 | DEBUG | Notification |
+| 284 | DEBUG | Sent request |
+
+#### agentView.ts (Agent State)
+
+| Line | Level | Purpose |
+|------|-------|---------|
+| 203 | INFO | MCP tools refreshed |
+| 244 | DEBUG | MCP check |
+| 246 | ERROR | MCP status check error |
+| 259 | INFO | MCP disconnected |
+| 275 | INFO | Restored agents from storage |
+| 351 | INFO | Watching mode file |
+| 376 | ERROR | Mode file load failed |
+| 398 | ERROR | Trace directory creation failed |
+| 412 | INFO | Watching trace file |
+| 426 | DEBUG | Skipping trace check (startup delay) |
+| 494 | INFO | Re-checking MCP status |
+| 700 | INFO | All agents cleared |
+| 723 | INFO | Agent initialized (default mode) |
+| 817 | INFO | Agent mode changed |
+| 835 | INFO | Agent created |
+
+#### diagnosticsServer.ts (IPC Server)
+
+| Line | Level | Purpose |
+|------|-------|---------|
+| 60 | INFO | IPC port in use, trying next |
+| 64 | ERROR | IPC server error |
+| 72 | INFO | IPC server listening |
+| 96 | DEBUG | Wrote IPC port file |
+| 98 | ERROR | Port file write failed |
+| 107 | DEBUG | IPC client connected |
+| 143 | DEBUG | IPC client disconnected |
+| 147 | ERROR | IPC socket error |
+
+#### Other Extension Files
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `lensWidget.ts` | 117-700 | Widget state, agent init, debug trace |
+| `statusBar.ts` | 46 | Status bar initialized |
+| `lintingProvider.ts` | 269-272 | Lint results and errors |
+| `definitionProvider.ts` | 30-51 | Definition lookup |
+| `referenceProvider.ts` | 31-61 | Reference lookup |
+| `hoverProvider.ts` | 58 | Hover lookup failed |
+| `completionProvider.ts` | 60 | Completion failed |
+| `conflictsView.ts` | 96 | Conflicts load failed |
+| `explorerView.ts` | 187 | Get children failed |
+| `issuesView.ts` | 123-181 | Issues/errors/conflicts load |
+| `playsetView.ts` | 107-194 | Mod reorder, playset load |
+| `studioPanel.ts` | 546-658 | File creation, copy from vanilla |
+| `symbolsView.ts` | 137 | Symbols load failed |
+| `astViewerPanel.ts` | 128-210 | AST viewer operations |
+
+### F. Core Library - Python Logging
+
+**Destination:** `stderr` (Python logging, not persisted)
+
+| File | Line | Level | Purpose |
+|------|------|-------|---------|
+| `src/ck3raven/db/ast_cache.py` | 20 | (logger) | AST cache module |
+| `src/ck3raven/db/cleanup.py` | 15 | (logger) | Cleanup module |
+| `src/ck3raven/db/cleanup.py` | 238 | INFO | Cleanup stats |
+| `src/ck3raven/db/symbols.py` | 30 | (logger) | Symbols module |
+| `src/ck3raven/db/symbols.py` | 895-1152 | INFO/WARN/DEBUG | Symbol/ref extraction progress |
+| `src/ck3raven/db/work_detection.py` | 30 | (logger) | Work detection module |
+| `src/ck3raven/db/work_detection.py` | 161 | WARN | Error reading file |
+| `src/ck3raven/db/work_detection.py` | 611 | INFO | Insufficient samples |
+| `src/ck3raven/emulator/builder.py` | 27 | (logger) | Emulator builder module |
+| `src/ck3raven/emulator/builder.py` | 181-248 | INFO/WARN/DEBUG | Game state building |
+
+---
+
 ## Next Steps
 
 1. Review and approve this proposal
