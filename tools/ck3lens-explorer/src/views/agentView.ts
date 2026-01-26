@@ -81,7 +81,7 @@ export function generateInitPrompt(mode: LensMode, instanceId: string | undefine
 class AgentTreeItem extends vscode.TreeItem {
     constructor(
         public readonly label: string,
-        public readonly itemType: 'python-bridge' | 'mcp-server' | 'policy-enforcement' | 'agent' | 'action' | 'info',
+        public readonly itemType: 'python-bridge' | 'mcp-server' | 'policy-enforcement' | 'agent' | 'action' | 'info' | 'instance-id',
         public readonly collapsibleState: vscode.TreeItemCollapsibleState = vscode.TreeItemCollapsibleState.None,
         public readonly agent?: AgentInstance,
         public readonly actionCommand?: string
@@ -124,6 +124,10 @@ class AgentTreeItem extends vscode.TreeItem {
                 break;
             case 'info':
                 this.iconPath = new vscode.ThemeIcon('info');
+                break;
+            case 'instance-id':
+                this.iconPath = new vscode.ThemeIcon('key');
+                // Command set by caller
                 break;
         }
     }
@@ -596,6 +600,25 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
         }
         items.push(policyItem);
 
+        // Instance ID display with copy action (FEAT-001)
+        if (this.instanceId) {
+            const instanceItem = new AgentTreeItem(
+                `Instance ID: ${this.instanceId}`,
+                'instance-id',
+                vscode.TreeItemCollapsibleState.None,
+                undefined,
+                'ck3lens.agent.copyInstanceId'
+            );
+            instanceItem.description = 'click to copy';
+            instanceItem.tooltip = new vscode.MarkdownString(
+                `**MCP Server Instance ID**\n\n` +
+                `ID: \`${this.instanceId}\`\n\n` +
+                `Tool prefix: \`mcp_ck3_lens_${this.instanceId}_\`\n\n` +
+                `Click to copy to clipboard or send to chat.`
+            );
+            items.push(instanceItem);
+        }
+
         // Agents
         if (this.state.agents.length === 0) {
             // No agents - show initialize button
@@ -724,6 +747,48 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
                 this.persistState();
                 this.refresh();
                 this.logger.info('All agents cleared');
+            })
+        );
+
+        // FEAT-001: Copy instance ID to clipboard or send to chat
+        this.disposables.push(
+            vscode.commands.registerCommand('ck3lens.agent.copyInstanceId', async () => {
+                if (!this.instanceId) {
+                    vscode.window.showWarningMessage('Instance ID not available');
+                    return;
+                }
+
+                const toolPrefix = `mcp_ck3_lens_${this.instanceId}_`;
+                const actions = [
+                    { label: '$(clippy) Copy Instance ID', action: 'copy_id' },
+                    { label: '$(comment) Copy Tool Prefix', action: 'copy_prefix' },
+                    { label: '$(comment-discussion) Send to Chat', action: 'chat' },
+                ];
+
+                const selected = await vscode.window.showQuickPick(actions, {
+                    placeHolder: `Instance ID: ${this.instanceId}`,
+                    title: 'Copy MCP Instance ID'
+                });
+
+                if (!selected) return;
+
+                switch (selected.action) {
+                    case 'copy_id':
+                        await vscode.env.clipboard.writeText(this.instanceId);
+                        vscode.window.showInformationMessage(`Copied instance ID: ${this.instanceId}`);
+                        break;
+                    case 'copy_prefix':
+                        await vscode.env.clipboard.writeText(toolPrefix);
+                        vscode.window.showInformationMessage(`Copied tool prefix: ${toolPrefix}`);
+                        break;
+                    case 'chat':
+                        const message = `⚠️ CRITICAL: The current MCP server instance ID is "${this.instanceId}". ` +
+                            `All tool names are prefixed with "${toolPrefix}" (e.g., ${toolPrefix}ck3_get_mode_instructions). ` +
+                            `NEVER use tool names from conversation history - the instance ID changes on window reload.`;
+                        await vscode.commands.executeCommand('workbench.action.chat.open', { query: message });
+                        vscode.window.showInformationMessage('Instance ID sent to chat - press Enter to send');
+                        break;
+                }
             })
         );
     }

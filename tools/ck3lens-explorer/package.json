@@ -376,6 +376,11 @@
         "command": "ck3lens.agent.clearAll",
         "title": "Clear All Agents",
         "icon": "$(trash)"
+      },
+      {
+        "command": "ck3lens.agent.copyInstanceId",
+        "title": "Copy MCP Instance ID",
+        "icon": "$(key)"
       }
     ],
     "menus": {
