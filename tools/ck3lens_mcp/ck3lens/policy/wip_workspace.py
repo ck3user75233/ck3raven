@@ -87,7 +87,7 @@ def get_workspace_state(
 def initialize_workspace(
     mode: AgentMode = AgentMode.CK3LENS,
     repo_root: Path | None = None,
-    wipe: bool = True,
+    wipe: bool = False,
 ) -> dict[str, Any]:
     """
     Initialize the WIP workspace for the specified mode.
@@ -97,7 +97,7 @@ def initialize_workspace(
     Args:
         mode: Agent mode (affects WIP location)
         repo_root: Repository root (required for ck3raven-dev mode)
-        wipe: If True, wipe existing contents (default behavior on session start)
+        wipe: If True, wipe existing contents (disabled by default to preserve work)
     
     Returns:
         Status dict with path, wiped_count, etc.

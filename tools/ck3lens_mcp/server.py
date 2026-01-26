@@ -4744,7 +4744,7 @@ def ck3_get_mode_instructions(
             wip_info = initialize_workspace(
                 mode=agent_mode,
                 repo_root=ck3raven_root if mode == "ck3raven-dev" else None,
-                wipe=True  # Auto-wipe on session start
+                wipe=False  # DO NOT auto-wipe - preserve WIP contents across sessions
             )
         except Exception as e:
             wip_info = {"error": f"WIP init failed: {e}"}
