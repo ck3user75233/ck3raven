@@ -1196,22 +1196,27 @@ class DBQueries:
         
         INTERNAL: Called by DbHandle.get_symbol_conflicts()
         
+        Uses Golden Join pattern: symbols → asts → files → content_versions
         This is INSTANT compared to contribution_units extraction.
         Uses GROUP BY to find symbols defined in multiple mods.
         """
         if not visible_cvids:
             return {"conflict_count": 0, "conflicts": [], "compatch_conflicts_hidden": 0}
         
-        cv_filter = self._cv_filter_sql(visible_cvids, "s.content_version_id")
+        cv_filter = self._cv_filter_sql(visible_cvids, "cv.content_version_id")
         
         # Build query to find symbols with multiple definitions
+        # GOLDEN JOIN: symbols → asts → files → content_versions
         sql = f"""
             SELECT 
                 s.symbol_type,
                 s.name,
-                COUNT(DISTINCT s.content_version_id) as source_count,
-                GROUP_CONCAT(DISTINCT s.content_version_id) as cv_ids
+                COUNT(DISTINCT cv.content_version_id) as source_count,
+                GROUP_CONCAT(DISTINCT cv.content_version_id) as cv_ids
             FROM symbols s
+            JOIN asts a ON s.ast_id = a.ast_id
+            JOIN files f ON a.content_hash = f.content_hash
+            JOIN content_versions cv ON f.content_version_id = cv.content_version_id
             WHERE 1=1
             {cv_filter}
         """
@@ -1222,7 +1227,7 @@ class DBQueries:
             params.append(symbol_type)
         
         if game_folder:
-            sql += " AND EXISTS (SELECT 1 FROM files f WHERE f.file_id = s.file_id AND f.relpath LIKE ?)"
+            sql += " AND f.relpath LIKE ?"
             params.append(f"{game_folder}%")
         
         sql += """
@@ -1246,7 +1251,7 @@ class DBQueries:
             name = row["name"]
             cv_ids_found = [int(cv) for cv in row["cv_ids"].split(",")]
             
-            # Get details for each source
+            # Get details for each source using Golden Join
             sources = []
             is_compatch_conflict = False
             
@@ -1257,10 +1262,11 @@ class DBQueries:
                         f.relpath,
                         s.line_number
                     FROM symbols s
-                    JOIN files f ON s.file_id = f.file_id
-                    JOIN content_versions cv ON s.content_version_id = cv.content_version_id
+                    JOIN asts a ON s.ast_id = a.ast_id
+                    JOIN files f ON a.content_hash = f.content_hash
+                    JOIN content_versions cv ON f.content_version_id = cv.content_version_id
                     LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-                    WHERE s.content_version_id = ? AND s.symbol_type = ? AND s.name = ?
+                    WHERE cv.content_version_id = ? AND s.symbol_type = ? AND s.name = ?
                     LIMIT 1
                 """, (cv_id, symbol_type_val, name)).fetchone()
                 

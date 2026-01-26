@@ -532,6 +532,26 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
         )
     
     # ==========================================================================
+    # STEP 2.5: WIP EXEMPTION (BEFORE contract check!)
+    # ==========================================================================
+    # WIP workspace writes are ALWAYS allowed without contract.
+    # This check MUST come before the contract requirement check.
+    
+    if op == OperationType.FILE_WRITE:
+        # Check domain from resolution
+        if request.domain == "wip":
+            return EnforcementResult(
+                decision=Decision.ALLOW,
+                reason="Write to WIP workspace allowed (no contract required)",
+            )
+        # Also check target_path format (legacy fallback)
+        if request.target_path and request.target_path.startswith("wip:/"):
+            return EnforcementResult(
+                decision=Decision.ALLOW,
+                reason="Write to WIP workspace allowed (no contract required)",
+            )
+    
+    # ==========================================================================
     # STEP 3: Contract requirement check
     # ==========================================================================
     

@@ -350,11 +350,14 @@ def resolve_ck3_references(
             
             if cvids:
                 placeholders = ",".join("?" * len(cvids))
+                # Golden Join pattern: symbols → asts → files → content_versions
                 cursor.execute(f"""
                     SELECT DISTINCT s.name 
                     FROM symbols s
-                    JOIN files f ON s.file_id = f.file_id
-                    WHERE f.content_version_id IN ({placeholders})
+                    JOIN asts a ON s.ast_id = a.ast_id
+                    JOIN files f ON a.content_hash = f.content_hash
+                    JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+                    WHERE cv.content_version_id IN ({placeholders})
                 """, cvids)
             else:
                 cursor.execute("SELECT DISTINCT name FROM symbols")

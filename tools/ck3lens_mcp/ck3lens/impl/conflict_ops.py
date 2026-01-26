@@ -107,6 +107,8 @@ def get_symbol_conflicts(
 ) -> dict:
     """Get symbol-level conflicts (same symbol defined by multiple mods).
     
+    Uses Golden Join pattern: symbols → asts → files → content_versions
+    
     Args:
         conn: Database connection
         cvids: Set of content_version_ids to filter to
@@ -130,19 +132,22 @@ def get_symbol_conflicts(
         if symbol_type:
             type_filter = "AND s.symbol_type = ?"
         
+        # GOLDEN JOIN: symbols → asts → files → content_versions
         sql = f"""
             SELECT s.name, s.symbol_type,
                    GROUP_CONCAT(
-                       COALESCE(mp.name, 'vanilla') || ':' || s.content_version_id,
+                       COALESCE(mp.name, 'vanilla') || ':' || cv.content_version_id,
                        '|'
                    ) as sources,
                    COUNT(*) as source_count
             FROM symbols s
-            JOIN content_versions cv ON s.content_version_id = cv.content_version_id
+            JOIN asts a ON s.ast_id = a.ast_id
+            JOIN files f ON a.content_hash = f.content_hash
+            JOIN content_versions cv ON f.content_version_id = cv.content_version_id
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE 1=1 {cvid_filter} {type_filter}
             GROUP BY s.name, s.symbol_type
-            HAVING COUNT(DISTINCT s.content_version_id) > 1
+            HAVING COUNT(DISTINCT cv.content_version_id) > 1
             ORDER BY s.name
             LIMIT ?
         """

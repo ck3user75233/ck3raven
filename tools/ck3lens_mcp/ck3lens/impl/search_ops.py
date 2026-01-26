@@ -50,6 +50,7 @@ def search_symbols(
     """Search for symbols in the database.
     
     Uses FTS5 search on symbols_fts table, filtered to provided CVIDs.
+    Uses Golden Join pattern: symbols → asts → files → content_versions
     
     Args:
         conn: Database connection
@@ -67,15 +68,17 @@ def search_symbols(
     try:
         fts_query = escape_fts_query(query)
         
-        # Build SQL with CVID filtering (NOT playset_mods table - BANNED)
+        # Build SQL with CVID filtering using Golden Join
+        # GOLDEN JOIN: symbols → asts → files → content_versions
         sql = """
             SELECT s.symbol_id, s.name, s.symbol_type, s.scope,
                    s.line_number, f.relpath, cv.content_version_id,
                    mp.name as mod_name, rank
             FROM symbols_fts fts
             JOIN symbols s ON s.symbol_id = fts.rowid
-            LEFT JOIN files f ON s.defining_file_id = f.file_id
-            LEFT JOIN content_versions cv ON s.content_version_id = cv.content_version_id
+            JOIN asts a ON s.ast_id = a.ast_id
+            LEFT JOIN files f ON a.content_hash = f.content_hash
+            LEFT JOIN content_versions cv ON f.content_version_id = cv.content_version_id
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE symbols_fts MATCH ?
         """
@@ -136,6 +139,7 @@ def confirm_not_exists(
     
     Performs a thorough search to prevent false negatives when
     claiming a symbol doesn't exist.
+    Uses Golden Join pattern: symbols → asts → files → content_versions
     
     Args:
         conn: Database connection
@@ -150,11 +154,13 @@ def confirm_not_exists(
         return {"can_claim_not_exists": False, "similar_matches": []}
     
     try:
-        # 1. Exact match search
+        # 1. Exact match search using Golden Join
         sql = """
             SELECT s.name, s.symbol_type, mp.name as mod_name
             FROM symbols s
-            LEFT JOIN content_versions cv ON s.content_version_id = cv.content_version_id
+            JOIN asts a ON s.ast_id = a.ast_id
+            LEFT JOIN files f ON a.content_hash = f.content_hash
+            LEFT JOIN content_versions cv ON f.content_version_id = cv.content_version_id
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE s.name = ?
         """
@@ -184,11 +190,13 @@ def confirm_not_exists(
                 "similar_matches": []
             }
         
-        # 2. Similar match search (fuzzy)
+        # 2. Similar match search (fuzzy) using Golden Join
         fuzzy_sql = """
             SELECT DISTINCT s.name, s.symbol_type, mp.name as mod_name
             FROM symbols s
-            LEFT JOIN content_versions cv ON s.content_version_id = cv.content_version_id
+            JOIN asts a ON s.ast_id = a.ast_id
+            LEFT JOIN files f ON a.content_hash = f.content_hash
+            LEFT JOIN content_versions cv ON f.content_version_id = cv.content_version_id
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE s.name LIKE ?
         """

@@ -5136,39 +5136,41 @@ _DB_QUERY_SCHEMA = {
     },
     "symbols": {
         "table": "symbols",
-        "columns": ["symbol_id", "name", "symbol_type", "file_id", "line_number", "source_mod"],
+        "columns": ["symbol_id", "ast_id", "line_number", "column_number", "name", "symbol_type", "scope"],
         "filters": {
             "name": "str - LIKE pattern for symbol name",
             "symbol_type": "str - Type (trait, event, decision, etc.)",
-            "source_mod": "str - Source mod name",
         },
         "examples": [
             'table=symbols, filters={"name": "brave", "symbol_type": "trait"}',
-            'table=symbols, filters={"symbol_type": "event", "source_mod": "vanilla"}',
+            'table=symbols, filters={"symbol_type": "event"}',
         ],
     },
     "files": {
         "table": "files",
-        "columns": ["file_id", "rel_path", "source_name", "file_type", "size_bytes", "deleted"],
+        "columns": ["file_id", "content_version_id", "relpath", "content_hash", "file_type", "deleted", "file_size"],
         "filters": {
-            "rel_path": "str - LIKE pattern for path",
-            "source_name": "str - Source mod name",
+            "relpath": "str - LIKE pattern for path",
+            "content_version_id": "int - Content version ID",
             "file_type": "str - File type",
             "deleted": "bool - Deleted flag (default: false)",
         },
         "examples": [
-            'table=files, filters={"rel_path": "%traits%", "source_name": "vanilla"}',
+            'table=files, filters={"relpath": "%traits%"}',
+            'table=files, filters={"file_type": "txt"}',
         ],
     },
     "refs": {
         "table": "refs",
-        "columns": ["ref_id", "name", "ref_type", "file_id", "line_number", "resolved_symbol_id"],
+        "columns": ["ref_id", "ast_id", "line_number", "column_number", "name", "ref_type", "resolution_status", "resolved_symbol_id"],
         "filters": {
             "name": "str - LIKE pattern for reference name",
             "ref_type": "str - Reference type",
+            "resolution_status": "str - Resolution status (resolved, unresolved)",
         },
         "examples": [
             'table=refs, filters={"name": "brave"}',
+            'table=refs, filters={"resolution_status": "unresolved"}',
         ],
     },
 }
