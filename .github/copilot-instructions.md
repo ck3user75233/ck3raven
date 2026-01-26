@@ -1,6 +1,6 @@
 ﻿# CK3 Lens - Comprehensive Copilot Instructions
 
-> **Last Updated:** January 2, 2026  
+> **Last Updated:** January 26, 2026  
 > **For use with:** ck3raven, CK3 Lens MCP, CK3 Lens Explorer
 
 ---
@@ -19,6 +19,21 @@ Key rules (violations will be rejected):
 5. **Enforcement = decisions** - decides allow/deny at execution time only
 
 **For MCP tool development:** See [Section 5: MCP Tool Architecture](../docs/CANONICAL_ARCHITECTURE.md#5-mcp-tool-architecture) for the canonical pattern all tools must follow.
+
+---
+
+## Instance ID (CRITICAL for Multi-Window)
+
+Each VS Code window gets a unique MCP instance ID (e.g., `tt79-6f854d`).
+
+**If tools aren't working:**
+1. Check the **Tools** view in CK3 Lens sidebar
+2. Look for "Instance ID: xxx" item
+3. Click it to copy or send to chat
+
+**Tool names include instance ID:** `mcp_ck3_lens_{instanceId}_ck3_*`
+
+If you see tools from a different instance ID in conversation history, they're stale - use current instance.
 
 ---
 

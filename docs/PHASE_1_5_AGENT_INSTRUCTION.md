@@ -269,3 +269,54 @@ If we build validators first and test them:
 If compliance cannot be proven deterministically:
 
 stop, block closure, escalate to user.
+
+---
+
+## Session Notes
+
+### January 26, 2026 Session
+
+**Focus:** Bug fixes, infrastructure improvements, documentation
+
+**Commits:**
+- `056176f` - fix: disable WIP auto-wipe on mode initialization
+- `a3e3028` - feat: add Python semantic validator using VS Code IPC + pyright fallback
+- `07c9fd6` - refactor: use golden_join.py for consistent symbol query patterns
+- `4a423a0` - fix: remove fallbacks from Python validator, require VS Code IPC
+- `fa2bcef` - feat(FEAT-001): add Instance ID button to AgentView for copy/chat
+
+**Changes Made:**
+
+1. **WIP Auto-Wipe Disabled**
+   - Changed `wipe=True` to `wipe=False` in `server.py` and `wip_workspace.py`
+   - WIP workspace now preserves files across mode initialization
+
+2. **Python Semantic Validator (`tools/ck3lens_mcp/ck3lens/validation/python_validator.py`)**
+   - Uses VS Code IPC to get Pylance diagnostics
+   - No fallbacks - errors out if IPC unavailable
+   - Raises `PythonValidationError` if validation cannot be performed
+   - Version 1.1.0
+
+3. **Golden Join Pattern (`tools/ck3lens_mcp/ck3lens/db/golden_join.py`)**
+   - Canonical JOIN order: `symbols s → asts a → files f → content_versions cv`
+   - `GOLDEN_JOIN` constant and `cvid_filter_clause()` helper
+   - Refactored `search_ops.py`, `conflict_ops.py`, `unified_tools.py` to use it
+
+4. **Instance ID Button (FEAT-001)**
+   - Added `instance-id` item type to `AgentTreeItem`
+   - Shows current MCP instance ID in Tools view
+   - Click to copy ID, copy tool prefix, or send to chat
+   - Helps agents identify correct MCP server instance
+
+**Verified Working (No Changes Needed):**
+
+1. **FEAT-002: Auto-detect file type**
+   - Already implemented - code checks `path.endswith(".txt")` before CK3 syntax validation
+   - Non-.txt files (.py, .md, .json) automatically skip CK3 validation
+
+2. **BUG-002: Instance Sharing**
+   - Working correctly via `agent_mode_{instanceId}.json` mechanism
+   - Extension watches mode file for changes
+   - Trace filtering by `instance_id` prevents cross-window contamination
+
+**Phase 1.5 Status:** COMPLETE - Ready for Phase 2
