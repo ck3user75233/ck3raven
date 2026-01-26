@@ -1,0 +1,5 @@
+{
+  "expect_arch_lint": "FAIL",
+  "reason_hint": "relative import",
+  "expect_python_undefined_refs": []
+}

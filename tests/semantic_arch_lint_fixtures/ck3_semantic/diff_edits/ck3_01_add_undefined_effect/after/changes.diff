@@ -1,0 +1,8 @@
+--- /mnt/data/semantic_arch_lint_fixtures/ck3_semantic/diff_edits/ck3_01_add_undefined_effect/base/events.txt+++ /mnt/data/semantic_arch_lint_fixtures/ck3_semantic/diff_edits/ck3_01_add_undefined_effect/after/events.txt@@ -6,5 +6,8 @@ 
+     immediate = {
+         add_prestige = 25
++
++        # SUBSET EDIT: hallucinated effect
++        summon_dragon = yes
+     }
+ }

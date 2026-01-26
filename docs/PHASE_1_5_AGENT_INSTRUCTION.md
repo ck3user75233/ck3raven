@@ -202,6 +202,68 @@ Failure blocks contract closure.
 
 ---
 
+## ⚠️ Phase Boundary Rules (CRITICAL)
+
+### BUILD NOW (Phase 1.5) — Evidence Construction
+
+These components are SENSORS. They observe reality and emit evidence.
+They do NOT make enforcement decisions.
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| `semantic_validator.py` | `tools/compliance/` | Extract definitions, resolve refs, emit evidence |
+| `tokens.py` | `tools/compliance/` | NST/LXE lifecycle: propose → approve → validate |
+| `arch_lint` / `code_diff_guard.py` | `scripts/guards/` | Detect architecture violations |
+| Symbol extractors | `tools/compliance/` | Extract Python and CK3 symbol inventories |
+| Evidence artifacts | `artifacts/` | Deterministic JSON outputs |
+
+**Validator output schema:**
+```json
+{
+  "definitions_added": ["symbol1", "symbol2"],
+  "undefined_refs": [{"name": "bad_ref", "location": {...}}],
+  "valid_refs": [{"name": "good_ref", "resolved_to": "mod/file.txt"}]
+}
+```
+
+### DO NOT BUILD YET (Phase 2) — Deterministic Gates
+
+These components are JUDGES. They use evidence to allow/deny.
+They require stable sensors before implementation.
+
+| Component | Location | Why Wait |
+|-----------|----------|----------|
+| Contract close enforcement | `audit_contract_close.py` caller | Needs stable evidence format |
+| Target file validation | `enforcement.py` | Needs contract schema finalized |
+| Branch-based commits | git integration | Needs close enforcement first |
+| Commit blocking | pre-commit hook | Needs audit tool stable |
+
+**Phase 2 will add:**
+- `ck3_contract(command="close")` validates all evidence before allowing
+- Writes outside declared target files are blocked proactively
+- Failed validation keeps changes on contract branch (not main)
+
+### Why This Separation?
+
+```
+Phase 1.5: Build the thermometer
+Phase 2.0: Build the thermostat
+
+The thermometer must be accurate before the thermostat can work.
+```
+
+If we build enforcement gates before validators are stable:
+- Gates will have false positives/negatives
+- Agents will be blocked by buggy evidence
+- Trust in the system will degrade
+
+If we build validators first and test them:
+- Evidence format stabilizes
+- Edge cases are discovered
+- Gates can be confident in their inputs
+
+---
+
 ## Hard Law
 
 If compliance cannot be proven deterministically:

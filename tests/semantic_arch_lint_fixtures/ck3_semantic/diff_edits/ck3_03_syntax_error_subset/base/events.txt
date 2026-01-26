@@ -1,0 +1,7 @@
+character_event = {
+    id = test_event.30
+
+    immediate = {
+        add_prestige = 5
+    }
+}

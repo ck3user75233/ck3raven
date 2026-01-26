@@ -1,0 +1,9 @@
+--- /mnt/data/semantic_arch_lint_fixtures/ck3_semantic/diff_edits/ck3_04_add_local_def_to_fix/base/events.txt+++ /mnt/data/semantic_arch_lint_fixtures/ck3_semantic/diff_edits/ck3_04_add_local_def_to_fix/after/events.txt@@ -1,3 +1,9 @@+# SUBSET EDIT: add local definition to resolve reference
++scripted_effect = {
++    name = my_effect
++    effect = { add_prestige = 1 }
++}
++
+ character_event = {
+     id = test_event.40
+ 

@@ -1,0 +1,20 @@
+namespace = test_event
+
+character_event = {
+    id = test_event.20
+    title = test_event.20.t
+
+    immediate = {
+        add_prestige = 10
+    }
+}
+
+# SUBSET EDIT: new event definition
+character_event = {
+    id = test_event.21
+    title = test_event.21.t
+
+    immediate = {
+        add_prestige = 15
+    }
+}

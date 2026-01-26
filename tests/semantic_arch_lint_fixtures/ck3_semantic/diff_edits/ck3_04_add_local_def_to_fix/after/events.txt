@@ -1,0 +1,13 @@
+# SUBSET EDIT: add local definition to resolve reference
+scripted_effect = {
+    name = my_effect
+    effect = { add_prestige = 1 }
+}
+
+character_event = {
+    id = test_event.40
+
+    immediate = {
+        my_effect = yes
+    }
+}

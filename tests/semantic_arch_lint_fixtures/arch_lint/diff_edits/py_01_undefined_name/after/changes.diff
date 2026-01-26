@@ -1,0 +1,8 @@
+--- /mnt/data/semantic_arch_lint_fixtures/arch_lint/diff_edits/py_01_undefined_name/base/calc.py+++ /mnt/data/semantic_arch_lint_fixtures/arch_lint/diff_edits/py_01_undefined_name/after/calc.py@@ -2,4 +2,8 @@     total = 0
+     for p in prices:
+         total += p
++
++    # SUBSET EDIT: hallucinated helper call
++    total += add_tax(total)
++
+     return total

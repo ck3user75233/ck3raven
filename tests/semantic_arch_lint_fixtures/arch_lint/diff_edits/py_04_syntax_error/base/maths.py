@@ -1,0 +1,2 @@
+def area(w: int, h: int) -> int:
+    return w * h

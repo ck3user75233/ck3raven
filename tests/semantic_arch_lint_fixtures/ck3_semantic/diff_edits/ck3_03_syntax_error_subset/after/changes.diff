@@ -1,0 +1,5 @@
+--- /mnt/data/semantic_arch_lint_fixtures/ck3_semantic/diff_edits/ck3_03_syntax_error_subset/base/events.txt+++ /mnt/data/semantic_arch_lint_fixtures/ck3_semantic/diff_edits/ck3_03_syntax_error_subset/after/events.txt@@ -4,4 +4,4 @@     immediate = {
+         add_prestige = 5
+     }
+-}
++# SUBSET EDIT: accidentally removed closing brace

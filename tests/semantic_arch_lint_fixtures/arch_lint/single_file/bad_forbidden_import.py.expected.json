@@ -1,0 +1,4 @@
+{
+  "expect_arch_lint": "FAIL",
+  "reason_hint": "forbidden cross-layer import"
+}

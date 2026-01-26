@@ -1,0 +1,15 @@
+scripted_effect = {
+    name = my_effect
+
+    effect = {
+        add_prestige = 25
+    }
+}
+
+character_event = {
+    id = test_event.4
+
+    immediate = {
+        my_effect = yes
+    }
+}

@@ -1,0 +1,7 @@
+character_event = {
+    id = test_event.40
+
+    immediate = {
+        my_effect = yes
+    }
+}

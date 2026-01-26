@@ -1,0 +1,6 @@
+character_event = {
+    id = test_event.2
+    title = test_event.2.t
+
+    immediate = {
+        add_prestige = 50

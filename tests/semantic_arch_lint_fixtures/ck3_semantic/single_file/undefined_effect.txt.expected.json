@@ -1,0 +1,6 @@
+{
+  "expect_ck3_parse": "PASS",
+  "expect_undefined_refs_contains": [
+    "summon_dragon"
+  ]
+}

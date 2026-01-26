@@ -1,0 +1,7 @@
+{
+  "expect_ck3_parse": "PASS",
+  "expect_undefined_refs": [],
+  "expect_defs_added": [
+    "my_effect"
+  ]
+}

@@ -1,0 +1,7 @@
+character_event = {
+    id = test_event.3
+
+    immediate = {
+        summon_dragon = yes
+    }
+}

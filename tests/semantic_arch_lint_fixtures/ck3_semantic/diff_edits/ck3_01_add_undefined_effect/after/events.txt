@@ -1,0 +1,13 @@
+namespace = test_event
+
+character_event = {
+    id = test_event.10
+    title = test_event.10.t
+
+    immediate = {
+        add_prestige = 25
+
+        # SUBSET EDIT: hallucinated effect
+        summon_dragon = yes
+    }
+}

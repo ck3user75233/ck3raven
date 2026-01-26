@@ -1,0 +1,7 @@
+{
+  "expect_arch_lint": "FAIL",
+  "reason_hint": "relative import + internal import",
+  "expect_semantic_validator_python_defs_added": [
+    "EvilThing"
+  ]
+}

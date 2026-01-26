@@ -1,0 +1,6 @@
+{
+  "expect_python_defs_added": [
+    "greet_formal"
+  ],
+  "expect_python_undefined_refs": []
+}

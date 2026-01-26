@@ -1,0 +1,7 @@
+{
+  "expect_ck3_parse": "PASS",
+  "expect_defs_added_if_new_file": [
+    "test_event.1"
+  ],
+  "expect_undefined_refs": []
+}

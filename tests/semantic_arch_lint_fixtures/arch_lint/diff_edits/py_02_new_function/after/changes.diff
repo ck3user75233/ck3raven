@@ -1,0 +1,6 @@
+--- /mnt/data/semantic_arch_lint_fixtures/arch_lint/diff_edits/py_02_new_function/base/greet.py+++ /mnt/data/semantic_arch_lint_fixtures/arch_lint/diff_edits/py_02_new_function/after/greet.py@@ -1,2 +1,6 @@ def greet(name: str) -> str:
+     return f"Hello, {name}"
++
++# SUBSET EDIT: new public API function (NST-governed)
++def greet_formal(title: str, name: str) -> str:
++    return f"Good day, {title} {name}"

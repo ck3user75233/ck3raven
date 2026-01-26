@@ -2448,7 +2448,12 @@ def _validate_python(content, file_path, trace):
 
 
 def _validate_references(symbol_name, symbol_type, db, trace):
-    """Validate symbol references."""
+    """Validate symbol references.
+    
+    Join path: symbols -> asts -> files (via content_hash)
+    Note: Multiple files can share the same AST (content-addressed storage),
+    so we may get multiple file matches per symbol.
+    """
     # Look up symbol
     conditions = ["s.name = ?"]
     params = [symbol_name]
@@ -2457,10 +2462,15 @@ def _validate_references(symbol_name, symbol_type, db, trace):
         conditions.append("s.symbol_type = ?")
         params.append(symbol_type)
     
+    # Join through asts to files via content_hash
+    # This handles the content-addressed storage model correctly
     rows = db.conn.execute(f"""
-        SELECT s.*, f.relpath
+        SELECT s.symbol_id, s.name, s.symbol_type, s.line_number,
+               f.relpath, cv.name as mod_name
         FROM symbols s
-        JOIN files f ON s.file_id = f.file_id
+        JOIN asts a ON s.ast_id = a.ast_id
+        JOIN files f ON a.content_hash = f.content_hash
+        JOIN content_versions cv ON f.content_version_id = cv.content_version_id
         WHERE {" AND ".join(conditions)}
     """, params).fetchall()
     
@@ -2478,6 +2488,7 @@ def _validate_references(symbol_name, symbol_type, db, trace):
             "file": row['relpath'],
             "line": row['line_number'],
             "type": row['symbol_type'],
+            "mod": row['mod_name'],
         } for row in rows],
     }
 

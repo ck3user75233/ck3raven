@@ -1,0 +1,6 @@
+{
+  "expect_semantic_validator_python_defs_added": [
+    "WorldAdapterV2"
+  ],
+  "expect_arch_lint": "MAYBE"
+}

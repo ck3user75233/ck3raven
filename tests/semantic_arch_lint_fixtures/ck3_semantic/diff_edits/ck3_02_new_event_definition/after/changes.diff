@@ -1,0 +1,13 @@
+--- /mnt/data/semantic_arch_lint_fixtures/ck3_semantic/diff_edits/ck3_02_new_event_definition/base/events.txt+++ /mnt/data/semantic_arch_lint_fixtures/ck3_semantic/diff_edits/ck3_02_new_event_definition/after/events.txt@@ -8,3 +8,13 @@         add_prestige = 10
+     }
+ }
++
++# SUBSET EDIT: new event definition
++character_event = {
++    id = test_event.21
++    title = test_event.21.t
++
++    immediate = {
++        add_prestige = 15
++    }
++}

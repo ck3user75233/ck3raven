@@ -1,0 +1,4 @@
+--- /mnt/data/semantic_arch_lint_fixtures/arch_lint/diff_edits/py_04_syntax_error/base/maths.py+++ /mnt/data/semantic_arch_lint_fixtures/arch_lint/diff_edits/py_04_syntax_error/after/maths.py@@ -1,2 +1,3 @@ def area(w: int, h: int) -> int:
+-    return w * h
++    # SUBSET EDIT: syntax error
++    return w * * h
