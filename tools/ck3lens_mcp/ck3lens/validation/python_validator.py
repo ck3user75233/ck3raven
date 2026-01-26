@@ -6,9 +6,8 @@ and other issues that indicate hallucinated or incorrect code.
 
 This is a SENSOR, not a JUDGE — it observes and reports evidence.
 
-Strategy:
-1. Try VS Code IPC (Pylance) — fastest, uses already-open file analysis
-2. Fall back to pyright CLI — works without VS Code
+REQUIRES: VS Code with Pylance extension running and IPC server active.
+The validator uses Pylance diagnostics via VS Code IPC for semantic analysis.
 
 Produces evidence compatible with SemanticReport format from semantic_validator.py.
 
@@ -27,15 +26,21 @@ from __future__ import annotations
 import ast
 import json
 import re
-import subprocess
-import sys
-import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from ..ipc_client import VSCodeIPCClient, VSCodeIPCError, is_vscode_available
+
+
+# ============================================================================
+# Exceptions
+# ============================================================================
+
+class PythonValidationError(Exception):
+    """Raised when Python validation cannot proceed."""
+    pass
 
 
 # ============================================================================
@@ -53,7 +58,7 @@ class PythonDiagnostic:
     end_column: int
     severity: str  # "error", "warning", "information", "hint"
     message: str
-    source: str  # "Pylance", "pyright", "syntax"
+    source: str  # "Pylance"
     code: Optional[str] = None  # diagnostic code like "reportUndefinedVariable"
     
     # Categorization
@@ -81,11 +86,11 @@ class PythonValidationReport:
     """Complete Python validation report."""
     
     tool: str = "python_semantic_validator"
-    version: str = "1.0.0"
+    version: str = "1.1.0"
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
     
     # Source info
-    source: str = "unknown"  # "vscode_ipc", "pyright_cli", "ast_only"
+    source: str = "vscode_ipc"  # Always Pylance via IPC
     files_analyzed: list[str] = field(default_factory=list)
     
     # Diagnostics by category
@@ -239,7 +244,7 @@ def severity_from_vscode(severity: str) -> str:
 
 
 # ============================================================================
-# Python AST Analysis (Baseline)
+# Python AST Analysis (for definitions extraction)
 # ============================================================================
 
 def extract_definitions_ast(content: str, file_path: str) -> tuple[list[dict], list[PythonDiagnostic]]:
@@ -296,17 +301,21 @@ def extract_definitions_ast(content: str, file_path: str) -> tuple[list[dict], l
 
 
 # ============================================================================
-# VS Code IPC Strategy (Primary)
+# VS Code IPC Validation (REQUIRED)
 # ============================================================================
 
-def validate_via_vscode_ipc(files: list[Path]) -> Optional[PythonValidationReport]:
+def validate_via_vscode_ipc(files: list[Path]) -> PythonValidationReport:
     """
     Validate files using VS Code IPC to get Pylance diagnostics.
     
-    Returns None if IPC is unavailable.
+    Raises:
+        PythonValidationError: If VS Code IPC is unavailable
     """
     if not is_vscode_available():
-        return None
+        raise PythonValidationError(
+            "VS Code IPC is not available. "
+            "Ensure VS Code is running with the CK3 Lens extension active."
+        )
     
     report = PythonValidationReport(source="vscode_ipc")
     
@@ -382,110 +391,7 @@ def validate_via_vscode_ipc(files: list[Path]) -> Optional[PythonValidationRepor
                     report.validation_errors.append(f"AST parse error for {abs_path}: {e}")
     
     except VSCodeIPCError as e:
-        report.validation_errors.append(f"IPC error: {e}")
-    
-    return report
-
-
-# ============================================================================
-# Pyright CLI Strategy (Fallback)
-# ============================================================================
-
-def validate_via_pyright(files: list[Path]) -> PythonValidationReport:
-    """
-    Validate files using pyright CLI as fallback when VS Code IPC unavailable.
-    """
-    report = PythonValidationReport(source="pyright_cli")
-    
-    if not files:
-        return report
-    
-    # First, extract definitions and check for syntax errors
-    for file_path in files:
-        abs_path = str(file_path.resolve())
-        report.files_analyzed.append(abs_path)
-        
-        try:
-            content = file_path.read_text(encoding="utf-8")
-            definitions, syntax_errors = extract_definitions_ast(content, abs_path)
-            report.definitions.extend([{**d, "file": abs_path} for d in definitions])
-            report.syntax_errors.extend(syntax_errors)
-        except Exception as e:
-            report.validation_errors.append(f"Failed to read {abs_path}: {e}")
-    
-    # Now run pyright for semantic analysis
-    try:
-        cmd = [
-            sys.executable, "-m", "pyright",
-            "--outputjson",
-            *[str(f) for f in files],
-        ]
-        
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        
-        try:
-            data = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            # pyright might not be installed
-            report.validation_errors.append("pyright not available or returned invalid JSON")
-            report.source = "ast_only"
-            return report
-        
-        # Process diagnostics
-        for diag in data.get("generalDiagnostics", []):
-            severity = diag.get("severity", "error")
-            message = diag.get("message", "")
-            file_path = diag.get("file", "")
-            
-            range_info = diag.get("range", {})
-            start = range_info.get("start", {})
-            end = range_info.get("end", {})
-            
-            # Extract diagnostic code (pyright format: "reportXxx")
-            code = diag.get("rule", None)
-            
-            # Categorize
-            category, symbol_name = categorize_diagnostic(message, code)
-            
-            diagnostic = PythonDiagnostic(
-                file=file_path,
-                line=start.get("line", 0) + 1,
-                column=start.get("character", 0),
-                end_line=end.get("line", 0) + 1,
-                end_column=end.get("character", 0),
-                severity=severity,
-                message=message,
-                source="pyright",
-                code=code,
-                category=category,
-                symbol_name=symbol_name,
-            )
-            
-            # Route to appropriate list
-            if category == "undefined_name":
-                report.undefined_names.append(diagnostic)
-            elif category == "unresolved_import":
-                report.unresolved_imports.append(diagnostic)
-            elif category == "syntax":
-                report.syntax_errors.append(diagnostic)
-            elif category == "type_error":
-                report.type_errors.append(diagnostic)
-            else:
-                report.other_errors.append(diagnostic)
-    
-    except subprocess.TimeoutExpired:
-        report.validation_errors.append("pyright timed out")
-    except FileNotFoundError:
-        report.validation_errors.append("pyright not installed")
-        report.source = "ast_only"
-    except Exception as e:
-        report.validation_errors.append(f"pyright error: {e}")
-        report.source = "ast_only"
+        raise PythonValidationError(f"VS Code IPC error: {e}")
     
     return report
 
@@ -496,7 +402,9 @@ def validate_via_pyright(files: list[Path]) -> PythonValidationReport:
 
 class PythonSemanticValidator:
     """
-    Python semantic validator with multiple strategies.
+    Python semantic validator using Pylance via VS Code IPC.
+    
+    REQUIRES: VS Code with Pylance extension and CK3 Lens IPC server running.
     
     Usage:
         validator = PythonSemanticValidator()
@@ -508,28 +416,16 @@ class PythonSemanticValidator:
                 print(f"  {diag.file}:{diag.line}: {diag.symbol_name}")
     """
     
-    def __init__(self, prefer_ipc: bool = True):
-        """
-        Initialize validator.
-        
-        Args:
-            prefer_ipc: If True, prefer VS Code IPC over pyright CLI.
-        """
-        self.prefer_ipc = prefer_ipc
-    
     def validate_files(self, files: list[Path]) -> PythonValidationReport:
         """
         Validate Python files for semantic errors.
         
-        Tries VS Code IPC first (fastest), falls back to pyright CLI.
-        """
-        if self.prefer_ipc:
-            report = validate_via_vscode_ipc(files)
-            if report is not None:
-                return report
+        Uses Pylance diagnostics via VS Code IPC.
         
-        # Fallback to pyright
-        return validate_via_pyright(files)
+        Raises:
+            PythonValidationError: If VS Code IPC is unavailable
+        """
+        return validate_via_vscode_ipc(files)
     
     def validate_content(
         self, 
@@ -539,10 +435,13 @@ class PythonSemanticValidator:
         """
         Validate Python content string (for pre-write validation).
         
-        This creates a temporary file to enable pyright/Pylance analysis.
+        This checks syntax locally via AST. For full semantic analysis,
+        the content would need to be written to a file and analyzed.
+        
+        NOTE: This only catches syntax errors since we can't open
+        arbitrary content in VS Code for Pylance analysis.
         """
-        # First check syntax
-        report = PythonValidationReport(source="content_validation")
+        report = PythonValidationReport(source="ast_syntax_only")
         report.files_analyzed.append(filename)
         
         definitions, syntax_errors = extract_definitions_ast(content, filename)
@@ -550,50 +449,10 @@ class PythonSemanticValidator:
         report.syntax_errors.extend(syntax_errors)
         
         if syntax_errors:
-            # Don't bother with semantic analysis if syntax is broken
-            return report
-        
-        # Write to temp file for semantic analysis
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            suffix=".py",
-            delete=False,
-            encoding="utf-8"
-        ) as f:
-            f.write(content)
-            temp_path = Path(f.name)
-        
-        try:
-            # Run semantic analysis
-            semantic_report = self.validate_files([temp_path])
-            
-            # Merge results (update source file name)
-            report.source = semantic_report.source
-            
-            for diag in semantic_report.undefined_names:
-                diag.file = filename
-                report.undefined_names.append(diag)
-            
-            for diag in semantic_report.unresolved_imports:
-                diag.file = filename
-                report.unresolved_imports.append(diag)
-            
-            for diag in semantic_report.type_errors:
-                diag.file = filename
-                report.type_errors.append(diag)
-            
-            for diag in semantic_report.other_errors:
-                diag.file = filename
-                report.other_errors.append(diag)
-            
-            report.validation_errors.extend(semantic_report.validation_errors)
-            
-        finally:
-            # Clean up temp file
-            try:
-                temp_path.unlink()
-            except:
-                pass
+            report.validation_errors.append(
+                "Syntax errors found - semantic validation skipped. "
+                "Write the file to disk for full Pylance analysis."
+            )
         
         return report
 
@@ -606,7 +465,10 @@ def validate_python_files(files: list[Path]) -> PythonValidationReport:
     """
     Validate Python files for semantic errors.
     
-    Convenience function using default settings.
+    Requires VS Code IPC to be available.
+    
+    Raises:
+        PythonValidationError: If VS Code IPC is unavailable
     """
     validator = PythonSemanticValidator()
     return validator.validate_files(files)
@@ -614,9 +476,10 @@ def validate_python_files(files: list[Path]) -> PythonValidationReport:
 
 def validate_python_content(content: str, filename: str = "untitled.py") -> PythonValidationReport:
     """
-    Validate Python content for semantic errors.
+    Validate Python content for syntax errors.
     
-    Convenience function for pre-write validation.
+    NOTE: Only catches syntax errors. For full semantic analysis,
+    write the file and use validate_python_files().
     """
     validator = PythonSemanticValidator()
     return validator.validate_content(content, filename)
@@ -628,6 +491,7 @@ def validate_python_content(content: str, filename: str = "untitled.py") -> Pyth
 
 if __name__ == "__main__":
     import argparse
+    import sys
     
     parser = argparse.ArgumentParser(description="Python Semantic Validator")
     parser.add_argument("files", nargs="*", type=Path, help="Python files to validate")
@@ -638,7 +502,11 @@ if __name__ == "__main__":
         print("Usage: python -m ck3lens.validation.python_validator file.py ...")
         sys.exit(1)
     
-    report = validate_python_files(args.files)
+    try:
+        report = validate_python_files(args.files)
+    except PythonValidationError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(2)
     
     if args.json:
         print(json.dumps(report.to_dict(), indent=2))
