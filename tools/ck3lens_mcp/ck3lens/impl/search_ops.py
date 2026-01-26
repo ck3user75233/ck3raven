@@ -11,11 +11,14 @@ Architecture:
 - Takes database connection and CVID list as parameters
 - CVIDs are obtained from playset_ops.get_playset_mods()
 - Both MCP and bridge call with their own connection/CVID context
+- Uses Golden Join from ck3lens.db.golden_join for consistent schema
 """
 from __future__ import annotations
 
 import sqlite3
 from typing import Optional
+
+from ..db.golden_join import GOLDEN_JOIN, cvid_filter_clause
 
 
 def escape_fts_query(query: str) -> str:
@@ -68,27 +71,23 @@ def search_symbols(
     try:
         fts_query = escape_fts_query(query)
         
-        # Build SQL with CVID filtering using Golden Join
-        # GOLDEN JOIN: symbols → asts → files → content_versions
-        sql = """
+        # Build CVID filter clause
+        cvid_clause, cvid_params = cvid_filter_clause(cvids)
+        
+        # Build SQL using GOLDEN_JOIN constant
+        # Note: This query has special FTS join before the Golden Join
+        sql = f"""
             SELECT s.symbol_id, s.name, s.symbol_type, s.scope,
                    s.line_number, f.relpath, cv.content_version_id,
                    mp.name as mod_name, rank
             FROM symbols_fts fts
             JOIN symbols s ON s.symbol_id = fts.rowid
-            JOIN asts a ON s.ast_id = a.ast_id
-            LEFT JOIN files f ON a.content_hash = f.content_hash
-            LEFT JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+            {GOLDEN_JOIN}
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE symbols_fts MATCH ?
+            {cvid_clause}
         """
-        params_list = [fts_query]
-        
-        # Filter by CVIDs (from playset_ops, NOT playset_mods table)
-        if cvids:
-            placeholders = ",".join("?" * len(cvids))
-            sql += f" AND cv.content_version_id IN ({placeholders})"
-            params_list.extend(sorted(cvids))
+        params_list = [fts_query] + cvid_params
         
         # Filter by symbol type if specified
         if symbol_type:
@@ -154,22 +153,19 @@ def confirm_not_exists(
         return {"can_claim_not_exists": False, "similar_matches": []}
     
     try:
+        # Build CVID filter clause
+        cvid_clause, cvid_params = cvid_filter_clause(cvids)
+        
         # 1. Exact match search using Golden Join
-        sql = """
+        sql = f"""
             SELECT s.name, s.symbol_type, mp.name as mod_name
             FROM symbols s
-            JOIN asts a ON s.ast_id = a.ast_id
-            LEFT JOIN files f ON a.content_hash = f.content_hash
-            LEFT JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+            {GOLDEN_JOIN}
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE s.name = ?
+            {cvid_clause}
         """
-        params_list = [name]
-        
-        if cvids:
-            placeholders = ",".join("?" * len(cvids))
-            sql += f" AND cv.content_version_id IN ({placeholders})"
-            params_list.extend(sorted(cvids))
+        params_list = [name] + cvid_params
         
         if symbol_type:
             sql += " AND s.symbol_type = ?"
@@ -191,21 +187,16 @@ def confirm_not_exists(
             }
         
         # 2. Similar match search (fuzzy) using Golden Join
-        fuzzy_sql = """
+        cvid_clause2, cvid_params2 = cvid_filter_clause(cvids)
+        fuzzy_sql = f"""
             SELECT DISTINCT s.name, s.symbol_type, mp.name as mod_name
             FROM symbols s
-            JOIN asts a ON s.ast_id = a.ast_id
-            LEFT JOIN files f ON a.content_hash = f.content_hash
-            LEFT JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+            {GOLDEN_JOIN}
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE s.name LIKE ?
+            {cvid_clause2}
         """
-        fuzzy_params = [f"%{name}%"]
-        
-        if cvids:
-            placeholders = ",".join("?" * len(cvids))
-            fuzzy_sql += f" AND cv.content_version_id IN ({placeholders})"
-            fuzzy_params.extend(sorted(cvids))
+        fuzzy_params = [f"%{name}%"] + cvid_params2
         
         if symbol_type:
             fuzzy_sql += " AND s.symbol_type = ?"

@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal, Optional
 
+from .db.golden_join import GOLDEN_JOIN
 from .world_adapter import PathDomain
 
 
@@ -2450,7 +2451,7 @@ def _validate_python(content, file_path, trace):
 def _validate_references(symbol_name, symbol_type, db, trace):
     """Validate symbol references.
     
-    Join path: symbols -> asts -> files (via content_hash)
+    Uses Golden Join from ck3lens.db.golden_join for consistent schema.
     Note: Multiple files can share the same AST (content-addressed storage),
     so we may get multiple file matches per symbol.
     """
@@ -2462,15 +2463,13 @@ def _validate_references(symbol_name, symbol_type, db, trace):
         conditions.append("s.symbol_type = ?")
         params.append(symbol_type)
     
-    # Join through asts to files via content_hash
+    # Join through asts to files via content_hash using Golden Join
     # This handles the content-addressed storage model correctly
     rows = db.conn.execute(f"""
         SELECT s.symbol_id, s.name, s.symbol_type, s.line_number,
                f.relpath, cv.name as mod_name
         FROM symbols s
-        JOIN asts a ON s.ast_id = a.ast_id
-        JOIN files f ON a.content_hash = f.content_hash
-        JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+        {GOLDEN_JOIN}
         WHERE {" AND ".join(conditions)}
     """, params).fetchall()
     

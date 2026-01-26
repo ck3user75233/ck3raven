@@ -11,11 +11,14 @@ Architecture:
 - Takes database connection and CVID list as parameters
 - CVIDs are obtained from playset_ops.get_playset_mods()
 - Both MCP and bridge call with their own connection/CVID context
+- Uses Golden Join from ck3lens.db.golden_join for consistent schema
 """
 from __future__ import annotations
 
 import sqlite3
 from typing import Optional
+
+from ..db.golden_join import GOLDEN_JOIN, cvid_filter_clause
 
 
 def get_file_conflicts(
@@ -40,12 +43,7 @@ def get_file_conflicts(
     """
     try:
         # Build CVID filter
-        cvid_filter = ""
-        params = []
-        if cvids:
-            placeholders = ",".join("?" * len(cvids))
-            cvid_filter = f"AND cv.content_version_id IN ({placeholders})"
-            params = list(sorted(cvids))
+        cvid_clause, cvid_params = cvid_filter_clause(cvids)
         
         # Find files that exist in multiple content versions
         sql = f"""
@@ -58,13 +56,14 @@ def get_file_conflicts(
             FROM files f
             JOIN content_versions cv ON f.content_version_id = cv.content_version_id
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-            WHERE f.relpath LIKE ? {cvid_filter}
+            WHERE f.relpath LIKE ?
+            {cvid_clause}
             GROUP BY f.relpath
             HAVING COUNT(*) > 1
             ORDER BY f.relpath
             LIMIT ?
         """
-        params = [path_pattern] + params + [limit]
+        params = [path_pattern] + cvid_params + [limit]
         
         conflicts = conn.execute(sql, params).fetchall()
         
@@ -119,18 +118,14 @@ def get_symbol_conflicts(
         Dict with conflicts list
     """
     try:
-        # Build filters
-        cvid_filter = ""
+        # Build filters using helper
+        cvid_clause, cvid_params = cvid_filter_clause(cvids)
+        
         type_filter = ""
-        params = []
-        
-        if cvids:
-            placeholders = ",".join("?" * len(cvids))
-            cvid_filter = f"AND cv.content_version_id IN ({placeholders})"
-            params = list(sorted(cvids))
-        
+        type_params = []
         if symbol_type:
             type_filter = "AND s.symbol_type = ?"
+            type_params = [symbol_type]
         
         # GOLDEN JOIN: symbols → asts → files → content_versions
         sql = f"""
@@ -141,23 +136,18 @@ def get_symbol_conflicts(
                    ) as sources,
                    COUNT(*) as source_count
             FROM symbols s
-            JOIN asts a ON s.ast_id = a.ast_id
-            JOIN files f ON a.content_hash = f.content_hash
-            JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+            {GOLDEN_JOIN}
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-            WHERE 1=1 {cvid_filter} {type_filter}
+            WHERE 1=1 {cvid_clause} {type_filter}
             GROUP BY s.name, s.symbol_type
             HAVING COUNT(DISTINCT cv.content_version_id) > 1
             ORDER BY s.name
             LIMIT ?
         """
         
-        final_params = params
-        if symbol_type:
-            final_params = params + [symbol_type]
-        final_params = final_params + [limit]
+        params = cvid_params + type_params + [limit]
         
-        conflicts = conn.execute(sql, final_params).fetchall()
+        conflicts = conn.execute(sql, params).fetchall()
         
         result_conflicts = []
         for c in conflicts:

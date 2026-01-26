@@ -4,6 +4,14 @@ Database Query Layer
 Provides query wrappers around ck3raven's SQLite database.
 Includes adjacency search pattern expansion for robust symbol lookup.
 
+GOLDEN JOIN PATTERN:
+    All symbol/refs queries use the canonical join pattern:
+    symbols s → asts a → files f → content_versions cv
+    
+    The GOLDEN_JOIN constant is defined in ck3lens.db.golden_join.
+    New code should import and use that constant where possible.
+    Legacy queries in this file use the pattern inline.
+
 CAPABILITY-GATED ARCHITECTURE (December 2025):
 - All queries go through _*_internal methods
 - _*_internal methods accept visible_cvids: Optional[FrozenSet[int]] directly
