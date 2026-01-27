@@ -1,23 +1,28 @@
 """
 Policy module for agent validation and CLI wrapping.
 
-CANONICAL SOURCES (Dec 2025):
+CANONICAL SOURCES (Jan 2026):
 - enforcement.py: THE single gate for all policy/permission decisions
 - WorldAdapter.is_visible(): THE single source for path visibility
+- tools/compliance/tokens.py: Canonical token types (NST, LXE only)
 
 Supporting modules:
 - loader.py: Policy file loading
 - validator.py: Policy validation logic
-- tokens.py: HMAC-signed approval tokens for risky operations
 - ck3lens_rules.py: CK3Lens-specific validation rules (POST-HOC, calls enforcement.py)
 - wip_workspace.py: WIP workspace lifecycle management
-- contract_schema.py: Contract schema validation
+- contract_v1.py: Contract V1 schema validation
 - audit.py: Structured audit logging
 
+DEPRECATED (Jan 2026):
+- tokens.py: Legacy token system - deprecated in favor of tools/compliance/tokens.py
+  - Only canonical tokens remain: NST (New Symbol Token), LXE (Lint Exception Token)
+  - All deprecated token types removed (GIT_PUSH, FS_DELETE, etc.)
+
 ARCHIVED (see archive/deprecated_policy/):
-- clw.py: Command Line Wrapper - oracle functions archived, classification migrated to enforcement.py
-- hard_gates.py: Superseded by enforcement.py - all gate logic consolidated there
-- script_sandbox.py: Moved to tools/script_sandbox.py (tool layer)
+- clw.py: Command Line Wrapper - oracle functions archived
+- hard_gates.py: Superseded by enforcement.py
+- script_sandbox.py: Moved to tools layer
 - lensworld_sandbox.py: Merged into WorldAdapter
 """
 from .types import (
@@ -27,55 +32,26 @@ from .types import (
     ToolCall,
     ValidationContext,
     PolicyOutcome,
-    # CK3LENS types (from CK3LENS_POLICY_ARCHITECTURE)
+    # Scope domains
     ScopeDomain,
-    CK3LensTokenType,
-    CK3LENS_TOKEN_TTLS,
+    Ck3RavenDevScopeDomain,
+    # WIP workspace
     WipWorkspaceInfo,
     get_wip_workspace_path,
     get_ck3lens_wip_path,
     get_ck3raven_dev_wip_path,
-    # CK3RAVEN-DEV types (from CK3RAVEN_DEV_POLICY_ARCHITECTURE)
-    Ck3RavenDevScopeDomain,
-    Ck3RavenDevTokenType,
-    CK3RAVEN_DEV_TOKEN_TIER_A,
-    CK3RAVEN_DEV_TOKEN_TIER_B,
-    CK3RAVEN_DEV_TOKEN_TTLS,
+    # Git command classification
     GIT_COMMANDS_SAFE,
     GIT_COMMANDS_RISKY,
     GIT_COMMANDS_DANGEROUS,
 )
 from .loader import load_policy, get_policy
 from .validator import validate_policy, validate_for_mode, server_delivery_gate
-from .tokens import (
-    ApprovalToken,
-    TOKEN_TYPES,
-    CK3LENS_TOKEN_TYPES,
-    issue_token,
-    validate_token,
-    consume_token,
-    revoke_token,
-    list_tokens,
-    cleanup_expired_tokens,
-    # CK3Lens-specific token helpers
-    issue_delete_token,
-    issue_inactive_mod_token,
-    issue_script_execute_token,
-    issue_git_push_mod_token,
-    validate_script_token,
-    check_user_prompt_required,
-    check_script_hash_required,
-)
-# ARCHIVED: clw.py (Dec 2025)
-# All CLW functionality migrated to enforcement.py
-# - CommandCategory, classify_command, check_path_in_contract_scope -> enforcement.py
-# - evaluate_policy, can_execute -> DELETED (banned oracle functions)
-# - CommandRequest, PolicyResult, Decision -> use enforcement.py types
-# See archive/deprecated_policy/clw.py for original code
 
-# REMOVED: hard_gates imports (Dec 2025)
-# hard_gates.py was archived - all enforcement now goes through enforcement.py
-# See docs/PLAYSET_ARCHITECTURE.md for canonical sources
+# DEPRECATED: tokens.py exports removed (Jan 2026)
+# The deprecated token system has been replaced by tools/compliance/tokens.py
+# Only NST (New Symbol Token) and LXE (Lint Exception Token) are canonical tokens
+
 from .wip_workspace import (
     WipWorkspaceState,
     get_workspace_state,
@@ -102,19 +78,14 @@ from .ck3lens_rules import (
     WIP_ONLY_EXTENSIONS,
 )
 
-# DEPRECATED: script_sandbox moved to ck3lens.tools.script_sandbox
-# The old policy/script_sandbox.py has been archived.
-# Use the tools-layer sandbox instead:
-#   from ck3lens.tools.script_sandbox import run_script_sandboxed
-
 # =============================================================================
-# NEW: Centralized Enforcement Gate (Phase 1)
+# Centralized Enforcement Gate (Phase 1)
 # =============================================================================
 from .enforcement import (
     # Operation types
     OperationType,
     TokenTier,
-    Decision as EnforcementDecision,  # Aliased to avoid conflict with old clw.Decision
+    Decision as EnforcementDecision,
     # Request/Result
     EnforcementRequest,
     EnforcementResult,
@@ -123,22 +94,21 @@ from .enforcement import (
     is_protected_branch,
     is_agent_branch,
     # Main enforcement function
-    enforce_policy as enforce_policy_gate,  # Aliased to distinguish from validator.validate_policy
+    enforce_policy as enforce_policy_gate,
     log_enforcement_decision,
     enforce_and_log,
-    # Shell command classification (migrated from clw.py Dec 2025)
+    # Shell command classification
     CommandCategory,
     SAFE_COMMANDS,
     BLOCKED_COMMANDS,
     TOKEN_REQUIRED_PATTERNS,
     GIT_MODIFY_PATTERNS,
     classify_command,
-    get_required_token_type,
     check_path_in_contract_scope,
 )
 
 # =============================================================================
-# NEW: Structured Audit Logging (Phase 1)
+# Structured Audit Logging (Phase 1)
 # =============================================================================
 from .audit import (
     EventCategory,
@@ -165,38 +135,14 @@ __all__ = [
     "validate_policy",
     "validate_for_mode",
     "server_delivery_gate",
-    # Approval tokens
-    "ApprovalToken",
-    "TOKEN_TYPES",
-    "CK3LENS_TOKEN_TYPES",
-    "issue_token",
-    "validate_token",
-    "consume_token",
-    "revoke_token",
-    "list_tokens",
-    "cleanup_expired_tokens",
-    # CK3Lens token helpers
-    "issue_delete_token",
-    "issue_inactive_mod_token",
-    "issue_script_execute_token",
-    "issue_git_push_mod_token",
-    "validate_script_token",
-    "check_user_prompt_required",
-    "check_script_hash_required",
-    # CLW Classification (migrated to enforcement.py Dec 2025)
-    "CommandCategory",
-    "SAFE_COMMANDS",
-    "BLOCKED_COMMANDS",
-    "TOKEN_REQUIRED_PATTERNS",
-    "GIT_MODIFY_PATTERNS",
-    "classify_command",
-    "get_required_token_type",
-    "check_path_in_contract_scope",
-    # ARCHIVED: clw.py (Dec 2025)
-    # - evaluate_policy, can_execute -> DELETED (banned oracle functions)
-    # - CommandRequest, PolicyResult, Decision -> use enforcement.py types
-    # REMOVED: Hard gates exports (Dec 2025) - use enforcement.py instead
+    # Scope domains
+    "ScopeDomain",
+    "Ck3RavenDevScopeDomain",
     # WIP Workspace
+    "WipWorkspaceInfo",
+    "get_wip_workspace_path",
+    "get_ck3lens_wip_path",
+    "get_ck3raven_dev_wip_path",
     "WipWorkspaceState",
     "get_workspace_state",
     "initialize_workspace",
@@ -212,7 +158,10 @@ __all__ = [
     "validate_script_syntax",
     "ScriptDeclaration",
     "validate_script_declarations",
-    # Contract Schema
+    # Git command classification
+    "GIT_COMMANDS_SAFE",
+    "GIT_COMMANDS_RISKY",
+    "GIT_COMMANDS_DANGEROUS",
     # CK3Lens Rules
     "validate_ck3lens_rules",
     "classify_path_domain",
@@ -220,10 +169,7 @@ __all__ = [
     "CK3LENS_FORBIDDEN_PATHS",
     "CK3LENS_FORBIDDEN_EXTENSIONS",
     "WIP_ONLY_EXTENSIONS",
-    # Script Sandbox - DEPRECATED (moved to ck3lens.tools.script_sandbox)
-    # =============================================================================
-    # NEW: Centralized Enforcement (Phase 1)
-    # =============================================================================
+    # Centralized Enforcement (Phase 1)
     "OperationType",
     "TokenTier",
     "EnforcementDecision",
@@ -235,9 +181,15 @@ __all__ = [
     "enforce_policy_gate",
     "log_enforcement_decision",
     "enforce_and_log",
-    # =============================================================================
-    # NEW: Structured Audit Logging (Phase 1)
-    # =============================================================================
+    # Shell command classification
+    "CommandCategory",
+    "SAFE_COMMANDS",
+    "BLOCKED_COMMANDS",
+    "TOKEN_REQUIRED_PATTERNS",
+    "GIT_MODIFY_PATTERNS",
+    "classify_command",
+    "check_path_in_contract_scope",
+    # Structured Audit Logging (Phase 1)
     "EventCategory",
     "EnforcementLogEntry",
     "AuditLogger",

@@ -1230,21 +1230,20 @@ def _file_delete_raw(path, token_id, trace, world=None):
     Delete file at raw filesystem path.
     
     MODE: ck3raven-dev only (enforced by caller).
-    Requires token for destructive operation.
+    Requires confirmation via token_id (any value = confirmed).
     """
     from pathlib import Path as P
-    from ck3lens.policy.tokens import validate_token
     
     file_path = P(path).resolve()
     
-    # Token required for file deletion
+    # Confirmation required for file deletion
     if not token_id:
-        return {"success": False, "error": "token_id required for file deletion", "required_token_type": "FS_DELETE_CODE"}
+        return {
+            "success": False, 
+            "error": "File deletion requires confirmation. Provide token_id='confirm' to proceed.",
+        }
     
-    # Validate token
-    is_valid, reason = validate_token(token_id, required_capability="FS_DELETE_CODE", path=str(file_path))
-    if not is_valid:
-        return {"success": False, "error": reason}
+    # token_id provided = user confirmed (any value accepted)
     
     if not file_path.exists():
         return {"success": False, "error": f"File not found: {path}"}

@@ -3015,7 +3015,20 @@ def ck3_contract(
             ROOT_STEAM, ROOT_GAME, ROOT_UTILITIES, ROOT_LAUNCHER)
         operations: List of operations (READ, WRITE, DELETE, etc.)
         targets: List of target dicts with target_type, path, description
-        work_declaration: Dict with work_summary, work_plan (3-15 items), out_of_scope
+        work_declaration: REQUIRED for mutating operations. JSON schema:
+            {
+                "work_summary": "Brief description of the work",
+                "work_plan": ["Step 1", "Step 2", ...],  // 1-15 items
+                "out_of_scope": ["What this does NOT include"],
+                "edits": [  // REQUIRED for WRITE/DELETE operations
+                    {
+                        "file": "relative/path/to/file.py",
+                        "edit_kind": "add" | "modify" | "delete" | "rename",
+                        "location": "description of where in file",
+                        "change_description": "what changes are being made"
+                    }
+                ]
+            }
         expires_hours: Hours until expiry (default 8)
         contract_id: Contract ID for close/cancel (uses active if not specified)
         closure_commit: Git commit SHA for close
@@ -3027,12 +3040,23 @@ def ck3_contract(
         Contract info or operation result
     
     Examples:
-        # ck3lens mode 
-        ck3_contract(command="open", intent="Fix trait conflicts", 
-                     root_category="ROOT_USER_DOCS",)
-        
-        # ck3raven-dev mode 
-        ck3_contract(command="open", intent="Refactor parser", root_category="ROOT_REPO")
+        # ck3raven-dev mode with work_declaration
+        ck3_contract(
+            command="open",
+            intent="Fix parser bug",
+            root_category="ROOT_REPO",
+            work_declaration={
+                "work_summary": "Fix off-by-one error in lexer",
+                "work_plan": ["Locate bug in lexer.py", "Add test case", "Fix bug"],
+                "out_of_scope": ["Parser changes"],
+                "edits": [{
+                    "file": "src/ck3raven/parser/lexer.py",
+                    "edit_kind": "modify",
+                    "location": "tokenize() function",
+                    "change_description": "Fix boundary check"
+                }]
+            }
+        )
     """
     from ck3lens.policy.contract_v1 import (
         open_contract, close_contract, cancel_contract,
@@ -3494,7 +3518,7 @@ def ck3_exec(
     
     # ==========================================================================
     # WIP SCRIPT DETECTION AND SANDBOXED EXECUTION
-    # - ck3lens mode: Sandboxed execution with Token B (user approval)
+    # - ck3lens mode: Sandboxed execution with user confirmation (token_id)
     # - ck3raven-dev mode: Enforcement gate (existing logic)
     # ==========================================================================
     wip_script_info = _detect_wip_script(command, working_dir or str(Path(__file__).parent.parent.parent))
@@ -3504,12 +3528,11 @@ def ck3_exec(
         # CK3LENS MODE: SANDBOXED WIP SCRIPT EXECUTION
         # Per Canonical Initialization #9: Scripts must be sandboxed
         # =======================================================================
-        from ck3lens.policy.tokens import validate_script_token
         from ck3lens.tools.script_sandbox import run_script_sandboxed
         
         script_path = Path(wip_script_info["script_path"])
         
-        # Token B (user approval) required for script execution in ck3lens
+        # User confirmation required for script execution in ck3lens
         if not token_id:
             return {
                 "allowed": False,
@@ -3518,33 +3541,14 @@ def ck3_exec(
                 "exit_code": None,
                 "policy": {
                     "decision": "REQUIRE_TOKEN",
-                    "reason": "WIP script execution in ck3lens mode requires SCRIPT_EXECUTE token (user approval)",
-                    "required_token_type": "SCRIPT_EXECUTE",
+                    "reason": "WIP script execution in ck3lens mode requires confirmation (provide token_id)",
                     "category": "WIP_SCRIPT_SANDBOXED",
                 },
-                "error": "Script execution requires user approval",
-                "hint": "Use ck3_token(command='request', token_type='SCRIPT_EXECUTE', reason='...') to request approval",
+                "error": "Script execution requires user confirmation",
+                "hint": "Provide token_id='confirm' or any value to confirm script execution",
             }
         
-        # Validate token with script hash binding
-        current_hash = wip_script_info.get("script_hash", "UNKNOWN")
-        token_valid, token_msg = validate_script_token(token_id, current_hash)
-        
-        if not token_valid:
-            return {
-                "allowed": False,
-                "executed": False,
-                "output": None,
-                "exit_code": None,
-                "policy": {
-                    "decision": "DENY",
-                    "reason": f"Token invalid: {token_msg}",
-                    "required_token_type": "SCRIPT_EXECUTE",
-                    "category": "WIP_SCRIPT_SANDBOXED",
-                },
-                "error": f"Token validation failed: {token_msg}",
-            }
-        
+        # Token provided = user confirmed script execution
         # Get sandbox paths
         from ck3lens.policy.wip_workspace import get_wip_workspace_path
         from ck3lens.policy.types import AgentMode
@@ -3848,165 +3852,32 @@ def ck3_token(
     path: str | None = None,
 ) -> dict:
     """
-    Manage approval tokens for risky operations.
+    DEPRECATED: Token system replaced by confirmation-based workflow.
     
-    Mode-aware token types:
-    - ck3lens mode: Tokens for mod file deletion, inactive mod access, git push
-    - ck3raven-dev mode: Additional tokens for git rewrite, DB schema changes, force push
+    The legacy token system (GIT_PUSH, FS_DELETE, etc.) has been deprecated.
+    Only canonical tokens remain in tools/compliance/tokens.py:
+    - NST (New Symbol Token): For creating new symbol identities
+    - LXE (Lint Exception Token): For lint rule exceptions
     
-    Tokens are HMAC-signed, time-limited approvals for specific operations.
-    Required for commands that would otherwise be blocked.
+    For operations that previously required tokens:
+    - File deletion: Provide token_id='confirm' in the tool call
+    - Git push: Allowed with active contract (no token needed)
+    - Destructive commands: Provide token_id='confirm' to confirm
+    - Launcher repair: Provide token_id='confirm' to confirm
     
-    Commands:
-    
-    command=request   ? Request a new approval token
-    command=list      ? List active tokens
-    command=validate  ? Check if a token is valid for an operation
-    command=revoke    ? Revoke a token
-    
-    Token Types (see TOKEN_TYPES):
-    - FS_DELETE_CODE: Delete .py/.txt files (30 min TTL)
-    - FS_WRITE_OUTSIDE_CONTRACT: Write outside contract scope (60 min)
-    - CMD_RUN_DESTRUCTIVE: Drop tables, etc. (15 min)
-    - CMD_RUN_ARBITRARY: Curl|bash patterns (10 min)
-    - GIT_PUSH: Push to remote (60 min)
-    - GIT_FORCE_PUSH: Force push (10 min)
-    - GIT_REWRITE_HISTORY: Rebase, reset (15 min)
-    - DB_SCHEMA_MIGRATE: Schema changes (30 min)
-    - DB_DELETE_DATA: Delete DB rows (15 min)
-    - BYPASS_CONTRACT: Skip contract check (5 min)
-    - BYPASS_POLICY: Skip policy check (5 min)
-    
-    Args:
-        command: Action to perform
-        token_type: Type of token to request (for request)
-        reason: Why this token is needed (for request)
-        path_patterns: Allowed paths (for request)
-        command_patterns: Allowed commands (for request)
-        ttl_minutes: Override TTL (for request)
-        token_id: Token to validate/revoke
-        capability: Capability to check (for validate)
-        path: Path to check against (for validate)
-    
-    Returns:
-        Token info or operation result
+    This tool now returns a deprecation notice for all commands.
+    Phase 2 will implement proper approval flows where needed.
     """
-    from ck3lens.policy.tokens import (
-        issue_token, validate_token, list_tokens, revoke_token,
-        TOKEN_TYPES, ApprovalToken,
-    )
-    from ck3lens.policy.contract_v1 import get_active_contract
-    
-    trace = _get_trace()
-    
-    if command == "request":
-        if not token_type:
-            return {
-                "error": "token_type required",
-                "valid_types": list(TOKEN_TYPES.keys()),
-            }
-        if not reason:
-            return {"error": "reason required for token request"}
-        
-        if token_type not in TOKEN_TYPES:
-            return {
-                "error": f"Unknown token type: {token_type}",
-                "valid_types": list(TOKEN_TYPES.keys()),
-            }
-        
-        # Get contract for context
-        active_contract = get_active_contract()
-        contract_id = active_contract.contract_id if active_contract else None
-        
-        try:
-            token = issue_token(
-                token_type=token_type,
-                capability=token_type,  # Use type as capability
-                reason=reason,
-                path_patterns=path_patterns,
-                command_patterns=command_patterns,
-                contract_id=contract_id,
-                issued_by="agent",
-                ttl_minutes=ttl_minutes,
-            )
-            
-            trace.log("ck3lens.token.issue", {
-                "token_type": token_type,
-                "reason": reason,
-            }, {"token_id": token.token_id})
-            
-            return {
-                "success": True,
-                "token_id": token.token_id,
-                "token_type": token.token_type,
-                "expires_at": token.expires_at,
-                "path_patterns": token.path_patterns,
-                "command_patterns": token.command_patterns,
-                "message": "Token issued. Use token_id with ck3_exec for approved commands.",
-            }
-        except Exception as e:
-            return {"error": str(e)}
-    
-    elif command == "list":
-        tokens = list_tokens()
-        
-        return {
-            "count": len(tokens),
-            "tokens": [
-                {
-                    "token_id": t.token_id,
-                    "token_type": t.token_type,
-                    "capability": t.capability,
-                    "expires_at": t.expires_at,
-                    "consumed": t.consumed,
-                    "reason": t.reason,
-                }
-                for t in tokens
-            ],
-        }
-    
-    elif command == "validate":
-        if not token_id:
-            return {"error": "token_id required for validate"}
-        if not capability:
-            return {"error": "capability required for validate"}
-        
-        valid, msg = validate_token(
-            token_id=token_id,
-            required_capability=capability,
-            path=path,
-        )
-        
-        return {
-            "valid": valid,
-            "message": msg,
-            "token_id": token_id,
-            "capability": capability,
-        }
-    
-    elif command == "revoke":
-        if not token_id:
-            return {"error": "token_id required for revoke"}
-        
-        success = revoke_token(token_id)
-        
-        if success:
-            trace.log("ck3lens.token.revoke", {
-                "token_id": token_id,
-            }, {})
-            
-            return {
-                "success": True,
-                "token_id": token_id,
-                "message": "Token revoked",
-            }
-        else:
-            return {
-                "success": False,
-                "error": f"Token not found: {token_id}",
-            }
-    
-    return {"error": f"Unknown command: {command}"}
+    return {
+        "deprecated": True,
+        "message": "Token system deprecated. Operations now use confirmation-based workflow.",
+        "guidance": {
+            "file_deletion": "Use ck3_file(command='delete', token_id='confirm', ...)",
+            "git_push": "Git push allowed with active contract",
+            "destructive_commands": "Use ck3_exec(..., token_id='confirm')",
+            "canonical_tokens": "NST and LXE tokens are in tools/compliance/tokens.py",
+        },
+    }
 
 
 # ============================================================================

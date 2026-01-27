@@ -239,40 +239,6 @@ class TestModePolicyEnforcement:
 
 
 # =============================================================================
-# Test: Token Validation
-# =============================================================================
-
-class TestTokenValidation:
-    """Tests for token validation contract compliance."""
-    
-    def test_validate_token_returns_tuple(self):
-        """validate_token must return tuple[bool, str]."""
-        from ck3lens.policy.tokens import validate_token
-        
-        # Non-existent token
-        result = validate_token(
-            token_id="fake-token",
-            required_capability="FS_DELETE_CODE",
-        )
-        
-        assert isinstance(result, tuple)
-        assert len(result) == 2
-        assert isinstance(result[0], bool)
-        assert isinstance(result[1], str)
-    
-    def test_validate_token_keyword_is_required_capability(self):
-        """validate_token uses 'required_capability', not 'capability'."""
-        from ck3lens.policy.tokens import validate_token
-        import inspect
-        
-        sig = inspect.signature(validate_token)
-        param_names = list(sig.parameters.keys())
-        
-        assert "required_capability" in param_names
-        assert "capability" not in param_names
-
-
-# =============================================================================
 # Test: ArtifactBundle Contract
 # =============================================================================
 

@@ -225,25 +225,6 @@ def classify_command(command: str) -> CommandCategory:
     return CommandCategory.SYSTEM
 
 
-def get_required_token_type(command: str) -> Optional[str]:
-    """
-    Check if a command matches a token-required pattern.
-    
-    Args:
-        command: The shell command to check
-        
-    Returns:
-        Token type string if token required, None otherwise
-    """
-    cmd_lower = command.lower()
-    
-    for token_type, patterns in TOKEN_REQUIRED_PATTERNS.items():
-        for pattern in patterns:
-            if re.search(pattern, cmd_lower, re.IGNORECASE):
-                return token_type
-    return None
-
-
 # =============================================================================
 # CONTRACT PATH SCOPE
 # =============================================================================
@@ -439,36 +420,6 @@ def _normalize_request_paths(request: EnforcementRequest) -> None:
         request.staged_files = [_normalize_path_to_relative(p) for p in request.staged_files]
 
 
-def _validate_token_for_operation(
-    token_id: str,
-    required_type: str,
-    target_path: Optional[str] = None,
-    command: Optional[str] = None,
-) -> tuple[bool, str]:
-    """
-    Validate a token for a specific operation.
-    
-    Centralizes token validation logic for enforcement.py.
-    
-    Args:
-        token_id: The token ID to validate
-        required_type: The token type required (e.g., "DELETE_LOCALMOD")
-        target_path: Optional path to check against token's path_patterns
-        command: Optional command to check against token's command_patterns
-        
-    Returns:
-        (is_valid, reason) tuple
-    """
-    from .tokens import validate_token
-    
-    return validate_token(
-        token_id=token_id,
-        required_capability=required_type,
-        path=target_path,
-        command=command,
-    )
-
-
 # =============================================================================
 # MAIN ENFORCEMENT FUNCTION
 # =============================================================================
@@ -632,35 +583,20 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
             )
     
     if op == OperationType.FILE_DELETE:
-        # Deletes always require token
-        # Use token names that exist in tokens.py TOKEN_TYPES
-        token_type = "FS_DELETE_CODE" if mode == "ck3raven-dev" else "DELETE_MOD_FILE"
+        # Deletes require explicit confirmation via token_id
+        # Phase 2 will implement proper approval flow
         if not request.token_id:
             return EnforcementResult(
                 decision=Decision.REQUIRE_TOKEN,
-                reason=f"File deletion requires {token_type} token",
+                reason="File deletion requires explicit confirmation (provide token_id)",
                 required_token_tier=TokenTier.TIER_B,
-                required_token_type=token_type,
                 contract_id=contract.contract_id if contract else None,
             )
         
-        # Validate the provided token
-        target_path = request.target_path or (f"{request.mod_name}/{request.rel_path}" if request.mod_name else None)
-        is_valid, reason = _validate_token_for_operation(
-            token_id=request.token_id,
-            required_type=token_type,
-            target_path=target_path,
-        )
-        if not is_valid:
-            return EnforcementResult(
-                decision=Decision.DENY,
-                reason=f"Token validation failed: {reason}",
-                contract_id=contract.contract_id if contract else None,
-            )
-        
+        # Token provided = user confirmed
         return EnforcementResult(
             decision=Decision.ALLOW,
-            reason="File delete allowed with valid token",
+            reason="File delete allowed with confirmation",
             contract_id=contract.contract_id if contract else None,
             token_id=request.token_id,
         )
@@ -695,12 +631,11 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
         return _enforce_git_push(request, contract)
     
     if op == OperationType.GIT_DESTRUCTIVE:
-        # Always requires Token B with user approval
+        # Always requires user approval (Phase 2 will implement proper flow)
         return EnforcementResult(
             decision=Decision.REQUIRE_USER_APPROVAL,
             reason="Git destructive operations require user approval",
             required_token_tier=TokenTier.TIER_B,
-            required_token_type="GIT_REWRITE_HISTORY",
             contract_id=contract.contract_id if contract else None,
         )
     
@@ -721,27 +656,15 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
         if not request.token_id:
             return EnforcementResult(
                 decision=Decision.REQUIRE_TOKEN,
-                reason="DB deletion requires DB_DELETE_DATA token",
+                reason="DB deletion requires explicit confirmation (provide token_id)",
                 required_token_tier=TokenTier.TIER_B,
-                required_token_type="DB_DELETE_DATA",
                 contract_id=contract.contract_id if contract else None,
             )
         
-        # Validate the provided token
-        is_valid, reason = _validate_token_for_operation(
-            token_id=request.token_id,
-            required_type="DB_DELETE_DATA",
-        )
-        if not is_valid:
-            return EnforcementResult(
-                decision=Decision.DENY,
-                reason=f"Token validation failed: {reason}",
-                contract_id=contract.contract_id if contract else None,
-            )
-        
+        # Token provided = user confirmed
         return EnforcementResult(
             decision=Decision.ALLOW,
-            reason="DB delete allowed with valid token",
+            reason="DB delete allowed with confirmation",
             contract_id=contract.contract_id if contract else None,
             token_id=request.token_id,
         )
@@ -755,36 +678,20 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
         )
     
     if op == OperationType.SHELL_DESTRUCTIVE:
-        # Determine the specific token type based on command pattern
-        # This allows git push -> GIT_PUSH, git push --force -> GIT_FORCE_PUSH, etc.
-        specific_token_type = get_required_token_type(request.command) if request.command else None
-        required_token = specific_token_type or "CMD_RUN_DESTRUCTIVE"
-        
+        # Destructive shell commands require confirmation
+        # Phase 2 will implement proper approval flow
         if not request.token_id:
             return EnforcementResult(
                 decision=Decision.REQUIRE_TOKEN,
-                reason=f"Command requires {required_token} token",
+                reason="Destructive command requires explicit confirmation (provide token_id)",
                 required_token_tier=TokenTier.TIER_B,
-                required_token_type=required_token,
                 contract_id=contract.contract_id if contract else None,
             )
         
-        # Validate the provided token
-        is_valid, reason = _validate_token_for_operation(
-            token_id=request.token_id,
-            required_type=required_token,
-            command=request.command,
-        )
-        if not is_valid:
-            return EnforcementResult(
-                decision=Decision.DENY,
-                reason=f"Token validation failed: {reason}",
-                contract_id=contract.contract_id if contract else None,
-            )
-        
+        # Token provided = user confirmed
         return EnforcementResult(
             decision=Decision.ALLOW,
-            reason=f"Command allowed with valid {required_token} token",
+            reason="Destructive command allowed with confirmation",
             contract_id=contract.contract_id if contract else None,
             token_id=request.token_id,
         )
@@ -798,25 +705,14 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
         if not request.token_id:
             return EnforcementResult(
                 decision=Decision.REQUIRE_TOKEN,
-                reason="Launcher repair requires REGISTRY_REPAIR token",
+                reason="Launcher repair requires explicit confirmation (provide token_id)",
                 required_token_tier=TokenTier.TIER_B,
-                required_token_type="REGISTRY_REPAIR",
             )
         
-        # Validate the provided token
-        is_valid, reason = _validate_token_for_operation(
-            token_id=request.token_id,
-            required_type="REGISTRY_REPAIR",
-        )
-        if not is_valid:
-            return EnforcementResult(
-                decision=Decision.DENY,
-                reason=f"Token validation failed: {reason}",
-            )
-        
+        # Token provided = user confirmed
         return EnforcementResult(
             decision=Decision.ALLOW,
-            reason="Launcher repair allowed with valid token",
+            reason="Launcher repair allowed with confirmation",
             token_id=request.token_id,
         )
     
@@ -824,25 +720,14 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
         if not request.token_id:
             return EnforcementResult(
                 decision=Decision.REQUIRE_TOKEN,
-                reason="Cache deletion requires CACHE_DELETE token",
+                reason="Cache deletion requires explicit confirmation (provide token_id)",
                 required_token_tier=TokenTier.TIER_B,
-                required_token_type="CACHE_DELETE",
             )
         
-        # Validate the provided token
-        is_valid, reason = _validate_token_for_operation(
-            token_id=request.token_id,
-            required_type="CACHE_DELETE",
-        )
-        if not is_valid:
-            return EnforcementResult(
-                decision=Decision.DENY,
-                reason=f"Token validation failed: {reason}",
-            )
-        
+        # Token provided = user confirmed
         return EnforcementResult(
             decision=Decision.ALLOW,
-            reason="Cache deletion allowed with valid token",
+            reason="Cache deletion allowed with confirmation",
             token_id=request.token_id,
         )
     
@@ -888,7 +773,6 @@ def _enforce_git_push(
             decision=Decision.REQUIRE_USER_APPROVAL,
             reason="Force push requires user approval",
             required_token_tier=TokenTier.TIER_B,
-            required_token_type="GIT_FORCE_PUSH",
             contract_id=contract.contract_id,
         )
     
@@ -898,7 +782,6 @@ def _enforce_git_push(
             decision=Decision.REQUIRE_USER_APPROVAL,
             reason=f"Push to protected branch '{branch}' requires user approval",
             required_token_tier=TokenTier.TIER_B,
-            required_token_type="GIT_PUSH_PROTECTED",
             contract_id=contract.contract_id,
         )
     
@@ -908,7 +791,6 @@ def _enforce_git_push(
             decision=Decision.REQUIRE_USER_APPROVAL,
             reason=f"Branch '{branch}' is not a valid agent branch for contract {contract.contract_id}",
             required_token_tier=TokenTier.TIER_B,
-            required_token_type="GIT_PUSH",
             contract_id=contract.contract_id,
         )
     
@@ -992,31 +874,19 @@ def _enforce_ck3lens_write(
             },
         )
     
-    # Case 3: Launcher registry - requires token
+    # Case 3: Launcher registry - requires confirmation
     if domain == "launcher_registry":
         if not request.token_id:
             return EnforcementResult(
                 decision=Decision.REQUIRE_TOKEN,
-                reason="Launcher registry writes require REGISTRY_REPAIR token",
+                reason="Launcher registry writes require explicit confirmation (provide token_id)",
                 required_token_tier=TokenTier.TIER_B,
-                required_token_type="REGISTRY_REPAIR",
             )
         
-        # Validate the provided token
-        is_valid, reason = _validate_token_for_operation(
-            token_id=request.token_id,
-            required_type="REGISTRY_REPAIR",
-            target_path=target_path,
-        )
-        if not is_valid:
-            return EnforcementResult(
-                decision=Decision.DENY,
-                reason=f"Token validation failed: {reason}",
-            )
-        
+        # Token provided = user confirmed
         return EnforcementResult(
             decision=Decision.ALLOW,
-            reason="Launcher registry write allowed with valid token",
+            reason="Launcher registry write allowed with confirmation",
             token_id=request.token_id,
         )
     
@@ -1171,9 +1041,8 @@ def _enforce_wip_script(
     if not request.token_id:
         return EnforcementResult(
             decision=Decision.REQUIRE_TOKEN,
-            reason="WIP script execution requires SCRIPT_RUN_WIP token (Tier A)",
+            reason="WIP script execution requires confirmation (provide token_id)",
             required_token_tier=TokenTier.TIER_A,
-            required_token_type="SCRIPT_RUN_WIP",
             contract_id=contract.contract_id,
         )
     

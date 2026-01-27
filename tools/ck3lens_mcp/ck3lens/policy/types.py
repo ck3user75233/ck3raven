@@ -54,31 +54,23 @@ class ScopeDomain(str, Enum):
 
 
 # =============================================================================
-# TOKEN TYPES FOR CK3LENS (Tier B - Approval Required)
+# TOKEN TYPES
 # =============================================================================
-
-class CK3LensTokenType(str, Enum):
-    """
-    Token types available in ck3lens mode.
-    
-    All are Tier B (require explicit approval).
-    No Tier A (auto-grant) tokens for ck3lens.
-    """
-    DELETE_LOCALMOD = "DELETE_LOCALMOD"          # Delete files in active local mods (15 min)
-    READ_INACTIVE_MOD = "READ_INACTIVE_MOD"      # Read inactive mod (30 min)
-    REGISTRY_REPAIR = "REGISTRY_REPAIR"          # Repair mod registry (15 min)
-    CACHE_DELETE = "CACHE_DELETE"                # Delete launcher cache (15 min)
-    SCRIPT_EXECUTE = "SCRIPT_EXECUTE"            # Execute WIP script (60 min, reusable per hash)
-
-
-# Token TTLs in minutes
-CK3LENS_TOKEN_TTLS = {
-    CK3LensTokenType.DELETE_LOCALMOD: 15,
-    CK3LensTokenType.READ_INACTIVE_MOD: 30,
-    CK3LensTokenType.REGISTRY_REPAIR: 15,
-    CK3LensTokenType.CACHE_DELETE: 15,
-    CK3LensTokenType.SCRIPT_EXECUTE: 60,
-}
+# DEPRECATED: Token types have been moved to the canonical system.
+# See tools/compliance/tokens.py for canonical NST/LXE tokens.
+# The deprecated token types below are kept as comments for reference during migration.
+#
+# CK3LensTokenType (deprecated):
+#   DELETE_LOCALMOD, READ_INACTIVE_MOD, REGISTRY_REPAIR, CACHE_DELETE, SCRIPT_EXECUTE
+#
+# Ck3RavenDevTokenType (deprecated):
+#   TEST_EXECUTE, SCRIPT_RUN_WIP, READ_SAFE (Tier A)
+#   DELETE_SOURCE, GIT_PUSH, GIT_FORCE_PUSH, GIT_HISTORY_REWRITE, DB_MIGRATION_DESTRUCTIVE (Tier B)
+#
+# All operations that previously required deprecated tokens now use:
+# - Active contract for write operations
+# - token_id parameter for explicit confirmation (any value)
+# - Phase 2 will implement proper approval flows
 
 
 # =============================================================================
@@ -118,60 +110,8 @@ class Ck3RavenDevScopeDomain(str, Enum):
 # Ck3RavenDevWipIntent REMOVED - BANNED per Phase 1 cleanup (January 2026)
 # WIP workspace constraints are documented in policy, not enforced via enum
 
-
-class Ck3RavenDevTokenType(str, Enum):
-    """
-    Token types for ck3raven-dev mode.
-    
-    Tier A (Auto-Grant with Logging):
-    - Low-risk, high-frequency operations
-    - Auto-granted but logged for audit
-    
-    Tier B (Approval Required):
-    - Higher risk operations
-    - Require explicit user approval
-    """
-    # Tier A: Auto-Grant (low-risk, logged)
-    TEST_EXECUTE = "TEST_EXECUTE"            # Run pytest/test suite (5 min TTL)
-    SCRIPT_RUN_WIP = "SCRIPT_RUN_WIP"        # Execute WIP analysis script (15 min, scope-limited)
-    READ_SAFE = "READ_SAFE"                  # Read non-sensitive paths (60 min)
-    
-    # Tier B: Approval Required (higher risk)
-    DELETE_SOURCE = "DELETE_SOURCE"          # Delete source files (15 min)
-    GIT_PUSH = "GIT_PUSH"                    # git push (15 min)
-    GIT_FORCE_PUSH = "GIT_FORCE_PUSH"        # git push --force (5 min)
-    GIT_HISTORY_REWRITE = "GIT_HISTORY_REWRITE"  # rebase, amend (15 min)
-    DB_MIGRATION_DESTRUCTIVE = "DB_MIGRATION_DESTRUCTIVE"  # Schema destructive ops (30 min)
-
-
-# Tier classification for ck3raven-dev tokens
-CK3RAVEN_DEV_TOKEN_TIER_A = {
-    Ck3RavenDevTokenType.TEST_EXECUTE,
-    Ck3RavenDevTokenType.SCRIPT_RUN_WIP,
-    Ck3RavenDevTokenType.READ_SAFE,
-}
-
-CK3RAVEN_DEV_TOKEN_TIER_B = {
-    Ck3RavenDevTokenType.DELETE_SOURCE,
-    Ck3RavenDevTokenType.GIT_PUSH,
-    Ck3RavenDevTokenType.GIT_FORCE_PUSH,
-    Ck3RavenDevTokenType.GIT_HISTORY_REWRITE,
-    Ck3RavenDevTokenType.DB_MIGRATION_DESTRUCTIVE,
-}
-
-# Token TTLs in minutes for ck3raven-dev
-CK3RAVEN_DEV_TOKEN_TTLS = {
-    # Tier A
-    Ck3RavenDevTokenType.TEST_EXECUTE: 5,
-    Ck3RavenDevTokenType.SCRIPT_RUN_WIP: 15,
-    Ck3RavenDevTokenType.READ_SAFE: 60,
-    # Tier B
-    Ck3RavenDevTokenType.DELETE_SOURCE: 15,
-    Ck3RavenDevTokenType.GIT_PUSH: 15,
-    Ck3RavenDevTokenType.GIT_FORCE_PUSH: 5,
-    Ck3RavenDevTokenType.GIT_HISTORY_REWRITE: 15,
-    Ck3RavenDevTokenType.DB_MIGRATION_DESTRUCTIVE: 30,
-}
+# Ck3RavenDevTokenType REMOVED - DEPRECATED January 2026
+# See tools/compliance/tokens.py for canonical NST/LXE tokens
 
 
 # =============================================================================
@@ -395,17 +335,8 @@ class ValidationContext:
             self.ck3raven_root = Path(scope["ck3raven_root"])
         return self
     
-    def with_contract(self, intent_type: IntentType | str, contract_id: str) -> "ValidationContext":
-        """Add contract context."""
-        if isinstance(intent_type, str):
-            try:
-                self.intent_type = IntentType(intent_type)
-            except ValueError:
-                self.intent_type = None  # Invalid intent will trigger hard gate
-        else:
-            self.intent_type = intent_type
-        self.contract_id = contract_id
-        return self
+    # with_contract REMOVED - IntentType is BANNED per CANONICAL CONTRACT SYSTEM
+    # Contract context is now handled via contract_id only
 
 
 @dataclass
