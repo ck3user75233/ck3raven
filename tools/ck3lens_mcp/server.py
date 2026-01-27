@@ -69,10 +69,18 @@ _verify_python_environment()
 
 from mcp.server.fastmcp import FastMCP
 
-# Add ck3raven to path
+# Add ck3raven to path BEFORE importing from it
 CK3RAVEN_ROOT = Path(__file__).parent.parent.parent / "src"
 if CK3RAVEN_ROOT.exists():
     sys.path.insert(0, str(CK3RAVEN_ROOT))
+
+# Canonical Reply System (Phase C migration)
+# NOTE: Must be after path setup since ck3raven.core is in src/
+from ck3raven.core.reply import Reply, TraceInfo, MetaInfo
+from ck3raven.core.trace import generate_trace_id, get_or_create_session_id
+from safety import mcp_safe_tool, ReplyBuilder
+
+
 
 from ck3lens.workspace import Session, LocalMod
 from ck3lens.db_queries import DBQueries
@@ -571,7 +579,8 @@ def ck3_get_instance_info() -> dict:
 
 
 @mcp.tool()
-def ck3_ping() -> dict:
+@mcp_safe_tool
+def ck3_ping(*, trace_info: TraceInfo) -> Reply:
     """
     Simple health check - always returns success.
     
@@ -580,14 +589,19 @@ def ck3_ping() -> dict:
     always succeed if the server is reachable.
     
     Returns:
-        {"status": "ok", "instance_id": str, "timestamp": str}
+        Reply with status, instance_id, and timestamp in data
     """
     from datetime import datetime
-    return {
-        "status": "ok",
-        "instance_id": _instance_id,
-        "timestamp": datetime.now().isoformat(),
-    }
+    rb = ReplyBuilder(trace_info, tool="ck3_ping")
+    return rb.success(
+        "MCP-SYS-S-900",
+        data={
+            "status": "ok",
+            "instance_id": _instance_id,
+            "timestamp": datetime.now().isoformat(),
+        },
+        message="Ping successful.",
+    )
 
 def _init_session_internal(
     db_path: Optional[str] = None,
@@ -4259,10 +4273,13 @@ def ck3_file_search(
 
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_parse_content(
     content: str,
-    filename: str = "inline.txt"
-) -> dict:
+    filename: str = "inline.txt",
+    *,
+    trace_info: TraceInfo,
+) -> Reply:
     """
     Parse CK3 script content and return AST or errors.
     
@@ -4277,24 +4294,11 @@ def ck3_parse_content(
         filename: Optional filename for error messages
     
     Returns:
-        {
-            "success": bool (true if no errors),
-            "ast": {...} (partial AST, may be valid despite errors),
-            "errors": [
-                {
-                    "line": 5,
-                    "column": 10,
-                    "end_line": 5,
-                    "end_column": 15,
-                    "message": "Expected value after operator",
-                    "code": "PARSE_ERROR",
-                    "severity": "error"
-                },
-                ...
-            ]
-        }
+        Reply with code PARSE-AST-S-001 on success (ast and node_count in data),
+        or PARSE-AST-E-001 on syntax errors (errors list in data).
     """
     trace = _get_trace()
+    rb = ReplyBuilder(trace_info, tool="ck3_parse_content", layer="PARSE")
     
     result = parse_content(content, filename, recover=True)
     
@@ -4303,7 +4307,42 @@ def ck3_parse_content(
         "content_length": len(content)
     }, {"success": result["success"], "error_count": len(result["errors"])})
     
-    return result
+    if result["success"]:
+        # Count nodes in AST for the message
+        node_count = 0
+        if result["ast"]:
+            # Simple node counting: count all dict items in AST
+            def count_nodes(obj):
+                if isinstance(obj, dict):
+                    return 1 + sum(count_nodes(v) for v in obj.values())
+                elif isinstance(obj, list):
+                    return sum(count_nodes(item) for item in obj)
+                return 0
+            node_count = count_nodes(result["ast"])
+        
+        return rb.success(
+            "PARSE-AST-S-001",
+            data={
+                "ast": result["ast"],
+                "errors": result["errors"],  # Empty list on success
+                "node_count": node_count,
+                "filename": filename,
+            },
+        )
+    else:
+        # Parse failed - get first error for message
+        first_error = result["errors"][0] if result["errors"] else {"line": 1, "message": "Unknown parse error"}
+        
+        return rb.error(
+            "PARSE-AST-E-001",
+            data={
+                "ast": result["ast"],  # Partial AST may still be useful
+                "errors": result["errors"],
+                "line": first_error.get("line", 1),
+                "error": first_error.get("message", "Unknown parse error"),
+                "filename": filename,
+            },
+        )
 
 
 @mcp.tool()
