@@ -4559,7 +4559,7 @@ def ck3_get_mode_instructions(
     """
     from pathlib import Path
     from ck3lens.policy import (
-        ScopeDomain, CK3LensTokenType, AgentMode,
+        ScopeDomain, AgentMode,
         get_wip_workspace_path, initialize_workspace,
     )
     from ck3lens.agent_mode import set_agent_mode, VALID_MODES
@@ -4677,9 +4677,8 @@ def _get_mode_policy_context(mode: str) -> dict:
     Build policy context for a mode showing boundaries and capabilities.
     """
     from ck3lens.policy import (
-        ScopeDomain, CK3LensTokenType,
+        ScopeDomain,
         Ck3RavenDevScopeDomain,
-        Ck3RavenDevTokenType, CK3RAVEN_DEV_TOKEN_TIER_A, CK3RAVEN_DEV_TOKEN_TIER_B,
     )
     
     if mode == "ck3lens":
@@ -4708,7 +4707,7 @@ def _get_mode_policy_context(mode: str) -> dict:
                     "write to CK3RAVEN_SOURCE",
                 ],
             },
-            "available_tokens": [tt.value for tt in CK3LensTokenType],
+            "available_tokens": ["Token system deprecated - see tools/compliance/tokens.py for NST/LXE"],
             "hard_rules": [
                 "Python files only allowed in WIP workspace",
                 "Delete requires explicit token with user prompt evidence",
@@ -4748,10 +4747,7 @@ def _get_mode_policy_context(mode: str) -> dict:
                     "run_in_terminal (use ck3_exec instead)",
                 ],
             },
-            "available_tokens": {
-                "tier_a_auto_grant": [tt.value for tt in CK3RAVEN_DEV_TOKEN_TIER_A],
-                "tier_b_approval_required": [tt.value for tt in CK3RAVEN_DEV_TOKEN_TIER_B],
-            },
+            "available_tokens": {"note": "Token system deprecated - see tools/compliance/tokens.py for NST/LXE"},
             "hard_rules": [
                 "ABSOLUTE PROHIBITION: Cannot write to ANY mod files (local, workshop, vanilla)",
                 "PROHIBITION: Cannot use run_in_terminal (use ck3_exec)",
