@@ -95,8 +95,9 @@ SAFE_COMMANDS = frozenset({
     "git remote -v", "git stash list",
     "git add", "git commit",  # Allowed without approval per policy
     "git fetch", "git pull",  # Read-like remote operations
-    # Python/tools
-    "python -c", "python -m pytest", "python -m mypy",
+    # Python/tools - NOTE: "python -c" REMOVED (Phase 1.5 remediation)
+    # python -c is now handled by classify_python_inline() with scanning
+    "python -m pytest", "python -m mypy",
     # Info commands
     "pwd", "echo", "which", "where", "whoami",
     # PowerShell read-only commands (Get-* cmdlets are non-mutating)
@@ -178,6 +179,27 @@ def classify_command(command: str) -> CommandCategory:
         CommandCategory indicating risk level
     """
     cmd_lower = command.lower()
+    
+    # ==========================================================================
+    # PHASE 1.5: python -c special handling
+    # python -c is NOT in SAFE_COMMANDS. It's analyzed by the inline scanner.
+    # ==========================================================================
+    from .python_inline_scanner import classify_python_inline, InlineIntentType
+    
+    is_python_c, intent = classify_python_inline(command)
+    if is_python_c and intent is not None:
+        if intent.intent == InlineIntentType.SAFE:
+            # Matches safe allowlist (env checks, prints)
+            return CommandCategory.READ_ONLY
+        elif intent.intent == InlineIntentType.READ_ONLY:
+            # No mutations detected - still allow as read-only
+            return CommandCategory.READ_ONLY
+        elif intent.intent == InlineIntentType.DESTRUCTIVE:
+            # Deletes, removes, etc.
+            return CommandCategory.DESTRUCTIVE
+        else:
+            # POTENTIALLY_WRITE - requires enforcement
+            return CommandCategory.WRITE_IN_SCOPE
     
     # Check safe commands FIRST - PowerShell Get-* cmdlets should not be blocked
     for safe in SAFE_COMMANDS:
