@@ -78,7 +78,7 @@ if CK3RAVEN_ROOT.exists():
 # NOTE: Must be after path setup since ck3raven.core is in src/
 from ck3raven.core.reply import Reply, TraceInfo, MetaInfo
 from ck3raven.core.trace import generate_trace_id, get_or_create_session_id
-from safety import mcp_safe_tool, ReplyBuilder
+from safety import mcp_safe_tool, ReplyBuilder, get_current_trace_info
 
 
 
@@ -512,7 +512,7 @@ def ck3_get_instance_info() -> dict:
 
 @mcp.tool()
 @mcp_safe_tool
-def ck3_ping(*, trace_info: TraceInfo) -> Reply:
+def ck3_ping() -> Reply:
     """
     Simple health check - always returns success.
     
@@ -524,6 +524,7 @@ def ck3_ping(*, trace_info: TraceInfo) -> Reply:
         Reply with status, instance_id, and timestamp in data
     """
     from datetime import datetime
+    trace_info = get_current_trace_info()
     rb = ReplyBuilder(trace_info, tool="ck3_ping")
     return rb.success(
         "MCP-SYS-S-900",
@@ -4046,8 +4047,6 @@ def ck3_file_search(
 def ck3_parse_content(
     content: str,
     filename: str = "inline.txt",
-    *,
-    trace_info: TraceInfo,
 ) -> Reply:
     """
     Parse CK3 script content and return AST or errors.
@@ -4067,6 +4066,7 @@ def ck3_parse_content(
         or PARSE-AST-E-001 on syntax errors (errors list in data).
     """
     trace = _get_trace()
+    trace_info = get_current_trace_info()
     rb = ReplyBuilder(trace_info, tool="ck3_parse_content", layer="PARSE")
     
     result = parse_content(content, filename, recover=True)

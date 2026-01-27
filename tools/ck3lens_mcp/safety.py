@@ -6,28 +6,50 @@ to enforce the Reply contract:
 
 1. Generate trace_id per invocation
 2. Attach session_id
-3. Catch exceptions -> MCP-SYS-E-001
-4. Enforce Reply return type (non-Reply -> MCP-SYS-E-003)
-5. Serialize Reply to dict for transport
+3. Set trace_info in context variable (accessible via get_current_trace_info())
+4. Catch exceptions -> MCP-SYS-E-001
+5. Enforce Reply return type (non-Reply -> MCP-SYS-E-003)
+6. Serialize Reply to dict for transport
 
 Usage:
+    @mcp.tool()
     @mcp_safe_tool
     def ck3_my_tool(param: str) -> Reply:
-        ...
-        return Reply.success(...)
+        trace_info = get_current_trace_info()
+        rb = ReplyBuilder(trace_info, tool='ck3_my_tool')
+        return rb.success('CODE', data={...})
 """
 from __future__ import annotations
 
+import contextvars
 import functools
 import traceback
-from typing import Any, Callable, Dict, TypeVar, ParamSpec
+from typing import Any, Callable, Dict, TypeVar, ParamSpec, Optional
 
 from ck3raven.core.reply import Reply, TraceInfo, MetaInfo
 from ck3raven.core.trace import generate_trace_id, get_or_create_session_id
 
 
-P = ParamSpec("P")
-T = TypeVar("T")
+P = ParamSpec('P')
+T = TypeVar('T')
+
+# Context variable for current trace_info (set by decorator, read by tool)
+_current_trace_info: contextvars.ContextVar[Optional[TraceInfo]] = contextvars.ContextVar(
+    'current_trace_info', default=None
+)
+
+
+def get_current_trace_info() -> TraceInfo:
+    """
+    Get the current TraceInfo from context.
+    
+    Call this from within a @mcp_safe_tool decorated function.
+    Raises RuntimeError if called outside of a tool context.
+    """
+    trace_info = _current_trace_info.get()
+    if trace_info is None:
+        raise RuntimeError('get_current_trace_info() called outside of @mcp_safe_tool context')
+    return trace_info
 
 
 def mcp_safe_tool(func: Callable[P, Reply]) -> Callable[P, Dict[str, Any]]:
@@ -37,11 +59,13 @@ def mcp_safe_tool(func: Callable[P, Reply]) -> Callable[P, Dict[str, Any]]:
     Responsibilities:
     1. Generate unique trace_id per invocation
     2. Get/create session_id
-    3. Catch ALL exceptions and convert to MCP-SYS-E-001
-    4. Enforce that tool returns Reply (non-Reply -> MCP-SYS-E-003)
-    5. Serialize Reply to dict for MCP transport
+    3. Set trace_info in context variable (access via get_current_trace_info())
+    4. Catch ALL exceptions and convert to MCP-SYS-E-001
+    5. Enforce that tool returns Reply (non-Reply -> MCP-SYS-E-003)
+    6. Serialize Reply to dict for MCP transport
     
-    The wrapped function receives injected 'trace_info' kwarg if it accepts one.
+    IMPORTANT: Do NOT add trace_info to the function signature. Use
+    get_current_trace_info() inside the function to access it.
     """
     @functools.wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> Dict[str, Any]:
@@ -50,13 +74,10 @@ def mcp_safe_tool(func: Callable[P, Reply]) -> Callable[P, Dict[str, Any]]:
         session_id = get_or_create_session_id()
         trace_info = TraceInfo(trace_id=trace_id, session_id=session_id)
         
-        # Inject trace_info if function accepts it
-        import inspect
-        sig = inspect.signature(func)
-        if "trace_info" in sig.parameters:
-            kwargs["trace_info"] = trace_info
-        
         tool_name = func.__name__
+        
+        # Set trace_info in context variable
+        token = _current_trace_info.set(trace_info)
         
         try:
             result = func(*args, **kwargs)
@@ -65,14 +86,14 @@ def mcp_safe_tool(func: Callable[P, Reply]) -> Callable[P, Dict[str, Any]]:
             if not isinstance(result, Reply):
                 actual_type = type(result).__name__
                 error_reply = Reply.error(
-                    code="MCP-SYS-E-003",
-                    message=f"Tool returned {actual_type}, expected Reply.",
+                    code='MCP-SYS-E-003',
+                    message=f'Tool returned {actual_type}, expected Reply.',
                     data={
-                        "actual_type": actual_type,
-                        "tool": tool_name,
+                        'actual_type': actual_type,
+                        'tool': tool_name,
                     },
                     trace=trace_info,
-                    meta=MetaInfo(layer="MCP", tool=tool_name),
+                    meta=MetaInfo(layer='MCP', tool=tool_name),
                 )
                 return error_reply.to_dict()
             
@@ -83,21 +104,24 @@ def mcp_safe_tool(func: Callable[P, Reply]) -> Callable[P, Dict[str, Any]]:
             error_msg = str(e)
             stack_trace = traceback.format_exc()
             
-            # Log to disk for debugging (optional - can be enhanced later)
+            # Log to disk for debugging
             _log_exception(trace_id, tool_name, e, stack_trace)
             
             error_reply = Reply.error(
-                code="MCP-SYS-E-001",
-                message=f"Unhandled exception: {error_msg}",
+                code='MCP-SYS-E-001',
+                message=f'Unhandled exception: {error_msg}',
                 data={
-                    "error": error_msg,
-                    "error_type": type(e).__name__,
-                    "tool": tool_name,
+                    'error': error_msg,
+                    'error_type': type(e).__name__,
+                    'tool': tool_name,
                 },
                 trace=trace_info,
-                meta=MetaInfo(layer="MCP", tool=tool_name),
+                meta=MetaInfo(layer='MCP', tool=tool_name),
             )
             return error_reply.to_dict()
+        finally:
+            # Reset context variable
+            _current_trace_info.reset(token)
     
     return wrapper
 
@@ -105,45 +129,45 @@ def mcp_safe_tool(func: Callable[P, Reply]) -> Callable[P, Dict[str, Any]]:
 def _log_exception(trace_id: str, tool_name: str, exc: Exception, stack_trace: str) -> None:
     """
     Log exception details to disk for debugging.
-    
-    This is a placeholder for proper structured logging integration.
-    Currently writes to stderr to avoid silent failures.
     """
     import sys
     from datetime import datetime, timezone
     
     ts = datetime.now(timezone.utc).isoformat()
     print(
-        f"[{ts}] EXCEPTION trace_id={trace_id} tool={tool_name}\n"
-        f"  {type(exc).__name__}: {exc}\n"
-        f"{stack_trace}",
+        f'[{ts}] EXCEPTION trace_id={trace_id} tool={tool_name}\n'
+        f'  {type(exc).__name__}: {exc}\n'
+        f'{stack_trace}',
         file=sys.stderr,
     )
 
 
-# =============================================================================
+# ===========================================================================
 # Helper for creating Replies with automatic trace injection
-# =============================================================================
+# ===========================================================================
 
 class ReplyBuilder:
     """
     Helper class for building Reply objects with pre-set trace and meta.
     
     Usage in tool handlers:
-        def ck3_my_tool(param: str, *, trace_info: TraceInfo) -> Reply:
-            rb = ReplyBuilder(trace_info, tool="ck3_my_tool")
+        @mcp.tool()
+        @mcp_safe_tool
+        def ck3_my_tool(param: str) -> Reply:
+            trace_info = get_current_trace_info()
+            rb = ReplyBuilder(trace_info, tool='ck3_my_tool')
             
             if not param:
-                return rb.denied("MCP-SYS-D-902", {"missing": ["param"]})
+                return rb.denied('MCP-SYS-D-902', {'missing': ['param']})
             
-            return rb.success("MCP-SYS-S-900", {"result": "ok"})
+            return rb.success('MCP-SYS-S-900', {'result': 'ok'})
     """
     
     def __init__(
         self,
         trace_info: TraceInfo,
         tool: str,
-        layer: str = "MCP",
+        layer: str = 'MCP',
         contract_id: str | None = None,
     ):
         self.trace_info = trace_info
