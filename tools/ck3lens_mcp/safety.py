@@ -158,7 +158,7 @@ class ReplyBuilder:
             rb = ReplyBuilder(trace_info, tool='ck3_my_tool')
             
             if not param:
-                return rb.denied('MCP-SYS-D-902', {'missing': ['param']})
+                return rb.invalid('MCP-SYS-I-902', {'missing': ['param']})
             
             return rb.success('MCP-SYS-S-900', {'result': 'ok'})
     """
@@ -200,16 +200,16 @@ class ReplyBuilder:
             meta=self._meta(layer),
         )
     
-    def info(
+    def invalid(
         self,
         code: str,
         data: Dict[str, Any],
         message: str | None = None,
         layer: str | None = None,
     ) -> Reply:
-        """Create an Info reply."""
+        """Create an Invalid reply (malformed input, unknown reference)."""
         from ck3raven.core.reply_registry import get_message
-        return Reply.info(
+        return Reply.invalid(
             code=code,
             message=message or get_message(code, **data),
             data=data,

@@ -78,7 +78,7 @@ if CK3RAVEN_ROOT.exists():
 # NOTE: Must be after path setup since ck3raven.core is in src/
 from ck3raven.core.reply import Reply, TraceInfo, MetaInfo
 from ck3raven.core.trace import generate_trace_id, get_or_create_session_id
-from safety import mcp_safe_tool, ReplyBuilder, get_current_trace_info
+from .safety import mcp_safe_tool, ReplyBuilder, get_current_trace_info
 
 
 
@@ -491,7 +491,8 @@ def _get_trace() -> ToolTrace:
 
 
 @mcp.tool()
-def ck3_get_instance_info() -> dict:
+@mcp_safe_tool
+def ck3_get_instance_info() -> Reply:
     """
     Get information about this MCP server instance.
     
@@ -502,12 +503,18 @@ def ck3_get_instance_info() -> dict:
         Instance ID, server name, and process info
     """
     import os
-    return {
-        "instance_id": _instance_id,
-        "server_name": _server_name,
-        "pid": os.getpid(),
-        "is_isolated": _instance_id != "default",
-    }
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool="ck3_get_instance_info")
+    return rb.success(
+        "MCP-SYS-S-900",
+        data={
+            "instance_id": _instance_id,
+            "server_name": _server_name,
+            "pid": os.getpid(),
+            "is_isolated": _instance_id != "default",
+        },
+        message="Instance info retrieved.",
+    )
 
 
 @mcp.tool()
@@ -710,7 +717,8 @@ def _check_db_health(conn) -> dict:
 
 
 @mcp.tool()
-def ck3_close_db() -> dict:
+@mcp_safe_tool
+def ck3_close_db() -> Reply:
     """
     Close database connection to release file lock.
     
@@ -728,6 +736,8 @@ def ck3_close_db() -> dict:
     global _db, _playset_id, _session_scope
     
     trace = _get_trace()
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool="ck3_close_db", layer="DB")
     
     try:
         # Use db_api to disable (which handles WAL mode, close, and blocks reconnect)
@@ -753,30 +763,33 @@ def ck3_close_db() -> dict:
         
         trace.log("ck3lens.close_db", {}, {"success": True})
         
-        return {
-            "success": True,
-            "message": "Database connection closed and DISABLED. Use ck3_db(command='enable') to reconnect. File lock released."
-        }
+        return rb.success(
+            "DB-CONN-S-001",
+            data={"closed": True},
+            message="Database connection closed and DISABLED. Use ck3_db(command='enable') to reconnect. File lock released.",
+        )
     except Exception as e:
         trace.log("ck3lens.close_db", {}, {"success": False, "error": str(e)})
-        return {
-            "success": False,
-            "message": f"Failed to close connection: {e}"
-        }
+        return rb.error(
+            "DB-CONN-E-001",
+            data={"error": str(e)},
+            message=f"Failed to close connection: {e}",
+        )
 
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_db(
     command: Literal["status", "disable", "enable"] = "status",
-) -> dict:
+) -> Reply:
     """
     Manage database connection for maintenance operations.
     
     Commands:
     
-    command=status   ? Check if database is enabled/connected
-    command=disable  ? Close connection and block reconnection (for file operations)
-    command=enable   ? Re-enable database access
+    command=status   → Check if database is enabled/connected
+    command=disable  → Close connection and block reconnection (for file operations)
+    command=enable   → Re-enable database access
     
     Use disable before deleting database files to ensure file locks are released.
     Use enable to restore normal operation.
@@ -795,11 +808,13 @@ def ck3_db(
     global _db
     
     trace = _get_trace()
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool="ck3_db", layer="DB")
     
     if command == "status":
         result = db_api.status()
         trace.log("ck3lens.db.status", {}, result)
-        return result
+        return rb.success("MCP-SYS-S-900", data=result, message="Database status retrieved.")
         
     elif command == "disable":
         # Use db_api to disable (handles WAL mode, close, blocks reconnect)
@@ -820,15 +835,15 @@ def ck3_db(
         gc.collect()
         
         trace.log("ck3lens.db.disable", {}, result)
-        return result
+        return rb.success("DB-CONN-S-001", data=result, message="Database disabled.")
         
     elif command == "enable":
         result = db_api.enable()
         trace.log("ck3lens.db.enable", {}, result)
-        return result
+        return rb.success("MCP-SYS-S-900", data=result, message="Database enabled.")
     
     else:
-        return {"error": f"Unknown command: {command}"}
+        return rb.invalid("MCP-SYS-I-901", data={"command": command}, message=f"Unknown command: {command}")
 
 
 # NOTE: ck3_get_playset_build_status() DELETED - January 2026
@@ -837,13 +852,14 @@ def ck3_db(
 
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_db_delete(
     target: Literal["asts", "symbols", "refs", "files", "content_versions", "lookups", "playsets", "build_tracking"],
     scope: Literal["all", "mods_only", "by_ids", "by_content_version"],
     ids: Optional[list[int | str]] = None,
     content_version_ids: Optional[list[int]] = None,
     confirm: bool = False
-) -> dict:
+) -> Reply:
     """
     Flexible database cleanup tool for surgical deletion of indexed data.
     
@@ -904,6 +920,37 @@ def ck3_db_delete(
         # Delete ASTs for content_versions 5-10
         ck3_db_delete(target="asts", scope="by_content_version", content_version_ids=[5,6,7,8,9,10], confirm=True)
     """
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_db_delete')
+    
+    # Call internal implementation
+    result = _ck3_db_delete_internal(target, scope, ids, content_version_ids, confirm)
+    
+    # Convert to Reply
+    if result.get("error"):
+        if result.get("policy_decision") in ("DENY", "REQUIRE_CONTRACT", "REQUIRE_TOKEN"):
+            return rb.denied('MCP-SYS-D-903', data=result, message=result.get("error", "Policy denied"))
+        return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Unknown error"))
+    
+    if result.get("success"):
+        msg = f"Deleted {result.get('rows_deleted', 0)} rows from {target}."
+        return rb.success('MCP-SYS-S-900', data=result, message=msg)
+    
+    if result.get("preview") or result.get("rows_would_delete") is not None:
+        msg = f"Would delete {result.get('rows_would_delete', 0)} rows from {target}. Use confirm=True to delete."
+        return rb.invalid('MCP-SYS-I-901', data=result, message=msg)
+    
+    return rb.success('MCP-SYS-S-900', data=result, message="Operation complete.")
+
+
+def _ck3_db_delete_internal(
+    target: str,
+    scope: str,
+    ids: Optional[list[int | str]],
+    content_version_ids: Optional[list[int]],
+    confirm: bool,
+) -> dict:
+    """Internal implementation of ck3_db_delete returning dict."""
     from ck3lens.agent_mode import get_agent_mode
     from ck3lens.policy.enforcement import (
         OperationType, Decision, EnforcementRequest, enforce_and_log
@@ -933,37 +980,37 @@ def ck3_db_delete(
         )
         
         # Enforce policy
-        result = enforce_and_log(request, trace)
+        enforcement_result = enforce_and_log(request, trace)
         
         # Handle enforcement decision
-        if result.decision == Decision.DENY:
+        if enforcement_result.decision == Decision.DENY:
             return {
                 "success": False,
                 "target": target,
                 "scope": scope,
-                "error": result.reason,
+                "error": enforcement_result.reason,
                 "policy_decision": "DENY",
             }
         
-        if result.decision == Decision.REQUIRE_CONTRACT:
+        if enforcement_result.decision == Decision.REQUIRE_CONTRACT:
             return {
                 "success": False,
                 "target": target,
                 "scope": scope,
-                "error": result.reason,
+                "error": enforcement_result.reason,
                 "policy_decision": "REQUIRE_CONTRACT",
                 "guidance": "Use ck3_contract(command='open', ...) to open a work contract",
             }
         
-        if result.decision == Decision.REQUIRE_TOKEN:
+        if enforcement_result.decision == Decision.REQUIRE_TOKEN:
             return {
                 "success": False,
                 "target": target,
                 "scope": scope,
-                "error": result.reason,
+                "error": enforcement_result.reason,
                 "policy_decision": "REQUIRE_TOKEN",
-                "required_token_type": result.required_token_type,
-                "hint": f"Use ck3_token to request a {result.required_token_type} token",
+                "required_token_type": enforcement_result.required_token_type,
+                "hint": f"Use ck3_token to request a {enforcement_result.required_token_type} token",
             }
         
         # Decision is ALLOW - continue to implementation
@@ -1242,7 +1289,8 @@ def ck3_db_delete(
 
 
 @mcp.tool()
-def ck3_get_policy_status() -> dict:
+@mcp_safe_tool
+def ck3_get_policy_status() -> Reply:
     """
     Check if policy enforcement is working.
     
@@ -1257,28 +1305,31 @@ def ck3_get_policy_status() -> dict:
             "message": str            # Human-readable status
         }
     """
-    import time
-    
-    trace = _get_trace()
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_get_policy_status')
     
     # Run fresh health check
     health = _check_policy_health()
     
-    result = {
+    data = {
         "healthy": health["healthy"],
         "error": health["error"],
         "validated_at": health["validated_at"],
     }
     
     if health["healthy"]:
-        result["message"] = "✅ Policy enforcement is ACTIVE"
+        return rb.success(
+            'MCP-SYS-S-900',
+            data=data,
+            message="✅ Policy enforcement is ACTIVE",
+        )
     else:
-        result["message"] = f"🚨 POLICY ENFORCEMENT IS DOWN: {health['error']}"
-        result["action_required"] = "Agent must stop work. Fix policy module or restart MCP server."
-    
-    trace.log("ck3lens.get_policy_status", {}, result)
-    
-    return result
+        data["action_required"] = "Agent must stop work. Fix policy module or restart MCP server."
+        return rb.error(
+            'MCP-SYS-E-001',
+            data=data,
+            message=f"🚨 POLICY ENFORCEMENT IS DOWN: {health['error']}",
+        )
 
 
 # ============================================================================
@@ -1286,6 +1337,7 @@ def ck3_get_policy_status() -> dict:
 # ============================================================================
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_logs(
     source: Literal["error", "game", "debug", "crash"] = "error",
     command: Literal["summary", "list", "search", "detail", "categories", "cascades", "read"] = "summary",
@@ -1303,7 +1355,7 @@ def ck3_logs(
     from_end: bool = True,
     # Pagination
     limit: int = 50,
-) -> dict:
+) -> Reply:
     """
     Unified logging tool for error.log, game.log, debug.log, and crash reports.
     
@@ -1349,7 +1401,8 @@ def ck3_logs(
     """
     from ck3lens.unified_tools import ck3_logs_impl
     
-    trace = _get_trace()
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_logs')
     
     result = ck3_logs_impl(
         source=source,
@@ -1365,13 +1418,18 @@ def ck3_logs(
         limit=limit,
     )
     
-    trace.log("ck3lens.logs", {
-        "source": source,
-        "command": command,
-        "category": category,
-    }, {"success": "error" not in result})
+    if "error" in result:
+        return rb.error(
+            'MCP-SYS-E-001',
+            data=result,
+            message=result["error"],
+        )
     
-    return result
+    return rb.success(
+        'MCP-SYS-S-900',
+        data=result,
+        message=f"Logs query completed: source={source}, command={command}",
+    )
 
 
 # ============================================================================
@@ -1381,6 +1439,7 @@ def ck3_logs(
 ConflictCommand = Literal["symbols", "files", "summary"]
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_conflicts(
     command: ConflictCommand = "symbols",
     # Filters
@@ -1390,7 +1449,7 @@ def ck3_conflicts(
     # Options
     include_compatch: bool = False,
     limit: int = 100,
-) -> dict:
+) -> Reply:
     """
     Unified conflict detection for the active playset.
     
@@ -1449,8 +1508,10 @@ def ck3_conflicts(
         ck3_conflicts(command="files", game_folder="common/on_action")  # File conflicts
         ck3_conflicts(command="summary")  # Overview statistics
     """
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_conflicts')
+    
     db = _get_db()
-    trace = _get_trace()
     session = _get_session()
     
     # Get CVIDs from session.mods[] - THE canonical source
@@ -1461,7 +1522,11 @@ def ck3_conflicts(
     )
     
     if not cvids:
-        return {"error": "No mods in session.mods[] - no active playset?"}
+        return rb.error(
+            'MCP-SYS-E-001',
+            data={"error": "No mods in session.mods[]"},
+            message="No mods in session.mods[] - no active playset?",
+        )
     
     if command == "symbols":
         # Use the internal method that was powering the deleted tools
@@ -1482,16 +1547,11 @@ def ck3_conflicts(
             ]
             result["conflict_count"] = len(result["conflicts"])
         
-        trace.log("ck3lens.conflicts.symbols", {
-            "symbol_type": symbol_type,
-            "symbol_names": symbol_names,
-            "game_folder": game_folder,
-            "include_compatch": include_compatch,
-        }, {
-            "conflict_count": result.get("conflict_count", 0)
-        })
-        
-        return result
+        return rb.success(
+            'MCP-SYS-S-900',
+            data=result,
+            message=f"Found {result.get('conflict_count', 0)} symbol conflicts.",
+        )
     
     elif command == "files":
         # File-level conflict detection
@@ -1537,13 +1597,11 @@ def ck3_conflicts(
                 "has_zzz_prefix": has_zzz,
             })
         
-        trace.log("ck3lens.conflicts.files", {
-            "game_folder": game_folder,
-        }, {
-            "conflict_count": len(conflicts)
-        })
-        
-        return {"conflicts": conflicts, "count": len(conflicts)}
+        return rb.success(
+            'MCP-SYS-S-900',
+            data={"conflicts": conflicts, "count": len(conflicts)},
+            message=f"Found {len(conflicts)} file conflicts.",
+        )
     
     elif command == "summary":
         # Summary statistics
@@ -1591,20 +1649,23 @@ def ck3_conflicts(
         total_symbols = sum(by_type.values())
         total_files = sum(by_folder.values())
         
-        trace.log("ck3lens.conflicts.summary", {}, {
-            "total_symbols": total_symbols,
-            "total_files": total_files,
-        })
-        
-        return {
-            "total_symbol_conflicts": total_symbols,
-            "total_file_conflicts": total_files,
-            "by_type": by_type,
-            "by_folder": by_folder,
-        }
+        return rb.success(
+            'MCP-SYS-S-900',
+            data={
+                "total_symbol_conflicts": total_symbols,
+                "total_file_conflicts": total_files,
+                "by_type": by_type,
+                "by_folder": by_folder,
+            },
+            message=f"Summary: {total_symbols} symbol conflicts, {total_files} file conflicts.",
+        )
     
     else:
-        return {"error": f"Unknown command: {command}"}
+        return rb.error(
+            'MCP-SYS-E-001',
+            data={"error": f"Unknown command: {command}"},
+            message=f"Unknown command: {command}",
+        )
 
 
 # ============================================================================
@@ -1612,6 +1673,7 @@ def ck3_conflicts(
 # ============================================================================
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_file(
     command: Literal["get", "read", "write", "edit", "delete", "rename", "refresh", "list", "create_patch"],
     # Path identification
@@ -1640,7 +1702,7 @@ def ck3_file(
     # For create_patch (ck3lens mode only)
     source_path: str | None = None,
     patch_mode: Literal["partial_patch", "full_replace"] | None = None,
-) -> Reply | dict:
+) -> Reply:
     """
     Unified file operations tool.
     
@@ -1688,6 +1750,9 @@ def ck3_file(
     """
     from ck3lens.unified_tools import ck3_file_impl
     
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_file')
+    
     session = _get_session()
     trace = _get_trace()
     world = _get_world()  # WorldAdapter for unified path resolution
@@ -1695,7 +1760,7 @@ def ck3_file(
     # Only acquire DB connection for commands that need it
     db = _get_db() if command == "get" else None
     
-    return ck3_file_impl(
+    result = ck3_file_impl(
         command=command,
         path=path,
         mod_name=mod_name,
@@ -1719,6 +1784,30 @@ def ck3_file(
         trace=trace,
         world=world,
     )
+    
+    # If impl returned a Reply directly, pass it through
+    if isinstance(result, Reply):
+        return result
+    
+    if result.get("error"):
+        err = result.get("error", "File operation failed")
+        policy_decision = result.get("policy_decision", "")
+        visibility = result.get("visibility", "")
+        
+        # Governance denial (policy/contract/authority refusal)
+        if policy_decision in ("DENY", "REQUIRE_CONTRACT", "REQUIRE_TOKEN"):
+            return rb.denied('FILE-OP-D-001', data=result, message=err)
+        if "denied" in err.lower() or "not allowed" in err.lower() or "permission" in err.lower():
+            return rb.denied('FILE-OP-D-001', data=result, message=err)
+        
+        # Invalid reference / not found (caller's input cannot be resolved)
+        if visibility == "NOT_FOUND" or "not found" in err.lower() or "unknown" in err.lower():
+            return rb.invalid('FILE-OP-I-001', data=result, message=err)
+        
+        # System error (actual exception / unexpected failure)
+        return rb.error('FILE-OP-E-001', data=result, message=err)
+    
+    return rb.success('FILE-OP-S-001', data=result, message=f"File {command} complete.")
 
 
 # ============================================================================
@@ -1726,6 +1815,7 @@ def ck3_file(
 # ============================================================================
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_folder(
     command: Literal["list", "contents", "top_level", "mod_folders"] = "contents",
     # For list/contents
@@ -1738,7 +1828,7 @@ def ck3_folder(
     symbol_search: str | None = None,
     mod_filter: list[str] | None = None,
     file_type_filter: list[str] | None = None,
-) -> dict:
+) -> Reply:
     """
     Unified folder operations tool.
     
@@ -1768,6 +1858,9 @@ def ck3_folder(
     """
     from ck3lens.unified_tools import ck3_folder_impl
     
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_folder')
+    
     session = _get_session()
     trace = _get_trace()
     world = _get_world()  # WorldAdapter for visibility enforcement
@@ -1779,7 +1872,7 @@ def ck3_folder(
     # CANONICAL: Get cvids from session.mods[] instead of using playset_id
     cvids = [m.cvid for m in session.mods if m.cvid is not None] if db_required else None
     
-    return ck3_folder_impl(
+    result = ck3_folder_impl(
         command=command,
         path=path,
         content_version_id=content_version_id,
@@ -1793,6 +1886,11 @@ def ck3_folder(
         trace=trace,
         world=world,
     )
+    
+    if result.get("error"):
+        return rb.error('FOLDER-OP-E-001', data=result, message=result.get("error", "Folder operation failed"))
+    
+    return rb.success('FOLDER-OP-S-001', data=result, message=f"Folder {command} complete.")
 
 
 # ============================================================================
@@ -1800,6 +1898,7 @@ def ck3_folder(
 # ============================================================================
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_playset(
     command: Literal["get", "list", "switch", "mods", "add_mod", "remove_mod", "reorder", "create", "import"] = "get",
     # For switch/add_mod/remove_mod/reorder
@@ -1816,7 +1915,7 @@ def ck3_playset(
     launcher_playset_name: str | None = None,
     # For mods command
     limit: int | None = None,
-) -> dict:
+) -> Reply:
     """
     Unified playset operations tool.
     
@@ -1851,6 +1950,40 @@ def ck3_playset(
     Returns:
         Dict with playset info or operation result
     """
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_playset')
+    
+    result = _ck3_playset_internal(
+        command, playset_name, mod_name, new_position,
+        name, description, vanilla_version_id, mod_ids, launcher_playset_name, limit
+    )
+    
+    if result.get("error"):
+        return rb.error('PLAYSET-OP-E-001', data=result, message=result.get("error", "Playset operation failed"))
+    
+    if command == "switch":
+        return rb.success('PLAYSET-OP-S-002', data=result, message=f"Switched to playset: {result.get('playset_name')}")
+    
+    if command == "get":
+        name_val = result.get("playset_name") or result.get("name")
+        return rb.success('PLAYSET-OP-S-001', data=result, message=f"Active playset: {name_val}")
+    
+    return rb.success('PLAYSET-OP-S-001', data=result, message=f"Playset {command} complete.")
+
+
+def _ck3_playset_internal(
+    command: str,
+    playset_name: str | None,
+    mod_name: str | None,
+    new_position: int | None,
+    name: str | None,
+    description: str | None,
+    vanilla_version_id: int | None,
+    mod_ids: list[int] | None,
+    launcher_playset_name: str | None,
+    limit: int | None,
+) -> dict:
+    """Internal implementation returning dict."""
     global _session_scope
     
     trace = _get_trace()
@@ -2000,9 +2133,21 @@ def ck3_playset(
                             "path": mod_path_check
                         })
                 
+                # Calculate statistics for build_status
+                total_mods = len(mods)
+                missing_count = len(mods_missing_from_disk)
+                pending_count = sum(1 for m in mods_needing_build if m.get("status") == "pending_build")
+                not_indexed_count = sum(1 for m in mods_needing_build if m.get("status") == "not_indexed")
+                ready_count = total_mods - missing_count - len(mods_needing_build)
+                
                 build_status = {
                     "needs_build": len(mods_needing_build) > 0,
                     "mods": mods_needing_build,
+                    # Add the keys that the result construction expects:
+                    "playset_valid": total_mods > 0 and missing_count < total_mods,
+                    "ready_mods": max(0, ready_count),
+                    "pending_mods": pending_count + not_indexed_count,
+                    "missing_mods": missing_count,
                 }
         except Exception as e:
             # DB might not be available yet - need to build everything
@@ -2336,6 +2481,7 @@ def ck3_playset(
 # ============================================================================
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_git(
     command: Literal["status", "diff", "add", "commit", "push", "pull", "log"],
     mod_name: str | None = None,
@@ -2348,7 +2494,7 @@ def ck3_git(
     message: str | None = None,
     # For log
     limit: int = 10,
-) -> dict:
+) -> Reply:
     """
     Unified git operations for mods.
     
@@ -2386,10 +2532,13 @@ def ck3_git(
     """
     from ck3lens.unified_tools import ck3_git_impl
     
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_git')
+    
     session = _get_session()
     trace = _get_trace()
     
-    return ck3_git_impl(
+    result = ck3_git_impl(
         command=command,
         mod_name=mod_name,
         file_path=file_path,
@@ -2400,6 +2549,11 @@ def ck3_git(
         session=session,
         trace=trace,
     )
+    
+    if result.get("error"):
+        return rb.error('GIT-CMD-E-001', data=result, message=result.get("error", "Git command failed"))
+    
+    return rb.success('GIT-CMD-S-001', data=result, message=f"Git {command} complete.")
 
 
 # ============================================================================
@@ -2407,6 +2561,7 @@ def ck3_git(
 # ============================================================================
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_validate(
     target: Literal["syntax", "python", "references", "bundle", "policy"],
     # For syntax/python
@@ -2420,7 +2575,7 @@ def ck3_validate(
     # For policy
     mode: str | None = None,
     trace_path: str | None = None,
-) -> dict:
+) -> Reply:
     """
     Unified validation tool.
     
@@ -2447,10 +2602,12 @@ def ck3_validate(
     """
     from ck3lens.unified_tools import ck3_validate_impl
     
-    db = _get_db()
-    trace = _get_trace()
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_validate')
     
-    return ck3_validate_impl(
+    db = _get_db()
+    
+    result = ck3_validate_impl(
         target=target,
         content=content,
         file_path=file_path,
@@ -2460,7 +2617,20 @@ def ck3_validate(
         mode=mode,
         trace_path=trace_path,
         db=db,
-        trace=trace,
+        trace=None,  # Deprecated: using ReplyBuilder
+    )
+    
+    if "error" in result:
+        return rb.error(
+            'MCP-SYS-E-001',
+            data=result,
+            message=result["error"],
+        )
+    
+    return rb.success(
+        'MCP-SYS-S-900',
+        data=result,
+        message=f"Validation completed: target={target}",
     )
 
 
@@ -2469,6 +2639,7 @@ def ck3_validate(
 # ============================================================================
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_vscode(
     command: Literal["ping", "diagnostics", "all_diagnostics", "errors_summary", 
                      "validate_file", "open_files", "active_file", "status"] = "status",
@@ -2478,7 +2649,7 @@ def ck3_vscode(
     severity: str | None = None,
     source: str | None = None,
     limit: int = 50,
-) -> dict:
+) -> Reply:
     """
     Access VS Code IDE APIs via IPC connection.
     
@@ -2508,15 +2679,29 @@ def ck3_vscode(
     """
     from ck3lens.unified_tools import ck3_vscode_impl
     
-    trace = _get_trace()
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_vscode')
     
-    return ck3_vscode_impl(
+    result = ck3_vscode_impl(
         command=command,
         path=path,
         severity=severity,
         source=source,
         limit=limit,
-        trace=trace,
+        trace=None,  # Deprecated: using ReplyBuilder
+    )
+    
+    if "error" in result:
+        return rb.error(
+            'MCP-SYS-E-001',
+            data=result,
+            message=result["error"],
+        )
+    
+    return rb.success(
+        'MCP-SYS-S-900',
+        data=result,
+        message=f"VS Code operation completed: command={command}",
     )
 
 
@@ -2525,6 +2710,7 @@ def ck3_vscode(
 # ============================================================================
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_repair(
     command: Literal["query", "diagnose_launcher", "repair_registry", "delete_cache", "backup_launcher", "migrate_paths"] = "query",
     # For query - get status of repair targets
@@ -2533,7 +2719,7 @@ def ck3_repair(
     dry_run: bool = True,
     # For backup
     backup_name: str | None = None,
-) -> dict:
+) -> Reply:
     """
     Repair CK3 launcher registry and cache issues.
     
@@ -2568,6 +2754,27 @@ def ck3_repair(
     - backup_launcher before any repair operations
     - Cache deletion is reversible (ck3raven will rebuild)
     """
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_repair')
+    
+    result = _ck3_repair_internal(command, target, dry_run, backup_name)
+    
+    if result.get("error"):
+        return rb.error('REPAIR-OP-E-001', data=result, message=result.get("error", "Repair failed"))
+    
+    if result.get("dry_run"):
+        return rb.invalid('REPAIR-OP-I-001', data=result, message=f"Dry run - {command} would make changes.")
+    
+    return rb.success('REPAIR-OP-S-001', data=result, message=f"Repair {command} complete.")
+
+
+def _ck3_repair_internal(
+    command: str,
+    target: str | None,
+    dry_run: bool,
+    backup_name: str | None,
+) -> dict:
+    """Internal implementation returning dict."""
     import shutil
     from pathlib import Path
     from datetime import datetime
@@ -2920,6 +3127,7 @@ def _diagnose_launcher_db(launcher_db: Path) -> dict:
 # ============================================================================
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_contract(
     command: Literal["open", "close", "cancel", "status", "list", "flush", "archive_legacy"] = "status",
     # For open - REQUIRED
@@ -2938,7 +3146,7 @@ def ck3_contract(
     # For list
     status_filter: str | None = None,
     include_archived: bool = False,
-) -> dict:
+) -> Reply:
     """
     Manage work contracts (Contract V1 schema).
     
@@ -3005,6 +3213,51 @@ def ck3_contract(
             }
         )
     """
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_contract')
+    
+    result = _ck3_contract_internal(
+        command, intent, root_category, operations, targets, work_declaration,
+        expires_hours, contract_id, closure_commit, cancel_reason, status_filter, include_archived
+    )
+    
+    if result.get("error"):
+        if "not authorized" in str(result.get("error", "")).lower():
+            return rb.denied('CONTRACT-OP-D-001', data=result, message=result.get("error", "Not authorized"))
+        return rb.error('CONTRACT-OP-E-001', data=result, message=result.get("error", "Contract operation failed"))
+    
+    if command == "status":
+        if result.get("has_active_contract"):
+            return rb.success('CONTRACT-OP-S-003', data=result, message=f"Active contract: {result.get('contract_id')}")
+        return rb.invalid('CONTRACT-OP-I-001', data=result, message="No active contract.")
+    
+    if command == "open":
+        return rb.success('CONTRACT-OP-S-001', data=result, message=f"Contract opened: {result.get('contract_id')}")
+    
+    if command == "close":
+        return rb.success('CONTRACT-OP-S-002', data=result, message="Contract closed.")
+    
+    if command == "cancel":
+        return rb.success('CONTRACT-OP-S-004', data=result, message="Contract cancelled.")
+    
+    return rb.success('CONTRACT-OP-S-003', data=result, message=f"Contract {command} complete.")
+
+
+def _ck3_contract_internal(
+    command: str,
+    intent: str | None,
+    root_category: str | None,
+    operations: list[str] | None,
+    targets: list[dict] | None,
+    work_declaration: dict | None,
+    expires_hours: float,
+    contract_id: str | None,
+    closure_commit: str | None,
+    cancel_reason: str | None,
+    status_filter: str | None,
+    include_archived: bool,
+) -> dict:
+    """Internal implementation returning dict."""
     from ck3lens.policy.contract_v1 import (
         open_contract, close_contract, cancel_contract,
         get_active_contract, list_contracts, archive_legacy_contracts,
@@ -3346,6 +3599,7 @@ def ck3_contract(
 # ============================================================================
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_exec(
     command: str,
     working_dir: str | None = None,
@@ -3353,7 +3607,7 @@ def ck3_exec(
     token_id: str | None = None,
     dry_run: bool = False,
     timeout: int = 30,
-) -> dict:
+) -> Reply:
     """
     Execute a shell command with CLW policy enforcement.
     
@@ -3399,6 +3653,37 @@ def ck3_exec(
         ck3_exec("rm test.py", token_id="tok-abc123")  # Risky - needs token
         ck3_exec("git push --force", dry_run=True)  # Check if would be allowed
     """
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_exec')
+    
+    result = _ck3_exec_internal(command, working_dir, target_paths, token_id, dry_run, timeout)
+    
+    if result.get("error") and not result.get("allowed"):
+        decision = result.get("policy", {}).get("decision", "DENY")
+        if decision in ("DENY", "REQUIRE_CONTRACT", "REQUIRE_TOKEN", "PATH_NOT_FOUND"):
+            return rb.denied('MCP-SYS-D-903', data=result, message=result.get("error", "Command denied"))
+        return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Command failed"))
+    
+    if result.get("executed"):
+        exit_code = result.get("exit_code", 0)
+        msg = f"Command executed. Exit code: {exit_code}."
+        return rb.success('MCP-SYS-S-900', data=result, message=msg)
+    
+    if result.get("allowed") and not result.get("executed"):
+        return rb.invalid('MCP-SYS-I-901', data=result, message="Dry run - command would be allowed.")
+    
+    return rb.success('MCP-SYS-S-900', data=result, message="Complete.")
+
+
+def _ck3_exec_internal(
+    command: str,
+    working_dir: str | None,
+    target_paths: list[str] | None,
+    token_id: str | None,
+    dry_run: bool,
+    timeout: int,
+) -> dict:
+    """Internal implementation returning dict."""
     # ==========================================================================
     # CANONICAL IMPORTS: All from enforcement.py (clw.py archived Dec 2025)
     # ==========================================================================
@@ -3622,6 +3907,7 @@ def ck3_exec(
 
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_token(
     command: Literal["request", "list", "validate", "revoke"] = "list",
     # For request
@@ -3634,7 +3920,7 @@ def ck3_token(
     token_id: str | None = None,
     capability: str | None = None,
     path: str | None = None,
-) -> dict:
+) -> Reply:
     """
     DEPRECATED: Token system replaced by confirmation-based workflow.
     
@@ -3652,16 +3938,22 @@ def ck3_token(
     This tool now returns a deprecation notice for all commands.
     Phase 2 will implement proper approval flows where needed.
     """
-    return {
-        "deprecated": True,
-        "message": "Token system deprecated. Operations now use confirmation-based workflow.",
-        "guidance": {
-            "file_deletion": "Use ck3_file(command='delete', token_id='confirm', ...)",
-            "git_push": "Git push allowed with active contract",
-            "destructive_commands": "Use ck3_exec(..., token_id='confirm')",
-            "canonical_tokens": "NST and LXE tokens are in tools/compliance/tokens.py",
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_token')
+    
+    return rb.invalid(
+        'MCP-SYS-I-901',
+        data={
+            "deprecated": True,
+            "guidance": {
+                "file_deletion": "Use ck3_file(command='delete', token_id='confirm', ...)",
+                "git_push": "Git push allowed with active contract",
+                "destructive_commands": "Use ck3_exec(..., token_id='confirm')",
+                "canonical_tokens": "NST and LXE tokens are in tools/compliance/tokens.py",
+            },
         },
-    }
+        message="Token system deprecated. Operations now use confirmation-based workflow.",
+    )
 
 
 # ============================================================================
@@ -3669,6 +3961,7 @@ def ck3_token(
 # ============================================================================
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_search(
     query: str,
     file_pattern: Optional[str] = None,
@@ -3678,7 +3971,7 @@ def ck3_search(
     limit: int = 25,
     definitions_only: bool = False,
     verbose: bool = False,
-) -> dict:
+) -> Reply:
     """
     Unified search across symbols, file content, and file paths.
     
@@ -3723,8 +4016,10 @@ def ck3_search(
         ck3_search("brave", game_folder="common/traits")  # Only trait files
         ck3_search("has_trait", limit=100, verbose=True)  # More results
     """
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_search')
+    
     db = _get_db()
-    trace = _get_trace()
     session = _get_session()
     world = _get_world()
     
@@ -3785,21 +4080,11 @@ def ck3_search(
     if guidance:
         result["guidance"] = guidance
     
-    trace.log("ck3lens.search", {
-        "query": query,
-        "file_pattern": effective_file_pattern,
-        "game_folder": game_folder,
-        "symbol_type": symbol_type,
-        "limit": limit,
-        "definitions_only": definitions_only,
-    }, {
-        "symbols_count": result["symbols"]["count"],
-        "references_count": total_refs,
-        "content_count": content_count,
-        "truncated": truncated
-    })
-    
-    return result
+    return rb.success(
+        'MCP-SYS-S-900',
+        data=result,
+        message=f"Search completed: {result['symbols']['count']} symbols, {total_refs} refs, {content_count} content matches.",
+    )
 
 
 # ============================================================================
@@ -3822,12 +4107,13 @@ def ck3_search(
 
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_grep_raw(
     path: str,
     query: str,
     is_regex: bool = False,
     include_pattern: Optional[str] = None
-) -> dict:
+) -> Reply:
     """
     Search for text in files with tracing.
     
@@ -3849,6 +4135,9 @@ def ck3_grep_raw(
     import re
     from ck3lens.agent_mode import get_agent_mode
     
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_grep_raw')
+    
     trace = _get_trace()
     search_path = Path(path)
     
@@ -3856,14 +4145,14 @@ def ck3_grep_raw(
     world = _get_world()
     resolution = world.resolve(str(search_path))
     if not resolution.found:
-        return {
-            "success": False,
-            "error": f"Path not found: {path}",
-            "mode": world.mode,
-        }
+        return rb.invalid(
+            'SEARCH-OP-I-001',
+            data={"path": path, "mode": world.mode},
+            message=f"Path not found: {path}",
+        )
     # Use resolved absolute path (always set when resolution.found is True)
     if resolution.absolute_path is None:
-        return {"success": False, "error": f"Resolution returned no path for: {path}"}
+        return rb.invalid('SEARCH-OP-I-001', data={"path": path}, message=f"Resolution returned no path for: {path}")
     search_path = resolution.absolute_path
     
     # Log the attempt
@@ -3875,7 +4164,7 @@ def ck3_grep_raw(
     }, {})
     
     if not search_path.exists():
-        return {"success": False, "error": f"Path not found: {path}"}
+        return rb.invalid('SEARCH-OP-I-001', data={"path": path}, message=f"Path not found: {path}")
     
     try:
         matches = []
@@ -3916,7 +4205,7 @@ def ck3_grep_raw(
             if len(matches) >= 50:
                 break
         
-        result = {
+        result_data = {
             "success": True,
             "matches": matches,
             "count": len(matches),
@@ -3928,17 +4217,18 @@ def ck3_grep_raw(
             "query": query,
         }, {"match_count": len(matches)})
         
-        return result
+        return rb.success('MCP-SYS-S-900', data=result_data, message=f"Found {len(matches)} matches.")
         
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return rb.error('MCP-SYS-E-001', data={"error": str(e)}, message=str(e))
 
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_file_search(
     pattern: str,
     base_path: Optional[str] = None
-) -> dict:
+) -> Reply:
     """
     Search for files by glob pattern with tracing.
     
@@ -3965,6 +4255,9 @@ def ck3_file_search(
     """
     from ck3lens.agent_mode import get_agent_mode
     
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_file_search')
+    
     trace = _get_trace()
     scope = _get_session_scope()
     world = _get_world()
@@ -3986,14 +4279,14 @@ def ck3_file_search(
     # WorldAdapter visibility - THE canonical way
     resolution = world.resolve(str(search_base))
     if not resolution.found:
-        return {
-            "success": False,
-            "error": f"Path not found: {base_path or search_base}",
-            "mode": world.mode,
-        }
+        return rb.error(
+            'MCP-SYS-E-001',
+            data={"path": str(base_path or search_base), "mode": world.mode},
+            message=f"Path not found: {base_path or search_base}",
+        )
     # Always set when resolution.found is True
     if resolution.absolute_path is None:
-        return {"success": False, "error": f"Resolution returned no path for: {base_path}"}
+        return rb.invalid('SEARCH-OP-I-001', data={"path": base_path}, message=f"Resolution returned no path for: {base_path}")
     search_base = resolution.absolute_path
     
     # Log the attempt
@@ -4003,7 +4296,7 @@ def ck3_file_search(
     }, {})
     
     if not search_base.exists():
-        return {"success": False, "error": f"Base path not found: {search_base}"}
+        return rb.invalid('SEARCH-OP-I-001', data={"base_path": str(search_base)}, message=f"Base path not found: {search_base}")
     
     try:
         files = []
@@ -4013,7 +4306,7 @@ def ck3_file_search(
                 if len(files) >= 500:  # Limit results
                     break
         
-        result = {
+        result_data = {
             "success": True,
             "files": files,
             "count": len(files),
@@ -4025,10 +4318,10 @@ def ck3_file_search(
             "pattern": pattern,
         }, {"count": len(files)})
         
-        return result
+        return rb.success('MCP-SYS-S-900', data=result_data, message=f"Found {len(files)} files.")
         
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return rb.error('MCP-SYS-E-001', data={"error": str(e)}, message=str(e))
 
 
 # ============================================================================
@@ -4115,13 +4408,14 @@ def ck3_parse_content(
 
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_report_validation_issue(
     issue_type: Literal["parser_false_positive", "reference_false_positive", "parser_missed_error", "other"],
     code_snippet: str,
     expected_behavior: str,
     actual_behavior: str,
     notes: str | None = None,
-) -> dict:
+) -> Reply:
     """
     Report a validation false positive or missed error.
     
@@ -4148,8 +4442,10 @@ def ck3_report_validation_issue(
     import hashlib
     from datetime import datetime
     
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_report_validation_issue')
+    
     trace = _get_trace()
-    session = _get_session()
     
     # Create issue record
     issue_id = hashlib.sha256(
@@ -4178,12 +4474,14 @@ def ck3_report_validation_issue(
         "snippet_length": len(code_snippet)
     }, {"issue_id": issue_id})
     
-    return {
-        "success": True,
-        "issue_id": issue_id,
-        "message": f"Validation issue recorded. ID: {issue_id}. Will be reviewed in ck3raven-dev mode.",
-        "issues_file": str(issues_file)
-    }
+    return rb.success(
+        'MCP-SYS-S-900',
+        data={
+            "issue_id": issue_id,
+            "issues_file": str(issues_file),
+        },
+        message=f"Validation issue recorded. ID: {issue_id}. Will be reviewed in ck3raven-dev mode.",
+    )
 
 
 # ============================================================================
@@ -4198,7 +4496,8 @@ def ck3_report_validation_issue(
 
 
 @mcp.tool()
-def ck3_get_agent_briefing() -> dict:
+@mcp_safe_tool
+def ck3_get_agent_briefing() -> Reply:
     """
     Get the agent briefing notes for the active playset.
     
@@ -4211,15 +4510,17 @@ def ck3_get_agent_briefing() -> dict:
     Returns:
         Agent briefing configuration from the active playset
     """
-    trace = _get_trace()
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_get_agent_briefing')
     
     scope = _get_session_scope()
     
     if scope.get("source") == "none":
-        return {
-            "error": "No active playset",
-            "hint": "Switch to a playset with ck3_switch_playset first"
-        }
+        return rb.error(
+            'MCP-SYS-E-001',
+            data={"error": "No active playset", "hint": "Switch to a playset with ck3_switch_playset first"},
+            message="No active playset",
+        )
     
     briefing = scope.get("agent_briefing", {})
     sub_agent = scope.get("sub_agent_config", {})
@@ -4241,21 +4542,21 @@ def ck3_get_agent_briefing() -> dict:
     result["compatch_mods_count"] = compatch_count
     result["compatch_mods"] = [m["name"] for m in mod_list if m.get("is_compatch", False)]
     
-    trace.log("ck3lens.get_agent_briefing", {}, {
-        "has_briefing": bool(briefing),
-        "compatch_count": compatch_count
-    })
-    
-    return result
+    return rb.success(
+        'MCP-SYS-S-900',
+        data=result,
+        message=f"Agent briefing loaded: {compatch_count} compatch mods.",
+    )
 
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_search_mods(
     query: str,
     search_by: Literal["name", "workshop_id", "any"] = "any",
     fuzzy: bool = True,
     limit: int = 20
-) -> dict:
+) -> Reply:
     """
     Search for mods in the database by name, workshop ID, or both.
     
@@ -4270,8 +4571,10 @@ def ck3_search_mods(
     Returns:
         List of matching mods with details
     """
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_search_mods')
+    
     db = _get_db()
-    trace = _get_trace()
     
     results = []
     
@@ -4332,19 +4635,21 @@ def ck3_search_mods(
                         "match_type": match_type
                     })
     
-    trace.log("ck3lens.search_mods", {"query": query, "search_by": search_by, "fuzzy": fuzzy},
-              {"result_count": len(results)})
-    
-    return {"results": results[:limit], "query": query}
+    return rb.success(
+        'MCP-SYS-S-900',
+        data={"results": results[:limit], "query": query},
+        message=f"Found {len(results[:limit])} mods matching '{query}'.",
+    )
 
 # ============================================================================
 # Mode & Configuration Tools
 # ============================================================================
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_get_mode_instructions(
     mode: Literal["ck3lens", "ck3raven-dev"]
-) -> dict:
+) -> Reply:
     """
     Get the instruction content for a specific agent mode.
     
@@ -4365,6 +4670,23 @@ def ck3_get_mode_instructions(
     Returns:
         Mode instructions, policy boundaries, session context, and database status
     """
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_get_mode_instructions')
+    
+    result = _ck3_get_mode_instructions_internal(mode)
+    
+    if result.get("error"):
+        return rb.error('MCP-SYS-E-001', data=result, message=result.get("error"))
+    
+    return rb.success(
+        'MCP-SYS-S-900',
+        data=result,
+        message=f"Initialized mode: {mode}. Database: {'connected' if result.get('session', {}).get('db_path') else 'not available'}.",
+    )
+
+
+def _ck3_get_mode_instructions_internal(mode: str) -> dict:
+    """Internal implementation returning dict."""
     from pathlib import Path
     from ck3lens.policy import (
         ScopeDomain, AgentMode,
@@ -4387,7 +4709,9 @@ def ck3_get_mode_instructions(
     # =========================================================================
     # STEP 2: Set mode (persisted to file as single source of truth)
     # =========================================================================
-    set_agent_mode(mode)
+    # Cast to literal type - we validated mode is valid above
+    from typing import cast
+    set_agent_mode(cast(Literal["ck3lens", "ck3raven-dev"], mode))
     
     # Reset cached world adapter - mode change invalidates the cache
     _reset_world_cache()
@@ -4603,7 +4927,8 @@ def _get_mode_session_note(mode: str) -> str:
 
 
 @mcp.tool()
-def ck3_get_detected_mode() -> dict:
+@mcp_safe_tool
+def ck3_get_detected_mode() -> Reply:
     """
     Get the currently detected agent mode from trace log.
     
@@ -4620,6 +4945,9 @@ def ck3_get_detected_mode() -> dict:
             "evidence": list of trace entries supporting detection
         }
     """
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_get_detected_mode')
+    
     trace = _get_trace()
     
     # Get recent events (last 100)
@@ -4672,16 +5000,21 @@ def ck3_get_detected_mode() -> dict:
         confidence = "none"
         last_activity = events[0].get("ts") if events else None
     
-    return {
-        "detected_mode": detected_mode,
-        "confidence": confidence,
-        "last_activity": last_activity,
-        "evidence": evidence[:5]  # Limit evidence entries
-    }
+    return rb.success(
+        'MCP-SYS-S-900',
+        data={
+            "detected_mode": detected_mode,
+            "confidence": confidence,
+            "last_activity": last_activity,
+            "evidence": evidence[:5]  # Limit evidence entries
+        },
+        message=f"Detected mode: {detected_mode or 'none'} (confidence: {confidence}).",
+    )
 
 
 @mcp.tool()
-def ck3_get_workspace_config() -> dict:
+@mcp_safe_tool
+def ck3_get_workspace_config() -> Reply:
     """
     Get the workspace configuration including tool sets and MCP settings.
     
@@ -4697,6 +5030,9 @@ def ck3_get_workspace_config() -> dict:
     from pathlib import Path
     import json
 
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_get_workspace_config')
+    
     session = _get_session()
 
     # Minimal config - WorldAdapter handles visibility, enforcement handles writes
@@ -4726,7 +5062,11 @@ def ck3_get_workspace_config() -> dict:
         # NOTE: toolSets.json reading removed - hard-coded paths are not portable
     }
     
-    return result
+    return rb.success(
+        'MCP-SYS-S-900',
+        data=result,
+        message="Workspace configuration loaded.",
+    )
 
 
 # ============================================================================
@@ -4852,6 +5192,7 @@ _DB_QUERY_SCHEMA = {
 
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_db_query(
     table: str | None = None,
     filters: dict | None = None,
@@ -4860,7 +5201,7 @@ def ck3_db_query(
     sql_file: str | None = None,
     limit: int = 100,
     help: bool = False,
-) -> dict:
+) -> Reply:
     """
     Unified database query tool for CK3 raven database.
     
@@ -4892,20 +5233,27 @@ def ck3_db_query(
         ck3_db_query(table="symbols", filters={"name": "%brave%", "symbol_type": "trait"})
         ck3_db_query(sql="SELECT COUNT(*) as cnt FROM symbols GROUP BY symbol_type")
     """
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_db_query')
+    
     # Help mode
     if help:
-        return {
-            "usage": "ck3_db_query(table=..., filters={...}, limit=N) or ck3_db_query(sql=...)",
-            "tables": {
-                name: {
-                    "columns": schema["columns"],
-                    "filters": schema["filters"],
-                    "examples": schema["examples"],
-                }
-                for name, schema in _DB_QUERY_SCHEMA.items()
+        return rb.success(
+            'MCP-SYS-S-900',
+            data={
+                "usage": "ck3_db_query(table=..., filters={...}, limit=N) or ck3_db_query(sql=...)",
+                "tables": {
+                    name: {
+                        "columns": schema["columns"],
+                        "filters": schema["filters"],
+                        "examples": schema["examples"],
+                    }
+                    for name, schema in _DB_QUERY_SCHEMA.items()
+                },
+                "stats": _get_table_stats(),
             },
-            "stats": _get_table_stats(),
-        }
+            message="Database schema and statistics.",
+        )
     
     db = _get_db()
     
@@ -4918,12 +5266,12 @@ def ck3_db_query(
             
             # At this point sql must be a string
             if sql is None:
-                return {"error": "No SQL provided"}
+                return rb.error('MCP-SYS-E-001', data={"error": "No SQL provided"}, message="No SQL provided")
             
             # Safety: only allow SELECT
             sql_upper = sql.strip().upper()
             if not sql_upper.startswith("SELECT") and not sql_upper.startswith("WITH"):
-                return {"error": "Only SELECT queries allowed for safety"}
+                return rb.denied('MCP-SYS-D-903', data={"mode": "query"}, message="Only SELECT queries allowed for safety")
             
             # Add LIMIT if not present
             if "LIMIT" not in sql_upper:
@@ -4935,16 +5283,20 @@ def ck3_db_query(
             col_names = [d[0] for d in cursor.description] if cursor.description else []
             
             results = [dict(zip(col_names, row)) for row in rows]
-            return {"count": len(results), "results": results}
+            return rb.success(
+                'MCP-SYS-S-900',
+                data={"count": len(results), "results": results},
+                message=f"Query returned {len(results)} rows.",
+            )
         except Exception as e:
-            return {"error": str(e)}
+            return rb.error('MCP-SYS-E-001', data={"error": str(e)}, message=str(e))
     
     # Table query mode
     if not table:
-        return {"error": "Provide table= or sql=, or use help=True"}
+        return rb.invalid('DB-QUERY-I-001', data={"error": "Provide table= or sql=, or use help=True"}, message="No table or SQL provided")
     
     if table not in _DB_QUERY_SCHEMA:
-        return {"error": f"Unknown table '{table}'. Use help=True to see options."}
+        return rb.invalid('DB-QUERY-I-002', data={"table": table, "available": list(_DB_QUERY_SCHEMA.keys())}, message=f"Unknown table '{table}'. Use help=True to see options.")
     
     schema = _DB_QUERY_SCHEMA[table]
     db_table = schema["table"]
@@ -4986,9 +5338,13 @@ def ck3_db_query(
         rows = db.conn.execute(query, params).fetchall()
         
         results = [dict(zip(select_cols, row)) for row in rows]
-        return {"count": len(results), "table": table, "results": results}
+        return rb.success(
+            'MCP-SYS-S-900',
+            data={"count": len(results), "table": table, "results": results},
+            message=f"Query returned {len(results)} rows from {table}.",
+        )
     except Exception as e:
-        return {"error": str(e), "query": query if 'query' in dir() else None}
+        return rb.error('MCP-SYS-E-001', data={"error": str(e), "query": query if 'query' in dir() else None}, message=str(e))
 
 
 def _get_table_stats() -> dict:
@@ -5009,11 +5365,12 @@ def _get_table_stats() -> dict:
 # ============================================================================
 
 @mcp.tool()
+@mcp_safe_tool
 def ck3_qbuilder(
     command: Literal["status", "build", "discover", "reset"] = "status",
     max_tasks: Optional[int] = None,
     fresh: bool = False,
-) -> dict:
+) -> Reply:
     """
     Unified QBuilder tool for build system operations.
 
@@ -5043,10 +5400,13 @@ def ck3_qbuilder(
     """
     import subprocess
     import sys
+    import time
     
     from ck3lens.daemon_client import daemon, DaemonNotAvailableError
     
-    trace = _get_trace()
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_qbuilder')
+    
     ck3raven_root = str(Path(__file__).parent.parent.parent)
     python_exe = sys.executable
     
@@ -5056,18 +5416,23 @@ def ck3_qbuilder(
             if daemon.is_available():
                 status = daemon.get_queue_status()
                 status["daemon_available"] = True
-                trace.log("ck3_qbuilder.status", {}, status)
-                return status
+                return rb.success(
+                    'MCP-SYS-S-900',
+                    data=status,
+                    message=f"Daemon running. Pending: {status.get('pending', 0)}, Processing: {status.get('processing', 0)}.",
+                )
             else:
-                result = {
-                    "daemon_available": False,
-                    "message": "Daemon not running. Use ck3_qbuilder(command='build') to start.",
-                    "hint": "The daemon is the single writer - it must be running for builds.",
-                }
-                trace.log("ck3_qbuilder.status", {}, result)
-                return result
+                return rb.invalid(
+                    'MCP-SYS-I-901',
+                    data={
+                        "daemon_available": False,
+                        "message": "Daemon not running. Use ck3_qbuilder(command='build') to start.",
+                        "hint": "The daemon is the single writer - it must be running for builds.",
+                    },
+                    message="Daemon not running.",
+                )
         except Exception as e:
-            return {"error": f"Failed to get status: {e}", "daemon_available": False}
+            return rb.error('MCP-SYS-E-001', data={"error": str(e), "daemon_available": False}, message=str(e))
     
     elif command == "build":
         # Launch background daemon
@@ -5076,25 +5441,24 @@ def ck3_qbuilder(
         log_dir.mkdir(parents=True, exist_ok=True)
         
         from datetime import datetime
-        import time
         log_file = log_dir / f"daemon_{datetime.now().strftime('%Y-%m-%d')}.log"
         
         # Check if daemon already running via IPC
         if daemon.is_available():
             health = daemon.health()
-            result = {
-                "success": True,
-                "already_running": True,
-                "daemon_pid": health.daemon_pid,
-                "state": health.state,
-                "queue_pending": health.queue_pending,
-                "message": "Daemon already running",
-            }
-            trace.log("ck3_qbuilder.build", {}, result)
-            return result
+            return rb.success(
+                'MCP-SYS-S-900',
+                data={
+                    "success": True,
+                    "already_running": True,
+                    "daemon_pid": health.daemon_pid,
+                    "state": health.state,
+                    "queue_pending": health.queue_pending,
+                },
+                message="Daemon already running.",
+            )
         
         # RACE CONDITION FIX: Check writer lock before spawning
-        # The lock file exists immediately when daemon starts, before IPC is ready
         try:
             from qbuilder.writer_lock import check_writer_lock
             db_path = Path.home() / ".ck3raven" / "ck3raven.db"
@@ -5106,25 +5470,28 @@ def ck3_qbuilder(
                     time.sleep(0.5)
                     if daemon.is_available(force_check=True):
                         health = daemon.health()
-                        result = {
-                            "success": True,
-                            "already_running": True,
-                            "daemon_pid": health.daemon_pid,
-                            "state": health.state,
-                            "queue_pending": health.queue_pending,
-                            "message": "Daemon already running (connected after lock wait)",
-                        }
-                        trace.log("ck3_qbuilder.build", {}, result)
-                        return result
+                        return rb.success(
+                            'MCP-SYS-S-900',
+                            data={
+                                "success": True,
+                                "already_running": True,
+                                "daemon_pid": health.daemon_pid,
+                                "state": health.state,
+                                "queue_pending": health.queue_pending,
+                            },
+                            message="Daemon already running (connected after lock wait).",
+                        )
                 
                 # Lock holder exists but IPC not responding
-                result = {
-                    "success": False,
-                    "error": f"Daemon lock held by PID {lock_status.get('holder_pid')} but IPC not responding",
-                    "hint": "Kill the stale daemon process or wait for it to finish",
-                }
-                trace.log("ck3_qbuilder.build", {}, result)
-                return result
+                return rb.error(
+                    'MCP-SYS-E-001',
+                    data={
+                        "success": False,
+                        "error": f"Daemon lock held by PID {lock_status.get('holder_pid')} but IPC not responding",
+                        "hint": "Kill the stale daemon process or wait for it to finish",
+                    },
+                    message="Daemon lock held but IPC not responding.",
+                )
         except ImportError:
             pass  # Fall back to basic spawn
         
@@ -5145,55 +5512,65 @@ def ck3_qbuilder(
             # Wait briefly for daemon to start IPC server
             time.sleep(1.0)
             
-            result = {
-                "success": True,
-                "pid": proc.pid,
-                "message": f"Daemon started (PID {proc.pid})",
-                "log_file": str(log_file),
-                "note": "Daemon is the single DB writer. Use 'discover' to enqueue work.",
-            }
+            return rb.success(
+                'MCP-SYS-S-900',
+                data={
+                    "success": True,
+                    "pid": proc.pid,
+                    "log_file": str(log_file),
+                    "note": "Daemon is the single DB writer. Use 'discover' to enqueue work.",
+                },
+                message=f"Daemon started (PID {proc.pid}).",
+            )
         except Exception as e:
-            result = {"success": False, "error": str(e)}
-        
-        trace.log("ck3_qbuilder.build", {}, result)
-        return result
+            return rb.error('MCP-SYS-E-001', data={"success": False, "error": str(e)}, message=str(e))
     
     elif command == "discover":
         # Request daemon to enqueue discovery tasks via IPC
         try:
             if not daemon.is_available():
-                return {
-                    "success": False,
-                    "error": "Daemon not running",
-                    "hint": "Start daemon first with ck3_qbuilder(command='build')",
-                }
+                return rb.error(
+                    'MCP-SYS-E-001',
+                    data={
+                        "success": False,
+                        "error": "Daemon not running",
+                        "hint": "Start daemon first with ck3_qbuilder(command='build')",
+                    },
+                    message="Daemon not running.",
+                )
             
             result = daemon.enqueue_scan()
             result["note"] = "Discovery tasks enqueued. Daemon will process them."
-            trace.log("ck3_qbuilder.discover", {}, result)
-            return result
+            return rb.success('MCP-SYS-S-900', data=result, message="Discovery tasks enqueued.")
             
         except DaemonNotAvailableError as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "hint": "Start daemon first with ck3_qbuilder(command='build')",
-            }
+            return rb.error(
+                'MCP-SYS-E-001',
+                data={
+                    "success": False,
+                    "error": str(e),
+                    "hint": "Start daemon first with ck3_qbuilder(command='build')",
+                },
+                message=str(e),
+            )
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            return rb.error('MCP-SYS-E-001', data={"success": False, "error": str(e)}, message=str(e))
     
     elif command == "reset":
         # Reset is a write operation - must go through daemon
-        # For now, this requires manual intervention since reset is destructive
-        return {
-            "success": False,
-            "error": "Reset requires daemon restart with --fresh flag",
-            "hint": "Stop daemon, then run: python -m qbuilder.cli daemon --fresh",
-            "note": "This is intentionally gated to prevent accidental data loss.",
-        }
+        return rb.denied(
+            'MCP-SYS-D-903',
+            data={
+                "mode": "reset",
+                "error": "Reset requires daemon restart with --fresh flag",
+                "hint": "Stop daemon, then run: python -m qbuilder.cli daemon --fresh",
+                "note": "This is intentionally gated to prevent accidental data loss.",
+            },
+            message="Reset requires daemon restart with --fresh flag.",
+        )
     
     else:
-        return {"error": f"Unknown command: {command}"}
+        return rb.error('MCP-SYS-E-001', data={"error": f"Unknown command: {command}"}, message=f"Unknown command: {command}")
 
 
 # ============================================================================

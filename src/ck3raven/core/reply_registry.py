@@ -312,6 +312,21 @@ _REGISTRY_LIST: List[ReplyCode] = [
     # Database Access
     # =========================================================================
     ReplyCode(
+        code="DB-CONN-S-001",
+        reply_type="S",
+        layer="DB",
+        semantics="Database connection closed successfully.",
+        message_template="Database connection closed.",
+    ),
+    ReplyCode(
+        code="DB-CONN-E-001",
+        reply_type="E",
+        layer="DB",
+        semantics="Database connection close failed.",
+        message_template="Database close failed: {error}",
+        required_data_fields=("error",),
+    ),
+    ReplyCode(
         code="DB-READ-S-001",
         reply_type="S",
         layer="DB",
@@ -444,6 +459,471 @@ _REGISTRY_LIST: List[ReplyCode] = [
         layer="GIT",
         semantics="Hook failed due to internal error.",
         message_template="Git hook error: {error}",
+        required_data_fields=("error",),
+    ),
+    
+    # =========================================================================
+    # MCP Tool-Specific Codes (FILE-OP, FOLDER-OP, etc.)
+    # 
+    # These are for tool-level outcomes within the MCP layer.
+    # Layer = MCP (tools call these, not lower layers)
+    # =========================================================================
+    
+    # File Operations (ck3_file tool)
+    # =========================================================================
+    ReplyCode(
+        code="FILE-OP-S-001",
+        reply_type="S",
+        layer="MCP",
+        semantics="File operation completed successfully.",
+        message_template="File {command} complete.",
+        required_data_fields=("command",),
+    ),
+    ReplyCode(
+        code="FILE-OP-D-001",
+        reply_type="D",
+        layer="MCP",
+        semantics="File write/edit denied by policy.",
+        message_template="File write denied: {reason}",
+        required_data_fields=("reason",),
+    ),
+    ReplyCode(
+        code="FILE-OP-I-001",
+        reply_type="I",
+        layer="MCP",
+        semantics="File not found in database or filesystem.",
+        message_template="File not found: {path}",
+        required_data_fields=("path",),
+    ),
+    ReplyCode(
+        code="FILE-OP-E-001",
+        reply_type="E",
+        layer="MCP",
+        semantics="File operation failed due to internal error.",
+        message_template="File operation error: {error}",
+        required_data_fields=("error",),
+    ),
+    
+    # Folder Operations (ck3_folder tool)
+    # =========================================================================
+    ReplyCode(
+        code="FOLDER-OP-S-001",
+        reply_type="S",
+        layer="MCP",
+        semantics="Folder operation completed successfully.",
+        message_template="Folder {command} complete.",
+        required_data_fields=("command",),
+    ),
+    ReplyCode(
+        code="FOLDER-OP-D-001",
+        reply_type="D",
+        layer="MCP",
+        semantics="Folder access denied by policy.",
+        message_template="Folder access denied: {reason}",
+        required_data_fields=("reason",),
+    ),
+    ReplyCode(
+        code="FOLDER-OP-I-001",
+        reply_type="I",
+        layer="MCP",
+        semantics="Folder not found.",
+        message_template="Folder not found: {path}",
+        required_data_fields=("path",),
+    ),
+    ReplyCode(
+        code="FOLDER-OP-E-001",
+        reply_type="E",
+        layer="MCP",
+        semantics="Folder operation failed due to internal error.",
+        message_template="Folder operation error: {error}",
+        required_data_fields=("error",),
+    ),
+    
+    # Playset Operations (ck3_playset tool)
+    # =========================================================================
+    ReplyCode(
+        code="PLAYSET-OP-S-001",
+        reply_type="S",
+        layer="MCP",
+        semantics="Playset query completed successfully.",
+        message_template="Active playset: {playset_name}",
+        required_data_fields=("playset_name",),
+    ),
+    ReplyCode(
+        code="PLAYSET-OP-S-002",
+        reply_type="S",
+        layer="MCP",
+        semantics="Playset switched successfully.",
+        message_template="Switched to playset: {playset_name}",
+        required_data_fields=("playset_name",),
+    ),
+    ReplyCode(
+        code="PLAYSET-OP-D-001",
+        reply_type="D",
+        layer="MCP",
+        semantics="Invalid command or missing required parameter.",
+        message_template="Invalid playset command: {reason}",
+        required_data_fields=("reason",),
+    ),
+    ReplyCode(
+        code="PLAYSET-OP-I-001",
+        reply_type="I",
+        layer="MCP",
+        semantics="Playset not found.",
+        message_template="Playset not found: {playset_name}",
+        required_data_fields=("playset_name",),
+    ),
+    ReplyCode(
+        code="PLAYSET-OP-E-001",
+        reply_type="E",
+        layer="MCP",
+        semantics="Playset operation failed due to internal error.",
+        message_template="Playset operation error: {error}",
+        required_data_fields=("error",),
+    ),
+    
+    # Git Command Operations (ck3_git tool)
+    # =========================================================================
+    ReplyCode(
+        code="GIT-CMD-S-001",
+        reply_type="S",
+        layer="MCP",
+        semantics="Git command completed successfully.",
+        message_template="Git {command} complete.",
+        required_data_fields=("command",),
+    ),
+    ReplyCode(
+        code="GIT-CMD-D-001",
+        reply_type="D",
+        layer="MCP",
+        semantics="Git command denied by policy.",
+        message_template="Git command denied: {reason}",
+        required_data_fields=("reason",),
+    ),
+    ReplyCode(
+        code="GIT-CMD-D-002",
+        reply_type="D",
+        layer="MCP",
+        semantics="Invalid git command or missing required parameter.",
+        message_template="Invalid git command: {reason}",
+        required_data_fields=("reason",),
+    ),
+    ReplyCode(
+        code="GIT-CMD-E-001",
+        reply_type="E",
+        layer="MCP",
+        semantics="Git command failed due to internal error.",
+        message_template="Git command error: {error}",
+        required_data_fields=("error",),
+    ),
+    
+    # Repair Operations (ck3_repair tool)
+    # =========================================================================
+    ReplyCode(
+        code="REPAIR-OP-S-001",
+        reply_type="S",
+        layer="MCP",
+        semantics="Repair operation completed successfully.",
+        message_template="Repair {command} complete.",
+        required_data_fields=("command",),
+    ),
+    ReplyCode(
+        code="REPAIR-OP-D-001",
+        reply_type="D",
+        layer="MCP",
+        semantics="Repair denied (wrong mode or requires confirmation).",
+        message_template="Repair denied: {reason}",
+        required_data_fields=("reason",),
+    ),
+    ReplyCode(
+        code="REPAIR-OP-E-001",
+        reply_type="E",
+        layer="MCP",
+        semantics="Repair operation failed due to internal error.",
+        message_template="Repair operation error: {error}",
+        required_data_fields=("error",),
+    ),
+    ReplyCode(
+        code="REPAIR-OP-I-001",
+        reply_type="I",
+        layer="MCP",
+        semantics="Repair dry run - changes would be made.",
+        message_template="Dry run - {command} would make changes.",
+        required_data_fields=("command",),
+    ),
+    
+    # Exec Operations (ck3_exec tool)
+    # =========================================================================
+    ReplyCode(
+        code="EXEC-CMD-S-001",
+        reply_type="S",
+        layer="MCP",
+        semantics="Command executed successfully.",
+        message_template="Command executed: exit_code={exit_code}",
+        required_data_fields=("exit_code",),
+    ),
+    ReplyCode(
+        code="EXEC-CMD-D-001",
+        reply_type="D",
+        layer="MCP",
+        semantics="Command denied by policy.",
+        message_template="Command denied: {reason}",
+        required_data_fields=("reason",),
+    ),
+    ReplyCode(
+        code="EXEC-CMD-E-001",
+        reply_type="E",
+        layer="MCP",
+        semantics="Command execution failed.",
+        message_template="Command failed: {error}",
+        required_data_fields=("error",),
+    ),
+    
+    # Search Operations (ck3_search tool)
+    # =========================================================================
+    ReplyCode(
+        code="SEARCH-OP-S-001",
+        reply_type="S",
+        layer="MCP",
+        semantics="Search completed successfully.",
+        message_template="Search complete: {result_count} results.",
+        required_data_fields=("result_count",),
+    ),
+    ReplyCode(
+        code="SEARCH-OP-D-001",
+        reply_type="D",
+        layer="MCP",
+        semantics="Search query invalid or missing.",
+        message_template="Invalid search: {reason}",
+        required_data_fields=("reason",),
+    ),
+    ReplyCode(
+        code="SEARCH-OP-E-001",
+        reply_type="E",
+        layer="MCP",
+        semantics="Search failed due to internal error.",
+        message_template="Search error: {error}",
+        required_data_fields=("error",),
+    ),
+    
+    # Validate Operations (ck3_validate tool)
+    # =========================================================================
+    ReplyCode(
+        code="VALIDATE-OP-S-001",
+        reply_type="S",
+        layer="MCP",
+        semantics="Validation passed.",
+        message_template="Validation passed for {target}.",
+        required_data_fields=("target",),
+    ),
+    ReplyCode(
+        code="VALIDATE-OP-D-001",
+        reply_type="D",
+        layer="MCP",
+        semantics="Validation target invalid or missing.",
+        message_template="Invalid validation request: {reason}",
+        required_data_fields=("reason",),
+    ),
+    ReplyCode(
+        code="VALIDATE-OP-I-001",
+        reply_type="I",
+        layer="MCP",
+        semantics="Validation found issues (not a crash, just invalid input).",
+        message_template="Validation failed: {error_count} errors found.",
+        required_data_fields=("error_count",),
+    ),
+    ReplyCode(
+        code="VALIDATE-OP-E-001",
+        reply_type="E",
+        layer="MCP",
+        semantics="Validation failed due to internal error.",
+        message_template="Validation error: {error}",
+        required_data_fields=("error",),
+    ),
+    
+    # QBuilder Operations (ck3_qbuilder tool)
+    # =========================================================================
+    ReplyCode(
+        code="QBUILD-OP-S-001",
+        reply_type="S",
+        layer="MCP",
+        semantics="QBuilder operation completed successfully.",
+        message_template="QBuilder {command} complete.",
+        required_data_fields=("command",),
+    ),
+    ReplyCode(
+        code="QBUILD-OP-D-001",
+        reply_type="D",
+        layer="MCP",
+        semantics="QBuilder command invalid.",
+        message_template="Invalid qbuilder command: {reason}",
+        required_data_fields=("reason",),
+    ),
+    ReplyCode(
+        code="QBUILD-OP-E-001",
+        reply_type="E",
+        layer="MCP",
+        semantics="QBuilder operation failed due to internal error.",
+        message_template="QBuilder error: {error}",
+        required_data_fields=("error",),
+    ),
+    
+    # VS Code IPC Operations (ck3_vscode tool)
+    # =========================================================================
+    ReplyCode(
+        code="VSCODE-IPC-S-001",
+        reply_type="S",
+        layer="MCP",
+        semantics="VS Code IPC operation completed successfully.",
+        message_template="VS Code {command} complete.",
+        required_data_fields=("command",),
+    ),
+    ReplyCode(
+        code="VSCODE-IPC-D-001",
+        reply_type="D",
+        layer="MCP",
+        semantics="VS Code IPC not available or command invalid.",
+        message_template="VS Code IPC unavailable: {reason}",
+        required_data_fields=("reason",),
+    ),
+    ReplyCode(
+        code="VSCODE-IPC-E-001",
+        reply_type="E",
+        layer="MCP",
+        semantics="VS Code IPC operation failed due to internal error.",
+        message_template="VS Code IPC error: {error}",
+        required_data_fields=("error",),
+    ),
+    
+    # Contract Operations (ck3_contract tool)
+    # =========================================================================
+    ReplyCode(
+        code="CONTRACT-OP-S-001",
+        reply_type="S",
+        layer="MCP",
+        semantics="Contract opened successfully.",
+        message_template="Contract opened: {contract_id}",
+        required_data_fields=("contract_id",),
+    ),
+    ReplyCode(
+        code="CONTRACT-OP-S-002",
+        reply_type="S",
+        layer="MCP",
+        semantics="Contract closed successfully.",
+        message_template="Contract closed: {contract_id}",
+        required_data_fields=("contract_id",),
+    ),
+    ReplyCode(
+        code="CONTRACT-OP-S-003",
+        reply_type="S",
+        layer="MCP",
+        semantics="Contract status retrieved successfully.",
+        message_template="Contract status: {status}",
+        required_data_fields=("status",),
+    ),
+    ReplyCode(
+        code="CONTRACT-OP-S-004",
+        reply_type="S",
+        layer="MCP",
+        semantics="Contract cancelled successfully.",
+        message_template="Contract cancelled: {contract_id}",
+        required_data_fields=("contract_id",),
+    ),
+    ReplyCode(
+        code="CONTRACT-OP-D-001",
+        reply_type="D",
+        layer="MCP",
+        semantics="Contract command invalid or missing required parameter.",
+        message_template="Invalid contract command: {reason}",
+        required_data_fields=("reason",),
+    ),
+    ReplyCode(
+        code="CONTRACT-OP-E-001",
+        reply_type="E",
+        layer="MCP",
+        semantics="Contract operation failed due to internal error.",
+        message_template="Contract error: {error}",
+        required_data_fields=("error",),
+    ),
+    ReplyCode(
+        code="CONTRACT-OP-I-001",
+        reply_type="I",
+        layer="MCP",
+        semantics="No active contract.",
+        message_template="No active contract.",
+        required_data_fields=(),
+    ),
+    
+    # DB Query Operations (ck3_db_query tool)
+    # =========================================================================
+    ReplyCode(
+        code="DB-QUERY-S-001",
+        reply_type="S",
+        layer="MCP",
+        semantics="Database query completed successfully.",
+        message_template="Query returned {row_count} rows.",
+        required_data_fields=("row_count",),
+    ),
+    ReplyCode(
+        code="DB-QUERY-D-001",
+        reply_type="D",
+        layer="MCP",
+        semantics="Invalid query or table name.",
+        message_template="Invalid query: {reason}",
+        required_data_fields=("reason",),
+    ),
+    ReplyCode(
+        code="DB-QUERY-E-001",
+        reply_type="E",
+        layer="MCP",
+        semantics="Database query failed due to internal error.",
+        message_template="Query error: {error}",
+        required_data_fields=("error",),
+    ),
+    
+    # Conflict Detection Operations (ck3_conflicts tool)
+    # =========================================================================
+    ReplyCode(
+        code="CONFLICT-OP-S-001",
+        reply_type="S",
+        layer="MCP",
+        semantics="Conflict detection completed successfully.",
+        message_template="Found {conflict_count} conflicts.",
+        required_data_fields=("conflict_count",),
+    ),
+    ReplyCode(
+        code="CONFLICT-OP-D-001",
+        reply_type="D",
+        layer="MCP",
+        semantics="Invalid conflict command.",
+        message_template="Invalid conflict command: {reason}",
+        required_data_fields=("reason",),
+    ),
+    ReplyCode(
+        code="CONFLICT-OP-E-001",
+        reply_type="E",
+        layer="MCP",
+        semantics="Conflict detection failed due to internal error.",
+        message_template="Conflict detection error: {error}",
+        required_data_fields=("error",),
+    ),
+    
+    # Logs Operations (ck3_logs tool)
+    # =========================================================================
+    ReplyCode(
+        code="LOGS-OP-S-001",
+        reply_type="S",
+        layer="MCP",
+        semantics="Log query completed successfully.",
+        message_template="Logs query completed: source={source}, command={command}",
+        required_data_fields=("source", "command"),
+    ),
+    ReplyCode(
+        code="LOGS-OP-E-001",
+        reply_type="E",
+        layer="MCP",
+        semantics="Log query failed due to internal error.",
+        message_template="Logs error: {error}",
         required_data_fields=("error",),
     ),
 ]

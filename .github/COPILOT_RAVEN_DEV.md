@@ -3,7 +3,7 @@
 > **Mode:** `ck3raven-dev`  
 > **Purpose:** Core infrastructure development for the CK3 Lens toolkit  
 > **Policy Document:** `docs/CK3RAVEN_DEV_POLICY_ARCHITECTURE.md`  
-> **Last Updated:** December 31, 2025
+> **Last Updated:** January 28, 2026
 
 ---
 
@@ -38,7 +38,7 @@ You are an **autonomous development agent**. When given a task:
 | `src/ck3raven/**` | ✅ Full write access |
 | `tools/ck3lens_mcp/**` | ✅ Full write access |
 | `tools/ck3lens-explorer/**` | ✅ Full write access |
-| `builder/**` | ✅ Full write access |
+| `qbuilder/**` | ✅ Full write access |
 | `scripts/**` | ✅ Full write access |
 | `tests/**` | ✅ Full write access |
 | `docs/**` | ✅ Full write access |
@@ -119,7 +119,7 @@ Given a playset (vanilla + mods in load order), it:
 
 ---
 
-## Current Status (December 2025)
+## Current Status (January 2026)
 
 | Module | Status | Description |
 |--------|--------|-------------|
@@ -174,8 +174,16 @@ ck3raven/
 │   │
 │   └── emulator/             # (Phase 2) Full game state
 │
+├── qbuilder/                 # Queue-based Build System (Single-Writer)
+│   ├── cli.py                # CLI: daemon, status, build, discover, reset
+│   ├── api.py                # Public API for MCP tools
+│   ├── worker.py             # FIFO queue processor with lease-based claims
+│   ├── discovery.py          # File/mod discovery from playset
+│   ├── ipc_server.py         # TCP socket server for daemon IPC
+│   └── writer_lock.py        # Single-writer lock enforcement
+│
 ├── tools/ck3lens_mcp/        # MCP Server
-│   ├── server.py             # FastMCP with 25+ tools
+│   ├── server.py             # FastMCP with 30+ tools
 │   └── ck3lens/
 │       ├── workspace.py      # Live mod whitelist
 │       └── db_queries.py     # Query layer
@@ -370,10 +378,10 @@ Or use `mcp_pylance_mcp_s_pylanceRunCodeSnippet` to validate imports.
 When diagnosing issues (build failures, performance problems, data anomalies):
 
 ✅ **DO:**
-- Use existing daemon flags: `--debug-refs N`, `--test`, `--symbols-only`
-- Add new flags/functions to `builder/daemon.py` for diagnostic features
+- Use the `ck3_qbuilder` MCP tool for build operations
+- Add new flags/functions to `qbuilder/cli.py` for diagnostic features
 - Add debug modes to existing library code
-- Create proper modules in `builder/`, `src/ck3raven/`, or `scripts/`
+- Create proper modules in `qbuilder/`, `src/ck3raven/`, or `scripts/`
 
 ❌ **DO NOT:**
 - Create one-off Python scripts in AI Workspace or other external folders
@@ -388,62 +396,45 @@ Side scripts cause problems:
 3. **Code rot** - Features developed outside the library never get maintained
 4. **Policy bypass** - Side scripts skip pre-commit validation
 
-### Builder-Daemon Debug Interface
+### QBuilder Commands
 
-**Modern debug mode using DebugSession architecture:**
+**Use the `ck3_qbuilder` MCP tool for build operations:**
+
+```python
+# Check daemon status
+ck3_qbuilder(command="status")
+
+# Start the daemon (launches background process)
+ck3_qbuilder(command="build")
+
+# Enqueue discovery tasks
+ck3_qbuilder(command="discover")
+
+# Reset queues (use fresh=True for full reset)
+ck3_qbuilder(command="reset", fresh=True)
+```
+
+**Or use CLI directly:**
 
 ```bash
-# Debug any phase with detailed timing
-& $VENV_PYTHON builder/daemon.py start --debug PHASE --debug-limit N
+# Start daemon (single-writer, runs in foreground)
+python -m qbuilder daemon
 
-# Available phases:
-#   all          - Run ALL phases sequentially
-#   ingest       - File discovery and content storage
-#   parse        - Content → AST parsing
-#   symbols      - AST → symbol extraction
-#   refs         - AST → reference extraction  
-#   localization - YML → localization entries
-#   lookups      - Symbol → lookup tables
+# Fresh rebuild (clears all data)
+python -m qbuilder daemon --fresh
 
-# Examples:
-& $VENV_PYTHON builder/daemon.py start --debug all --debug-limit 10
-& $VENV_PYTHON builder/daemon.py start --debug refs --debug-limit 20
-& $VENV_PYTHON builder/daemon.py start --debug parse --debug-limit 50
+# Check queue status
+python -m qbuilder status
 
-# Run synchronously with full output (no background daemon)
-& $VENV_PYTHON builder/daemon.py start --test
+# Run discovery + build pipeline
+python -m qbuilder run
 
-# Skip mods (vanilla only)
-& $VENV_PYTHON builder/daemon.py start --test --skip-mods
+# Reset queues
+python -m qbuilder reset --fresh
 ```
 
-**Debug output (in `~/.ck3raven/daemon/`):**
-- `debug_trace.jsonl` - JSONL event stream (machine-readable)
-- `debug_summary.json` - Aggregated stats per phase
-- `debug_output.json` - Legacy format (backwards compatible)
-
-**DebugSession Architecture (builder/debug/session.py):**
-```python
-from builder.debug import DebugSession
-
-with DebugSession.from_config(output_dir, sample_limit=100) as debug:
-    debug.phase_start("parse")
-    
-    for file in files:
-        with debug.span("file", phase="parse", path=file.path) as s:
-            ast = parse(file.content)
-            s.add(output_bytes=len(ast), output_count=node_count)
-    
-    debug.phase_end("parse")
-```
-
-**Design principles:**
-- **Observe, don't re-implement** - Hooks into real phases
-- **Phase-agnostic** - Session handles output format
-- **Data-driven** - Uniform metrics across all phases
-
-When you need new debugging capability, add it to the daemon or create a proper 
-module in `builder/` or `scripts/`.
+**Debug output (in `~/.ck3raven/logs/`):**
+- `daemon_YYYY-MM-DD.log` - Daemon log output
 
 ---
 
@@ -504,40 +495,29 @@ For AST access, use `ck3_parse_content` instead.
 ## Quick Commands
 
 ```bash
-# IMPORTANT: Always use the venv Python!
-# From the ck3raven directory:
-VENV_PYTHON=".venv\Scripts\python.exe"
+# Start QBuilder daemon (single-writer, runs in foreground)
+python -m qbuilder daemon
 
-# Build database (detached daemon - runs in background)
-& $VENV_PYTHON builder/daemon.py start
+# Fresh rebuild (clears all data)
+python -m qbuilder daemon --fresh
 
-# Force full rebuild (clears all data)
-& $VENV_PYTHON builder/daemon.py start --force
+# Check queue status
+python -m qbuilder status
 
-# Build only active playset mods
-& $VENV_PYTHON builder/daemon.py start --playset-file "path/to/active_mod_paths.json"
+# Run discovery + build pipeline  
+python -m qbuilder run
 
-# Check build status
-& $VENV_PYTHON builder/daemon.py status
-
-# View build logs (follow mode)
-& $VENV_PYTHON builder/daemon.py logs -f
-
-# Stop daemon
-& $VENV_PYTHON builder/daemon.py stop
+# Reset queues
+python -m qbuilder reset --fresh
 
 # Run tests
 pytest tests/ -v
-
-# Start MCP server
-python -m tools.ck3lens_mcp.server
 ```
 
 ---
 
 ## Immediate Tasks (Priority Order)
 
-1. **Database build in progress** - daemon running, check with `python builder/daemon.py status`
-2. **Localization phase order** - move to Phase 3 (after parsing, before symbols)
-3. **Add more lookup extractors** - currently have trait/event/decision, need culture/religion
-4. **Test MCP tools** with `ck3_init_session` → `ck3_search` → verify results
+1. **Database build** - Use `ck3_qbuilder(command="status")` to check, or `ck3_qbuilder(command="build")` to start
+2. **Add more lookup extractors** - currently have trait/event/decision, need culture/religion
+3. **Test MCP tools** with `ck3_search` → verify results

@@ -800,7 +800,7 @@ def _file_read_raw(path, start_line, end_line, trace, world=None, *, trace_info:
     resolution = world.resolve(str(file_path))
     if not resolution.found:
         if rb:
-            return rb.info("WA-RES-I-001", {"input_path": str(path), "mode": world.mode})
+            return rb.invalid("WA-RES-I-001", {"input_path": str(path), "mode": world.mode})
         return {
             "success": False,
             "error": f"Path not found: {path}",
@@ -820,7 +820,7 @@ def _file_read_raw(path, start_line, end_line, trace, world=None, *, trace_info:
     
     if not file_path.exists():
         if rb:
-            return rb.info("WA-RES-I-001", {"input_path": str(path)})
+            return rb.invalid("WA-RES-I-001", {"input_path": str(path)})
         return {"success": False, "error": f"File not found: {path}"}
     
     if not file_path.is_file():
@@ -871,7 +871,7 @@ def _file_read_live(mod_name, rel_path, max_bytes, session, trace, *, trace_info
     mod = session.get_mod(mod_name)
     if not mod:
         if rb:
-            return rb.info("WA-RES-I-001", {"input_path": f"{mod_name}:{rel_path}", "mod_name": mod_name})
+            return rb.invalid("WA-RES-I-001", {"input_path": f"{mod_name}:{rel_path}", "mod_name": mod_name})
         return {"error": f"Unknown mod_id: {mod_name}", "exists": False}
     
     valid, err = validate_relpath(rel_path)
@@ -884,7 +884,7 @@ def _file_read_live(mod_name, rel_path, max_bytes, session, trace, *, trace_info
     
     if not file_path.exists():
         if rb:
-            return rb.info("WA-RES-I-001", {
+            return rb.invalid("WA-RES-I-001", {
                 "input_path": f"{mod_name}:{rel_path}",
                 "mod_id": mod_name,
                 "relpath": rel_path,
@@ -968,7 +968,7 @@ def _file_write(mod_name, rel_path, content, validate_syntax, session, trace, *,
     if not mod:
         err = f"Unknown mod_id: {mod_name}"
         if rb:
-            return rb.info("WA-RES-I-001", {"input_path": f"{mod_name}:{rel_path}", "error": err})
+            return rb.invalid("WA-RES-I-001", {"input_path": f"{mod_name}:{rel_path}", "error": err})
         return {"success": False, "error": err}
     
     valid, err = validate_relpath(rel_path)

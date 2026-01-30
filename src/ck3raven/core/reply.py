@@ -6,7 +6,7 @@ Every MCP tool must return a Reply object (which is serialized to dict for trans
 
 Reply Types:
     S (Success)  - Operation completed successfully
-    I (Info)     - Operation completed with informational outcome (e.g., nothing to do)
+    I (Invalid)  - Malformed input, unknown reference, or request cannot be executed as stated
     D (Denied)   - Caller not permitted / precondition not met / refused by governance
     E (Error)    - Unexpected failure (bug, exception, corruption)
 
@@ -112,7 +112,7 @@ class Reply:
         )
     
     @classmethod
-    def info(
+    def invalid(
         cls,
         code: str,
         message: str,
@@ -120,7 +120,7 @@ class Reply:
         trace: TraceInfo,
         meta: MetaInfo,
     ) -> Reply:
-        """Create an Info reply."""
+        """Create an Invalid reply (malformed input, unknown reference)."""
         return cls(
             reply_type="I",
             code=code,
@@ -178,8 +178,8 @@ class Reply:
         return self.reply_type == "S"
     
     @property
-    def is_info(self) -> bool:
-        """True if this is an info reply."""
+    def is_invalid(self) -> bool:
+        """True if this is an invalid reply."""
         return self.reply_type == "I"
     
     @property
@@ -194,7 +194,7 @@ class Reply:
     
     @property
     def is_ok(self) -> bool:
-        """True if this is success or info (operation completed)."""
+        """True if this is success or invalid (operation completed)."""
         return self.reply_type in ("S", "I")
     
     @property
