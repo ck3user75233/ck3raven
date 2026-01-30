@@ -1064,8 +1064,18 @@ except Exception as e:
 
 /**
  * Extension deactivation
+ * 
+ * ZOMBIE BUG FIX: The ordering here is critical for clean MCP server shutdown.
+ * 
+ * 1. Dispose registration (unregisters provider from VS Code API)
+ * 2. Call provider.shutdown() (sets isShutdown=true, fires change event)
+ * 3. Yield one tick (gives VS Code event loop opportunity to see empty definitions)
+ * 4. Dispose provider (cleans up resources)
+ * 
+ * The shutdown() + yield ensures VS Code sees definitions=[] before we fully dispose,
+ * preventing it from caching a stale connection to the old server.
  */
-export function deactivate(): void {
+export async function deactivate(): Promise<void> {
     logger?.info('CK3 Lens Explorer deactivating...');
     
     // Clean up database state (checkpoint WAL, clean stale locks)
@@ -1076,13 +1086,34 @@ export function deactivate(): void {
     // Stop IPC diagnostics server
     diagnosticsServer?.dispose();
     
-    // Dispose MCP registration FIRST (unregisters from VS Code API)
-    // This must happen before disposing the provider itself
-    mcpRegistration?.dispose();
+    // ZOMBIE FIX: Proper MCP shutdown sequence
+    // Step 1: Dispose registration (unregisters from VS Code API)
+    logger?.info('MCP deactivate: disposing registration');
+    try {
+        mcpRegistration?.dispose();
+    } catch (e) {
+        logger?.debug('Error disposing mcpRegistration: ' + (e as Error).message);
+    }
     mcpRegistration = undefined;
     
-    // Then dispose MCP server provider (cleans up server resources)
-    mcpServerProvider?.dispose();
+    // Step 2: Call shutdown() - sets isShutdown=true and fires change event
+    // This causes VS Code to re-query and see [] (empty definitions)
+    try {
+        mcpServerProvider?.shutdown();
+    } catch (e) {
+        logger?.debug('Error calling mcpServerProvider.shutdown(): ' + (e as Error).message);
+    }
+    
+    // Step 3: Yield one tick to allow VS Code to process the change event
+    // This is important - VS Code needs an event loop opportunity to observe the empty definitions
+    await new Promise(resolve => setTimeout(resolve, 0));
+    
+    // Step 4: Dispose provider (cleans up resources)
+    try {
+        mcpServerProvider?.dispose();
+    } catch (e) {
+        logger?.debug('Error disposing mcpServerProvider: ' + (e as Error).message);
+    }
     mcpServerProvider = undefined;
     
     session?.dispose();

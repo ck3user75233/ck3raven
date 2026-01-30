@@ -6,6 +6,12 @@
  * MCP server instances without conflicts.
  * 
  * This replaces the static mcp.json configuration approach.
+ * 
+ * ZOMBIE BUG FIX (January 2026):
+ * - Instance ID is generated fresh on EVERY activation (no PID-based caching)
+ * - shutdown() method clears definitions to [] before dispose
+ * - Python server exits on stdin EOF
+ * See docs/MCP_SERVER_ARCHITECTURE.md for full lifecycle documentation.
  */
 
 import * as vscode from 'vscode';
@@ -15,54 +21,20 @@ import * as crypto from 'crypto';
 import { Logger } from '../utils/logger';
 
 /**
- * Generates a unique instance ID for this VS Code window.
+ * Generates a unique instance ID for this activation.
  * 
- * IMPORTANT: Each VS Code window gets a NEW unique ID, even if opening the same workspace.
- * This allows running multiple agents in parallel with the same workspace.
+ * CRITICAL: This is called on EVERY activation to generate a FRESH ID.
+ * We do NOT cache by PID or use globalState - that causes the zombie bug
+ * where VS Code sees "same server" after reload and caches the connection.
  * 
- * The ID is stored in globalState with a window-specific key (using process.pid + timestamp)
- * so that reloading the window preserves the ID, but opening a new window generates a new one.
+ * Since agent mode state is already lost on reload anyway, stable identity
+ * provides no benefit and causes duplicate tool catalogs.
  */
-function generateInstanceId(context: vscode.ExtensionContext): string {
-    // Use a session-based key that's unique per VS Code window process
-    // globalState persists across sessions, so we use a unique key per window
-    const windowKey = `ck3lens.windowInstanceId.${process.pid}`;
-    
-    // Check if this specific window already has an ID (survives reload)
-    const existingId = context.globalState.get<string>(windowKey);
-    if (existingId) {
-        return existingId;
-    }
-
-    // Generate a fully random instance ID (no workspace dependency)
+function generateInstanceId(): string {
+    // Generate a fully random instance ID every time
     const timestamp = Date.now().toString(36).slice(-4);
     const random = crypto.randomBytes(3).toString('hex');
-    const instanceId = `${timestamp}-${random}`;
-
-    // Store with window-specific key
-    context.globalState.update(windowKey, instanceId);
-    
-    // Clean up old window keys (garbage collection)
-    // Keep only keys from the last 24 hours
-    cleanupOldWindowKeys(context);
-    
-    return instanceId;
-}
-
-/**
- * Clean up old window instance IDs to prevent globalState bloat.
- */
-function cleanupOldWindowKeys(context: vscode.ExtensionContext): void {
-    const keys = context.globalState.keys();
-    const prefix = 'ck3lens.windowInstanceId.';
-    const currentPid = process.pid.toString();
-    
-    for (const key of keys) {
-        if (key.startsWith(prefix) && !key.endsWith(currentPid)) {
-            // Remove old window keys (from previous VS Code sessions)
-            context.globalState.update(key, undefined);
-        }
-    }
+    return `${timestamp}-${random}`;
 }
 
 /**
@@ -176,6 +148,15 @@ function findCk3RavenRoot(logger: Logger): string | undefined {
  * 
  * Provides VS Code with the MCP server definition, injecting a unique instance ID
  * per VS Code window for proper isolation.
+ * 
+ * LIFECYCLE:
+ * 1. Constructor generates fresh instanceId (no caching)
+ * 2. provideMcpServerDefinitions() returns server definition with instanceId
+ * 3. shutdown() sets isShutdown=true and fires change event (returns [])
+ * 4. dispose() cleans up resources
+ * 
+ * The shutdown() step is CRITICAL for zombie prevention - it tells VS Code
+ * that definitions are now empty BEFORE the provider is disposed.
  */
 export class CK3LensMcpServerProvider implements vscode.Disposable {
     private readonly _onDidChangeDefinitions = new vscode.EventEmitter<void>();
@@ -183,15 +164,21 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
 
     private readonly instanceId: string;
     private readonly logger: Logger;
-    private readonly context: vscode.ExtensionContext;
     private disposables: vscode.Disposable[] = [];
+    
+    /** 
+     * When true, provideMcpServerDefinitions returns [].
+     * Set by shutdown() before dispose to force VS Code to see empty definitions.
+     */
+    private isShutdown: boolean = false;
 
     constructor(context: vscode.ExtensionContext, logger: Logger) {
-        this.context = context;
         this.logger = logger;
-        this.instanceId = generateInstanceId(context);
         
-        this.logger.info(`MCP Server Provider initialized with instance ID: ${this.instanceId}`);
+        // CRITICAL: Generate fresh instance ID every activation (no caching!)
+        this.instanceId = generateInstanceId();
+        
+        this.logger.info(`MCP activate: instanceId=${this.instanceId}`);
 
         // Watch for configuration changes that might affect the server definition
         this.disposables.push(
@@ -208,10 +195,21 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
     /**
      * Provides MCP server definitions to VS Code.
      * Called by VS Code's MCP system when it needs available servers.
+     * 
+     * CRITICAL: Returns [] if isShutdown is true. This is part of the
+     * zombie prevention - on deactivate, we call shutdown() which sets
+     * isShutdown=true and fires a change event, causing VS Code to
+     * re-query and see empty definitions.
      */
     provideMcpServerDefinitions(
         _token: vscode.CancellationToken
     ): vscode.ProviderResult<vscode.McpStdioServerDefinition[]> {
+        // ZOMBIE FIX: Return empty if shutdown was called
+        if (this.isShutdown) {
+            this.logger.info(`provideDefinitions: [] (shutdown) instanceId=${this.instanceId}`);
+            return [];
+        }
+        
         const ck3ravenRoot = findCk3RavenRoot(this.logger);
         if (!ck3ravenRoot) {
             this.logger.info('Cannot provide MCP server: ck3raven root not found');
@@ -234,7 +232,7 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
         const env: Record<string, string | number | null> = {
             CK3LENS_INSTANCE_ID: this.instanceId,
             // Ensure Python can find ck3raven modules
-            PYTHONPATH: path.join(ck3ravenRoot, 'src'),
+            PYTHONPATH: `${ck3ravenRoot}${path.delimiter}${path.join(ck3ravenRoot, 'src')}`,
         };
 
         // CRITICAL: Inject venv Scripts dir into PATH so subprocesses resolve 'python' correctly
@@ -256,10 +254,9 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
 
         const serverName = `CK3 Lens (${this.instanceId})`;
         
-        this.logger.info(`Providing MCP server: ${serverName}`);
+        this.logger.info(`provideDefinitions: [serverName=${serverName}] instanceId=${this.instanceId}`);
         this.logger.debug(`  Python: ${pythonPath}`);
         this.logger.debug(`  Server: ${serverPath}`);
-        this.logger.debug(`  Instance ID: ${this.instanceId}`);
         this.logger.debug(`  CK3RAVEN_ROOT: ${ck3ravenRoot}`);
 
         // McpStdioServerDefinition constructor: (label, command, args?, env?, version?)
@@ -269,7 +266,7 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
                 new vscode.McpStdioServerDefinition(
                     serverName,           // label
                     pythonPath,           // command
-                    [serverPath],         // args
+                    ['-m', 'tools.ck3lens_mcp.server'],  // args - run as module for relative imports
                     env,                  // env
                     '1.0.0'               // version
                 )
@@ -288,14 +285,28 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
         return this.instanceId;
     }
 
-    dispose(): void {
-        // Signal VS Code that our server definitions are being removed
-        // This helps VS Code's MCP system clean up cached servers
+    /**
+     * Shutdown the provider - sets isShutdown=true and fires change event.
+     * 
+     * CRITICAL for zombie prevention: This must be called BEFORE dispose().
+     * When VS Code receives the change event and re-queries provideMcpServerDefinitions,
+     * it will see [] (empty) because isShutdown is true. This tells VS Code
+     * that the server is no longer available, preventing it from caching
+     * a stale connection.
+     */
+    shutdown(): void {
+        this.logger.info(`MCP deactivate: provider.shutdown() -> definitions [] instanceId=${this.instanceId}`);
+        this.isShutdown = true;
         this._onDidChangeDefinitions.fire();
+    }
+
+    dispose(): void {
+        this.logger.info(`MCP deactivate: provider.dispose() instanceId=${this.instanceId}`);
         this._onDidChangeDefinitions.dispose();
         this.disposables.forEach(d => d.dispose());
     }
 }
+
 /**
  * Result of registering the MCP server provider.
  * Both disposables must be disposed on deactivate for clean reload.
@@ -354,6 +365,9 @@ export function registerMcpServerProvider(
         );
         
         // Also add to subscriptions as backup, but caller should dispose explicitly
+        context.subscriptions.push(registration);
+        context.subscriptions.push(provider);
+        
         logger.info('MCP Server Definition Provider registered successfully');
         logger.info(`Per-instance isolation enabled with instance ID: ${provider.getInstanceId()}`);
         

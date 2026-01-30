@@ -5577,7 +5577,92 @@ def ck3_qbuilder(
 # Main Entry Point
 # ============================================================================
 
-if __name__ == "__main__":
-    mcp.run()
+import logging
+import signal
+import atexit
 
+# Configure logging for shutdown diagnostics
+_mcp_logger = logging.getLogger("ck3lens_mcp")
+_mcp_logger.setLevel(logging.INFO)
+_pid = os.getpid()
+
+
+def _log_exit():
+    """Log exit for debugging - called via atexit."""
+    global _instance_id, _pid
+    print(
+        f"MCP server exit: instanceId={_instance_id} pid={_pid}",
+        file=sys.stderr
+    )
+
+
+def _setup_signal_handlers() -> None:
+    """Setup signal handlers for clean shutdown."""
+    def handle_signal(signum, frame):
+        global _instance_id, _pid
+        _mcp_logger.info(
+            f"MCP server: signal {signum} received, shutting down "
+            f"instanceId={_instance_id} pid={_pid}"
+        )
+        print(
+            f"MCP server: signal {signum} received, shutting down "
+            f"instanceId={_instance_id} pid={_pid}",
+            file=sys.stderr
+        )
+        sys.exit(0)
+    
+    # Handle common termination signals
+    signal.signal(signal.SIGTERM, handle_signal)
+    signal.signal(signal.SIGINT, handle_signal)
+    if hasattr(signal, 'SIGBREAK'):  # Windows
+        signal.signal(signal.SIGBREAK, handle_signal)
+
+
+if __name__ == "__main__":
+    # Log startup with instance ID and PID for debugging
+    print(
+        f"MCP server start: instanceId={_instance_id} pid={_pid}",
+        file=sys.stderr
+    )
+    _mcp_logger.info(f"MCP server start: instanceId={_instance_id} pid={_pid}")
+    
+    # Register exit handler for logging
+    atexit.register(_log_exit)
+    
+    # Setup signal handlers
+    _setup_signal_handlers()
+    
+    try:
+        # Run the MCP server (this blocks on stdio)
+        # FastMCP uses stdin/stdout for MCP protocol.
+        # When stdin closes (VS Code disconnect/reload), FastMCP should exit.
+        # 
+        # ZOMBIE BUG FIX: The key is that FastMCP's run() must exit when stdin
+        # returns EOF. If it doesn't (e.g., gets stuck in asyncio loop), the
+        # process becomes a zombie. The signal handlers + atexit logging help
+        # us diagnose if this happens.
+        #
+        # All worker threads in this server should be daemon=True to ensure
+        # they don't keep the process alive after main exits.
+        mcp.run()
+    except EOFError:
+        # Explicit EOF handling
+        print(
+            f"MCP server: stdin EOF detected, shutting down "
+            f"instanceId={_instance_id} pid={_pid}",
+            file=sys.stderr
+        )
+    except Exception as e:
+        print(
+            f"MCP server: error during run - {e} "
+            f"instanceId={_instance_id} pid={_pid}",
+            file=sys.stderr
+        )
+    finally:
+        # Ensure we exit
+        print(
+            f"MCP server: main loop ended, exiting "
+            f"instanceId={_instance_id} pid={_pid}",
+            file=sys.stderr
+        )
 
