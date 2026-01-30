@@ -28,6 +28,7 @@ import { CompletionProvider } from './language/completionProvider';
 import { PythonBridge } from './bridge/pythonBridge';
 import { LensStatusBar } from './widget/statusBar';
 import { Logger } from './utils/logger';
+import { StructuredLogger, createStructuredLogger } from './utils/structuredLogger';
 import { SetupWizard, showSetupStatus } from './setup/setupWizard';
 import { registerMcpServerProvider, CK3LensMcpServerProvider, McpProviderRegistration } from './mcp/mcpServerProvider';
 import { DiagnosticsServer } from './ipc/diagnosticsServer';
@@ -42,6 +43,7 @@ let mcpRegistration: vscode.Disposable | undefined;
 let diagnosticsServer: DiagnosticsServer | undefined;
 let tokenWatcher: TokenWatcher | undefined;
 let logger: Logger;
+let structuredLogger: StructuredLogger | undefined;
 let outputChannel: vscode.OutputChannel;
 let diagnosticCollection: vscode.DiagnosticCollection;
 
@@ -112,12 +114,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         mcpRegistration = mcpResult.registration;
     }
     
+    // Initialize structured logger (CANONICAL per docs/CANONICAL_LOGS.md)
+    // Must happen AFTER mcpServerProvider so we have the instance ID
+    const instanceId = mcpServerProvider?.getInstanceId() ?? 'unknown';
+    structuredLogger = createStructuredLogger(instanceId, outputChannel);
+    structuredLogger.info('ext.activate', 'Extension activating', { 
+        version: context.extension.packageJSON.version,
+        instance_id: instanceId
+    });
+    
     // CRITICAL: Per-instance mode blanking
     // Must happen AFTER mcpServerProvider is created so we have the instance ID
     // Each VS Code window only blanks its own mode file, not affecting other windows
     if (mcpServerProvider) {
-        const instanceId = mcpServerProvider.getInstanceId();
-        logger.info(`MCP instance ID for this window: ${instanceId}`);
+        structuredLogger.info('ext.mcp', 'MCP provider registered', { instance_id: instanceId });
         
         // Blank this instance's mode file
         const sanitizedId = instanceId.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -129,9 +139,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 instance_id: instanceId,
                 cleared_at: new Date().toISOString() 
             }, null, 2));
-            logger.info(`Blanked agent mode for instance ${instanceId}`);
+            structuredLogger.debug('ext.activate', 'Blanked agent mode', { instance_id: instanceId });
         } catch (err) {
-            logger.error('Failed to blank agent mode', err as Error);
+            structuredLogger.error('ext.activate', 'Failed to blank agent mode', { 
+                error: (err as Error).message 
+            });
         }
         
         // Clean up stale mode files from old instances (older than 24 hours)
@@ -1076,6 +1088,8 @@ except Exception as e:
  * preventing it from caching a stale connection to the old server.
  */
 export async function deactivate(): Promise<void> {
+    // Log deactivation start with structured logger (CANONICAL per docs/CANONICAL_LOGS.md)
+    structuredLogger?.info('ext.deactivate', 'Extension deactivating');
     logger?.info('CK3 Lens Explorer deactivating...');
     
     // Clean up database state (checkpoint WAL, clean stale locks)
@@ -1088,20 +1102,25 @@ export async function deactivate(): Promise<void> {
     
     // ZOMBIE FIX: Proper MCP shutdown sequence
     // Step 1: Dispose registration (unregisters from VS Code API)
-    logger?.info('MCP deactivate: disposing registration');
+    structuredLogger?.debug('ext.mcp', 'Disposing MCP registration');
     try {
         mcpRegistration?.dispose();
     } catch (e) {
-        logger?.debug('Error disposing mcpRegistration: ' + (e as Error).message);
+        structuredLogger?.error('ext.mcp', 'Error disposing mcpRegistration', { 
+            error: (e as Error).message 
+        });
     }
     mcpRegistration = undefined;
     
     // Step 2: Call shutdown() - sets isShutdown=true and fires change event
     // This causes VS Code to re-query and see [] (empty definitions)
+    structuredLogger?.debug('ext.mcp', 'Calling MCP provider shutdown');
     try {
         mcpServerProvider?.shutdown();
     } catch (e) {
-        logger?.debug('Error calling mcpServerProvider.shutdown(): ' + (e as Error).message);
+        structuredLogger?.error('ext.mcp', 'Error calling mcpServerProvider.shutdown()', { 
+            error: (e as Error).message 
+        });
     }
     
     // Step 3: Yield one tick to allow VS Code to process the change event
@@ -1109,14 +1128,24 @@ export async function deactivate(): Promise<void> {
     await new Promise(resolve => setTimeout(resolve, 0));
     
     // Step 4: Dispose provider (cleans up resources)
+    structuredLogger?.debug('ext.mcp', 'Disposing MCP provider');
     try {
         mcpServerProvider?.dispose();
     } catch (e) {
-        logger?.debug('Error disposing mcpServerProvider: ' + (e as Error).message);
+        structuredLogger?.error('ext.mcp', 'Error disposing mcpServerProvider', { 
+            error: (e as Error).message 
+        });
     }
     mcpServerProvider = undefined;
     
     session?.dispose();
     pythonBridge?.dispose();
     statusBar?.dispose();
+    
+    // Log deactivation complete BEFORE disposing logger
+    structuredLogger?.info('ext.deactivate', 'Extension deactivation complete');
+    
+    // Dispose structured logger last (flushes remaining entries)
+    structuredLogger?.dispose();
+    structuredLogger = undefined;
 }

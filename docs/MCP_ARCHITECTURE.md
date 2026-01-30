@@ -10,6 +10,7 @@
 
 | Date | Changes |
 |------|---------|
+| 2026-01-31 | Added Diagnostic Logging section (canonical). Logging is now part of MCP lifecycle correctness. |
 | 2026-01-31 | Added Lifecycle & Zombie Prevention (canonical). Added Python EOF exit requirement. Resolved enabledApiProposals contradiction. Documented mode blanking behavior. Fixed stale references. |
 | 2026-01-17 | Initial per-instance architecture documentation. |
 
@@ -491,4 +492,129 @@ db.conn.execute("INSERT INTO symbols ...")  # FAILS: read-only
 |----------|---------|
 | [SINGLE_WRITER_ARCHITECTURE.md](SINGLE_WRITER_ARCHITECTURE.md) | Full single-writer spec |
 | [CANONICAL_ARCHITECTURE.md](CANONICAL_ARCHITECTURE.md) | Main architecture |
-| [LOGGING_IMPLEMENTATION_PLAN.md](LOGGING_IMPLEMENTATION_PLAN.md) | Structured logging plan |
+| [CANONICAL_LOGS.md](CANONICAL_LOGS.md) | Structured logging architecture |
+
+---
+
+## Diagnostic Logging (CANONICAL)
+
+**Status: NON-NEGOTIABLE. Logging is part of MCP lifecycle correctness.**
+
+Logging is **not cosmetic** and **not developer convenience**.
+It is a **diagnostic contract**:
+
+> If MCP lifecycle fails (zombie server, duplicate tools, reload weirdness),
+> the system must leave behind enough evidence to reconstruct exactly what happened.
+
+### Canonical Requirements
+
+#### 1. Separate Log Files Per Runtime
+
+**Windows file locking makes shared log files unsafe.**
+
+| Runtime | Log File |
+|---------|----------|
+| MCP Server (Python) | `~/.ck3raven/logs/ck3raven-mcp.log` |
+| VS Code Extension (Node) | `~/.ck3raven/logs/ck3raven-ext.log` |
+| QBuilder Daemon | `~/.ck3raven/logs/daemon_YYYY-MM-DD.log` |
+
+Aggregation happens at **read-time** (via `debug_get_logs` tool), never write-time.
+
+#### 2. ISO 8601 UTC Timestamps
+
+All logs **MUST** use:
+
+```
+YYYY-MM-DDTHH:MM:SS.mmmZ
+```
+
+Example: `2026-01-31T14:32:01.234Z`
+
+This enables chronological interleaving across all log sources without timezone guesswork.
+
+#### 3. Instance ID in Every Entry
+
+Every log entry **MUST** include:
+
+```json
+{"inst": "tt79-6f854d", ...}
+```
+
+This is critical for:
+- Multi-window debugging
+- Reload diagnostics
+- Zombie detection
+
+#### 4. Trace ID Correlation
+
+Log entries **MUST** support trace ID propagation:
+
+```
+UI action → MCP tool → contract/policy → result
+```
+
+The `trace_id` field links related events across components.
+
+#### 5. Fail-Safe Behavior
+
+**Logging failures MUST NOT crash the application.**
+
+| Failure | Behavior |
+|---------|----------|
+| Log directory doesn't exist | Create it; if that fails, use stderr |
+| Log file write fails | Fall back to stderr/console |
+| stderr write fails | Silently drop (last resort) |
+
+### Relationship: trace.log vs Debug Logs
+
+These are **complementary**, not replacements:
+
+| System | Purpose | Persistence |
+|--------|---------|-------------|
+| `trace.log()` → `ck3lens_trace.jsonl` | Audit trail (what tools were called) | Session-based |
+| `ck3raven-*.log` | Debugging + lifecycle visibility | Persistent (7-day rotation) |
+
+**Do NOT attempt to merge or simplify these systems.**
+
+### What Must Be Logged
+
+#### MCP Server (Python)
+
+| Event | Category | Level |
+|-------|----------|-------|
+| Server startup | `mcp.init` | INFO |
+| Server shutdown | `mcp.dispose` | INFO |
+| stdin EOF detection | `mcp.dispose` | INFO |
+| Tool invocation start | `mcp.tool` | DEBUG |
+| Tool invocation end | `mcp.tool` | DEBUG |
+| Tool exception | `mcp.tool` | ERROR |
+
+#### Extension (TypeScript)
+
+| Event | Category | Level |
+|-------|----------|-------|
+| Extension activate | `ext.activate` | INFO |
+| Extension deactivate | `ext.deactivate` | INFO |
+| MCP provider registration | `ext.mcp` | INFO |
+| MCP provider shutdown | `ext.mcp` | INFO |
+| MCP provider dispose | `ext.mcp` | INFO |
+
+### Validation Criteria
+
+After a window reload, the following **MUST** be verifiable from logs:
+
+1. Old MCP server logged stdin EOF shutdown
+2. Old extension logged deactivate sequence
+3. New extension logged activate with NEW instance ID
+4. New MCP server logged startup with NEW instance ID
+5. `debug_get_logs` tool can show before/after in one chronological output
+
+### Implementation Files
+
+| Component | File |
+|-----------|------|
+| Python logging module | `tools/ck3lens_mcp/ck3lens/logging.py` |
+| Python log rotation | `tools/ck3lens_mcp/ck3lens/log_rotation.py` |
+| TypeScript logger | `tools/ck3lens-explorer/src/utils/structuredLogger.ts` |
+| Log aggregator tool | `tools/ck3lens_mcp/server.py` (`debug_get_logs`) |
+| Full spec | `docs/CANONICAL_LOGS.md` |

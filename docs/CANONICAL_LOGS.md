@@ -1,9 +1,23 @@
-# Proposed Canonical Logging Architecture
+# Canonical Logging Architecture
 
-> **Status:** PROPOSAL  
-> **Created:** January 25, 2026  
-> **Updated:** January 26, 2026 (Consulting AI Review Incorporated)
+> **Status:** CANONICAL  
+> **Last Updated:** January 31, 2026  
 > **Purpose:** Unified logging for ck3raven infrastructure (excluding QBuilder)
+
+---
+
+## Canonical Invariants (MANDATORY)
+
+These invariants are **non-negotiable** and must be followed by all implementations:
+
+| # | Invariant | Rationale |
+|---|-----------|-----------|
+| 1 | **Separate log files per runtime** | Windows file locking prevents shared files between Python and Node.js |
+| 2 | **ISO 8601 UTC timestamps everywhere** | `YYYY-MM-DDTHH:MM:SS.mmmZ` enables chronological merging across processes |
+| 3 | **Instance ID in every log entry** | Multi-window isolation requires knowing which instance produced each log |
+| 4 | **Trace ID correlation mandatory** | UI action → MCP tool → result must be linkable for debugging |
+| 5 | **Fail-safe logging behavior** | Logging failures MUST NEVER crash the application |
+| 6 | **trace.log and debug logs are complementary** | Audit trail (trace.log) and diagnostics (ck3raven-*.log) serve different purposes |
 
 ---
 
@@ -29,7 +43,7 @@ Current logging is fragmented:
 
 ## Scope
 
-### IN SCOPE (This Proposal)
+### IN SCOPE (This Specification)
 - MCP Server (`tools/ck3lens_mcp/`)
 - VS Code Extension (`tools/ck3lens-explorer/`)
 - Contract System
@@ -86,9 +100,7 @@ graph TD
 
 ---
 
-## Proposed Architecture
-
-### 1. Log File Location
+## Log File Location
 
 ```
 ~/.ck3raven/logs/
@@ -102,7 +114,9 @@ graph TD
 **Note:** `daemon.log` lives at `~/.ck3raven/daemon/daemon.log` - the aggregator
 tool reads it from there.
 
-### 2. Log Format
+---
+
+## Log Format
 
 **JSONL format** (one JSON object per line):
 
@@ -119,11 +133,13 @@ tool reads it from there.
 | `level` | string | DEBUG, INFO, WARN, ERROR |
 | `cat` | string | Category (dot-separated hierarchy) |
 | `inst` | string | Instance ID (for multi-window isolation) |
-| `trace_id` | string | **NEW:** Correlation ID linking UI action → MCP → QBuilder |
+| `trace_id` | string | Correlation ID linking UI action → MCP → QBuilder |
 | `msg` | string | Human-readable message |
 | `data` | object | Structured context (optional) |
 
-### 3. Timestamp Standardization (CRITICAL)
+---
+
+## Timestamp Standardization (CRITICAL)
 
 **All components MUST use ISO 8601 UTC format:**
 
@@ -138,7 +154,9 @@ Example: `2026-01-25T14:32:01.234Z`
 - Eliminates timezone confusion
 - QBuilder `daemon.log` must also adopt this format
 
-### 4. Trace ID Correlation
+---
+
+## Trace ID Correlation
 
 **Problem:** When a user clicks "Lint File" and it fails, you see an error in
 `ck3raven-ext.log` and a stack trace in `ck3raven-mcp.log`, but nothing links them.
@@ -161,7 +179,9 @@ trace_id = params.get("_trace_id", "no-trace")
 info("mcp.tool", "Validating file", trace_id=trace_id, file=file)
 ```
 
-### 5. Log Levels
+---
+
+## Log Levels
 
 | Level | When to Use |
 |-------|-------------|
@@ -172,7 +192,9 @@ info("mcp.tool", "Validating file", trace_id=trace_id, file=file)
 
 **Default Level:** `INFO` (configurable via environment variable)
 
-### 6. Categories
+---
+
+## Categories
 
 Hierarchical dot-separated categories:
 
@@ -200,9 +222,67 @@ policy.token      # Token requests/validation
 
 ---
 
-## Implementation
+## Key Logging Points
 
-### 7. Python (MCP Server)
+### MCP Server (MANDATORY)
+
+| Event | Category | Level | Data |
+|-------|----------|-------|------|
+| Server starting | `mcp.init` | INFO | `{instance_id}` |
+| Mode set | `session.mode` | INFO | `{mode, previous}` |
+| Tool called | `mcp.tool` | DEBUG | `{tool, params, trace_id}` |
+| Tool succeeded | `mcp.tool` | DEBUG | `{tool, result_size}` |
+| Tool failed | `mcp.tool` | ERROR | `{tool, error, trace_id}` |
+| EOF received | `mcp.dispose` | INFO | `{reason: "EOF on stdin"}` |
+| Server disposing | `mcp.dispose` | INFO | `{instance_id}` |
+
+### Extension (MANDATORY)
+
+| Event | Category | Level | Data |
+|-------|----------|-------|------|
+| Activate start | `ext.activate` | INFO | `{version}` |
+| MCP registration | `ext.mcp` | INFO | `{instance_id}` |
+| MCP registration failed | `ext.mcp` | ERROR | `{error}` |
+| Deactivate start | `ext.deactivate` | INFO | - |
+| MCP disposal | `ext.mcp` | DEBUG | `{instance_id}` |
+| Deactivate complete | `ext.deactivate` | INFO | - |
+
+### Contracts (MANDATORY)
+
+| Event | Category | Level | Data |
+|-------|----------|-------|------|
+| Contract opened | `contract.open` | INFO | `{contract_id, intent, trace_id}` |
+| Contract closed | `contract.close` | INFO | `{contract_id, commit}` |
+| Contract cancelled | `contract.cancel` | INFO | `{contract_id, reason}` |
+
+---
+
+## Fail-Safe Behavior (MANDATORY)
+
+**Logging failures MUST NOT crash the application.**
+
+| Failure | Behavior |
+|---------|----------|
+| Log directory doesn't exist | Create it; if that fails, use stderr |
+| Log file write fails | Fall back to stderr/console |
+| stderr write fails | Silently drop (last resort) |
+| Rotation fails | Skip rotation, continue logging |
+| Sanitization fails | Log without data field |
+
+---
+
+## Implementation Files
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| Python Logger | `tools/ck3lens_mcp/ck3lens/logging.py` | Structured logging with JSONL output |
+| Python Rotation | `tools/ck3lens_mcp/ck3lens/log_rotation.py` | Daily rotation with 7-day retention |
+| TypeScript Logger | `tools/ck3lens-explorer/src/utils/structuredLogger.ts` | Extension logging with file persistence |
+| Aggregator Tool | `debug_get_logs` in server.py | Cross-component log merging |
+
+---
+
+## Python Implementation
 
 ```python
 # tools/ck3lens_mcp/ck3lens/logging.py
@@ -306,24 +386,9 @@ def bootstrap(msg: str):
     sys.stderr.write(f"[BOOTSTRAP {ts}] {msg}\n")
 ```
 
-**Usage:**
-```python
-from ck3lens.logging import info, debug, error, set_trace_id, bootstrap
+---
 
-# Bootstrap phase (before logger ready)
-bootstrap("Starting MCP server initialization")
-
-# Normal logging
-info("mcp.init", "Mode initialized", mode="ck3raven-dev")
-debug("contract.open", "Opening contract", intent="Fix bug")
-error("mcp.tool", "Tool failed", tool="ck3_file", error=str(e))
-
-# With trace_id from MCP params
-set_trace_id(params.get("_trace_id", "no-trace"))
-info("mcp.tool", "Processing request", tool="ck3_file")
-```
-
-### 8. TypeScript (Extension)
+## TypeScript Implementation
 
 ```typescript
 // tools/ck3lens-explorer/src/utils/structuredLogger.ts
@@ -473,32 +538,21 @@ export class StructuredLogger {
 }
 ```
 
-**Usage:**
-```typescript
-const logger = new StructuredLogger(instanceId, outputChannel);
+---
 
-// Bootstrap phase
-logger.bootstrap('Extension starting');
-
-// Normal logging
-logger.info('ext.activate', 'Extension activating');
-logger.debug('ext.mcp', 'Registering MCP provider', { instanceId });
-
-// With trace ID for cross-component correlation
-const traceId = logger.generateTraceId();
-logger.info('ext.lint', 'Lint requested', { file, traceId });
-await mcpCall('ck3_validate', { file, _trace_id: traceId });
-
-// Cleanup
-logger.dispose();
-```
-
-### 9. Log Rotation
+## Log Rotation
 
 **Daily rotation with 7-day retention:**
 
 ```python
-# Called on MCP server startup
+# tools/ck3lens_mcp/ck3lens/log_rotation.py
+
+from datetime import datetime, timezone
+from pathlib import Path
+
+_LOG_DIR = Path.home() / ".ck3raven" / "logs"
+_LOG_FILE = _LOG_DIR / "ck3raven-mcp.log"
+
 def rotate_logs():
     """Rotate logs if current log is from a previous day."""
     if not _LOG_FILE.exists():
@@ -522,12 +576,15 @@ def rotate_logs():
         pass  # Don't fail startup due to rotation issues
 ```
 
-### 10. Log Aggregator Tool
+---
 
-**New MCP Tool: `debug_get_logs`**
+## Log Aggregator Tool
+
+**MCP Tool: `debug_get_logs`**
 
 This tool reads all log files, parses timestamps, and returns a chronologically
-interleaved view.
+interleaved view. This tool exists specifically so users can copy-paste the
+agent's output back to external review.
 
 ```python
 @mcp.tool()
@@ -598,54 +655,6 @@ def debug_get_logs(
 
 ---
 
-## Key Logging Points
-
-### MCP Server
-
-| Event | Category | Level | Data |
-|-------|----------|-------|------|
-| Server starting | `mcp.init` | INFO | `{instance_id}` |
-| Mode set | `session.mode` | INFO | `{mode, previous}` |
-| Tool called | `mcp.tool` | DEBUG | `{tool, params, trace_id}` |
-| Tool succeeded | `mcp.tool` | DEBUG | `{tool, result_size}` |
-| Tool failed | `mcp.tool` | ERROR | `{tool, error, trace_id}` |
-| Server disposing | `mcp.dispose` | INFO | `{instance_id}` |
-
-### Extension
-
-| Event | Category | Level | Data |
-|-------|----------|-------|------|
-| Activate start | `ext.activate` | INFO | `{version}` |
-| MCP registration | `ext.mcp` | INFO | `{instance_id}` |
-| MCP registration failed | `ext.mcp` | ERROR | `{error}` |
-| Deactivate start | `ext.deactivate` | INFO | - |
-| MCP disposal | `ext.mcp` | DEBUG | `{instance_id}` |
-| Deactivate complete | `ext.deactivate` | INFO | - |
-
-### Contracts
-
-| Event | Category | Level | Data |
-|-------|----------|-------|------|
-| Contract opened | `contract.open` | INFO | `{contract_id, intent, trace_id}` |
-| Contract closed | `contract.close` | INFO | `{contract_id, commit}` |
-| Contract cancelled | `contract.cancel` | INFO | `{contract_id, reason}` |
-
----
-
-## Fail-Safe Behavior
-
-**Logging failures MUST NOT crash the application.**
-
-| Failure | Behavior |
-|---------|----------|
-| Log directory doesn't exist | Create it; if that fails, use stderr |
-| Log file write fails | Fall back to stderr/console |
-| stderr write fails | Silently drop (last resort) |
-| Rotation fails | Skip rotation, continue logging |
-| Sanitization fails | Log without data field |
-
----
-
 ## Performance Considerations
 
 1. **Default level: INFO** - DEBUG logging can be expensive in tight loops
@@ -661,8 +670,8 @@ def debug_get_logs(
 |--------|---------|--------------|
 | `trace.log` (JSONL) | MCP tool audit trail | `~/.ck3raven/ck3lens_trace.jsonl` |
 | `daemon.log` | QBuilder operations | `~/.ck3raven/daemon/daemon.log` |
-| **NEW: ck3raven-mcp.log** | MCP server debugging | `~/.ck3raven/logs/ck3raven-mcp.log` |
-| **NEW: ck3raven-ext.log** | Extension debugging | `~/.ck3raven/logs/ck3raven-ext.log` |
+| **ck3raven-mcp.log** | MCP server debugging | `~/.ck3raven/logs/ck3raven-mcp.log` |
+| **ck3raven-ext.log** | Extension debugging | `~/.ck3raven/logs/ck3raven-ext.log` |
 
 **Trace vs Log:**
 - `trace.log` = Audit trail (what tools were called, for policy validation)
@@ -685,53 +694,24 @@ Both are complementary, not replacements.
 
 ---
 
-## Migration Path
+## Validation Criteria
 
-**Phase 1: Add new logging (non-breaking)**
-1. Create `ck3lens/logging.py` with proposed API
-2. Create `structuredLogger.ts` for extension
-3. Add logs to key lifecycle points (init, dispose, contract open/close)
+After logging is implemented, these must be verifiable from logs alone:
 
-**Phase 2: Instrument key paths**
-1. MCP tool entry/exit
-2. Contract lifecycle
-3. Policy enforcement
-4. Extension activate/deactivate
-
-**Phase 3: Add aggregator tool**
-1. Implement `debug_get_logs` MCP tool
-2. Add category/level/trace_id filters
-3. Add log rotation on startup
-
-**Phase 4: Update QBuilder timestamps**
-1. Ensure `daemon.log` uses ISO 8601 UTC format
-2. Make aggregator tool include daemon logs
+| Criterion | How to Verify |
+|-----------|---------------|
+| MCP server started | `cat` = `mcp.init`, `level` = `INFO` |
+| Mode was initialized | `cat` = `session.mode`, contains `mode` in data |
+| Extension activated | `cat` = `ext.activate` |
+| Window closed cleanly | `cat` = `mcp.dispose` with EOF reason |
+| Tool failure traced | `cat` = `mcp.tool`, `level` = `ERROR`, trace_id present |
 
 ---
 
-## Open Questions (Resolved)
+## Changelog
 
-| Question | Resolution |
-|----------|------------|
-| Should logs be separate or merged? | **Separate files** - critical for Windows file locking |
-| Log level configuration? | Environment variable initially, VS Code setting later |
-| Log viewing in extension UI? | Future enhancement - use `debug_get_logs` tool for now |
-
----
-
-## Appendix: Current Logging Inventory
-
-**All existing logging events in ck3raven (excluding QBuilder `builder/` directory).**
-
-Use this inventory to plan migration to the new structured logging.
-
-*(Inventory unchanged from original - see previous version)*
-
----
-
-## Next Steps
-
-1. ✅ Review proposal with consulting AI feedback
-2. Implement Phase 1 (logging infrastructure)
-3. Add logging to MCP disposal path (immediate need)
-4. Incrementally instrument other components
+| Date | Changes |
+|------|---------|
+| 2026-01-31 | Promoted to CANONICAL status. Added Canonical Invariants section. Added Validation Criteria section. |
+| 2026-01-26 | Consulting AI Review incorporated. Separated log files per runtime. Added trace ID correlation. |
+| 2026-01-25 | Initial proposal created. |

@@ -543,6 +543,116 @@ def ck3_ping() -> Reply:
         message="Ping successful.",
     )
 
+
+@mcp.tool()
+@mcp_safe_tool
+def debug_get_logs(
+    lines: int = 50,
+    level: Optional[Literal["DEBUG", "INFO", "WARN", "ERROR"]] = None,
+    category: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    source: Literal["all", "mcp", "ext", "daemon"] = "all",
+) -> Reply:
+    """
+    Get recent logs from all ck3raven components, merged chronologically.
+    
+    This tool aggregates logs from:
+    - MCP Server (Python): ~/.ck3raven/logs/ck3raven-mcp.log
+    - VS Code Extension (Node): ~/.ck3raven/logs/ck3raven-ext.log
+    - QBuilder Daemon: ~/.ck3raven/daemon/daemon.log
+    
+    Logs are returned in chronological order with source identification.
+    Use this for debugging MCP lifecycle issues, tool failures, or 
+    tracing operations across components via trace_id.
+    
+    This tool exists specifically so the user can copy-paste the agent's 
+    output back to ChatGPT or other external review.
+    
+    Args:
+        lines: Maximum total lines to return (default 50)
+        level: Filter by minimum level (DEBUG, INFO, WARN, ERROR)
+        category: Filter by category prefix (e.g., "mcp.", "ext.", "contract.")
+        trace_id: Filter by trace ID (for debugging specific operations)
+        source: Which log sources to include (all, mcp, ext, daemon)
+    
+    Returns:
+        Merged, chronologically sorted log entries with source identification
+    """
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool="debug_get_logs")
+    
+    log_files = {
+        "mcp": Path.home() / ".ck3raven" / "logs" / "ck3raven-mcp.log",
+        "ext": Path.home() / ".ck3raven" / "logs" / "ck3raven-ext.log",
+        "daemon": Path.home() / ".ck3raven" / "daemon" / "daemon.log",
+    }
+    
+    level_order = {"DEBUG": 0, "INFO": 1, "WARN": 2, "ERROR": 3}
+    entries = []
+    files_read = []
+    
+    for src, log_path in log_files.items():
+        if source != "all" and source != src:
+            continue
+        if not log_path.exists():
+            continue
+        
+        files_read.append(str(log_path))
+        
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                for line_text in f:
+                    try:
+                        entry = json.loads(line_text.strip())
+                        entry["_source"] = src
+                        
+                        # Apply filters
+                        if level:
+                            entry_level = entry.get("level", "INFO")
+                            if level_order.get(entry_level, 1) < level_order.get(level, 1):
+                                continue
+                        if category and not entry.get("cat", "").startswith(category):
+                            continue
+                        if trace_id and entry.get("trace_id") != trace_id:
+                            continue
+                        
+                        entries.append(entry)
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as e:
+            # Log but continue - don't fail if one file is unreadable
+            entries.append({
+                "_source": src,
+                "ts": datetime.now().isoformat() + "Z",
+                "level": "WARN",
+                "cat": "debug.get_logs",
+                "msg": f"Could not read {log_path}: {e}",
+            })
+    
+    # Sort by timestamp
+    entries.sort(key=lambda e: e.get("ts", ""))
+    
+    # Return most recent entries
+    result_entries = entries[-lines:] if len(entries) > lines else entries
+    
+    return rb.success(
+        "MCP-SYS-S-900",
+        data={
+            "entries": result_entries,
+            "total_available": len(entries),
+            "truncated": len(entries) > lines,
+            "files_read": files_read,
+            "filters_applied": {
+                "level": level,
+                "category": category,
+                "trace_id": trace_id,
+                "source": source,
+            }
+        },
+        message=f"Retrieved {len(result_entries)} log entries from {len(files_read)} files.",
+    )
+
+
 def _init_session_internal(
     db_path: Optional[str] = None,
 ) -> dict:
@@ -5598,7 +5708,11 @@ import logging
 import signal
 import atexit
 
-# Configure logging for shutdown diagnostics
+# Structured logging (canonical per docs/CANONICAL_LOGS.md)
+from ck3lens.logging import info as log_info, error as log_error, bootstrap as log_bootstrap, set_instance_id
+from ck3lens.log_rotation import rotate_logs
+
+# Configure Python's standard logging for FastMCP internals
 _mcp_logger = logging.getLogger("ck3lens_mcp")
 _mcp_logger.setLevel(logging.INFO)
 _pid = os.getpid()
@@ -5607,6 +5721,8 @@ _pid = os.getpid()
 def _log_exit():
     """Log exit for debugging - called via atexit."""
     global _instance_id, _pid
+    # Dual output: structured log file + stderr for VS Code capture
+    log_info("mcp.dispose", "MCP server exit (atexit)", instance_id=_instance_id, pid=_pid)
     print(
         f"MCP server exit: instanceId={_instance_id} pid={_pid}",
         file=sys.stderr
@@ -5617,10 +5733,8 @@ def _setup_signal_handlers() -> None:
     """Setup signal handlers for clean shutdown."""
     def handle_signal(signum, frame):
         global _instance_id, _pid
-        _mcp_logger.info(
-            f"MCP server: signal {signum} received, shutting down "
-            f"instanceId={_instance_id} pid={_pid}"
-        )
+        log_info("mcp.dispose", f"Signal {signum} received, shutting down", 
+                 instance_id=_instance_id, pid=_pid, signal=signum)
         print(
             f"MCP server: signal {signum} received, shutting down "
             f"instanceId={_instance_id} pid={_pid}",
@@ -5636,12 +5750,21 @@ def _setup_signal_handlers() -> None:
 
 
 if __name__ == "__main__":
-    # Log startup with instance ID and PID for debugging
+    # Set instance ID for structured logging
+    set_instance_id(_instance_id)
+    
+    # Rotate logs at startup (daily rotation)
+    rotated = rotate_logs()
+    
+    # Log startup with structured logging
+    log_info("mcp.init", "MCP server starting", 
+             instance_id=_instance_id, pid=_pid, log_rotated=rotated)
+    
+    # Also log to stderr for VS Code capture
     print(
         f"MCP server start: instanceId={_instance_id} pid={_pid}",
         file=sys.stderr
     )
-    _mcp_logger.info(f"MCP server start: instanceId={_instance_id} pid={_pid}")
     
     # Register exit handler for logging
     atexit.register(_log_exit)
@@ -5663,13 +5786,17 @@ if __name__ == "__main__":
         # they don't keep the process alive after main exits.
         mcp.run()
     except EOFError:
-        # Explicit EOF handling
+        # Explicit EOF handling - CRITICAL for zombie prevention
+        log_info("mcp.dispose", "EOF on stdin, shutting down", 
+                 reason="EOF on stdin", instance_id=_instance_id, pid=_pid)
         print(
             f"MCP server: stdin EOF detected, shutting down "
             f"instanceId={_instance_id} pid={_pid}",
             file=sys.stderr
         )
     except Exception as e:
+        log_error("mcp.dispose", f"Error during run: {e}", 
+                  error=str(e), instance_id=_instance_id, pid=_pid)
         print(
             f"MCP server: error during run - {e} "
             f"instanceId={_instance_id} pid={_pid}",
@@ -5677,6 +5804,8 @@ if __name__ == "__main__":
         )
     finally:
         # Ensure we exit
+        log_info("mcp.dispose", "Main loop ended, exiting", 
+                 instance_id=_instance_id, pid=_pid)
         print(
             f"MCP server: main loop ended, exiting "
             f"instanceId={_instance_id} pid={_pid}",
