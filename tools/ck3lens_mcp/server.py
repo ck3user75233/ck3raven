@@ -20,7 +20,12 @@ import importlib
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Literal
-
+from click import command
+from ck3lens.log_rotation import rotate_logs
+from ck3lens.logging import info, bootstrap
+import signal
+import atexit
+import threading
 from ck3lens.policy.capability_matrix import Operation, validate_operations
 
 # =============================================================================
@@ -4836,9 +4841,9 @@ def _ck3_get_mode_instructions_internal(mode: str) -> dict:
     # =========================================================================
     # STEP 2: Set mode (persisted to file as single source of truth)
     # =========================================================================
-    # Cast to literal type - we validated mode is valid above
-    from typing import cast
-    set_agent_mode(cast(Literal["ck3lens", "ck3raven-dev"], mode))
+
+
+    set_agent_mode(mode)  # type: ignore[arg-type]
     
     # Reset cached world adapter - mode change invalidates the cache
     _reset_world_cache()
@@ -5750,6 +5755,9 @@ def _setup_signal_handlers() -> None:
 
 
 if __name__ == "__main__":
+    # Bootstrap structured logging
+    log_bootstrap(_instance_id)
+    
     # Set instance ID for structured logging
     set_instance_id(_instance_id)
     

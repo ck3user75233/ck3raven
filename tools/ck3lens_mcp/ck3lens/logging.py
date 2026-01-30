@@ -139,7 +139,7 @@ def log(
 
     _ensure_log_dir()
 
-    entry = {
+    entry: dict[str, Any] = {
         "ts": _format_timestamp(),
         "level": level,
         "cat": category,
