@@ -252,7 +252,12 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
             env['CK3LENS_CONFIG'] = configPath;
         }
 
-        const serverName = `CK3 Lens (${this.instanceId})`;
+        // CRITICAL: Label must be STABLE to prevent zombie servers.
+        // VS Code derives server identity from <extensionId>/<label>.
+        // If label changes on reload (e.g., by including instanceId), VS Code
+        // treats it as a NEW server while caching the old definition → zombies.
+        // The instanceId is still used in tool names, env, and logging.
+        const serverName = 'CK3 Lens';
         
         this.logger.info(`provideDefinitions: [serverName=${serverName}] instanceId=${this.instanceId}`);
         this.logger.debug(`  Python: ${pythonPath}`);
