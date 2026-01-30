@@ -127,7 +127,13 @@ class AgentTreeItem extends vscode.TreeItem {
                 break;
             case 'instance-id':
                 this.iconPath = new vscode.ThemeIcon('key');
-                // Command set by caller
+                // Set command from actionCommand parameter
+                if (this.actionCommand) {
+                    this.command = {
+                        command: this.actionCommand,
+                        title: this.label
+                    };
+                }
                 break;
         }
     }
