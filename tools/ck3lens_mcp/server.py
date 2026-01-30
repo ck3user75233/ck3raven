@@ -4356,13 +4356,29 @@ def ck3_parse_content(
     
     Returns:
         Reply with code PARSE-AST-S-001 on success (ast and node_count in data),
-        or PARSE-AST-E-001 on syntax errors (errors list in data).
+        or PARSE-AST-I-001 on syntax errors (errors list in data).
+        Returns PARSE-AST-E-001 only on unexpected system failure.
     """
     trace = _get_trace()
     trace_info = get_current_trace_info()
     rb = ReplyBuilder(trace_info, tool="ck3_parse_content", layer="PARSE")
     
-    result = parse_content(content, filename, recover=True)
+    # Wrap in try/except to distinguish user syntax errors from system failures
+    try:
+        result = parse_content(content, filename, recover=True)
+    except Exception as e:
+        # System failure - unexpected exception in parser
+        import traceback
+        return rb.error(
+            "PARSE-AST-E-001",
+            data={
+                "error": f"Parser system failure: {e}",
+                "error_type": type(e).__name__,
+                "filename": filename,
+                "traceback": traceback.format_exc(),
+            },
+            message=f"Parser system failure: {e}",
+        )
     
     trace.log("ck3lens.parse_content", {
         "filename": filename,
@@ -4392,11 +4408,11 @@ def ck3_parse_content(
             },
         )
     else:
-        # Parse failed - get first error for message
+        # Parse failed due to user syntax errors - this is INVALID input, not system error
         first_error = result["errors"][0] if result["errors"] else {"line": 1, "message": "Unknown parse error"}
         
-        return rb.error(
-            "PARSE-AST-E-001",
+        return rb.invalid(
+            "PARSE-AST-I-001",
             data={
                 "ast": result["ast"],  # Partial AST may still be useful
                 "errors": result["errors"],
@@ -4404,6 +4420,7 @@ def ck3_parse_content(
                 "error": first_error.get("message", "Unknown parse error"),
                 "filename": filename,
             },
+            message=f"Syntax error at line {first_error.get('line', 1)}: {first_error.get('message', 'Unknown parse error')}",
         )
 
 
