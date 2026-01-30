@@ -324,8 +324,8 @@ export interface McpProviderRegistration {
 /**
  * Registers the MCP server provider with VS Code.
  * 
- * Note: As of VS Code 1.96, McpServerDefinitionProvider is a proposed API.
- * The extension must declare "mcpServerDefinitionProvider" in enabledApiProposals.
+ * NOTE: As of VS Code 1.96, McpServerDefinitionProvider is a STABLE API.
+ * The enabledApiProposals field is NOT required in package.json.
  * 
  * CRITICAL: This is REQUIRED for per-instance isolation. Without it, all VS Code
  * windows share a single MCP server and mode state gets corrupted across windows.
@@ -341,7 +341,7 @@ export function registerMcpServerProvider(
     // Check if the API is available - REQUIRED, not optional
     if (!vscode.lm || typeof vscode.lm.registerMcpServerDefinitionProvider !== 'function') {
         const errorMsg = 'CRITICAL: MCP Server Definition Provider API not available. ' +
-            'This requires VS Code 1.96+ with mcpServerDefinitionProvider proposed API. ' +
+            'This requires VS Code 1.96+ (API is stable, no proposals needed). ' +
             'Without this, per-instance isolation is broken and mode state corrupts across windows. ' +
             'Delete any static mcp.json and ensure VS Code is updated.';
         logger.error(errorMsg);

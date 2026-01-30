@@ -1,8 +1,17 @@
 # MCP Server Architecture
 
 > **Status:** AUTHORITATIVE  
-> **Last Updated:** January 17, 2026  
+> **Last Updated:** January 31, 2026  
 > **Purpose:** Lock in the per-instance MCP server architecture to prevent drift
+
+---
+
+## Changelog
+
+| Date | Changes |
+|------|---------|
+| 2026-01-31 | Added Lifecycle & Zombie Prevention (canonical). Added Python EOF exit requirement. Resolved enabledApiProposals contradiction. Documented mode blanking behavior. Fixed stale references. |
+| 2026-01-17 | Initial per-instance architecture documentation. |
 
 ---
 
@@ -34,6 +43,179 @@ Each VS Code window:
 
 ---
 
+## Lifecycle & Zombie Prevention (CANONICAL)
+
+**Status: NON-NEGOTIABLE. These requirements prevent zombie MCP processes.**
+
+The "zombie bug" occurred when VS Code reloads cached stale MCP connections, causing:
+- Duplicate tool catalogs
+- Old Python processes that never exit
+- Memory leaks and process accumulation
+
+### Canonical Requirements
+
+#### 1. Fresh Instance ID Every Activation
+
+**MUST** generate a fresh `CK3LENS_INSTANCE_ID` on every extension activation.
+
+```typescript
+// ✅ CORRECT - Fresh random ID every activation
+function generateInstanceId(): string {
+    const timestamp = Date.now().toString(36).slice(-4);
+    const random = crypto.randomBytes(3).toString('hex');
+    return `${timestamp}-${random}`;
+}
+
+// ❌ WRONG - PID-based or globalState caching
+// This causes VS Code to see "same server" and cache connection
+const cachedId = context.globalState.get('instanceId');
+```
+
+**Why:** If instance ID is stable across reloads, VS Code's MCP system thinks it's the "same server" and caches the connection, preventing proper cleanup.
+
+#### 2. Stable Server Label
+
+**MUST** use a stable label (e.g., "CK3 Lens") that does NOT include the instance ID.
+
+```typescript
+// ✅ CORRECT - Stable label
+const serverName = 'CK3 Lens';
+
+// ❌ WRONG - Dynamic label with instance ID
+const serverName = `CK3 Lens (${instanceId})`;
+```
+
+**Why:** VS Code derives server identity from `<extensionId>/<label>`. If label changes, VS Code treats it as a NEW server while still caching the old one → zombies.
+
+#### 3. Provider Shutdown Method
+
+**MUST** implement `shutdown()` that:
+1. Sets `isShutdown = true`
+2. Fires `onDidChangeMcpServerDefinitions` event
+3. Returns `[]` from `provideMcpServerDefinitions()` when `isShutdown` is true
+
+```typescript
+class CK3LensMcpServerProvider {
+    private isShutdown: boolean = false;
+    
+    provideMcpServerDefinitions(): McpStdioServerDefinition[] {
+        if (this.isShutdown) {
+            return [];  // Tell VS Code: no servers available
+        }
+        return [/* normal definition */];
+    }
+    
+    shutdown(): void {
+        this.isShutdown = true;
+        this._onDidChangeDefinitions.fire();  // Force VS Code to re-query
+    }
+}
+```
+
+**Why:** VS Code must see empty definitions BEFORE the provider is disposed, otherwise it caches the stale connection.
+
+#### 4. Deactivation Sequence
+
+**MUST** follow this exact sequence in `deactivate()`:
+
+```typescript
+export async function deactivate(): Promise<void> {
+    // Step 1: Dispose registration (unregisters from VS Code API)
+    mcpRegistration?.dispose();
+    
+    // Step 2: Call shutdown() - sets isShutdown=true and fires change event
+    mcpServerProvider?.shutdown();
+    
+    // Step 3: Yield one tick (gives VS Code event loop opportunity)
+    await new Promise(resolve => setTimeout(resolve, 0));
+    
+    // Step 4: Dispose provider (cleans up resources)
+    mcpServerProvider?.dispose();
+}
+```
+
+**Why:** The yield tick is critical - VS Code needs an event loop opportunity to observe the empty definitions before we fully dispose.
+
+#### 5. Python Server EOF Exit
+
+**MUST** exit cleanly when stdin reaches EOF.
+
+```python
+# In server.py main block
+try:
+    mcp.run()
+except EOFError:
+    print(f"MCP server: stdin EOF detected, shutting down", file=sys.stderr)
+finally:
+    print(f"MCP server: main loop ended, exiting", file=sys.stderr)
+```
+
+**Why:** When VS Code closes the MCP connection, stdin closes. If the Python process doesn't exit, it becomes a zombie.
+
+### Validation Criteria
+
+To verify zombie prevention is working:
+
+1. **Reload 3× test**: Reload VS Code window 3 times. Each activation should show a DIFFERENT instance ID in logs.
+
+2. **No process accumulation**: After 3 reloads, Task Manager should show only ONE python process for the MCP server (not 3).
+
+3. **EOF shutdown logs**: On each reload, the OLD Python process should log "stdin EOF detected, shutting down".
+
+4. **No duplicate tools**: Copilot should show tools from only ONE instance ID, not duplicates.
+
+### Implementation Files
+
+| Component | File |
+|-----------|------|
+| Instance ID generation | `tools/ck3lens-explorer/src/mcp/mcpServerProvider.ts` |
+| Provider shutdown | `tools/ck3lens-explorer/src/mcp/mcpServerProvider.ts` |
+| Deactivation sequence | `tools/ck3lens-explorer/src/extension.ts` |
+| Python EOF handling | `tools/ck3lens_mcp/server.py` |
+
+---
+
+## Mode Behavior (Separate from Zombie Prevention)
+
+Mode management is related to but distinct from zombie prevention.
+
+### Mode File Blanking on Activation
+
+**On every activation**, the extension blanks the instance's mode file:
+
+```typescript
+// extension.ts - in activate()
+fs.writeFileSync(instanceModeFile, JSON.stringify({ 
+    mode: null, 
+    instance_id: instanceId,
+    cleared_at: new Date().toISOString() 
+}));
+```
+
+**Why:** Mode state should NOT persist across reloads. Each session starts fresh and requires explicit mode initialization via `ck3_get_mode_instructions()`.
+
+**This is intentional, not a bug.** Mode persistence would create confusion when the same window is used for different tasks.
+
+### Stale Mode File Cleanup
+
+Mode files older than 24 hours are automatically deleted:
+
+```typescript
+// extension.ts - cleanupStaleModeFiles()
+const maxAgeMs = 24 * 60 * 60 * 1000; // 24 hours
+// Files older than this are deleted
+```
+
+**Why:** Over time, orphaned mode files accumulate from crashed windows or development. This hygiene prevents disk clutter.
+
+### Mode Is NOT a Reason for Stable Instance ID
+
+Some might think: "If mode resets on reload, why not keep instance ID stable so mode persists?"
+
+**Answer:** Mode resetting is DESIRABLE. Fresh instance ID prevents zombies, which is more important than mode persistence. Users should explicitly initialize mode each session via the MCP tool.
+
+---
+
 ## Architecture Components
 
 ### 1. Extension: mcpServerProvider.ts
@@ -43,21 +225,12 @@ Each VS Code window:
 **Responsibility:** Dynamically register MCP server with VS Code
 
 ```typescript
-// Generates unique instance ID per window
-const instanceId = uuidv4();
+// Generates unique instance ID per activation (not per window!)
+const instanceId = generateInstanceId();
 
 // Registers dynamic MCP server definition
 vscode.lm.registerMcpServerDefinitionProvider('ck3lens', {
-    provideMcpServerDefinitions: () => [{
-        label: 'CK3 Lens MCP Server',
-        type: 'stdio',
-        command: 'python',
-        args: ['-m', 'ck3lens_mcp.server'],
-        env: {
-            CK3LENS_INSTANCE_ID: instanceId,  // <-- THE KEY
-            // ... other env vars
-        }
-    }]
+    provideMcpServerDefinitions: () => [/* ... */]
 });
 ```
 
@@ -79,7 +252,7 @@ vscode.lm.registerMcpServerDefinitionProvider('ck3lens', {
 }
 ```
 
-**NOTE:** `enabledApiProposals` is NOT needed - this API is stable as of VS Code 1.96.
+**NOTE:** As of VS Code 1.96, the `mcpServerDefinitionProvider` API is STABLE. The `enabledApiProposals` field is NOT required in the canonical architecture.
 
 ### 3. MCP Server: agent_mode.py
 
@@ -209,6 +382,15 @@ If output shows ck3lens, the file needs to be removed/renamed.
 Get-Content "$env:USERPROFILE\.ck3raven\mcp_server.log" -Tail 50
 ```
 
+### Symptom: Zombie processes after reload
+
+**Cause:** Deactivation sequence not completing properly
+
+**Diagnostics:**
+1. Check Output > CK3 Lens for "MCP deactivate: provider.shutdown()" log
+2. Check for Python stderr showing "stdin EOF detected"
+3. Verify deactivate() follows the 4-step sequence
+
 ---
 
 ## File Locations Summary
@@ -229,7 +411,8 @@ Get-Content "$env:USERPROFILE\.ck3raven\mcp_server.log" -Tail 50
 1. **DO NOT** create or resurrect `%APPDATA%\Code\User\mcp.json`
 2. **DO NOT** read/write to `agent_mode.json` without instance ID
 3. **DO NOT** assume mode state is shared across windows
-4. **DO NOT** use `enabledApiProposals` for this API (it's stable)
+4. **DO NOT** cache instance ID based on PID or globalState
+5. **DO NOT** include instance ID in server label
 
 ## For Agents: DO
 
@@ -237,6 +420,7 @@ Get-Content "$env:USERPROFILE\.ck3raven\mcp_server.log" -Tail 50
 2. **DO** use `agent_mode_{instanceId}.json` pattern
 3. **DO** log the instance ID for debugging
 4. **DO** fail loudly if instance ID is missing (not silently fallback)
+5. **DO** follow the 4-step deactivation sequence exactly
 
 ---
 
@@ -307,3 +491,4 @@ db.conn.execute("INSERT INTO symbols ...")  # FAILS: read-only
 |----------|---------|
 | [SINGLE_WRITER_ARCHITECTURE.md](SINGLE_WRITER_ARCHITECTURE.md) | Full single-writer spec |
 | [CANONICAL_ARCHITECTURE.md](CANONICAL_ARCHITECTURE.md) | Main architecture |
+| [LOGGING_IMPLEMENTATION_PLAN.md](LOGGING_IMPLEMENTATION_PLAN.md) | Structured logging plan |
