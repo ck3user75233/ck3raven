@@ -51,6 +51,8 @@ EXCLUDE_FILES = {
 # File extensions to include (code files)
 INCLUDE_EXTENSIONS = {
     ".py",
+    ".ts",       # TypeScript (VS Code extension)
+    ".js",       # JavaScript
     ".md",
     ".txt",
     ".yaml",

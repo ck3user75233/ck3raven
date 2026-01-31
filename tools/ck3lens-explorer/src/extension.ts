@@ -33,6 +33,11 @@ import { SetupWizard, showSetupStatus } from './setup/setupWizard';
 import { registerMcpServerProvider, CK3LensMcpServerProvider, McpProviderRegistration } from './mcp/mcpServerProvider';
 import { DiagnosticsServer } from './ipc/diagnosticsServer';
 import { TokenWatcher } from './tokens/tokenWatcher';
+import { Ck3RavenParticipant } from './chat/participant';
+import { registerActionCommands } from './chat/actions';
+import { registerSearchCommand } from './chat/search';
+import { runHealthCheck, formatHealthForChat } from './chat/diagnose';
+import { registerDoctorCommands } from './setup/doctor';
 
 // Global extension state
 let session: CK3LensSession | undefined;
@@ -42,6 +47,7 @@ let mcpServerProvider: CK3LensMcpServerProvider | undefined;
 let mcpRegistration: vscode.Disposable | undefined;
 let diagnosticsServer: DiagnosticsServer | undefined;
 let tokenWatcher: TokenWatcher | undefined;
+let chatParticipant: Ck3RavenParticipant | undefined;
 let logger: Logger;
 let structuredLogger: StructuredLogger | undefined;
 let outputChannel: vscode.OutputChannel;
@@ -96,14 +102,21 @@ function cleanupStaleModeFiles(logger: Logger): void {
  * Extension activation
  */
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+    console.error('[CK3RAVEN] A0 enter activate');
+    console.error('[CK3RAVEN] A0 version', context.extension.packageJSON.version);
+
     // Initialize logging
     outputChannel = vscode.window.createOutputChannel('CK3 Lens');
+    console.error('[CK3RAVEN] A1 after output channel');
+    
     logger = new Logger(outputChannel);
     logger.info('CK3 Lens Explorer activating...');
+    console.error('[CK3RAVEN] A2 after logger');
 
     // Initialize diagnostic collection for linting
     diagnosticCollection = vscode.languages.createDiagnosticCollection('ck3lens');
     context.subscriptions.push(diagnosticCollection);
+    console.error('[CK3RAVEN] A3 after diagnostic collection');
 
     // Register MCP Server Provider for per-window instance isolation
     // This replaces the static mcp.json approach and allows multiple VS Code windows
@@ -113,11 +126,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         mcpServerProvider = mcpResult.provider;
         mcpRegistration = mcpResult.registration;
     }
+    console.error('[CK3RAVEN] A4 after MCP provider registration');
     
     // Initialize structured logger (CANONICAL per docs/CANONICAL_LOGS.md)
     // Must happen AFTER mcpServerProvider so we have the instance ID
     const instanceId = mcpServerProvider?.getInstanceId() ?? 'unknown';
     structuredLogger = createStructuredLogger(instanceId, outputChannel);
+    console.error('[CK3RAVEN] A5 after structured logger');
+    
     structuredLogger.info('ext.activate', 'Extension activating', { 
         version: context.extension.packageJSON.version,
         instance_id: instanceId
@@ -149,13 +165,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // Clean up stale mode files from old instances (older than 24 hours)
         cleanupStaleModeFiles(logger);
     }
+    console.error('[CK3RAVEN] A6 after mode file handling');
 
     // Initialize Python bridge to ck3raven
     pythonBridge = new PythonBridge(logger);
     context.subscriptions.push(pythonBridge);
+    console.error('[CK3RAVEN] A7 after Python bridge');
 
     // Initialize session (lazy - will connect when first command is run)
     session = new CK3LensSession(pythonBridge, logger);
+    console.error('[CK3RAVEN] A8 after session');
 
     // Register view providers
     const explorerProvider = new ExplorerViewProvider(session, logger);
@@ -164,13 +183,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const issuesProvider = new IssuesViewProvider(session, logger);
     
     // Get instance ID for agentProvider (enables mode file watching)
-    const instanceId = mcpServerProvider?.getInstanceId();
+    // Note: instanceId was already declared at line ~124
     const agentProvider = new AgentViewProvider(context, logger, instanceId);
     // DEPRECATED: RulesView disabled - mode now controlled via MCP ck3_get_mode_instructions()
     // const rulesProvider = new RulesViewProvider(logger);
     
     // ContractsView: Shows active contracts and operation history
     const contractsProvider = new ContractsViewProvider(logger);
+    console.error('[CK3RAVEN] A9 after view providers created');
 
     // Create playset tree view with drag-and-drop support
     const playsetTreeView = vscode.window.createTreeView('ck3lens.playsetView', {
@@ -283,6 +303,75 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     } else {
         logger.debug('Token watcher skipped: ck3ravenPath not configured');
     }
+    console.error('[CK3RAVEN] A10 after token watcher');
+
+    // ========================================================================
+    // CK3 Raven Chat Participant (V1 Brief)
+    // ========================================================================
+    console.error('[CK3RAVEN] A11 before chat participant');
+    
+    // Check if Chat API exists
+    if (typeof vscode.chat?.createChatParticipant !== 'function') {
+        console.error('[CK3RAVEN] A11a Chat API not available');
+        logger.info('Chat Participant API not available - skipping @ck3raven registration');
+    } else {
+        console.error('[CK3RAVEN] A11b Chat API available, creating participant');
+        chatParticipant = new Ck3RavenParticipant(context, logger);
+        console.error('[CK3RAVEN] A11c participant created');
+        context.subscriptions.push(chatParticipant);
+
+        // Register chat journal commands
+        registerActionCommands(context, chatParticipant.getJournal(), logger);
+        registerSearchCommand(context, () => chatParticipant?.getJournal().getJournalFolder());
+        console.error('[CK3RAVEN] A11d journal commands registered');
+
+        // Health check command
+        context.subscriptions.push(
+            vscode.commands.registerCommand('ck3raven.chat.health', async () => {
+                const health = await runHealthCheck(context.extension.packageJSON.version);
+                const formatted = formatHealthForChat(health);
+                
+                // Transform HealthResult to HealthEvent['checks'] format for journal
+                await chatParticipant?.getJournal().logHealth({
+                    participant_registered: true, // We got here so it's registered
+                    journal_writable: true, // We're writing to it
+                    mcp_tools_registered: health.mcp_tools_registered,
+                    known_conflicts: []
+                });
+                
+                // Show in information message
+                vscode.window.showInformationMessage(
+                    health.mcp_tools_registered 
+                        ? `CK3 Raven: ${health.mcp_tool_count} tools registered`
+                        : 'CK3 Raven: No tools registered - check MCP connection'
+                );
+            })
+        );
+
+        // Check for conflicting chat recorder extensions (Q3)
+        const knownRecorders = vscode.workspace.getConfiguration('ck3raven.chatJournal')
+            .get<string[]>('knownChatRecorderExtensions', []);
+        if (knownRecorders.length > 0) {
+            const installed = knownRecorders.filter(id => vscode.extensions.getExtension(id));
+            if (installed.length > 0) {
+                logger.info(`Chat recorders detected: ${installed.join(', ')}`);
+            }
+        }
+
+        logger.info('CK3 Raven Chat Participant registered');
+    }
+    console.error('[CK3RAVEN] A12 after chat participant');
+
+    // ========================================================================
+    // Doctor Commands (Dev Host Determinism Shim)
+    // ========================================================================
+    registerDoctorCommands(
+        context,
+        () => mcpServerProvider?.getInstanceId(),
+        logger,
+        outputChannel
+    );
+    logger.info('Doctor commands registered');
 
     logger.info('CK3 Lens Explorer activated successfully');
 
@@ -1137,6 +1226,10 @@ export async function deactivate(): Promise<void> {
         });
     }
     mcpServerProvider = undefined;
+    
+    // Dispose chat participant
+    chatParticipant?.dispose();
+    chatParticipant = undefined;
     
     session?.dispose();
     pythonBridge?.dispose();

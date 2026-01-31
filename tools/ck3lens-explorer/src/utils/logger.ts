@@ -53,6 +53,12 @@ export class Logger {
         }
     }
 
+    warn(message: string): void {
+        if (this.shouldLog('info')) {  // warn uses info level threshold
+            this.outputChannel.appendLine(this.formatMessage('warn', message));
+        }
+    }
+
     debug(message: string): void {
         if (this.shouldLog('debug')) {
             this.outputChannel.appendLine(this.formatMessage('debug', message));

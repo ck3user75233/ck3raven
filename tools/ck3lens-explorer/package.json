@@ -33,6 +33,14 @@
     "mcpServerDefinitionProvider"
   ],
   "contributes": {
+    "chatParticipants": [
+      {
+        "id": "ck3raven",
+        "name": "ck3raven",
+        "description": "CK3 modding assistant with database access and mod editing",
+        "isSticky": true
+      }
+    ],
     "mcpServerDefinitionProviders": [
       {
         "id": "ck3lens",
@@ -381,6 +389,56 @@
         "command": "ck3lens.agent.copyInstanceId",
         "title": "Copy MCP Instance ID",
         "icon": "$(key)"
+      },
+      {
+        "command": "ck3raven.chat.tagSession",
+        "title": "CK3 Raven: Tag Chat Session",
+        "icon": "$(tag)"
+      },
+      {
+        "command": "ck3raven.chat.quickTag",
+        "title": "CK3 Raven: Quick Tag Session",
+        "icon": "$(tag)"
+      },
+      {
+        "command": "ck3raven.chat.logAction",
+        "title": "CK3 Raven: Log Action",
+        "icon": "$(note)"
+      },
+      {
+        "command": "ck3raven.chat.sessionInfo",
+        "title": "CK3 Raven: Show Session Info",
+        "icon": "$(info)"
+      },
+      {
+        "command": "ck3raven.chat.openJournalFolder",
+        "title": "CK3 Raven: Open Journal Folder",
+        "icon": "$(folder)"
+      },
+      {
+        "command": "ck3raven.chat.searchJournal",
+        "title": "CK3 Raven: Search Journal",
+        "icon": "$(search)"
+      },
+      {
+        "command": "ck3raven.chat.health",
+        "title": "CK3 Raven: Health Check",
+        "icon": "$(heart)"
+      },
+      {
+        "command": "ck3raven.doctor",
+        "title": "CK3 Raven: Doctor (Diagnostics)",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "ck3raven.setPythonPath",
+        "title": "CK3 Raven: Set Python Interpreter",
+        "icon": "$(symbol-variable)"
+      },
+      {
+        "command": "ck3raven.checkStatus",
+        "title": "CK3 Raven: Quick Status Check",
+        "icon": "$(check)"
       }
     ],
     "menus": {
@@ -612,6 +670,14 @@
           ],
           "default": "ck3lens",
           "description": "Default mode when starting CK3 Lens"
+        },
+        "ck3raven.chatJournal.knownChatRecorderExtensions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Extension IDs whose embedded chat recorders can conflict with ck3raven journaling. If non-empty, a warning is shown."
         }
       }
     },

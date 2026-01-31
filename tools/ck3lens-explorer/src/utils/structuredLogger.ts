@@ -71,13 +71,9 @@ export class StructuredLogger {
         this.instanceId = instanceId;
         this.outputChannel = outputChannel || null;
 
-        // Create log directory (fail silently)
-        try {
-            fs.mkdirSync(LOG_DIR, { recursive: true });
-            this.initialized = true;
-        } catch {
-            // Will use console fallback
-        }
+        // Create log directory - throw if fails
+        fs.mkdirSync(LOG_DIR, { recursive: true });
+        this.initialized = true;
 
         // Start flush timer
         this.flushTimer = setInterval(() => this.flush(), FLUSH_INTERVAL_MS);
@@ -169,7 +165,7 @@ export class StructuredLogger {
     }
 
     /**
-     * Flush buffered log entries to disk.
+     * Flush buffered log entries to disk - throws on failure
      */
     flush(): void {
         if (this.buffer.length === 0) return;
@@ -177,13 +173,8 @@ export class StructuredLogger {
         const lines = this.buffer.join('\n') + '\n';
         this.buffer = [];
 
-        // Fail-safe: try file, fall back to console
-        try {
-            fs.appendFileSync(LOG_FILE, lines, 'utf-8');
-        } catch {
-            // Graceful degradation
-            console.error('[LOG FALLBACK]', lines);
-        }
+        // Write to file - throw on failure
+        fs.appendFileSync(LOG_FILE, lines, 'utf-8');
     }
 
     /**

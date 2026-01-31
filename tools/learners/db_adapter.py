@@ -277,6 +277,10 @@ class LearnerDb:
         """Get the content_version_id for vanilla (always 1 by convention)."""
         return 1
     
+    def get_vanilla_cvid(self) -> int:
+        """Get the vanilla content_version_id (always 1 by convention)."""
+        return 1
+    
     def get_mod_cvid(self, mod_name: str) -> Optional[int]:
         """Look up content_version_id for a mod by name."""
         row = self.conn.execute("""
