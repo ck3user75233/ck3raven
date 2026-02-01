@@ -771,3 +771,65 @@ grep -rn "_detect_\|_get_vanilla\|findCk3raven" tools/
 ```
 
 All arch_lint PATH-* rules should pass with zero errors after migration is complete.
+
+---
+
+## Appendix: Hardcoded Paths Audit (February 1, 2026)
+
+This section documents all hardcoded paths found in the codebase that need to be migrated to `ck3lens/paths.py`.
+
+### Python Files - VIOLATIONS
+
+| File | Line(s) | Problem | Fix |
+|------|---------|---------|-----|
+| [`tools/ck3lens_mcp/ck3lens/workspace.py`](../tools/ck3lens_mcp/ck3lens/workspace.py#L163) | 163 | `DEFAULT_VANILLA_PATH = Path("C:/Program Files (x86)/Steam/...")` | Replace with `from ck3lens.paths import ROOT_GAME` |
+| [`tools/ck3lens_mcp/ck3lens/world_router.py`](../tools/ck3lens_mcp/ck3lens/world_router.py#L252-L254) | 252-254 | `_get_vanilla_root()` method with hardcoded Steam paths | Delete method, use `ROOT_GAME` import |
+| [`tools/ck3lens_mcp/server.py`](../tools/ck3lens_mcp/server.py#L374) | 374 | Fallback vanilla path hardcoded in function | Import `ROOT_GAME` from paths.py |
+| [`tools/ck3lens-explorer/bridge/server.py`](../tools/ck3lens-explorer/bridge/server.py#L231) | 231 | `vanilla_root=Path("C:/Program Files (x86)/Steam/...")` | Import `ROOT_GAME` |
+| [`scripts/launcher_to_playset.py`](../scripts/launcher_to_playset.py#L21) | 21, 46 | `STEAM_WORKSHOP = Path("C:/Program Files...")` + vanilla path in template | Import `ROOT_STEAM`, `ROOT_GAME` |
+
+### TypeScript Files - OK (Bootstrap Exception)
+
+| File | Line(s) | Status |
+|------|---------|--------|
+| [`tools/ck3lens-explorer/src/setup/setupWizard.ts`](../tools/ck3lens-explorer/src/setup/setupWizard.ts#L532-L557) | 532-557 | ✅ **ALLOWED** - Bootstrap detection candidates are permitted per Rule 5 |
+
+### Temporary Scripts - DELETE
+
+These scripts contain hardcoded paths and should be deleted during migration:
+
+| File | Action |
+|------|--------|
+| [`scripts/temp_sym.py`](../scripts/temp_sym.py) | **DELETE** - temp script with hardcoded paths |
+| [`scripts/temp_w.py`](../scripts/temp_w.py) | **DELETE** - temp script |
+| [`scripts/temp_w2.py`](../scripts/temp_w2.py) | **DELETE** - temp script |
+| [`scripts/temp_wr.py`](../scripts/temp_wr.py) | **DELETE** - temp script |
+| [`scripts/temp_write.py`](../scripts/temp_write.py) | **DELETE** - temp script |
+
+### Quick Verification Commands
+
+```bash
+# Find remaining hardcoded Steam paths
+grep -rn "C:\\\\Program Files\\|C:/Program Files\\|\.steam/steam" tools/ scripts/ --include="*.py" --include="*.ts"
+
+# Find banned path aliases
+grep -rn "vanilla_root\\|workshop_root\\|ck3raven_root\\|local_mods_folder" tools/ --include="*.py" --include="*.ts"
+
+# Find DEFAULT_* constants
+grep -rn "DEFAULT_VANILLA\\|DEFAULT_CK3_MOD\\|DEFAULT_DB_PATH" tools/ --include="*.py"
+
+# Find detection methods
+grep -rn "_get_vanilla_root\\|_detect_ck3raven_root\\|findCk3ravenPath" tools/ --include="*.py" --include="*.ts"
+```
+
+### Migration Status
+
+- [ ] Create `ck3lens/paths.py`
+- [ ] Migrate `workspace.py` (line 163)
+- [ ] Migrate `world_router.py` (lines 252-254)
+- [ ] Migrate `server.py` (line 374)
+- [ ] Migrate `bridge/server.py` (line 231)
+- [ ] Migrate `launcher_to_playset.py` (lines 21, 46)
+- [ ] Delete temp scripts (5 files)
+- [ ] Run arch_lint PATH-* rules
+- [ ] Update this checklist
