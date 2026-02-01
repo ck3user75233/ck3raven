@@ -45,24 +45,41 @@ export class DiagnosticsServer implements vscode.Disposable {
      * Start the TCP server
      */
     public start(): Promise<void> {
-        return new Promise((resolve, reject) => {
+        return new Promise(async (resolve, reject) => {
             if (this.server) {
                 resolve();
                 return;
             }
 
+            // Clean up zombie processes holding our port
+            await this.cleanupZombieServer();
+
             this.server = net.createServer((socket) => {
                 this.handleConnection(socket);
             });
 
+            let retried = false;
             this.server.on('error', (err: NodeJS.ErrnoException) => {
-                if (err.code === 'EADDRINUSE') {
+                if (err.code === 'EADDRINUSE' && !retried) {
+                    retried = true;
                     this.logger.info(`IPC port ${this.port} in use, trying next port...`);
                     this.server?.close();
-                    this.server?.listen(this.port + 1, this.host);
+                    // Retry on next port WITH proper callback
+                    this.server?.listen(this.port + 1, this.host, () => {
+                        const address = this.server?.address();
+                        const actualPort = typeof address === 'object' ? address?.port : this.port + 1;
+                        this.logger.info(`Diagnostics IPC server listening on ${this.host}:${actualPort}`);
+                        this.writePortFile(actualPort || this.port + 1);
+                        resolve();
+                    });
+                } else if (err.code === 'EADDRINUSE') {
+                    // Already retried once, give up - but log clearly
+                    this.logger.error(`IPC ports ${this.port} and ${this.port + 1} both in use - ck3_vscode tool will not work`);
+                    this.ipcDisabled = true;
+                    resolve(); // Don't reject - extension should still work
                 } else {
                     this.logger.error('IPC server error', err);
-                    reject(err);
+                    resolve(); // Don't reject - extension should still work
                 }
             });
 
@@ -76,6 +93,96 @@ export class DiagnosticsServer implements vscode.Disposable {
                 resolve();
             });
         });
+    }
+
+    /**
+     * Check for zombie server from crashed VS Code and clean up if found
+     */
+    private async cleanupZombieServer(): Promise<void> {
+        const fs = require('fs');
+        const path = require('path');
+        const os = require('os');
+        const { execSync } = require('child_process');
+        
+        const portFile = path.join(os.tmpdir(), 'ck3lens_ipc_port');
+        
+        try {
+            if (!fs.existsSync(portFile)) {
+                return; // No previous server
+            }
+            
+            const data = JSON.parse(fs.readFileSync(portFile, 'utf8'));
+            const { port, pid, timestamp } = data;
+            
+            // Check if the PID is still alive
+            try {
+                // On Windows, tasklist returns exit code 0 if process exists
+                if (process.platform === 'win32') {
+                    execSync(`tasklist /FI "PID eq ${pid}" /NH`, { encoding: 'utf8' });
+                    
+                    // Check if it's stale (older than 5 minutes without our current PID)
+                    const age = Date.now() - timestamp;
+                    if (pid !== process.pid && age > 5 * 60 * 1000) {
+                        // Old process - try to ping it first
+                        const isResponding = await this.pingServer(port);
+                        if (!isResponding) {
+                            this.logger.warn(`Found zombie IPC server (PID ${pid}, age ${Math.round(age/1000)}s) - cleaning up`);
+                            // Delete the stale port file so we can bind
+                            fs.unlinkSync(portFile);
+                        }
+                    }
+                }
+            } catch {
+                // PID doesn't exist - clean up stale file
+                this.logger.info(`Cleaning up stale IPC port file from dead process ${pid}`);
+                fs.unlinkSync(portFile);
+            }
+        } catch (err) {
+            // Ignore errors - we'll just try to bind anyway
+            this.logger.debug(`Zombie cleanup check failed: ${err}`);
+        }
+    }
+
+    /**
+     * Try to ping an existing server to see if it's responsive
+     */
+    private pingServer(port: number): Promise<boolean> {
+        return new Promise((resolve) => {
+            const socket = new net.Socket();
+            const timeout = setTimeout(() => {
+                socket.destroy();
+                resolve(false);
+            }, 1000);
+
+            socket.connect(port, this.host, () => {
+                // Send a ping request
+                socket.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }) + '\n');
+            });
+
+            socket.on('data', () => {
+                clearTimeout(timeout);
+                socket.destroy();
+                resolve(true); // Got a response - server is alive
+            });
+
+            socket.on('error', () => {
+                clearTimeout(timeout);
+                socket.destroy();
+                resolve(false);
+            });
+        });
+    }
+
+    /**
+     * Track if IPC was disabled due to port conflicts
+     */
+    private ipcDisabled = false;
+
+    /**
+     * Check if IPC is available
+     */
+    public isAvailable(): boolean {
+        return this.server !== null && !this.ipcDisabled;
     }
 
     /**

@@ -5,7 +5,7 @@
 import * as vscode from 'vscode';
 import { Logger } from '../utils/logger';
 
-export type LensMode = 'ck3lens' | 'ck3raven-dev' | 'none';
+export type LensMode = 'ck3lens' | 'ck3raven-dev' | 'none' | 'initializing';
 export type ConnectionStatus = 'connected' | 'disconnected';
 
 export interface AgentInstance {
@@ -103,13 +103,25 @@ class AgentTreeItem extends vscode.TreeItem {
                     if (this.agent.mode === 'none') {
                         this.iconPath = new vscode.ThemeIcon('account');
                         this.description = 'initialized by VS Code';
+                    } else if (this.agent.mode === 'initializing') {
+                        this.iconPath = new vscode.ThemeIcon('sync~spin');
+                        this.description = 'verifying...';
                     } else {
                         this.iconPath = new vscode.ThemeIcon(modeDef?.icon || 'account');
                         this.description = modeDef?.shortName || this.agent.mode;
                     }
+                    // Build tooltip text based on mode
+                    let modeText: string;
+                    if (this.agent.mode === 'none') {
+                        modeText = 'initialized by VS Code';
+                    } else if (this.agent.mode === 'initializing') {
+                        modeText = 'Initializing... awaiting MCP confirmation';
+                    } else {
+                        modeText = modeDef?.displayName || this.agent.mode;
+                    }
                     this.tooltip = new vscode.MarkdownString(
                         `**${this.label}**\n\n` +
-                        `Mode: ${this.agent.mode === 'none' ? 'initialized by VS Code' : modeDef?.displayName || this.agent.mode}\n\n` +
+                        `Mode: ${modeText}\n\n` +
                         (this.agent.lastActivity ? `Last activity: ${this.agent.lastActivity}` : '')
                     );
                 }
@@ -157,26 +169,33 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
         private readonly logger: Logger,
         private readonly instanceId?: string
     ) {
+        console.error('[CK3RAVEN] AgentViewProvider constructor ENTER');
         // Always start fresh - don't persist mode across sessions
         this.state = this.createFreshState();
+        console.error('[CK3RAVEN] AgentViewProvider after createFreshState');
         this.registerCommands();
+        console.error('[CK3RAVEN] AgentViewProvider after registerCommands');
         
         // Set up mode file watching if we have an instance ID
         if (this.instanceId) {
             this.setupModeFileWatcher();
         }
+        console.error('[CK3RAVEN] AgentViewProvider setupModeFileWatcher done');
         
         // Watch trace file for mode changes (with instance_id filtering)
-        // Delay initial check to avoid reading stale events from previous sessions
         if (this.instanceId) {
             this.setupTraceFileWatcher();
         }
+        console.error('[CK3RAVEN] AgentViewProvider setupTraceFileWatcher done');
         
         // Check MCP configuration on startup
         this.checkMcpConfiguration();
+        console.error('[CK3RAVEN] AgentViewProvider checkMcpConfiguration done');
         
         // Start ongoing MCP monitoring (every 30 seconds)
         this.startMcpMonitoring();
+        console.error('[CK3RAVEN] AgentViewProvider startMcpMonitoring done');
+        console.error('[CK3RAVEN] AgentViewProvider constructor EXIT');
     }
 
     /**
@@ -536,7 +555,9 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
     }
 
     getChildren(element?: AgentTreeItem): Thenable<AgentTreeItem[]> {
+        console.error('[CK3RAVEN] AgentView.getChildren ENTER element=', element?.label);
         if (element) {
+            console.error('[CK3RAVEN] AgentView.getChildren EXIT (has element)');
             return Promise.resolve([]);
         }
 
@@ -822,25 +843,20 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
 
     /**
      * Initialize agent with specific mode
+     * 
+     * Sets status to 'initializing' immediately for user feedback.
+     * The mode file watcher will update to actual mode when MCP confirms,
+     * or the user can retry/cancel if initialization fails.
      */
     private async initializeAgentWithMode(mode: LensMode): Promise<void> {
         const modeDef = MODE_DEFINITIONS[mode];
         if (!modeDef) return;
 
-        const newAgent: AgentInstance = {
-            id: this.generateId(),
-            mode: mode,
-            initializedAt: new Date().toISOString(),
-            label: 'Agent',
-            isLocal: true
-        };
+        // Set to 'initializing' for immediate user feedback
+        // Mode file watcher will update to actual mode on MCP confirmation
+        this.updateAgentMode('initializing');
 
-        // Replace existing primary agent
-        this.state.agents = this.state.agents.filter(a => a.label.startsWith('Sub-'));
-        this.state.agents.unshift(newAgent);
-
-        this.persistState();
-        this.refresh();
+        this.logger.info(`Initialization requested for mode: ${mode}`);
 
         // Open chat with initialization prompt (includes current MCP instance ID)
         await vscode.commands.executeCommand('workbench.action.chat.open', {
@@ -854,24 +870,18 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
 
     /**
      * Add a sub-agent
+     * 
+     * Sets status to 'initializing' for user feedback, then opens new chat.
+     * The mode file watcher will update status when MCP confirms success.
      */
     private async addSubAgent(mode: LensMode): Promise<void> {
         const modeDef = MODE_DEFINITIONS[mode];
         if (!modeDef) return;
 
-        const subAgentNum = this.state.agents.filter(a => a.label.startsWith('Sub-')).length + 1;
+        // Set to 'initializing' for immediate user feedback
+        this.updateAgentMode('initializing');
 
-        const newAgent: AgentInstance = {
-            id: this.generateId(),
-            mode: mode,
-            initializedAt: new Date().toISOString(),
-            label: `Sub-Agent ${subAgentNum}`,
-            isLocal: true
-        };
-
-        this.state.agents.push(newAgent);
-        this.persistState();
-        this.refresh();
+        this.logger.info(`Sub-agent initialization requested for mode: ${mode}`);
 
         // Create new chat with initialization prompt (includes current MCP instance ID)
         await vscode.commands.executeCommand('workbench.action.chat.newChat');

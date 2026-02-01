@@ -29,9 +29,6 @@
     "onStartupFinished"
   ],
   "main": "./out/extension.js",
-  "enabledApiProposals": [
-    "mcpServerDefinitionProvider"
-  ],
   "contributes": {
     "chatParticipants": [
       {

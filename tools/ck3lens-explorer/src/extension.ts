@@ -126,7 +126,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         mcpServerProvider = mcpResult.provider;
         mcpRegistration = mcpResult.registration;
     }
-    console.error('[CK3RAVEN] A4 after MCP provider registration');
+    console.error('[CK3RAVEN] A4 MCP provider registered');
     
     // Initialize structured logger (CANONICAL per docs/CANONICAL_LOGS.md)
     // Must happen AFTER mcpServerProvider so we have the instance ID
@@ -262,23 +262,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     // Register commands
     // NOTE: rulesProvider removed - mode now controlled via MCP ck3_get_mode_instructions()
+    console.error('[CK3RAVEN] A13 before registerCommands');
     registerCommands(context, agentProvider, explorerProvider, conflictsProvider, playsetProvider, issuesProvider, lintingProvider, contractsProvider);
+    console.error('[CK3RAVEN] A14 after registerCommands');
 
     // Register file watchers for real-time linting
     if (vscode.workspace.getConfiguration('ck3lens').get('enableRealTimeLinting', true)) {
         registerFileWatchers(context, lintingProvider);
     }
+    console.error('[CK3RAVEN] A15 file watchers done');
 
     // Start the IPC diagnostics server for MCP tool access
+    console.error('[CK3RAVEN] A16 DiagnosticsServer starting');
     diagnosticsServer = new DiagnosticsServer(logger);
     context.subscriptions.push(diagnosticsServer);
     diagnosticsServer.start().then(() => {
+        console.error('[CK3RAVEN] A16b DiagnosticsServer started');
         logger.info(`IPC diagnostics server started on port ${diagnosticsServer?.getPort()}`);
     }).catch(err => {
+        console.error('[CK3RAVEN] A16c DiagnosticsServer FAILED', err);
         logger.error('Failed to start IPC diagnostics server', err);
     });
+    console.error('[CK3RAVEN] A17 after DiagnosticsServer');
 
     // Initialize Token Watcher for Phase 1.5C token approval UX
+    console.error('[CK3RAVEN] A18 TokenWatcher starting');
     const ck3ravenPath = vscode.workspace.getConfiguration('ck3lens').get<string>('ck3ravenPath');
     if (ck3ravenPath && fs.existsSync(ck3ravenPath)) {
         // Find Python path for the CLI
@@ -308,7 +316,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // ========================================================================
     // CK3 Raven Chat Participant (V1 Brief)
     // ========================================================================
-    console.error('[CK3RAVEN] A11 before chat participant');
+    console.error('[CK3RAVEN] A11 Chat Participant starting');
     
     // Check if Chat API exists
     if (typeof vscode.chat?.createChatParticipant !== 'function') {
@@ -365,24 +373,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // ========================================================================
     // Doctor Commands (Dev Host Determinism Shim)
     // ========================================================================
+    console.error('[CK3RAVEN] A19 before registerDoctorCommands');
     registerDoctorCommands(
         context,
         () => mcpServerProvider?.getInstanceId(),
         logger,
         outputChannel
     );
+    console.error('[CK3RAVEN] A20 after registerDoctorCommands');
     logger.info('Doctor commands registered');
 
     logger.info('CK3 Lens Explorer activated successfully');
+    console.error('[CK3RAVEN] A21 ACTIVATE COMPLETE - returning from activate()');
 
-    // Auto-initialize session on startup if enabled (default: true)
-    if (vscode.workspace.getConfiguration('ck3lens').get('autoInitialize', true)) {
+    // Auto-initialize disabled by default - Python bridge can hang
+    // Users can manually init via the "Initialize CK3 Lens" button
+    if (vscode.workspace.getConfiguration('ck3lens').get('autoInitialize', false)) {
         // Delay slightly to let UI finish loading
         setTimeout(async () => {
             try {
+                console.error('[CK3RAVEN] AUTO-INIT triggered');
                 logger.info('Auto-initializing CK3 Lens session...');
                 await vscode.commands.executeCommand('ck3lens.initSession');
+                console.error('[CK3RAVEN] AUTO-INIT complete');
             } catch (error) {
+                console.error('[CK3RAVEN] AUTO-INIT FAILED', error);
                 logger.error('Auto-initialization failed', error);
                 // Don't show error on auto-init failure - user can manually init
             }

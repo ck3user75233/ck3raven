@@ -254,9 +254,11 @@ export class IssuesViewProvider implements vscode.TreeDataProvider<IssueTreeItem
     }
 
     async getChildren(element?: IssueTreeItem): Promise<IssueTreeItem[]> {
+        console.error('[CK3RAVEN] IssuesView.getChildren ENTER element=', element?.label);
         if (!element) {
             // Root level - show severity groups
             if (!this.session.isInitialized) {
+                console.error('[CK3RAVEN] IssuesView.getChildren EXIT (not initialized)');
                 return [
                     new IssueTreeItem(
                         'Initialize CK3 Lens to see issues',
