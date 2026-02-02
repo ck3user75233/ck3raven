@@ -164,38 +164,44 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
     private startupTime: number = Date.now();
     private readonly TRACE_STARTUP_DELAY_MS = 5000; // Don't read stale trace events for 5 seconds
 
+    // Track last state signature to avoid unnecessary refreshes (prevents listener leak)
+    private _lastStateSignature: string = '';
+
     constructor(
         private readonly context: vscode.ExtensionContext,
         private readonly logger: Logger,
         private readonly instanceId?: string
     ) {
-        console.error('[CK3RAVEN] AgentViewProvider constructor ENTER');
+        console.log('[CK3RAVEN] AgentViewProvider constructor ENTER');
         // Always start fresh - don't persist mode across sessions
         this.state = this.createFreshState();
-        console.error('[CK3RAVEN] AgentViewProvider after createFreshState');
+        console.log('[CK3RAVEN] AgentViewProvider after createFreshState');
+        
+        // Add the event emitter to disposables for proper cleanup
+        this.disposables.push(this._onDidChangeTreeData);
         this.registerCommands();
-        console.error('[CK3RAVEN] AgentViewProvider after registerCommands');
+        console.log('[CK3RAVEN] AgentViewProvider after registerCommands');
         
         // Set up mode file watching if we have an instance ID
         if (this.instanceId) {
             this.setupModeFileWatcher();
         }
-        console.error('[CK3RAVEN] AgentViewProvider setupModeFileWatcher done');
+        console.log('[CK3RAVEN] AgentViewProvider setupModeFileWatcher done');
         
         // Watch trace file for mode changes (with instance_id filtering)
         if (this.instanceId) {
             this.setupTraceFileWatcher();
         }
-        console.error('[CK3RAVEN] AgentViewProvider setupTraceFileWatcher done');
+        console.log('[CK3RAVEN] AgentViewProvider setupTraceFileWatcher done');
         
         // Check MCP configuration on startup
         this.checkMcpConfiguration();
-        console.error('[CK3RAVEN] AgentViewProvider checkMcpConfiguration done');
+        console.log('[CK3RAVEN] AgentViewProvider checkMcpConfiguration done');
         
         // Start ongoing MCP monitoring (every 30 seconds)
         this.startMcpMonitoring();
-        console.error('[CK3RAVEN] AgentViewProvider startMcpMonitoring done');
-        console.error('[CK3RAVEN] AgentViewProvider constructor EXIT');
+        console.log('[CK3RAVEN] AgentViewProvider startMcpMonitoring done');
+        console.log('[CK3RAVEN] AgentViewProvider constructor EXIT');
     }
 
     /**
@@ -231,6 +237,9 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
      * available during an active language model request context. We cannot call it
      * directly from extension code. Instead, we check tool list freshness and 
      * validate the MCP config file exists.
+     * 
+     * IMPORTANT: Only calls refresh() when state actually changes to prevent listener leak.
+     * See: https://github.com/microsoft/vscode/issues/... (listener accumulation on frequent fire())
      */
     private async checkMcpConfiguration(): Promise<void> {
         try {
@@ -247,27 +256,29 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
                 // No tools listed at all
                 this.lastToolCount = 0;
                 await this.markMcpDisconnected('no tools registered');
-                return;
-            }
+                // markMcpDisconnected updates state, so check if we need to refresh below
+            } else {
+                // Tools are listed - but we need to verify they're fresh
+                // If tool count changed, we know VS Code just refreshed the list
+                if (ck3Tools.length !== this.lastToolCount) {
+                    this.toolsLastSeen = now;
+                    this.lastToolCount = ck3Tools.length;
+                    this.logger.info(`MCP tools refreshed: ${ck3Tools.length} tools detected`);
+                }
 
-            // Tools are listed - but we need to verify they're fresh
-            // If tool count changed, we know VS Code just refreshed the list
-            if (ck3Tools.length !== this.lastToolCount) {
-                this.toolsLastSeen = now;
-                this.lastToolCount = ck3Tools.length;
-                this.logger.info(`MCP tools refreshed: ${ck3Tools.length} tools detected`);
-            }
+                // Dynamic provider: if tools are registered, MCP is working
+                // No need to check static config file - tool presence IS the proof
 
-            // Dynamic provider: if tools are registered, MCP is working
-            // No need to check static config file - tool presence IS the proof
-
-            // If we haven't seen a tool count change in a while, be cautious
-            // But still mark as connected if tools exist (VS Code manages the lifecycle)
-            const toolsAreFresh = (now - this.toolsLastSeen) < this.TOOL_STALE_THRESHOLD_MS;
-            
-            if (toolsAreFresh || this.toolsLastSeen === 0) {
-                // First check or tools recently refreshed - mark as connected
-                this.toolsLastSeen = now; // Initialize on first run
+                // If we haven't seen a tool count change in a while, be cautious
+                // But still mark as connected if tools exist (VS Code manages the lifecycle)
+                const toolsAreFresh = (now - this.toolsLastSeen) < this.TOOL_STALE_THRESHOLD_MS;
+                
+                if (toolsAreFresh || this.toolsLastSeen === 0) {
+                    // First check or tools recently refreshed - mark as connected
+                    this.toolsLastSeen = now; // Initialize on first run
+                }
+                
+                // Update state (same for fresh or not - we trust VS Code's tool list)
                 this.state.mcpServer = { 
                     status: 'connected', 
                     serverName: `ck3lens (${ck3Tools.length} tools)` 
@@ -280,30 +291,28 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
                 this.state.policyEnforcement = hasPolicyTool 
                     ? { status: 'connected', message: 'active' }
                     : { status: 'disconnected', message: 'no policy tools found' };
-            } else {
-                // Tools exist but haven't been refreshed - still report as connected
-                // VS Code manages MCP lifecycle, if tools are listed they should work
-                this.state.mcpServer = { 
-                    status: 'connected', 
-                    serverName: `ck3lens (${ck3Tools.length} tools)` 
-                };
                 
-                const hasPolicyTool = ck3Tools.some(t => 
-                    t.name.includes('policy') || t.name.includes('validate')
-                );
-                this.state.policyEnforcement = hasPolicyTool 
-                    ? { status: 'connected', message: 'active' }
-                    : { status: 'disconnected', message: 'no policy tools found' };
+                this.logger.debug(`MCP check: ${ck3Tools.length} tools, fresh=${toolsAreFresh}`);
             }
-            
-            this.logger.debug(`MCP check: ${ck3Tools.length} tools, fresh=${toolsAreFresh}`);
         } catch (error) {
             this.logger.error('MCP status check error:', error);
             await this.markMcpDisconnected('check error');
         }
 
-        this.persistState();
-        this.refresh();
+        // CRITICAL FIX: Only refresh if state actually changed
+        // This prevents listener leak from accumulating VS Code internal listeners
+        const currentSignature = JSON.stringify({
+            mcpServer: this.state.mcpServer,
+            policyEnforcement: this.state.policyEnforcement
+        });
+        
+        if (currentSignature !== this._lastStateSignature) {
+            this._lastStateSignature = currentSignature;
+            this.persistState();
+            this.refresh();
+            this.logger.debug('MCP state changed, refreshed tree view');
+        }
+        // else: state unchanged, skip refresh to avoid listener accumulation
     }
 
     /**
@@ -555,9 +564,9 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
     }
 
     getChildren(element?: AgentTreeItem): Thenable<AgentTreeItem[]> {
-        console.error('[CK3RAVEN] AgentView.getChildren ENTER element=', element?.label);
+        console.log('[CK3RAVEN] AgentView.getChildren ENTER element=', element?.label);
         if (element) {
-            console.error('[CK3RAVEN] AgentView.getChildren EXIT (has element)');
+            console.log('[CK3RAVEN] AgentView.getChildren EXIT (has element)');
             return Promise.resolve([]);
         }
 

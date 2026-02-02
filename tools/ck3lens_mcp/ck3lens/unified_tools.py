@@ -120,7 +120,7 @@ def _compute_mod_prefix(mod_name: str) -> str:
 # ============================================================================
 
 LogSource = Literal["error", "game", "debug", "crash"]
-LogCommand = Literal["summary", "list", "search", "detail", "categories", "cascades", "read"]
+LogCommand = Literal["summary", "list", "search", "detail", "categories", "cascades", "read", "raw"]
 
 
 def ck3_logs_impl(
@@ -130,6 +130,7 @@ def ck3_logs_impl(
     priority: int | None = None,
     category: str | None = None,
     mod_filter: str | None = None,
+    mod_filter_exact: bool = False,
     exclude_cascade_children: bool = True,
     # Search
     query: str | None = None,
@@ -140,6 +141,10 @@ def ck3_logs_impl(
     from_end: bool = True,
     # Pagination
     limit: int = 50,
+    # FR-1: Custom log source path
+    source_path: str | None = None,
+    # FR-2: Export results to WIP
+    export_to: str | None = None,
 ) -> dict:
     """
     Unified logging tool implementation.
@@ -162,26 +167,196 @@ def ck3_logs_impl(
     crash + detail      -> Full crash report (requires crash_id)
     
     Any source + read   -> Raw log content (tail/head with optional search)
+    
+    FR-1: source_path -> Custom log file path (for analyzing backups)
+    FR-2: export_to -> Export results to WIP as markdown
     """
     
+    # FR-1: Resolve source_path if provided
+    resolved_source_path: Path | None = None
+    if source_path:
+        resolved_source_path = _resolve_log_source_path(source_path)
+        if resolved_source_path is None:
+            return {"error": f"Cannot resolve source_path: {source_path}"}
+    
     # Route based on source and command
-    if command == "read":
-        return _read_log_raw(source, lines, from_end, query)
-    
-    if source == "error":
-        return _error_log_handler(command, priority, category, mod_filter, 
-                                   exclude_cascade_children, query, limit)
-    
+    if command == "raw":
+        result = _read_log_full(source, resolved_source_path)
+    elif command == "read":
+        result = _read_log_raw(source, lines, from_end, query, resolved_source_path)
+    elif source == "error":
+        result = _error_log_handler(command, priority, category, mod_filter, 
+                                   mod_filter_exact, exclude_cascade_children, query, limit,
+                                   resolved_source_path)
     elif source == "game":
-        return _game_log_handler(command, category, query, limit)
-    
+        result = _game_log_handler(command, category, query, limit, resolved_source_path)
     elif source == "debug":
-        return _debug_log_handler(command)
-    
+        result = _debug_log_handler(command, resolved_source_path)
     elif source == "crash":
-        return _crash_handler(command, crash_id, limit)
+        result = _crash_handler(command, crash_id, limit)
+    else:
+        return {"error": f"Unknown source: {source}"}
     
-    return {"error": f"Unknown source: {source}"}
+    # FR-2: Export results if requested
+    if export_to and "error" not in result:
+        export_result = _export_logs_result(result, source, command, export_to)
+        if "error" in export_result:
+            result["export_error"] = export_result["error"]
+        else:
+            result["export_path"] = export_result["export_path"]
+            result["export_success"] = True
+    
+    return result
+
+
+def _resolve_log_source_path(source_path: str) -> Path | None:
+    """
+    Resolve a source_path to an absolute Path.
+    
+    Supports:
+    - Absolute paths: "C:/path/to/error.log"
+    - WIP paths: "wip:/log-backups/error.log"
+    - Home-relative: "~/backups/error.log"
+    
+    Returns None if path doesn't exist or can't be resolved.
+    """
+    # Handle WIP paths
+    if source_path.startswith("wip:"):
+        wip_base = Path.home() / ".ck3raven" / "wip"
+        rel_path = source_path[4:].lstrip("/")
+        resolved = wip_base / rel_path
+    # Handle home-relative
+    elif source_path.startswith("~"):
+        resolved = Path(source_path).expanduser()
+    # Absolute or relative path
+    else:
+        resolved = Path(source_path)
+        if not resolved.is_absolute():
+            # Try relative to WIP
+            wip_base = Path.home() / ".ck3raven" / "wip"
+            resolved = wip_base / source_path
+    
+    if resolved.exists():
+        return resolved
+    return None
+
+
+def _export_logs_result(
+    result: dict,
+    source: str,
+    command: str,
+    export_to: str,
+) -> dict:
+    """
+    Export logs result to markdown file in WIP.
+    
+    Args:
+        result: The result dict from log analysis
+        source: Log source (error, game, debug, crash)
+        command: Command that was run
+        export_to: WIP path for output (supports {timestamp} substitution)
+    
+    Returns:
+        Dict with export_path on success, error on failure
+    """
+    from datetime import datetime
+    
+    # Resolve export path
+    wip_base = Path.home() / ".ck3raven" / "wip"
+    
+    # Handle wip: prefix
+    if export_to.startswith("wip:"):
+        rel_path = export_to[4:].lstrip("/")
+    else:
+        rel_path = export_to
+    
+    # Substitute {timestamp}
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    rel_path = rel_path.replace("{timestamp}", timestamp)
+    
+    export_path = wip_base / rel_path
+    
+    # Ensure parent directories exist
+    export_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Generate markdown content
+    md_content = _result_to_markdown(result, source, command)
+    
+    try:
+        export_path.write_text(md_content, encoding='utf-8')
+        return {"export_path": str(export_path)}
+    except Exception as e:
+        return {"error": f"Failed to write export: {e}"}
+
+
+def _result_to_markdown(result: dict, source: str, command: str) -> str:
+    """Convert log result to formatted markdown."""
+    from datetime import datetime
+    
+    lines = [
+        f"# CK3 Log Analysis: {source} / {command}",
+        f"",
+        f"**Generated:** {datetime.now().isoformat()}",
+        f"**Source:** {source}",
+        f"**Command:** {command}",
+        f"",
+        "---",
+        "",
+    ]
+    
+    if command == "summary":
+        lines.append("## Summary")
+        lines.append("")
+        for key, value in result.items():
+            if isinstance(value, dict):
+                lines.append(f"### {key}")
+                for k, v in value.items():
+                    lines.append(f"- **{k}:** {v}")
+            else:
+                lines.append(f"- **{key}:** {value}")
+        lines.append("")
+    
+    elif command == "cascades":
+        lines.append(f"## Cascade Analysis")
+        lines.append("")
+        lines.append(f"**Total Cascades:** {result.get('cascade_count', 0)}")
+        lines.append(f"**Total Errors:** {result.get('total_errors', 0)}")
+        lines.append("")
+        if result.get("recommendation"):
+            lines.append(f"> {result['recommendation']}")
+            lines.append("")
+        
+        for cascade in result.get("cascades", []):
+            lines.append(f"### Cascade: {cascade.get('root_pattern', 'Unknown')[:60]}")
+            lines.append(f"- **Root Errors:** {cascade.get('root_count', 0)}")
+            lines.append(f"- **Child Errors:** {cascade.get('child_count', 0)}")
+            if cascade.get("example_root"):
+                lines.append(f"- **Example:** `{cascade['example_root'][:100]}`")
+            lines.append("")
+    
+    elif command == "list":
+        errors = result.get("errors", [])
+        lines.append(f"## Error List ({len(errors)} items)")
+        lines.append("")
+        for i, error in enumerate(errors[:100], 1):  # Limit to 100 for markdown
+            msg = error.get("message", "")[:80]
+            lines.append(f"{i}. **{error.get('category', 'unknown')}** - {msg}")
+            if error.get("file"):
+                lines.append(f"   - File: `{error['file']}`")
+            if error.get("fix_hint"):
+                lines.append(f"   - Fix: {error['fix_hint']}")
+        lines.append("")
+    
+    else:
+        # Generic fallback - dump as code block
+        import json
+        lines.append("## Raw Result")
+        lines.append("")
+        lines.append("```json")
+        lines.append(json.dumps(result, indent=2, default=str))
+        lines.append("```")
+    
+    return "\n".join(lines)
 
 
 def _error_log_handler(
@@ -189,9 +364,11 @@ def _error_log_handler(
     priority: int | None,
     category: str | None,
     mod_filter: str | None,
+    mod_filter_exact: bool,
     exclude_cascade_children: bool,
     query: str | None,
     limit: int,
+    source_path: Path | None = None,
 ) -> dict:
     """Handle error.log commands."""
     from ck3raven.analyzers.error_parser import CK3ErrorParser, ERROR_CATEGORIES
@@ -199,9 +376,14 @@ def _error_log_handler(
     parser = CK3ErrorParser()
     
     try:
-        parser.parse_log()
+        parser.parse_log(log_path=source_path)
         parser.detect_cascading_errors()
     except FileNotFoundError:
+        if source_path:
+            return {
+                "error": f"Log file not found: {source_path}",
+                "hint": "Check the source_path parameter",
+            }
         return {
             "error": "error.log not found",
             "hint": "Make sure CK3 has been run at least once",
@@ -215,6 +397,7 @@ def _error_log_handler(
             category=category,
             priority=priority,
             mod_filter=mod_filter,
+            mod_filter_exact=mod_filter_exact,
             exclude_cascade_children=exclude_cascade_children,
             limit=limit,
         )
@@ -261,6 +444,7 @@ def _game_log_handler(
     category: str | None,
     query: str | None,
     limit: int,
+    source_path: Path | None = None,
 ) -> dict:
     """Handle game.log commands."""
     from ck3raven.analyzers.log_parser import CK3LogParser, LogType, GAME_LOG_CATEGORIES
@@ -268,8 +452,10 @@ def _game_log_handler(
     parser = CK3LogParser()
     
     try:
-        parser.parse_game_log()
+        parser.parse_game_log(log_path=source_path)
     except FileNotFoundError:
+        if source_path:
+            return {"error": f"Log file not found: {source_path}"}
         return {"error": "game.log not found"}
     
     if command == "summary":
@@ -321,15 +507,17 @@ def _game_log_handler(
     return {"error": f"Unknown command for game source: {command}"}
 
 
-def _debug_log_handler(command: str) -> dict:
+def _debug_log_handler(command: str, source_path: Path | None = None) -> dict:
     """Handle debug.log commands."""
     from ck3raven.analyzers.log_parser import CK3LogParser
     
     parser = CK3LogParser()
     
     try:
-        parser.parse_debug_log(extract_system_info=True)
+        parser.parse_debug_log(extract_system_info=True, log_path=source_path)
     except FileNotFoundError:
+        if source_path:
+            return {"error": f"Log file not found: {source_path}"}
         return {"error": "debug.log not found"}
     
     if command == "summary":
@@ -391,58 +579,192 @@ def _read_log_raw(
     lines: int,
     from_end: bool,
     search: str | None,
+    source_path: Path | None = None,
 ) -> dict:
-    """Read raw log content."""
+    """Read raw log content.
     
-    logs_dir = (
-        Path.home() / "Documents" / "Paradox Interactive" / 
-        "Crusader Kings III" / "logs"
-    )
+    MEMORY-SAFE: 
+    - For files >100KB with search: refuses (search requires full scan)
+    - For files >100KB without search: uses efficient tail-reading
+    - Always caps output to 200 lines max
+    """
+    MAX_SIZE_FOR_SEARCH = 100 * 1024  # 100KB limit when search is used
+    MAX_LINES = 200  # Never return more than 200 lines
     
-    log_files = {
-        "error": "error.log",
-        "game": "game.log",
-        "debug": "debug.log",
-        "setup": "setup.log",
-        "gui_warnings": "gui_warnings.log",
-        "database_conflicts": "database_conflicts.log",
-    }
-    
-    if source not in log_files:
-        return {
-            "error": f"Unknown log source: {source}",
-            "available": list(log_files.keys()),
+    # If custom source_path provided, use it directly
+    if source_path:
+        log_path = source_path
+    else:
+        logs_dir = (
+            Path.home() / "Documents" / "Paradox Interactive" / 
+            "Crusader Kings III" / "logs"
+        )
+        
+        log_files = {
+            "error": "error.log",
+            "game": "game.log",
+            "debug": "debug.log",
+            "setup": "setup.log",
+            "gui_warnings": "gui_warnings.log",
+            "database_conflicts": "database_conflicts.log",
         }
-    
-    log_path = logs_dir / log_files[source]
+        
+        if source not in log_files:
+            return {
+                "error": f"Unknown log source: {source}",
+                "available": list(log_files.keys()),
+            }
+        
+        log_path = logs_dir / log_files[source]
     
     if not log_path.exists():
         return {
-            "error": f"Log file not found: {log_files[source]}",
-            "hint": "Make sure CK3 has been run",
+            "error": f"Log file not found: {log_path}",
+            "hint": "Check the path or make sure CK3 has been run",
         }
     
     try:
-        content_lines = log_path.read_text(encoding='utf-8', errors='replace').splitlines()
+        file_size = log_path.stat().st_size
         
-        # Apply search filter if provided
+        # If search is requested on a large file, refuse
+        if search and file_size > MAX_SIZE_FOR_SEARCH:
+            size_mb = file_size / 1024 / 1024
+            return {
+                "error": f"File too large ({size_mb:.1f}MB) for search. Search requires loading entire file.",
+                "file_path": str(log_path),
+                "file_size": file_size,
+                "suggestion": (
+                    "For large log files, use structured access instead:\n"
+                    "  • ck3_logs(command='summary') - parsed error summary\n"
+                    "  • ck3_logs(command='list', mod_filter='...') - filter by mod\n"
+                    "  • ck3_logs(command='read', lines=100) - get last N lines without search"
+                ),
+            }
+        
+        # Cap lines
+        max_lines = min(lines, MAX_LINES)
+        
+        # For small files (<100KB), just read the whole thing
+        if file_size <= MAX_SIZE_FOR_SEARCH:
+            content_lines = log_path.read_text(encoding='utf-8', errors='replace').splitlines()
+            total_lines = len(content_lines)
+        else:
+            # Large file, no search - read efficiently from end
+            # Read enough to get ~200 lines (assuming ~500 bytes/line avg)
+            chunk_size = min(150 * 1024, file_size)  # ~150KB should be plenty for 200 lines
+            with open(log_path, 'rb') as f:
+                if from_end:
+                    f.seek(max(0, file_size - chunk_size))
+                chunk = f.read(chunk_size).decode('utf-8', errors='replace')
+            content_lines = chunk.splitlines()
+            # First line may be partial if we seeked mid-file
+            if file_size > chunk_size and content_lines and from_end:
+                content_lines = content_lines[1:]  # Drop partial first line
+            total_lines = None  # Unknown without full scan
+        
+        # Apply search filter if provided (only for small files per check above)
         if search:
             search_lower = search.lower()
             content_lines = [l for l in content_lines if search_lower in l.lower()]
         
         # Select lines
         if from_end:
-            selected = content_lines[-lines:] if len(content_lines) > lines else content_lines
+            selected = content_lines[-max_lines:] if len(content_lines) > max_lines else content_lines
         else:
-            selected = content_lines[:lines]
+            selected = content_lines[:max_lines]
         
         return {
             "log_source": source,
-            "total_lines": len(content_lines),
+            "file_path": str(log_path),
+            "file_size_bytes": file_size,
+            "total_lines": total_lines,  # May be None for large files
             "returned_lines": len(selected),
+            "lines_requested": lines,
+            "lines_capped_at": max_lines if lines > max_lines else None,
             "from_end": from_end,
             "search": search,
             "content": "\n".join(selected),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _read_log_full(source: str, source_path: Path | None = None) -> dict:
+    """Return raw log file content for backup/archival.
+    
+    MEMORY-SAFE: Refuses files larger than 100KB to prevent OOM.
+    For large files, suggests copying to WIP workspace first.
+    
+    Returns:
+        Dict with:
+        - log_source: The log type
+        - file_path: Absolute path to the log file
+        - file_size: Size in bytes
+        - content: File content
+        - line_count: Total number of lines
+    """
+    MAX_SIZE_BYTES = 100 * 1024  # 100KB limit for safety
+    
+    # If custom source_path provided, use it directly
+    if source_path:
+        log_path = source_path
+    else:
+        logs_dir = (
+            Path.home() / "Documents" / "Paradox Interactive" / 
+            "Crusader Kings III" / "logs"
+        )
+        
+        log_files = {
+            "error": "error.log",
+            "game": "game.log",
+            "debug": "debug.log",
+            "setup": "setup.log",
+            "gui_warnings": "gui_warnings.log",
+            "database_conflicts": "database_conflicts.log",
+        }
+        
+        if source not in log_files:
+            return {
+                "error": f"Unknown log source: {source}",
+                "available": list(log_files.keys()),
+            }
+        
+        log_path = logs_dir / log_files[source]
+    
+    if not log_path.exists():
+        return {
+            "error": f"Log file not found: {log_path}",
+            "hint": "Check the path or make sure CK3 has been run",
+        }
+    
+    try:
+        file_size = log_path.stat().st_size
+        
+        # Refuse large files to prevent OOM
+        if file_size > MAX_SIZE_BYTES:
+            size_mb = file_size / 1024 / 1024
+            return {
+                "error": f"File too large ({size_mb:.1f}MB). command='raw' is limited to 100KB.",
+                "file_path": str(log_path),
+                "file_size": file_size,
+                "suggestion": (
+                    "For large log files, use targeted access instead:\n"
+                    "  • ck3_logs(command='read', lines=100) - get last N lines\n"
+                    "  • ck3_logs(command='summary') - get parsed summary\n"
+                    "  • ck3_logs(command='list', limit=50) - get filtered errors\n"
+                    "  • ck3_logs(command='search', query='...') - search for specific text"
+                ),
+            }
+        
+        content = log_path.read_text(encoding='utf-8', errors='replace')
+        line_count = content.count('\n') + (1 if content and not content.endswith('\n') else 0)
+        
+        return {
+            "log_source": source,
+            "file_path": str(log_path),
+            "file_size": file_size,
+            "line_count": line_count,
+            "content": content,
         }
     except Exception as e:
         return {"error": str(e)}

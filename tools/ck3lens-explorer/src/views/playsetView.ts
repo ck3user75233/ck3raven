@@ -120,11 +120,11 @@ export class PlaysetViewProvider implements vscode.TreeDataProvider<PlaysetTreeI
     }
 
     async getChildren(element?: PlaysetTreeItem): Promise<PlaysetTreeItem[]> {
-        console.error('[CK3RAVEN] PlaysetView.getChildren ENTER element=', element?.label);
+        console.log('[CK3RAVEN] PlaysetView.getChildren ENTER element=', element?.label);
         if (!element) {
             // Root level - show playset info and mods
             if (!this.session.isInitialized) {
-                console.error('[CK3RAVEN] PlaysetView.getChildren EXIT (not initialized)');
+                console.log('[CK3RAVEN] PlaysetView.getChildren EXIT (not initialized)');
                 return [
                     new PlaysetTreeItem(
                         'Initialize CK3 Lens to see playset',

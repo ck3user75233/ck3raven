@@ -1,4 +1,4 @@
-﻿/**
+/**
  * CK3 Raven Chat Participant
  *
  * Implements @ck3raven chat participant with tool orchestration loop.
@@ -6,7 +6,6 @@
  */
 
 import * as vscode from 'vscode';
-import { JournalWriter } from './journal';
 import { Logger } from '../utils/logger';
 
 // Type for tool results (success or error)
@@ -17,15 +16,12 @@ interface ToolResultEntry {
 
 export class Ck3RavenParticipant implements vscode.Disposable {
     private participant: vscode.ChatParticipant;
-    private journal: JournalWriter;
     private disposables: vscode.Disposable[] = [];
 
     constructor(
         private readonly context: vscode.ExtensionContext,
         private readonly logger: Logger
     ) {
-        this.journal = new JournalWriter(logger);
-
         // Register the chat participant
         this.participant = vscode.chat.createChatParticipant(
             'ck3raven',
@@ -51,13 +47,6 @@ export class Ck3RavenParticipant implements vscode.Disposable {
     }
 
     /**
-     * Expose journal for command registration
-     */
-    public getJournal(): JournalWriter {
-        return this.journal;
-    }
-
-    /**
      * Main request handler - implements tool result feedback loop (Q1)
      */
     private async handleRequest(
@@ -66,12 +55,8 @@ export class Ck3RavenParticipant implements vscode.Disposable {
         stream: vscode.ChatResponseStream,
         token: vscode.CancellationToken
     ): Promise<vscode.ChatResult> {
-        // Ensure session is started
-        await this.journal.ensureSession();
-
         // Create turn ID
-        const turnId = this.journal.createTurnId();
-        const userText = request.prompt;
+        const turnId = `turn-${Date.now()}`;
 
         // Count tool calls for this turn
         let toolCallCount = 0;
@@ -140,17 +125,9 @@ export class Ck3RavenParticipant implements vscode.Disposable {
                             );
 
                             const timing = Date.now() - startTime;
-
-                            // Log successful tool call to journal
-                            await this.journal.logToolCall(turnId, {
-                                name: toolCall.name,
-                                input: toolCall.input as Record<string, unknown>,
-                                result: { ok: true, reply: result },
-                                timing_ms: timing
-                            });
+                            this.logger.debug(`Tool ${toolCall.name} completed in ${timing}ms`);
 
                             // Collect result for feedback to LLM
-                            // result is LanguageModelToolResult with .content array
                             iterationToolResults.push({
                                 callId: toolCall.callId,
                                 content: result.content
@@ -158,14 +135,7 @@ export class Ck3RavenParticipant implements vscode.Disposable {
 
                         } catch (error) {
                             const timing = Date.now() - startTime;
-
-                            // Log failed tool call to journal
-                            await this.journal.logToolCall(turnId, {
-                                name: toolCall.name,
-                                input: toolCall.input as Record<string, unknown>,
-                                result: { ok: false, error: String(error) },
-                                timing_ms: timing
-                            });
+                            this.logger.error(`Tool ${toolCall.name} failed in ${timing}ms`, error);
 
                             // Provide error as text content to LLM
                             iterationToolResults.push({
@@ -196,9 +166,6 @@ export class Ck3RavenParticipant implements vscode.Disposable {
                 }
             }
 
-            // Log the complete turn
-            await this.journal.logTurn(turnId, userText, fullResponseText, toolCallCount);
-
             return {
                 metadata: {
                     turnId,
@@ -208,10 +175,7 @@ export class Ck3RavenParticipant implements vscode.Disposable {
 
         } catch (error) {
             this.logger.error('Chat request failed', error);
-            stream.markdown(`\n\nâš ï¸ Error: ${error}`);
-
-            // Still log the turn (with error)
-            await this.journal.logTurn(turnId, userText, `Error: ${error}`, toolCallCount);
+            stream.markdown(`\n\n⚠️ Error: ${error}`);
 
             return {
                 errorDetails: {
@@ -231,7 +195,6 @@ export class Ck3RavenParticipant implements vscode.Disposable {
         const messages: vscode.LanguageModelChatMessage[] = [];
 
         // System prompt as first user message (prefixed for clarity)
-        // Note: VS Code LM API may not have dedicated system role
         messages.push(
             vscode.LanguageModelChatMessage.User(`SYSTEM: ${this.getSystemPrompt()}`)
         );
@@ -260,7 +223,6 @@ export class Ck3RavenParticipant implements vscode.Disposable {
 
     /**
      * Minimal system prompt (Q5 - FINAL)
-     * This is the ONLY system prompt. No alternatives. No dynamic expansion.
      */
     private getSystemPrompt(): string {
         return `You are ck3raven.
@@ -329,9 +291,6 @@ Tool names are dynamic; use EXACT tool name strings provided in tool list for th
 
     dispose(): void {
         this.participant.dispose();
-        this.journal.dispose();
         this.disposables.forEach(d => d.dispose());
     }
 }
-
-

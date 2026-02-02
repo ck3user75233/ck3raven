@@ -83,7 +83,7 @@ if CK3RAVEN_ROOT.exists():
 # NOTE: Must be after path setup since ck3raven.core is in src/
 from ck3raven.core.reply import Reply, TraceInfo, MetaInfo
 from ck3raven.core.trace import generate_trace_id, get_or_create_session_id
-from .safety import mcp_safe_tool, ReplyBuilder, get_current_trace_info
+from .safety import mcp_safe_tool, ReplyBuilder, get_current_trace_info, initialize_window_trace
 
 
 
@@ -1455,11 +1455,12 @@ def ck3_get_policy_status() -> Reply:
 @mcp_safe_tool
 def ck3_logs(
     source: Literal["error", "game", "debug", "crash"] = "error",
-    command: Literal["summary", "list", "search", "detail", "categories", "cascades", "read"] = "summary",
+    command: Literal["summary", "list", "search", "detail", "categories", "cascades", "read", "raw"] = "summary",
     # Filters
     priority: int | None = None,
     category: str | None = None,
     mod_filter: str | None = None,
+    mod_filter_exact: bool = False,
     exclude_cascade_children: bool = True,
     # Search
     query: str | None = None,
@@ -1470,6 +1471,10 @@ def ck3_logs(
     from_end: bool = True,
     # Pagination
     limit: int = 50,
+    # FR-1: Custom log source path
+    source_path: str | None = None,
+    # FR-2: Export results to WIP
+    export_to: str | None = None,
 ) -> Reply:
     """
     Unified logging tool for error.log, game.log, debug.log, and crash reports.
@@ -1496,23 +1501,31 @@ def ck3_logs(
         command=detail      ? Full crash report (crash_id required)
     
     Any source:
-        command=read        ? Raw log content (lines, from_end, query for search)
+        command=read        → Raw log content (lines, from_end, query for search)
+        command=raw         → Complete raw log file for backup/archival (no limits)
     
     Args:
         source: Log source to query
         command: Action to perform
         priority: Max priority 1-5 (error source only)
         category: Filter by category
-        mod_filter: Filter by mod name (partial match)
+        mod_filter: Filter by mod name (substring match by default)
+        mod_filter_exact: If True, require exact match instead of substring
         exclude_cascade_children: Skip errors caused by cascade patterns
         query: Search query for search/read commands
         crash_id: Crash folder name for detail command
         lines: Lines to return for read command
         from_end: Read from end (tail) vs start (head)
         limit: Max results for list commands
+        source_path: Custom path to log file (for analyzing backups). Accepts:
+            - Absolute paths: "C:/path/to/error.log"
+            - WIP paths: "wip:/log-backups/error_2025-02-02.log"
+        export_to: Export results to WIP as markdown. Accepts:
+            - WIP paths: "wip:/analysis/error_summary.md"
+            - Use {timestamp} for auto-substitution
     
     Returns:
-        Dict with results based on command
+        Dict with results based on command (plus export_path if export_to was used)
     """
     from ck3lens.unified_tools import ck3_logs_impl
     
@@ -1525,12 +1538,15 @@ def ck3_logs(
         priority=priority,
         category=category,
         mod_filter=mod_filter,
+        mod_filter_exact=mod_filter_exact,
         exclude_cascade_children=exclude_cascade_children,
         query=query,
         crash_id=crash_id,
         lines=lines,
         from_end=from_end,
         limit=limit,
+        source_path=source_path,
+        export_to=export_to,
     )
     
     if "error" in result:
@@ -5493,6 +5509,79 @@ def _get_table_stats() -> dict:
 
 
 # ============================================================================
+# Journal - Chat Session Archive Tools
+# ============================================================================
+
+@mcp.tool()
+@mcp_safe_tool
+def ck3_journal(
+    command: Literal["list", "read", "search", "status"] = "status",
+    # List parameters
+    target: Optional[Literal["workspaces", "windows", "sessions"]] = None,
+    workspace_key: Optional[str] = None,
+    window_id: Optional[str] = None,
+    # Read parameters
+    session_id: Optional[str] = None,
+    format: Literal["json", "markdown"] = "markdown",
+    # Search parameters
+    pattern: Optional[str] = None,
+    limit: int = 50,
+) -> Reply:
+    """
+    Access journal archives from Copilot Chat sessions.
+    
+    Commands:
+    
+    command=list     → List workspaces, windows, or sessions
+    command=read     → Read session content or manifest
+    command=search   → Search tags across journals
+    command=status   → Get journal status
+    
+    Args:
+        command: Operation to perform
+        target: What to list (workspaces, windows, sessions)
+        workspace_key: Workspace identifier (SHA-256)
+        window_id: Window identifier
+        session_id: Session to read
+        format: Output format for read (json, markdown)
+        pattern: Tag pattern for search (* = wildcard)
+        limit: Max results for search
+    
+    Returns:
+        Dict with results based on command
+    
+    Examples:
+        ck3_journal(command="status")
+        ck3_journal(command="list", target="workspaces")
+        ck3_journal(command="list", target="windows", workspace_key="abc123...")
+        ck3_journal(command="read", workspace_key="...", window_id="...", session_id="...")
+        ck3_journal(command="search", pattern="bug*")
+    """
+    from ck3lens.tools.journal import ck3_journal as journal_impl
+    
+    # Delegate to the implementation module
+    result = journal_impl(
+        command=command,
+        target=target,
+        workspace_key=workspace_key,
+        window_id=window_id,
+        session_id=session_id,
+        format=format,
+        pattern=pattern,
+        limit=limit,
+    )
+    
+    # The journal module returns dict, convert to Reply
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_journal')
+    
+    if result.get("success", False):
+        return rb.success('JRN-S-001', data=result, message=result.get("message", "OK"))
+    else:
+        return rb.error('JRN-E-001', data=result, message=result.get("error", "Unknown error"))
+
+
+# ============================================================================
 # QBuilder - Build System Tools
 # ============================================================================
 
@@ -5761,12 +5850,16 @@ if __name__ == "__main__":
     # Set instance ID for structured logging
     set_instance_id(_instance_id)
     
+    # Initialize per-window trace file for FR-3 journal capture
+    trace_path = initialize_window_trace(_instance_id)
+    
     # Rotate logs at startup (daily rotation)
     rotated = rotate_logs()
     
     # Log startup with structured logging
     log_info("mcp.init", "MCP server starting", 
-             instance_id=_instance_id, pid=_pid, log_rotated=rotated)
+             instance_id=_instance_id, pid=_pid, log_rotated=rotated,
+             trace_file=str(trace_path))
     
     # Also log to stderr for VS Code capture
     print(

@@ -137,6 +137,13 @@
           "type": "tree",
           "icon": "$(issues)",
           "contextualTitle": "CK3 Lens"
+        },
+        {
+          "id": "ck3lens.journalExplorer",
+          "name": "Chat Journals",
+          "type": "tree",
+          "icon": "$(notebook)",
+          "contextualTitle": "CK3 Lens"
         }
       ]
     },
@@ -226,6 +233,40 @@
         "command": "ck3lens.contracts.viewBugReports",
         "title": "CK3 Lens: View Bug Reports",
         "icon": "$(bug)"
+      },
+      {
+        "command": "ck3lens.journal.refresh",
+        "title": "CK3 Lens: Refresh Journal Explorer",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "ck3lens.journal.openFolder",
+        "title": "CK3 Lens: Open Journals Folder",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "ck3raven.journal.startWindow",
+        "title": "Journal: Start Window",
+        "category": "CK3 Lens",
+        "icon": "$(notebook)"
+      },
+      {
+        "command": "ck3raven.journal.closeWindow",
+        "title": "Journal: Close Window",
+        "category": "CK3 Lens",
+        "icon": "$(notebook)"
+      },
+      {
+        "command": "ck3raven.journal.status",
+        "title": "Journal: Show Status",
+        "category": "CK3 Lens",
+        "icon": "$(info)"
+      },
+      {
+        "command": "ck3raven.journal.toggle",
+        "title": "Journal: Toggle Window",
+        "category": "CK3 Lens",
+        "icon": "$(notebook)"
       },
       {
         "command": "ck3lens.contracts.refresh",
@@ -498,6 +539,16 @@
         {
           "command": "ck3lens.contracts.fileBugReport",
           "when": "view == ck3lens.contractsView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ck3lens.journal.refresh",
+          "when": "view == ck3lens.journalExplorer",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ck3lens.journal.openFolder",
+          "when": "view == ck3lens.journalExplorer",
           "group": "navigation@2"
         }
       ],

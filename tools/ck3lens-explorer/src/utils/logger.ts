@@ -6,18 +6,20 @@ import * as vscode from 'vscode';
 
 export type LogLevel = 'off' | 'error' | 'info' | 'debug';
 
-export class Logger {
+export class Logger implements vscode.Disposable {
     private level: LogLevel;
+    private readonly disposables: vscode.Disposable[] = [];
 
     constructor(private readonly outputChannel: vscode.OutputChannel) {
         this.level = vscode.workspace.getConfiguration('ck3lens').get<LogLevel>('traceLevel') || 'info';
         
-        // Watch for configuration changes
-        vscode.workspace.onDidChangeConfiguration((e) => {
+        // Watch for configuration changes - MUST be disposed to prevent listener leaks
+        const configListener = vscode.workspace.onDidChangeConfiguration((e) => {
             if (e.affectsConfiguration('ck3lens.traceLevel')) {
                 this.level = vscode.workspace.getConfiguration('ck3lens').get<LogLevel>('traceLevel') || 'info';
             }
         });
+        this.disposables.push(configListener);
     }
 
     private shouldLog(level: LogLevel): boolean {
@@ -67,5 +69,12 @@ export class Logger {
 
     show(): void {
         this.outputChannel.show();
+    }
+
+    dispose(): void {
+        for (const disposable of this.disposables) {
+            disposable.dispose();
+        }
+        this.disposables.length = 0;
     }
 }

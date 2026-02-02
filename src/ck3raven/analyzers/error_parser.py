@@ -561,6 +561,7 @@ class CK3ErrorParser:
         category: Optional[str] = None,
         priority: Optional[int] = None,
         mod_filter: Optional[str] = None,
+        mod_filter_exact: bool = False,
         exclude_cascade_children: bool = False,
         limit: int = 100,
     ) -> List[CK3Error]:
@@ -570,7 +571,9 @@ class CK3ErrorParser:
         Args:
             category: Filter by error category
             priority: Filter by max priority (1-5)
-            mod_filter: Filter by mod name (partial match)
+            mod_filter: Filter by mod name
+            mod_filter_exact: If True, require exact match (case-insensitive).
+                              If False, use substring match (default).
             exclude_cascade_children: Exclude errors that are cascade children
             limit: Maximum results to return
         
@@ -587,7 +590,12 @@ class CK3ErrorParser:
         
         if mod_filter:
             mod_lower = mod_filter.lower()
-            results = [e for e in results if e.mod_name and mod_lower in e.mod_name.lower()]
+            if mod_filter_exact:
+                # Exact match (case-insensitive)
+                results = [e for e in results if e.mod_name and e.mod_name.lower() == mod_lower]
+            else:
+                # Substring match (original behavior)
+                results = [e for e in results if e.mod_name and mod_lower in e.mod_name.lower()]
         
         if exclude_cascade_children:
             results = [e for e in results if not e.is_cascading_child]

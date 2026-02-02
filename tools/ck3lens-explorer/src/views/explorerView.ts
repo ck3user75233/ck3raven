@@ -155,9 +155,9 @@ export class ExplorerViewProvider implements vscode.TreeDataProvider<ExplorerTre
     }
 
     async getChildren(element?: ExplorerTreeItem): Promise<ExplorerTreeItem[]> {
-        console.error('[CK3RAVEN] ExplorerView.getChildren ENTER element=', element?.label);
+        console.log('[CK3RAVEN] ExplorerView.getChildren ENTER element=', element?.label);
         if (!this.session.isInitialized) {
-            console.error('[CK3RAVEN] ExplorerView.getChildren EXIT (not initialized)');
+            console.log('[CK3RAVEN] ExplorerView.getChildren EXIT (not initialized)');
             return [
                 new ExplorerTreeItem(
                     'Click to initialize CK3 Lens',

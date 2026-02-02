@@ -72,12 +72,12 @@ export class ConflictsViewProvider implements vscode.TreeDataProvider<ConflictTr
     }
 
     async getChildren(element?: ConflictTreeItem): Promise<ConflictTreeItem[]> {
-        console.error('[CK3RAVEN] ConflictsView.getChildren ENTER element=', element?.label);
+        console.log('[CK3RAVEN] ConflictsView.getChildren ENTER element=', element?.label);
         if (!element) {
             // Root level - show folders with conflicts
             if (this.groupedConflicts.size === 0) {
                 if (!this.session.isInitialized) {
-                    console.error('[CK3RAVEN] ConflictsView.getChildren EXIT (not initialized)');
+                    console.log('[CK3RAVEN] ConflictsView.getChildren EXIT (not initialized)');
                     return [
                         new ConflictTreeItem(
                             'Initialize CK3 Lens to see conflicts',
