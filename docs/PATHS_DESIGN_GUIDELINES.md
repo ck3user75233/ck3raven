@@ -2,6 +2,7 @@
 
 > **Status:** CANONICAL  
 > **Created:** January 27, 2026  
+> **Updated:** February 1, 2026  
 > **Purpose:** Single source of truth for ALL path resolution in ck3raven
 
 ---
@@ -23,56 +24,69 @@ abs_path = ROOT_GAME / "common/traits/00_traits.txt"
 
 ## Path Categories
 
-ck3raven has two categories of paths:
+ck3raven has three categories of paths:
 
-### 1. CK3 Domain Paths (User-Facing)
-Paths related to CK3 game content that users work with.
+### 1. Canonical Domain Roots (Capability Matrix)
+Top-level paths that define authorization boundaries. These map directly to `RootCategory` in the capability matrix.
 
-### 2. Infrastructure Paths (Tool-Facing)
-Paths the tool itself needs to function.
+### 2. Infrastructure Paths (Derived)
+Paths the tool needs to function. Most are derived from domain roots or `CONFIG_DIR`.
 
-Both categories follow the same rules: single source of truth, no aliases, no scattered detection logic.
+### 3. User-Configurable Paths
+Paths that users may need to override via `roots.json`.
 
 ---
 
 ## Complete Path Inventory
 
-### CK3 Domain Paths
+### Canonical Domain Roots (Capability Matrix)
 
-| Constant | Description | Typical Value |
-|----------|-------------|---------------|
-| `ROOT_GAME` | Vanilla CK3 installation | `.../steamapps/common/Crusader Kings III/game` |
-| `ROOT_STEAM` | Steam Workshop mods | `.../steamapps/workshop/content/1158310` |
-| `ROOT_USER_DOCS` | User-authored mods | `~/Documents/Paradox Interactive/Crusader Kings III/mod` |
-| `ROOT_UTILITIES` | CK3 logs, saves, crashes | `~/Documents/Paradox Interactive/Crusader Kings III` |
-| `ROOT_LAUNCHER` | Paradox launcher registry | `~/AppData/Roaming/Paradox Interactive/launcher-v2` |
-USER COMMENT: ROOT_WIP is in the canonical domains. We also foudn the need to add ROOT_VSCODE** as agents need to access it and recently ROOT_OTHER (not sure if we can really do this but it is everything not the other 
+These are THE domains for authorization. Each maps to a `RootCategory` enum value.
 
-### Infrastructure Paths
+| Constant | RootCategory | Description | Typical Value |
+|----------|--------------|-------------|---------------|
+| `ROOT_GAME` | `ROOT_GAME` | Vanilla CK3 installation | `.../steamapps/common/Crusader Kings III/game` |
+| `ROOT_STEAM` | `ROOT_STEAM` | Steam Workshop mods | `.../steamapps/workshop/content/1158310` |
+| `ROOT_USER_DOCS` | `ROOT_USER_DOCS` | User-authored mods | `~/Documents/Paradox Interactive/Crusader Kings III/mod` |
+| `ROOT_UTILITIES` | `ROOT_UTILITIES` | CK3 logs, saves, crashes | `~/Documents/Paradox Interactive/Crusader Kings III` |
+| `ROOT_LAUNCHER` | `ROOT_LAUNCHER` | Paradox launcher registry | `~/AppData/Roaming/Paradox Interactive/launcher-v2` |
+| `ROOT_REPO` | `ROOT_REPO` | ck3raven repository root | `C:/Users/.../ck3raven` |
+| `ROOT_WIP` | `ROOT_WIP` | Scratch/experimental workspace | `~/.ck3raven/wip` |
+| `ROOT_VSCODE` | `ROOT_VSCODE` | VS Code settings/extensions | Platform-specific |
+| `ROOT_OTHER` | `ROOT_OTHER` | Catch-all for unclassified paths | N/A (fallback) |
 
-| Constant | Description | Typical Value |
-|----------|-------------|---------------|
-| `ROOT_REPO` | ck3raven repository root | `C:/Users/.../ck3raven` |**
-| `ROOT_WIP` | Scratch/experimental workspace | `~/.ck3raven/wip` |** should denote canonical domains for capabilities matrisx
-| `VENV_PATH` | Python virtual environment | `{ROOT_REPO}/.venv` | 
-| `DB_PATH` | SQLite database | `~/.ck3raven/ck3raven.db` |USER COMMNENT: why not derived // default install should put it there
-| `CONFIG_DIR` | Configuration directory | `~/.ck3raven` |USER COMMNENT: why not derived // default install should put it there, but coudl be customized by user?
-| `PLAYSETS_DIR` | Playset definitions | `{ROOT_REPO}/playsets` | USER COMMNENT: why not derived but coudl be customized by user?
-| `MCP_SERVER_PATH` | MCP server entry point | `{ROOT_REPO}/tools/ck3lens_mcp` | USER COMMNENT: why not derived but coudl be customized by user?
-| `EXTENSION_PATH` | VS Code extension | `{ROOT_REPO}/tools/ck3lens-explorer` | USER COMMNENT: why not derived but coudl be customized by user?
-| `BRIDGE_PATH` | Python bridge module | `{ROOT_REPO}/tools/ck3lens_mcp/bridge` |USER COMMNENT: why not derived but coudl be customized by user?
+**Note:** `ROOT_OTHER` is a fallback domain for paths that don't match any other root. Operations targeting `ROOT_OTHER` require explicit token approval.
 
-### Derived Paths (Computed from Constants)
+### Infrastructure Paths (Derived from Roots)
 
-| Path | Derivation |
-|------|------------|
-| `LOGS_DIR` | `ROOT_UTILITIES / "logs"` |
-| `SAVES_DIR` | `ROOT_UTILITIES / "save games"` |
-| `CRASHES_DIR` | `ROOT_UTILITIES / "crashes"` |
-| `PYTHON_EXE` | `VENV_PATH / "Scripts/python.exe"` (Windows) or `VENV_PATH / "bin/python"` |
-| `ROOTS_CONFIG` | `CONFIG_DIR / "roots.json"` |
-| `SESSION_FILE` | `CONFIG_DIR / "session.json"` |
-| `ACTIVE_PLAYSET` | `PLAYSETS_DIR / "playset_manifest.json"` |   
+These are computed from canonical roots. They do NOT require user configuration.
+
+| Constant | Derivation | Description |
+|----------|------------|-------------|
+| `CONFIG_DIR` | Fixed: `~/.ck3raven` | Configuration directory |
+| `DB_PATH` | `CONFIG_DIR / "ck3raven.db"` | SQLite database |
+| `ROOTS_CONFIG` | `CONFIG_DIR / "roots.json"` | Path overrides file |
+| `SESSION_CONFIG` | `CONFIG_DIR / "session.json"` | Session state |
+| `VENV_PATH` | `ROOT_REPO / ".venv"` | Python virtual environment |
+| `PYTHON_EXE` | `VENV_PATH / "Scripts/python.exe"` | Python executable |
+| `PLAYSETS_DIR` | `ROOT_REPO / "playsets"` | Playset definitions |
+| `MCP_SERVER_DIR` | `ROOT_REPO / "tools/ck3lens_mcp"` | MCP server |
+| `EXTENSION_DIR` | `ROOT_REPO / "tools/ck3lens-explorer"` | VS Code extension |
+| `BRIDGE_DIR` | `MCP_SERVER_DIR / "bridge"` | Python bridge |
+| `LOGS_DIR` | `ROOT_UTILITIES / "logs"` | CK3 logs |
+| `SAVES_DIR` | `ROOT_UTILITIES / "save games"` | CK3 saves |
+| `CRASHES_DIR` | `ROOT_UTILITIES / "crashes"` | CK3 crash reports |
+
+### User-Configurable Paths
+
+Only these paths should be in `roots.json`. Everything else is derived.
+
+| Constant | Why Configurable |
+|----------|------------------|
+| `ROOT_GAME` | Steam library location varies |
+| `ROOT_STEAM` | Usually derived from ROOT_GAME, but can be separate |
+| `ROOT_REPO` | Workspace location varies |
+| `ROOT_USER_DOCS` | Paradox folder location can vary |
 
 ---
 
@@ -80,25 +94,27 @@ USER COMMENT: ROOT_WIP is in the canonical domains. We also foudn the need to ad
 
 These create parallel authority and are **permanently banned**:
 
-| ❌ Banned | ✅ Use Instead |
-|-----------|----------------|
-| `vanilla_root` | `ROOT_GAME` |
-| `vanilla_path` | `ROOT_GAME` |
-| `workshop_root` | `ROOT_STEAM` |
-| `local_mods_folder` | `ROOT_USER_DOCS` | USER COMMENT: local mods folder is canonical but should not be used in the context of domains
-| `wip_root` | `ROOT_WIP` |
-| `ck3raven_root` | `ROOT_REPO` |
-| `ck3ravenPath` | `ROOT_REPO` |
-| `utility_roots` | `ROOT_UTILITIES` |
-| `launcher_path` | `ROOT_LAUNCHER` |
-| `DEFAULT_VANILLA_PATH` | `ROOT_GAME` |
-| `DEFAULT_CK3_MOD_DIR` | `ROOT_USER_DOCS` |
-| `DEFAULT_DB_PATH` | `DB_PATH` |
-| `DEFAULT_CONFIG_PATH` | `CONFIG_DIR` |
-| `get_vanilla_root()` | `ROOT_GAME` |
-| `_detect_ck3raven_root()` | `ROOT_REPO` |
-| `pythonPath` (as detection) | `PYTHON_EXE` |
-| `possiblePaths` | Use `ROOT_REPO` directly |
+| ❌ Banned | ✅ Use Instead | Notes |
+|-----------|----------------|-------|
+| `vanilla_root` | `ROOT_GAME` | |
+| `vanilla_path` | `ROOT_GAME` | |
+| `workshop_root` | `ROOT_STEAM` | |
+| `local_mods_folder` | `ROOT_USER_DOCS` | *See note below* |
+| `wip_root` | `ROOT_WIP` | |
+| `ck3raven_root` | `ROOT_REPO` | |
+| `ck3ravenPath` | `ROOT_REPO` | |
+| `utility_roots` | `ROOT_UTILITIES` | |
+| `launcher_path` | `ROOT_LAUNCHER` | |
+| `DEFAULT_VANILLA_PATH` | `ROOT_GAME` | |
+| `DEFAULT_CK3_MOD_DIR` | `ROOT_USER_DOCS` | |
+| `DEFAULT_DB_PATH` | `DB_PATH` | |
+| `DEFAULT_CONFIG_PATH` | `CONFIG_DIR` | |
+| `get_vanilla_root()` | `ROOT_GAME` | |
+| `_detect_ck3raven_root()` | `ROOT_REPO` | |
+| `pythonPath` (as detection) | `PYTHON_EXE` | |
+| `possiblePaths` | Use `ROOT_REPO` directly | |
+
+**Note on `local_mods_folder`:** This term IS canonical in the playset/mod context (it identifies which mods are editable). However, it should NOT be used as a domain/path constant. For domain purposes, use `ROOT_USER_DOCS`.
 
 ---
 
@@ -181,20 +197,21 @@ const paths = await bridge.call('get_paths');
 const repoPath = paths.ROOT_REPO;
 ```
 
+**Bootstrap Exception:** The extension needs `ROOT_REPO` to FIND the Python bridge. This ONE case allows TypeScript detection (see Bootstrap Problem section).
+
 ---
 
 ## Configuration
 
 ### File: `~/.ck3raven/roots.json`
 
-Machine-specific path overrides:
+Machine-specific path overrides. Only non-derived paths belong here:
 
 ```json
 {
     "version": "1.0",
     "roots": {
         "ROOT_GAME": "D:/SteamLibrary/steamapps/common/Crusader Kings III/game",
-        "ROOT_STEAM": "D:/SteamLibrary/steamapps/workshop/content/1158310",
         "ROOT_REPO": "C:/Users/Nathan/Documents/AI Workspace/ck3raven"
     },
     "_auto_detected": false,
@@ -202,11 +219,21 @@ Machine-specific path overrides:
 }
 ```
 
-Only paths that differ from auto-detection need to be specified.
+**What belongs in roots.json:**
+- `ROOT_GAME` - if Steam is not in default location
+- `ROOT_STEAM` - only if different from derived value
+- `ROOT_REPO` - if not auto-detected from workspace
+- `ROOT_USER_DOCS` - only if non-standard location
+
+**What does NOT belong in roots.json:**
+- `DB_PATH` - always derived from `CONFIG_DIR`
+- `VENV_PATH` - always derived from `ROOT_REPO`
+- `PLAYSETS_DIR` - always derived from `ROOT_REPO`
+- Any `*_DIR` path - all derived
 
 ### Auto-Detection Order
 
-For each path, `paths.py` checks:
+For each configurable path, `paths.py` checks:
 
 1. **Config file** (`~/.ck3raven/roots.json`) - explicit override wins
 2. **Environment variable** (e.g., `CK3RAVEN_ROOT_GAME`) - for CI/testing
@@ -241,12 +268,16 @@ import os
 import sys
 
 # =============================================================================
-# CONFIG LOADING
+# FIXED PATHS (Never change, never configurable)
 # =============================================================================
 
 CONFIG_DIR: Path = Path.home() / ".ck3raven"
 _ROOTS_CONFIG: Path = CONFIG_DIR / "roots.json"
 
+
+# =============================================================================
+# CONFIG LOADING
+# =============================================================================
 
 def _load_config() -> dict:
     """Load roots.json if it exists."""
@@ -340,8 +371,19 @@ def _detect_root_launcher() -> Optional[Path]:
     return p if p.exists() else None
 
 
+def _detect_root_vscode() -> Optional[Path]:
+    """Find VS Code user data folder."""
+    if sys.platform == "win32":
+        p = Path.home() / "AppData" / "Roaming" / "Code" / "User"
+    elif sys.platform == "darwin":
+        p = Path.home() / "Library" / "Application Support" / "Code" / "User"
+    else:
+        p = Path.home() / ".config" / "Code" / "User"
+    return p if p.exists() else None
+
+
 # =============================================================================
-# CK3 DOMAIN PATHS
+# CANONICAL DOMAIN ROOTS (Capability Matrix)
 # =============================================================================
 
 ROOT_GAME: Optional[Path] = _get_root("ROOT_GAME", _detect_root_game)
@@ -349,41 +391,35 @@ ROOT_STEAM: Optional[Path] = _get_root("ROOT_STEAM", _detect_root_steam)
 ROOT_USER_DOCS: Optional[Path] = _get_root("ROOT_USER_DOCS", _detect_root_user_docs)
 ROOT_UTILITIES: Optional[Path] = _get_root("ROOT_UTILITIES", _detect_root_utilities)
 ROOT_LAUNCHER: Optional[Path] = _get_root("ROOT_LAUNCHER", _detect_root_launcher)
-
-# =============================================================================
-# INFRASTRUCTURE PATHS
-# =============================================================================
-
 ROOT_REPO: Optional[Path] = _get_root("ROOT_REPO", _detect_root_repo)
-ROOT_WIP: Path = CONFIG_DIR / "wip"  # Always exists conceptually
+ROOT_WIP: Path = CONFIG_DIR / "wip"  # Always derived, always exists conceptually
+ROOT_VSCODE: Optional[Path] = _get_root("ROOT_VSCODE", _detect_root_vscode)
+ROOT_OTHER: Optional[Path] = None  # Catch-all, never has a concrete path
 
-# Database
+# =============================================================================
+# DERIVED INFRASTRUCTURE PATHS
+# =============================================================================
+
+# Database & Config (derived from CONFIG_DIR)
 DB_PATH: Path = CONFIG_DIR / "ck3raven.db"
+ROOTS_CONFIG: Path = _ROOTS_CONFIG
+SESSION_CONFIG: Path = CONFIG_DIR / "session.json"
 
-# Python environment
+# Python environment (derived from ROOT_REPO)
 VENV_PATH: Optional[Path] = ROOT_REPO / ".venv" if ROOT_REPO else None
 PYTHON_EXE: Optional[Path] = (
     VENV_PATH / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
     if VENV_PATH else None
 )
 
-# Playsets
+# Tool paths (derived from ROOT_REPO)
 PLAYSETS_DIR: Optional[Path] = ROOT_REPO / "playsets" if ROOT_REPO else None
-ACTIVE_PLAYSET_MANIFEST: Optional[Path] = PLAYSETS_DIR / "playset_manifest.json" if PLAYSETS_DIR else None
-
-# Tool paths
 MCP_SERVER_DIR: Optional[Path] = ROOT_REPO / "tools" / "ck3lens_mcp" if ROOT_REPO else None
 EXTENSION_DIR: Optional[Path] = ROOT_REPO / "tools" / "ck3lens-explorer" if ROOT_REPO else None
 BRIDGE_DIR: Optional[Path] = MCP_SERVER_DIR / "bridge" if MCP_SERVER_DIR else None
+ACTIVE_PLAYSET_MANIFEST: Optional[Path] = PLAYSETS_DIR / "playset_manifest.json" if PLAYSETS_DIR else None
 
-# Config files
-ROOTS_CONFIG: Path = _ROOTS_CONFIG
-SESSION_CONFIG: Path = CONFIG_DIR / "session.json"
-
-# =============================================================================
-# DERIVED PATHS (convenience, not constants)
-# =============================================================================
-
+# CK3 utilities (derived from ROOT_UTILITIES)
 LOGS_DIR: Optional[Path] = ROOT_UTILITIES / "logs" if ROOT_UTILITIES else None
 SAVES_DIR: Optional[Path] = ROOT_UTILITIES / "save games" if ROOT_UTILITIES else None
 CRASHES_DIR: Optional[Path] = ROOT_UTILITIES / "crashes" if ROOT_UTILITIES else None
@@ -396,15 +432,17 @@ CRASHES_DIR: Optional[Path] = ROOT_UTILITIES / "crashes" if ROOT_UTILITIES else 
 def get_all_paths() -> dict[str, Optional[str]]:
     """Get all paths for diagnostics/configuration UI."""
     return {
-        # CK3 Domain
+        # Canonical Domain Roots
         "ROOT_GAME": str(ROOT_GAME) if ROOT_GAME else None,
         "ROOT_STEAM": str(ROOT_STEAM) if ROOT_STEAM else None,
         "ROOT_USER_DOCS": str(ROOT_USER_DOCS) if ROOT_USER_DOCS else None,
         "ROOT_UTILITIES": str(ROOT_UTILITIES) if ROOT_UTILITIES else None,
         "ROOT_LAUNCHER": str(ROOT_LAUNCHER) if ROOT_LAUNCHER else None,
-        # Infrastructure
         "ROOT_REPO": str(ROOT_REPO) if ROOT_REPO else None,
         "ROOT_WIP": str(ROOT_WIP),
+        "ROOT_VSCODE": str(ROOT_VSCODE) if ROOT_VSCODE else None,
+        "ROOT_OTHER": None,  # Catch-all has no path
+        # Derived Infrastructure
         "CONFIG_DIR": str(CONFIG_DIR),
         "DB_PATH": str(DB_PATH),
         "VENV_PATH": str(VENV_PATH) if VENV_PATH else None,
@@ -522,14 +560,15 @@ After bootstrap, ALL other path queries go through the Python bridge.
 ### Phase 1: Create ck3lens/paths.py
 
 1. Create new module `ck3lens/paths.py` with all constants
-2. Add `get_all_paths()` and `verify_paths()` utilities
+2. Add `get_all_paths()`, `get_domain_roots()`, and `verify_paths()` utilities
 3. Test: `from ck3lens.paths import ROOT_GAME, DB_PATH`
 
 ### Phase 2: Migrate capability_matrix.py
 
-1. Import paths from `ck3lens.paths` 
-2. `RootCategory.path` property delegates to `ck3lens.paths`
+1. Import paths from `ck3lens.paths`
+2. `RootCategory` enum values map to path constants
 3. Remove any path detection from capability_matrix.py
+4. Domain classification stays in WorldAdapter (the canonical resolver)
 
 ### Phase 3: Migrate WorldRouter
 
@@ -610,7 +649,7 @@ def ck3_paths(command: str = "status") -> dict:
         verify  - Check which paths exist
         detect  - Auto-detect and save roots.json
     """
-    from ck3lens.paths import get_all_paths, verify_paths, save_roots_config, _detect_root_game, ...
+    from ck3lens.paths import get_all_paths, verify_paths, save_roots_config
     
     if command == "status":
         return {"paths": get_all_paths()}
@@ -619,11 +658,7 @@ def ck3_paths(command: str = "status") -> dict:
         return {"verification": verify_paths()}
     
     elif command == "detect":
-        detected = {
-            "ROOT_GAME": str(p) if (p := _detect_root_game()) else None,
-            "ROOT_REPO": str(p) if (p := _detect_root_repo()) else None,
-            # ... etc
-        }
+        detected = {...}
         save_roots_config({k: v for k, v in detected.items() if v})
         return {"success": True, "detected": detected}
 ```
@@ -647,7 +682,6 @@ PATH_ALIAS_BANNED = [
     r"\bvanilla_root\b",
     r"\bvanilla_path\b",
     r"\bworkshop_root\b",
-    r"\blocal_mods_folder\b",
     r"\bwip_root\b",
     r"\bck3raven_root\b",
     r"\bck3ravenPath\b",
@@ -721,34 +755,8 @@ These files are ALLOWED to contain path detection (the source of truth):
 PATH_RULES_ALLOWLIST = [
     "ck3lens/paths.py",           # THE source of truth
     "pythonBridge.ts",            # Bootstrap exception only
-    "exports/PATHS_DESIGN_GUIDELINES.md",  # Documentation
+    "docs/PATHS_DESIGN_GUIDELINES.md",  # Documentation
 ]
-```
-
-### Configuration Addition
-
-Add to `scripts/arch_lint/config.py`:
-
-```python
-@dataclass(frozen=True)
-class LintConfig:
-    # ... existing config ...
-    
-    # Path hygiene rules
-    path_alias_patterns: tuple[str, ...] = (
-        r"\bvanilla_root\b",
-        r"\bworkshop_root\b",
-        # ... all patterns above ...
-    )
-    
-    allow_path_detection_in: tuple[str, ...] = (
-        "ck3lens/paths.py",
-        "pythonBridge.ts",  # Bootstrap only
-    )
-    
-    allow_hardcoded_paths_in: tuple[str, ...] = (
-        "ck3lens/paths.py",
-    )
 ```
 
 ---
@@ -765,7 +773,7 @@ python -m scripts.arch_lint --errors-only
 python -m scripts.arch_lint --rules PATH-01,PATH-02,PATH-03,PATH-04
 
 # Manual verification (should return empty outside paths.py)
-grep -rn "vanilla_root\|workshop_root\|local_mods_folder\|wip_root\|ck3raven_root\|ck3ravenPath" tools/
+grep -rn "vanilla_root\|workshop_root\|wip_root\|ck3raven_root\|ck3ravenPath" tools/
 grep -rn "DEFAULT_VANILLA\|DEFAULT_CK3_MOD\|DEFAULT_DB_PATH" tools/
 grep -rn "_detect_\|_get_vanilla\|findCk3raven" tools/
 ```
@@ -782,54 +790,35 @@ This section documents all hardcoded paths found in the codebase that need to be
 
 | File | Line(s) | Problem | Fix |
 |------|---------|---------|-----|
-| [`tools/ck3lens_mcp/ck3lens/workspace.py`](../tools/ck3lens_mcp/ck3lens/workspace.py#L163) | 163 | `DEFAULT_VANILLA_PATH = Path("C:/Program Files (x86)/Steam/...")` | Replace with `from ck3lens.paths import ROOT_GAME` |
-| [`tools/ck3lens_mcp/ck3lens/world_router.py`](../tools/ck3lens_mcp/ck3lens/world_router.py#L252-L254) | 252-254 | `_get_vanilla_root()` method with hardcoded Steam paths | Delete method, use `ROOT_GAME` import |
-| [`tools/ck3lens_mcp/server.py`](../tools/ck3lens_mcp/server.py#L374) | 374 | Fallback vanilla path hardcoded in function | Import `ROOT_GAME` from paths.py |
-| [`tools/ck3lens-explorer/bridge/server.py`](../tools/ck3lens-explorer/bridge/server.py#L231) | 231 | `vanilla_root=Path("C:/Program Files (x86)/Steam/...")` | Import `ROOT_GAME` |
-| [`scripts/launcher_to_playset.py`](../scripts/launcher_to_playset.py#L21) | 21, 46 | `STEAM_WORKSHOP = Path("C:/Program Files...")` + vanilla path in template | Import `ROOT_STEAM`, `ROOT_GAME` |
+| [`tools/ck3lens_mcp/ck3lens/workspace.py`](../tools/ck3lens_mcp/ck3lens/workspace.py#L163) | 163 | `DEFAULT_VANILLA_PATH` constant | Import `ROOT_GAME` |
+| [`tools/ck3lens_mcp/ck3lens/world_router.py`](../tools/ck3lens_mcp/ck3lens/world_router.py#L252-L254) | 252-254 | `_get_vanilla_root()` detection method | Delete, use `ROOT_GAME` |
+| [`tools/ck3lens_mcp/server.py`](../tools/ck3lens_mcp/server.py#L374) | 374 | Hardcoded fallback vanilla path | Import `ROOT_GAME` |
+| [`tools/ck3lens-explorer/bridge/server.py`](../tools/ck3lens-explorer/bridge/server.py#L231) | 231 | `vanilla_root=Path(...)` parameter | Import `ROOT_GAME` |
+| [`scripts/launcher_to_playset.py`](../scripts/launcher_to_playset.py#L21) | 21, 46 | `STEAM_WORKSHOP` constant | Import `ROOT_STEAM`, `ROOT_GAME` |
 
 ### TypeScript Files - OK (Bootstrap Exception)
 
 | File | Line(s) | Status |
 |------|---------|--------|
-| [`tools/ck3lens-explorer/src/setup/setupWizard.ts`](../tools/ck3lens-explorer/src/setup/setupWizard.ts#L532-L557) | 532-557 | ✅ **ALLOWED** - Bootstrap detection candidates are permitted per Rule 5 |
+| [`tools/ck3lens-explorer/src/setup/setupWizard.ts`](../tools/ck3lens-explorer/src/setup/setupWizard.ts#L532-L557) | 532-557 | ✅ **ALLOWED** - Bootstrap detection |
 
 ### Temporary Scripts - DELETE
 
-These scripts contain hardcoded paths and should be deleted during migration:
-
 | File | Action |
 |------|--------|
-| [`scripts/temp_sym.py`](../scripts/temp_sym.py) | **DELETE** - temp script with hardcoded paths |
-| [`scripts/temp_w.py`](../scripts/temp_w.py) | **DELETE** - temp script |
-| [`scripts/temp_w2.py`](../scripts/temp_w2.py) | **DELETE** - temp script |
-| [`scripts/temp_wr.py`](../scripts/temp_wr.py) | **DELETE** - temp script |
-| [`scripts/temp_write.py`](../scripts/temp_write.py) | **DELETE** - temp script |
-
-### Quick Verification Commands
-
-```bash
-# Find remaining hardcoded Steam paths
-grep -rn "C:\\\\Program Files\\|C:/Program Files\\|\.steam/steam" tools/ scripts/ --include="*.py" --include="*.ts"
-
-# Find banned path aliases
-grep -rn "vanilla_root\\|workshop_root\\|ck3raven_root\\|local_mods_folder" tools/ --include="*.py" --include="*.ts"
-
-# Find DEFAULT_* constants
-grep -rn "DEFAULT_VANILLA\\|DEFAULT_CK3_MOD\\|DEFAULT_DB_PATH" tools/ --include="*.py"
-
-# Find detection methods
-grep -rn "_get_vanilla_root\\|_detect_ck3raven_root\\|findCk3ravenPath" tools/ --include="*.py" --include="*.ts"
-```
+| [`scripts/temp_sym.py`](../scripts/temp_sym.py) | **DELETE** |
+| [`scripts/temp_w.py`](../scripts/temp_w.py) | **DELETE** |
+| [`scripts/temp_w2.py`](../scripts/temp_w2.py) | **DELETE** |
+| [`scripts/temp_wr.py`](../scripts/temp_wr.py) | **DELETE** |
+| [`scripts/temp_write.py`](../scripts/temp_write.py) | **DELETE** |
 
 ### Migration Status
 
 - [ ] Create `ck3lens/paths.py`
-- [ ] Migrate `workspace.py` (line 163)
-- [ ] Migrate `world_router.py` (lines 252-254)
-- [ ] Migrate `server.py` (line 374)
-- [ ] Migrate `bridge/server.py` (line 231)
-- [ ] Migrate `launcher_to_playset.py` (lines 21, 46)
+- [ ] Migrate `workspace.py`
+- [ ] Migrate `world_router.py`
+- [ ] Migrate `server.py`
+- [ ] Migrate `bridge/server.py`
+- [ ] Migrate `launcher_to_playset.py`
 - [ ] Delete temp scripts (5 files)
 - [ ] Run arch_lint PATH-* rules
-- [ ] Update this checklist
