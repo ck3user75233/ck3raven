@@ -147,6 +147,37 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         version: context.extension.packageJSON.version,
         instance_id: instanceId
     });
+
+    // ========================================================================
+    // CRITICAL: Journal Extractor - "Flight Recorder" (HOISTED - MUST init before risky subsystems)
+    // ========================================================================
+    // The journal is a passive filesystem observer that does NOT need Python, sockets, or MCP.
+    // If we initialize it AFTER risky subsystems (PythonBridge, DiagnosticsServer, etc.) and
+    // any of those hang, journalWindowManager stays undefined and deactivate() skips extraction.
+    // This caused 4 sessions on 2026-02-03 to produce zero journal exports despite hours of use.
+    // See: "Lifeboat First Protocol" - flight recorder must start before the engine.
+    console.log('[CK3RAVEN] A5b LIFEBOAT: Journal init (early)');
+    if (structuredLogger) {
+        try {
+            journalWindowManager = initializeWindowManager(context, structuredLogger);
+            journalStatusBar = createJournalStatusBar(journalWindowManager);
+            context.subscriptions.push(journalStatusBar);
+            registerJournalCommands(context, journalWindowManager);
+            structuredLogger.info('ext.journal', 'Journal subsystem initialized (early boot)');
+            
+            // Auto-start journal window to capture baseline
+            // This enables extraction on window close
+            await journalWindowManager.startWindow();
+            structuredLogger.info('ext.journal', 'Journal window auto-started');
+        } catch (err) {
+            // Journal init failure is non-fatal - log and continue
+            // Even partial init means deactivate() might still work
+            structuredLogger.warn('ext.journal', 'Journal early-init failed (non-fatal)', {
+                error: (err as Error).message,
+            });
+        }
+    }
+    console.log('[CK3RAVEN] A5c LIFEBOAT: Journal init complete');
     
     // CRITICAL: Per-instance mode blanking
     // Must happen AFTER mcpServerProvider is created so we have the instance ID
@@ -384,33 +415,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger.info('Doctor commands registered');
 
     // ========================================================================
-    // Journal Extractor (Window lifecycle for Copilot Chat archiving)
+    // Journal Tree View (UI chrome - can init late, flight recorder already started above)
     // ========================================================================
-    console.log('[CK3RAVEN] A21 before Journal init');
+    console.log('[CK3RAVEN] A21 Journal tree view');
     if (structuredLogger) {
-        journalWindowManager = initializeWindowManager(context, structuredLogger);
-        journalStatusBar = createJournalStatusBar(journalWindowManager);
-        context.subscriptions.push(journalStatusBar);
-        registerJournalCommands(context, journalWindowManager);
-        structuredLogger.info('ext.journal', 'Journal subsystem initialized');
-        
-        // Auto-start journal window to capture baseline
-        // This enables extraction on window close
-        try {
-            await journalWindowManager.startWindow();
-            structuredLogger.info('ext.journal', 'Journal window auto-started');
-        } catch (err) {
-            // Don't fail activation if journal auto-start fails
-            structuredLogger.warn('ext.journal', 'Journal auto-start failed', {
-                error: (err as Error).message,
-            });
-        }
-        
         // Register journal tree view for browsing archives
+        // Note: journalWindowManager was already initialized early (Lifeboat Protocol)
         registerJournalTreeView(context);
         structuredLogger.info('ext.journal', 'Journal tree view registered');
     }
-    console.log('[CK3RAVEN] A22 after Journal init');
+    console.log('[CK3RAVEN] A22 after Journal tree view');
 
     logger.info('CK3 Lens Explorer activated successfully');
     console.log('[CK3RAVEN] A23 ACTIVATE COMPLETE - returning from activate()');

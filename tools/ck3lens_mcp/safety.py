@@ -11,6 +11,13 @@ to enforce the Reply contract:
 5. Enforce Reply return type (non-Reply -> MCP-SYS-E-003)
 6. Serialize Reply to dict for transport
 7. Log tool calls to window trace file (FR-3)
+8. Emit canonical tool_end log entry (CANONICAL_LOGS.md compliance)
+
+Reply Code Ownership Rules (DECISION-LOCKED):
+    WA  → May emit: S, I, E    Must NOT emit: D
+    EN  → May emit: S, D, E    Must NOT emit: I
+    CT  → May emit: S, I, E    Must NOT emit: D
+    MCP → May emit: E, I       (transport layer only)
 
 Usage:
     @mcp.tool()
@@ -18,7 +25,7 @@ Usage:
     def ck3_my_tool(param: str) -> Reply:
         trace_info = get_current_trace_info()
         rb = ReplyBuilder(trace_info, tool='ck3_my_tool')
-        return rb.success('CODE', data={...})
+        return rb.success('WA-SYS-S-001', data={...})
 """
 from __future__ import annotations
 
@@ -33,6 +40,18 @@ from typing import Any, Callable, Dict, TypeVar, ParamSpec, Optional
 
 from ck3raven.core.reply import Reply, TraceInfo, MetaInfo
 from ck3raven.core.trace import generate_trace_id, get_or_create_session_id
+
+# Canonical logging import - for tool_end visibility
+from ck3lens.logging import (
+    info as log_info,
+    warn as log_warn,
+    error as log_error,
+    debug as log_debug,
+    set_trace_id as set_canonical_trace_id,
+)
+
+# Canonical reply codes - import registry for validation (optional startup check)
+from ck3lens.reply_codes import validate_code_format, Codes
 
 
 P = ParamSpec('P')
@@ -147,6 +166,67 @@ def _log_tool_call(
     _log_trace_event(event)
 
 
+def _log_canonical_tool_end(
+    tool_name: str,
+    trace_id: str,
+    reply_type: str,
+    code: str,
+    duration_ms: float,
+    message: str | None = None,
+    data_keys: list[str] | None = None,
+) -> None:
+    """
+    Emit canonical tool_end log entry per CANONICAL_LOGS.md.
+    
+    This is the single always-visible summary line per tool call.
+    Level mapping:
+        S (Success) -> INFO
+        I (Invalid) -> WARN
+        D (Denied)  -> WARN
+        E (Error)   -> ERROR
+    
+    Args:
+        tool_name: Name of the tool
+        trace_id: Correlation ID
+        reply_type: S, I, D, or E
+        code: Reply code (e.g., WA-SYS-S-001)
+        duration_ms: Execution time in milliseconds
+        message: Optional message for DEBUG detail
+        data_keys: Optional data keys for DEBUG detail
+    """
+    # Minimal payload for INFO/WARN/ERROR summary
+    summary_data = {
+        "tool": tool_name,
+        "reply_type": reply_type,
+        "code": code,
+        "duration_ms": round(duration_ms, 2),
+    }
+    
+    # Emit summary at appropriate level based on reply_type
+    if reply_type == "S":
+        log_info("mcp.tool", "tool_end", **summary_data)
+    elif reply_type in ("I", "D"):
+        log_warn("mcp.tool", "tool_end", **summary_data)
+    elif reply_type == "E":
+        log_error("mcp.tool", "tool_end", **summary_data)
+    else:
+        # Unknown reply_type - log as warning
+        log_warn("mcp.tool", "tool_end", **summary_data)
+    
+    # Optional DEBUG detail with richer info (not required for validation)
+    if message or data_keys:
+        detail_data = {
+            "tool": tool_name,
+            "code": code,
+        }
+        if message:
+            # Truncate message for safety
+            detail_data["message"] = message[:500] if len(message) > 500 else message
+        if data_keys:
+            detail_data["data_keys"] = data_keys[:10]
+        log_debug("mcp.tool", "tool_detail", **detail_data)
+
+
 def get_current_trace_info() -> TraceInfo:
     """
     Get the current TraceInfo from context.
@@ -172,6 +252,7 @@ def mcp_safe_tool(func: Callable[P, Reply]) -> Callable[P, Dict[str, Any]]:
     5. Enforce that tool returns Reply (non-Reply -> MCP-SYS-E-003)
     6. Serialize Reply to dict for MCP transport
     7. Log tool call to window trace file (FR-3)
+    8. Emit canonical tool_end log entry (CANONICAL_LOGS.md compliance)
     
     IMPORTANT: Do NOT add trace_info to the function signature. Use
     get_current_trace_info() inside the function to access it.
@@ -185,6 +266,9 @@ def mcp_safe_tool(func: Callable[P, Reply]) -> Callable[P, Dict[str, Any]]:
         
         tool_name = func.__name__
         start_time = time.perf_counter()
+        
+        # Set canonical logger trace context for correlation
+        set_canonical_trace_id(trace_id)
         
         # Set trace_info in context variable
         token = _current_trace_info.set(trace_info)
@@ -240,8 +324,33 @@ def mcp_safe_tool(func: Callable[P, Reply]) -> Callable[P, Dict[str, Any]]:
             # Reset context variable
             _current_trace_info.reset(token)
             
-            # Log tool call to window trace file (FR-3)
+            # Calculate duration
             duration_ms = (time.perf_counter() - start_time) * 1000
+            
+            # === CANONICAL LOGGING: tool_end summary ===
+            # This is the single always-visible log line per tool call
+            # Required for CANONICAL_LOGS.md compliance (validation matrix)
+            if result_dict:
+                reply_type = result_dict.get("reply_type", "E")
+                code = result_dict.get("code", "UNKNOWN")
+                message = result_dict.get("message")
+                
+                # Extract data_keys for DEBUG detail
+                data_keys = None
+                if "data" in result_dict and isinstance(result_dict["data"], dict):
+                    data_keys = list(result_dict["data"].keys())
+                
+                _log_canonical_tool_end(
+                    tool_name=tool_name,
+                    trace_id=trace_id,
+                    reply_type=reply_type,
+                    code=code,
+                    duration_ms=duration_ms,
+                    message=message,
+                    data_keys=data_keys,
+                )
+            
+            # Log tool call to window trace file (FR-3) - audit trail
             _log_tool_call(
                 tool_name=tool_name,
                 trace_id=trace_id,
@@ -287,9 +396,15 @@ class ReplyBuilder:
             rb = ReplyBuilder(trace_info, tool='ck3_my_tool')
             
             if not param:
-                return rb.invalid('MCP-SYS-I-902', {'missing': ['param']})
+                return rb.invalid('WA-RES-I-001', {'path': param})
             
-            return rb.success('MCP-SYS-S-900', {'result': 'ok'})
+            return rb.success('WA-READ-S-001', {'result': 'ok'})
+    
+    Reply Code Ownership (enforced at runtime):
+        - WA (World Adapter): S, I, E only (never D)
+        - EN (Enforcement): S, D, E only (never I) 
+        - CT (Contract): S, I, E only (never D)
+        - MCP (Transport): E, I only
     """
     
     def __init__(
@@ -312,21 +427,65 @@ class ReplyBuilder:
             contract_id=self.contract_id,
         )
     
+    def _validate_and_get_layer(self, code: str, expected_type: str) -> str:
+        """
+        Validate code format/ownership and extract canonical layer.
+        
+        Returns the layer prefix from the code (e.g., "WA" from "WA-READ-S-001").
+        This MUST be used for meta.layer to ensure consistency.
+        
+        Raises ValueError if code violates canonical rules.
+        """
+        valid, err = validate_code_format(code)
+        if not valid:
+            raise ValueError(f"Invalid reply code: {err}")
+        
+        # Extract layer and type from code
+        parts = code.split("-")
+        if len(parts) >= 3:
+            code_layer = parts[0]
+            code_type = parts[2]
+            
+            # Validate layer ownership
+            if code_layer == "WA" and code_type == "D":
+                raise ValueError(f"WA layer cannot emit Denied (D): {code}")
+            if code_layer == "CT" and code_type == "D":
+                raise ValueError(f"CT layer cannot emit Denied (D): {code}")
+            if code_layer == "EN" and code_type == "I":
+                raise ValueError(f"EN layer cannot emit Invalid (I): {code}")
+            
+            return code_layer
+        
+        # Fallback for malformed (should not reach here if validate_code_format passed)
+        return self.layer
+    
+    def _validate_code(self, code: str, expected_type: str) -> None:
+        """
+        Validate code format and ownership rules at runtime.
+        
+        DEPRECATED: Use _validate_and_get_layer instead.
+        Kept for backward compat.
+        
+        Raises ValueError if code violates canonical rules.
+        """
+        self._validate_and_get_layer(code, expected_type)
+    
     def success(
         self,
         code: str,
         data: Dict[str, Any],
         message: str | None = None,
-        layer: str | None = None,
+        layer: str | None = None,  # DEPRECATED: layer derived from code prefix
     ) -> Reply:
-        """Create a Success reply."""
+        """Create a Success reply. meta.layer is derived from code prefix."""
+        code_layer = self._validate_and_get_layer(code, "S")
         from ck3raven.core.reply_registry import get_message
         return Reply.success(
             code=code,
             message=message or get_message(code, **data),
             data=data,
             trace=self.trace_info,
-            meta=self._meta(layer),
+            meta=self._meta(code_layer),
         )
     
     def invalid(
@@ -334,16 +493,23 @@ class ReplyBuilder:
         code: str,
         data: Dict[str, Any],
         message: str | None = None,
-        layer: str | None = None,
+        layer: str | None = None,  # DEPRECATED: layer derived from code prefix
     ) -> Reply:
-        """Create an Invalid reply (malformed input, unknown reference)."""
+        """
+        Create an Invalid reply (malformed input, unknown reference).
+        
+        May only be emitted by: WA, CT, MCP
+        EN cannot emit Invalid - use denied() for governance refusals.
+        meta.layer is derived from code prefix.
+        """
+        code_layer = self._validate_and_get_layer(code, "I")
         from ck3raven.core.reply_registry import get_message
         return Reply.invalid(
             code=code,
             message=message or get_message(code, **data),
             data=data,
             trace=self.trace_info,
-            meta=self._meta(layer),
+            meta=self._meta(code_layer),
         )
     
     def denied(
@@ -351,16 +517,23 @@ class ReplyBuilder:
         code: str,
         data: Dict[str, Any],
         message: str | None = None,
-        layer: str | None = None,
+        layer: str | None = None,  # DEPRECATED: layer derived from code prefix
     ) -> Reply:
-        """Create a Denied reply."""
+        """
+        Create a Denied reply.
+        
+        DECISION-LOCKED: Only EN (Enforcement) may emit Denied.
+        WA and CT must never emit Denied.
+        meta.layer is derived from code prefix.
+        """
+        code_layer = self._validate_and_get_layer(code, "D")
         from ck3raven.core.reply_registry import get_message
         return Reply.denied(
             code=code,
             message=message or get_message(code, **data),
             data=data,
             trace=self.trace_info,
-            meta=self._meta(layer),
+            meta=self._meta(code_layer),
         )
     
     def error(
@@ -368,14 +541,15 @@ class ReplyBuilder:
         code: str,
         data: Dict[str, Any],
         message: str | None = None,
-        layer: str | None = None,
+        layer: str | None = None,  # DEPRECATED: layer derived from code prefix
     ) -> Reply:
-        """Create an Error reply."""
+        """Create an Error reply. meta.layer is derived from code prefix."""
+        code_layer = self._validate_and_get_layer(code, "E")
         from ck3raven.core.reply_registry import get_message
         return Reply.error(
             code=code,
             message=message or get_message(code, **data),
             data=data,
             trace=self.trace_info,
-            meta=self._meta(layer),
+            meta=self._meta(code_layer),
         )

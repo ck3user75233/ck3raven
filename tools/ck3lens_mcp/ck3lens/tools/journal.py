@@ -33,7 +33,9 @@ def _list_workspaces() -> list[dict[str, Any]]:
     
     workspaces = []
     for entry in base.iterdir():
-        if entry.is_dir() and len(entry.name) == 64:  # SHA-256 hex
+        # Workspace keys are 16-char hex (first 64 bits of SHA-256)
+        # See: tools/ck3lens-explorer/src/journal/workspaceKey.ts
+        if entry.is_dir() and len(entry.name) == 16 and entry.name.isalnum():
             windows_path = entry / "windows"
             window_count = 0
             if windows_path.exists():

@@ -17,6 +17,7 @@ import sys
 import os
 import json
 import importlib
+import sqlite3
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Literal
@@ -510,8 +511,9 @@ def ck3_get_instance_info() -> Reply:
     import os
     trace_info = get_current_trace_info()
     rb = ReplyBuilder(trace_info, tool="ck3_get_instance_info")
+    # Instance info is infrastructure metadata - ungoverned -> MCP layer
     return rb.success(
-        "MCP-SYS-S-900",
+        "MCP-SYS-S-001",
         data={
             "instance_id": _instance_id,
             "server_name": _server_name,
@@ -538,8 +540,9 @@ def ck3_ping() -> Reply:
     from datetime import datetime
     trace_info = get_current_trace_info()
     rb = ReplyBuilder(trace_info, tool="ck3_ping")
+    # Ping is system health check - ungoverned -> MCP layer
     return rb.success(
-        "MCP-SYS-S-900",
+        "MCP-SYS-S-001",
         data={
             "status": "ok",
             "instance_id": _instance_id,
@@ -641,7 +644,7 @@ def debug_get_logs(
     result_entries = entries[-lines:] if len(entries) > lines else entries
     
     return rb.success(
-        "MCP-SYS-S-900",
+        "WA-LOG-S-001",
         data={
             "entries": result_entries,
             "total_available": len(entries),
@@ -879,14 +882,14 @@ def ck3_close_db() -> Reply:
         trace.log("ck3lens.close_db", {}, {"success": True})
         
         return rb.success(
-            "DB-CONN-S-001",
+            "WA-DB-S-001",
             data={"closed": True},
             message="Database connection closed and DISABLED. Use ck3_db(command='enable') to reconnect. File lock released.",
         )
     except Exception as e:
         trace.log("ck3lens.close_db", {}, {"success": False, "error": str(e)})
         return rb.error(
-            "DB-CONN-E-001",
+            "MCP-SYS-E-001",
             data={"error": str(e)},
             message=f"Failed to close connection: {e}",
         )
@@ -929,7 +932,7 @@ def ck3_db(
     if command == "status":
         result = db_api.status()
         trace.log("ck3lens.db.status", {}, result)
-        return rb.success("MCP-SYS-S-900", data=result, message="Database status retrieved.")
+        return rb.success("WA-DB-S-001", data=result, message="Database status retrieved.")
         
     elif command == "disable":
         # Use db_api to disable (handles WAL mode, close, blocks reconnect)
@@ -950,15 +953,15 @@ def ck3_db(
         gc.collect()
         
         trace.log("ck3lens.db.disable", {}, result)
-        return rb.success("DB-CONN-S-001", data=result, message="Database disabled.")
+        return rb.success("WA-DB-S-001", data=result, message="Database disabled.")
         
     elif command == "enable":
         result = db_api.enable()
         trace.log("ck3lens.db.enable", {}, result)
-        return rb.success("MCP-SYS-S-900", data=result, message="Database enabled.")
+        return rb.success("WA-DB-S-001", data=result, message="Database enabled.")
     
     else:
-        return rb.invalid("MCP-SYS-I-901", data={"command": command}, message=f"Unknown command: {command}")
+        return rb.invalid("MCP-SYS-I-002", data={"command": command}, message=f"Unknown command: {command}")
 
 
 # NOTE: ck3_get_playset_build_status() DELETED - January 2026
@@ -1044,18 +1047,19 @@ def ck3_db_delete(
     # Convert to Reply
     if result.get("error"):
         if result.get("policy_decision") in ("DENY", "REQUIRE_CONTRACT", "REQUIRE_TOKEN"):
-            return rb.denied('MCP-SYS-D-903', data=result, message=result.get("error", "Policy denied"))
+            return rb.denied('EN-DB-D-001', data=result, message=result.get("error", "Policy denied"))
         return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Unknown error"))
     
+    # DB delete is system-owned/ungoverned -> MCP layer owns success
     if result.get("success"):
         msg = f"Deleted {result.get('rows_deleted', 0)} rows from {target}."
-        return rb.success('MCP-SYS-S-900', data=result, message=msg)
+        return rb.success('MCP-DB-S-001', data=result, message=msg)
     
     if result.get("preview") or result.get("rows_would_delete") is not None:
         msg = f"Would delete {result.get('rows_would_delete', 0)} rows from {target}. Use confirm=True to delete."
-        return rb.invalid('MCP-SYS-I-901', data=result, message=msg)
+        return rb.success('MCP-DB-S-002', data=result, message=msg)  # Preview is success
     
-    return rb.success('MCP-SYS-S-900', data=result, message="Operation complete.")
+    return rb.success('MCP-DB-S-001', data=result, message="Operation complete.")
 
 
 def _ck3_db_delete_internal(
@@ -1434,7 +1438,7 @@ def ck3_get_policy_status() -> Reply:
     
     if health["healthy"]:
         return rb.success(
-            'MCP-SYS-S-900',
+            'EN-GATE-S-001',
             data=data,
             message="✅ Policy enforcement is ACTIVE",
         )
@@ -1557,7 +1561,7 @@ def ck3_logs(
         )
     
     return rb.success(
-        'MCP-SYS-S-900',
+        'WA-LOG-S-001',
         data=result,
         message=f"Logs query completed: source={source}, command={command}",
     )
@@ -1679,7 +1683,7 @@ def ck3_conflicts(
             result["conflict_count"] = len(result["conflicts"])
         
         return rb.success(
-            'MCP-SYS-S-900',
+            'WA-READ-S-001',
             data=result,
             message=f"Found {result.get('conflict_count', 0)} symbol conflicts.",
         )
@@ -1729,7 +1733,7 @@ def ck3_conflicts(
             })
         
         return rb.success(
-            'MCP-SYS-S-900',
+            'WA-READ-S-001',
             data={"conflicts": conflicts, "count": len(conflicts)},
             message=f"Found {len(conflicts)} file conflicts.",
         )
@@ -1781,7 +1785,7 @@ def ck3_conflicts(
         total_files = sum(by_folder.values())
         
         return rb.success(
-            'MCP-SYS-S-900',
+            'WA-READ-S-001',
             data={
                 "total_symbol_conflicts": total_symbols,
                 "total_file_conflicts": total_files,
@@ -1792,9 +1796,9 @@ def ck3_conflicts(
         )
     
     else:
-        return rb.error(
-            'MCP-SYS-E-001',
-            data={"error": f"Unknown command: {command}"},
+        return rb.invalid(
+            'WA-SYS-I-001',
+            data={"error": f"Unknown command: {command}", "valid_commands": ["symbols", "files", "summary"]},
             message=f"Unknown command: {command}",
         )
 
@@ -1925,20 +1929,26 @@ def ck3_file(
         policy_decision = result.get("policy_decision", "")
         visibility = result.get("visibility", "")
         
-        # Governance denial (policy/contract/authority refusal)
+        # Governance denial (policy/contract/authority refusal) -> EN layer
         if policy_decision in ("DENY", "REQUIRE_CONTRACT", "REQUIRE_TOKEN"):
-            return rb.denied('FILE-OP-D-001', data=result, message=err)
+            return rb.denied('EN-WRITE-D-001', data=result, message=err)
         if "denied" in err.lower() or "not allowed" in err.lower() or "permission" in err.lower():
-            return rb.denied('FILE-OP-D-001', data=result, message=err)
+            return rb.denied('EN-WRITE-D-001', data=result, message=err)
         
-        # Invalid reference / not found (caller's input cannot be resolved)
+        # Invalid reference / not found (caller's input cannot be resolved) -> WA layer
+        # NOTE: "not visible" and "outside scope" are WA resolution failures, NOT governance denials
         if visibility == "NOT_FOUND" or "not found" in err.lower() or "unknown" in err.lower():
-            return rb.invalid('FILE-OP-I-001', data=result, message=err)
+            return rb.invalid('WA-RES-I-001', data=result, message=err)
         
-        # System error (actual exception / unexpected failure)
-        return rb.error('FILE-OP-E-001', data=result, message=err)
+        # System error (actual exception / unexpected failure) -> MCP layer
+        return rb.error('MCP-SYS-E-001', data=result, message=err)
     
-    return rb.success('FILE-OP-S-001', data=result, message=f"File {command} complete.")
+    # Determine if this was a read or write operation for correct code
+    # Write operations pass through enforcement -> EN layer owns success
+    if command in ("write", "edit", "delete", "rename"):
+        return rb.success('EN-WRITE-S-001', data=result, message=f"File {command} complete.")
+    else:
+        return rb.success('WA-READ-S-001', data=result, message=f"File {command} complete.")
 
 
 # ============================================================================
@@ -2019,9 +2029,9 @@ def ck3_folder(
     )
     
     if result.get("error"):
-        return rb.error('FOLDER-OP-E-001', data=result, message=result.get("error", "Folder operation failed"))
+        return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Folder operation failed"))
     
-    return rb.success('FOLDER-OP-S-001', data=result, message=f"Folder {command} complete.")
+    return rb.success('WA-READ-S-001', data=result, message=f"Folder {command} complete.")
 
 
 # ============================================================================
@@ -2090,16 +2100,16 @@ def ck3_playset(
     )
     
     if result.get("error"):
-        return rb.error('PLAYSET-OP-E-001', data=result, message=result.get("error", "Playset operation failed"))
+        return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Playset operation failed"))
     
     if command == "switch":
-        return rb.success('PLAYSET-OP-S-002', data=result, message=f"Switched to playset: {result.get('playset_name')}")
+        return rb.success('WA-VIS-S-001', data=result, message=f"Switched to playset: {result.get('playset_name')}")
     
     if command == "get":
         name_val = result.get("playset_name") or result.get("name")
-        return rb.success('PLAYSET-OP-S-001', data=result, message=f"Active playset: {name_val}")
+        return rb.success('WA-VIS-S-001', data=result, message=f"Active playset: {name_val}")
     
-    return rb.success('PLAYSET-OP-S-001', data=result, message=f"Playset {command} complete.")
+    return rb.success('WA-VIS-S-001', data=result, message=f"Playset {command} complete.")
 
 
 def _ck3_playset_internal(
@@ -2682,9 +2692,9 @@ def ck3_git(
     )
     
     if result.get("error"):
-        return rb.error('GIT-CMD-E-001', data=result, message=result.get("error", "Git command failed"))
+        return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Git command failed"))
     
-    return rb.success('GIT-CMD-S-001', data=result, message=f"Git {command} complete.")
+    return rb.success('WA-GIT-S-001', data=result, message=f"Git {command} complete.")
 
 
 # ============================================================================
@@ -2759,7 +2769,7 @@ def ck3_validate(
         )
     
     return rb.success(
-        'MCP-SYS-S-900',
+        'WA-VAL-S-001',
         data=result,
         message=f"Validation completed: target={target}",
     )
@@ -2830,7 +2840,7 @@ def ck3_vscode(
         )
     
     return rb.success(
-        'MCP-SYS-S-900',
+        'WA-IO-S-001',
         data=result,
         message=f"VS Code operation completed: command={command}",
     )
@@ -2891,12 +2901,14 @@ def ck3_repair(
     result = _ck3_repair_internal(command, target, dry_run, backup_name)
     
     if result.get("error"):
-        return rb.error('REPAIR-OP-E-001', data=result, message=result.get("error", "Repair failed"))
+        return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Repair failed"))
     
+    # Repair operations are system-owned/ungoverned -> MCP layer owns success
     if result.get("dry_run"):
-        return rb.invalid('REPAIR-OP-I-001', data=result, message=f"Dry run - {command} would make changes.")
+        # Dry run is a preview - still MCP since it's infrastructure
+        return rb.success('MCP-SYS-S-002', data=result, message=f"Dry run - {command} would make changes.")
     
-    return rb.success('REPAIR-OP-S-001', data=result, message=f"Repair {command} complete.")
+    return rb.success('MCP-SYS-S-001', data=result, message=f"Repair {command} complete.")
 
 
 def _ck3_repair_internal(
@@ -3353,25 +3365,27 @@ def ck3_contract(
     )
     
     if result.get("error"):
+        # Authorization denial -> EN layer (CT cannot emit D)
         if "not authorized" in str(result.get("error", "")).lower():
-            return rb.denied('CONTRACT-OP-D-001', data=result, message=result.get("error", "Not authorized"))
-        return rb.error('CONTRACT-OP-E-001', data=result, message=result.get("error", "Contract operation failed"))
+            return rb.denied('EN-OPEN-D-001', data=result, message=result.get("error", "Not authorized"))
+        return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Contract operation failed"))
     
     if command == "status":
         if result.get("has_active_contract"):
-            return rb.success('CONTRACT-OP-S-003', data=result, message=f"Active contract: {result.get('contract_id')}")
-        return rb.invalid('CONTRACT-OP-I-001', data=result, message="No active contract.")
+            return rb.success('CT-VAL-S-001', data=result, message=f"Active contract: {result.get('contract_id')}")
+        # "No active contract" is informational, not governance denial
+        return rb.invalid('CT-CLOSE-I-001', data=result, message="No active contract.")
     
     if command == "open":
-        return rb.success('CONTRACT-OP-S-001', data=result, message=f"Contract opened: {result.get('contract_id')}")
+        return rb.success('CT-OPEN-S-001', data=result, message=f"Contract opened: {result.get('contract_id')}")
     
     if command == "close":
-        return rb.success('CONTRACT-OP-S-002', data=result, message="Contract closed.")
+        return rb.success('CT-CLOSE-S-001', data=result, message="Contract closed.")
     
     if command == "cancel":
-        return rb.success('CONTRACT-OP-S-004', data=result, message="Contract cancelled.")
+        return rb.success('CT-CLOSE-S-002', data=result, message="Contract cancelled.")
     
-    return rb.success('CONTRACT-OP-S-003', data=result, message=f"Contract {command} complete.")
+    return rb.success('CT-VAL-S-001', data=result, message=f"Contract {command} complete.")
 
 
 def _ck3_contract_internal(
@@ -3533,7 +3547,7 @@ def _ck3_contract_internal(
                     f.write(f"  Result keys: {list(result.keys())}\n")
                 return {
                     "success": False,
-                    "code": "CONTRACT_OPEN_SERIALIZATION_ERROR",
+                    "code": "MCP-SYS-E-002",
                     "message": f"Response not JSON-serializable. error_id={error_id}",
                     "error_id": error_id,
                 }
@@ -3549,7 +3563,7 @@ def _ck3_contract_internal(
                     f.write(f"  Size: {len(serialized)} bytes\n")
                 return {
                     "success": False,
-                    "code": "CONTRACT_RESPONSE_TOO_LARGE",
+                    "code": "MCP-SYS-E-003",
                     "message": f"Response exceeds {MAX_RESPONSE_BYTES} bytes. error_id={error_id}",
                     "error_id": error_id,
                 }
@@ -3571,7 +3585,7 @@ def _ck3_contract_internal(
                 f.write(traceback.format_exc())
             return {
                 "success": False,
-                "code": "CONTRACT_OPEN_ERROR",
+                "code": "MCP-SYS-E-001",
                 "message": f"Internal error. Logged as {error_id}",
                 "error_id": error_id,
             }
@@ -3791,19 +3805,24 @@ def ck3_exec(
     
     if result.get("error") and not result.get("allowed"):
         decision = result.get("policy", {}).get("decision", "DENY")
-        if decision in ("DENY", "REQUIRE_CONTRACT", "REQUIRE_TOKEN", "PATH_NOT_FOUND"):
-            return rb.denied('MCP-SYS-D-903', data=result, message=result.get("error", "Command denied"))
+        # Governance denial -> EN layer
+        if decision in ("DENY", "REQUIRE_CONTRACT", "REQUIRE_TOKEN"):
+            return rb.denied('EN-EXEC-D-001', data=result, message=result.get("error", "Command denied"))
+        # Path not found is a resolution failure, not governance -> WA layer
+        if decision == "PATH_NOT_FOUND":
+            return rb.invalid('WA-RES-I-001', data=result, message=result.get("error", "Path not found"))
         return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Command failed"))
     
     if result.get("executed"):
         exit_code = result.get("exit_code", 0)
         msg = f"Command executed. Exit code: {exit_code}."
-        return rb.success('MCP-SYS-S-900', data=result, message=msg)
+        return rb.success('EN-EXEC-S-001', data=result, message=msg)
     
     if result.get("allowed") and not result.get("executed"):
-        return rb.invalid('MCP-SYS-I-901', data=result, message="Dry run - command would be allowed.")
+        # Dry run is a success (preview), not invalid
+        return rb.success('EN-EXEC-S-002', data=result, message="Dry run - command would be allowed.")
     
-    return rb.success('MCP-SYS-S-900', data=result, message="Complete.")
+    return rb.success('EN-EXEC-S-001', data=result, message="Complete.")
 
 
 def _ck3_exec_internal(
@@ -4073,7 +4092,7 @@ def ck3_token(
     rb = ReplyBuilder(trace_info, tool='ck3_token')
     
     return rb.invalid(
-        'MCP-SYS-I-901',
+        'WA-CFG-I-001',
         data={
             "deprecated": True,
             "guidance": {
@@ -4212,7 +4231,7 @@ def ck3_search(
         result["guidance"] = guidance
     
     return rb.success(
-        'MCP-SYS-S-900',
+        'WA-READ-S-001',
         data=result,
         message=f"Search completed: {result['symbols']['count']} symbols, {total_refs} refs, {content_count} content matches.",
     )
@@ -4277,13 +4296,13 @@ def ck3_grep_raw(
     resolution = world.resolve(str(search_path))
     if not resolution.found:
         return rb.invalid(
-            'SEARCH-OP-I-001',
+            'WA-RES-I-001',
             data={"path": path, "mode": world.mode},
             message=f"Path not found: {path}",
         )
     # Use resolved absolute path (always set when resolution.found is True)
     if resolution.absolute_path is None:
-        return rb.invalid('SEARCH-OP-I-001', data={"path": path}, message=f"Resolution returned no path for: {path}")
+        return rb.invalid('WA-RES-I-001', data={"path": path}, message=f"Resolution returned no path for: {path}")
     search_path = resolution.absolute_path
     
     # Log the attempt
@@ -4295,7 +4314,7 @@ def ck3_grep_raw(
     }, {})
     
     if not search_path.exists():
-        return rb.invalid('SEARCH-OP-I-001', data={"path": path}, message=f"Path not found: {path}")
+        return rb.invalid('WA-RES-I-001', data={"path": path}, message=f"Path not found: {path}")
     
     try:
         matches = []
@@ -4348,7 +4367,7 @@ def ck3_grep_raw(
             "query": query,
         }, {"match_count": len(matches)})
         
-        return rb.success('MCP-SYS-S-900', data=result_data, message=f"Found {len(matches)} matches.")
+        return rb.success('WA-READ-S-001', data=result_data, message=f"Found {len(matches)} matches.")
         
     except Exception as e:
         return rb.error('MCP-SYS-E-001', data={"error": str(e)}, message=str(e))
@@ -4410,14 +4429,14 @@ def ck3_file_search(
     # WorldAdapter visibility - THE canonical way
     resolution = world.resolve(str(search_base))
     if not resolution.found:
-        return rb.error(
-            'MCP-SYS-E-001',
+        return rb.invalid(
+            'WA-RES-I-001',
             data={"path": str(base_path or search_base), "mode": world.mode},
             message=f"Path not found: {base_path or search_base}",
         )
     # Always set when resolution.found is True
     if resolution.absolute_path is None:
-        return rb.invalid('SEARCH-OP-I-001', data={"path": base_path}, message=f"Resolution returned no path for: {base_path}")
+        return rb.invalid('WA-RES-I-001', data={"path": base_path}, message=f"Resolution returned no path for: {base_path}")
     search_base = resolution.absolute_path
     
     # Log the attempt
@@ -4427,7 +4446,7 @@ def ck3_file_search(
     }, {})
     
     if not search_base.exists():
-        return rb.invalid('SEARCH-OP-I-001', data={"base_path": str(search_base)}, message=f"Base path not found: {search_base}")
+        return rb.invalid('WA-RES-I-001', data={"base_path": str(search_base)}, message=f"Base path not found: {search_base}")
     
     try:
         files = []
@@ -4449,7 +4468,7 @@ def ck3_file_search(
             "pattern": pattern,
         }, {"count": len(files)})
         
-        return rb.success('MCP-SYS-S-900', data=result_data, message=f"Found {len(files)} files.")
+        return rb.success('WA-READ-S-001', data=result_data, message=f"Found {len(files)} files.")
         
     except Exception as e:
         return rb.error('MCP-SYS-E-001', data={"error": str(e)}, message=str(e))
@@ -4486,13 +4505,13 @@ def ck3_parse_content(
         filename: Optional filename for error messages
     
     Returns:
-        Reply with code PARSE-AST-S-001 on success (ast and node_count in data),
-        or PARSE-AST-I-001 on syntax errors (errors list in data).
-        Returns PARSE-AST-E-001 only on unexpected system failure.
+        Reply with code WA-PARSE-S-001 on success (ast and node_count in data),
+        or WA-PARSE-I-001 on syntax errors (errors list in data).
+        Returns MCP-SYS-E-001 only on unexpected system failure.
     """
     trace = _get_trace()
     trace_info = get_current_trace_info()
-    rb = ReplyBuilder(trace_info, tool="ck3_parse_content", layer="PARSE")
+    rb = ReplyBuilder(trace_info, tool="ck3_parse_content")
     
     # Wrap in try/except to distinguish user syntax errors from system failures
     try:
@@ -4501,7 +4520,7 @@ def ck3_parse_content(
         # System failure - unexpected exception in parser
         import traceback
         return rb.error(
-            "PARSE-AST-E-001",
+            "MCP-SYS-E-001",
             data={
                 "error": f"Parser system failure: {e}",
                 "error_type": type(e).__name__,
@@ -4530,7 +4549,7 @@ def ck3_parse_content(
             node_count = count_nodes(result["ast"])
         
         return rb.success(
-            "PARSE-AST-S-001",
+            "WA-PARSE-S-001",
             data={
                 "ast": result["ast"],
                 "errors": result["errors"],  # Empty list on success
@@ -4543,7 +4562,7 @@ def ck3_parse_content(
         first_error = result["errors"][0] if result["errors"] else {"line": 1, "message": "Unknown parse error"}
         
         return rb.invalid(
-            "PARSE-AST-I-001",
+            "WA-PARSE-I-001",
             data={
                 "ast": result["ast"],  # Partial AST may still be useful
                 "errors": result["errors"],
@@ -4622,8 +4641,9 @@ def ck3_report_validation_issue(
         "snippet_length": len(code_snippet)
     }, {"issue_id": issue_id})
     
+    # This is an MCP-owned system operation - writes to ck3raven repo, not governed by EN
     return rb.success(
-        'MCP-SYS-S-900',
+        'MCP-SYS-S-001',
         data={
             "issue_id": issue_id,
             "issues_file": str(issues_file),
@@ -4664,9 +4684,9 @@ def ck3_get_agent_briefing() -> Reply:
     scope = _get_session_scope()
     
     if scope.get("source") == "none":
-        return rb.error(
-            'MCP-SYS-E-001',
-            data={"error": "No active playset", "hint": "Switch to a playset with ck3_switch_playset first"},
+        return rb.invalid(
+            'WA-VIS-I-001',
+            data={"error": "No active playset", "hint": "Switch to a playset with ck3_playset(command='switch') first"},
             message="No active playset",
         )
     
@@ -4691,7 +4711,7 @@ def ck3_get_agent_briefing() -> Reply:
     result["compatch_mods"] = [m["name"] for m in mod_list if m.get("is_compatch", False)]
     
     return rb.success(
-        'MCP-SYS-S-900',
+        'WA-CFG-S-001',
         data=result,
         message=f"Agent briefing loaded: {compatch_count} compatch mods.",
     )
@@ -4784,7 +4804,7 @@ def ck3_search_mods(
                     })
     
     return rb.success(
-        'MCP-SYS-S-900',
+        'WA-READ-S-001',
         data={"results": results[:limit], "query": query},
         message=f"Found {len(results[:limit])} mods matching '{query}'.",
     )
@@ -4827,7 +4847,7 @@ def ck3_get_mode_instructions(
         return rb.error('MCP-SYS-E-001', data=result, message=result.get("error"))
     
     return rb.success(
-        'MCP-SYS-S-900',
+        'WA-CFG-S-001',
         data=result,
         message=f"Initialized mode: {mode}. Database: {'connected' if result.get('session', {}).get('db_path') else 'not available'}.",
     )
@@ -5149,7 +5169,7 @@ def ck3_get_detected_mode() -> Reply:
         last_activity = events[0].get("ts") if events else None
     
     return rb.success(
-        'MCP-SYS-S-900',
+        'WA-CFG-S-001',
         data={
             "detected_mode": detected_mode,
             "confidence": confidence,
@@ -5211,7 +5231,7 @@ def ck3_get_workspace_config() -> Reply:
     }
     
     return rb.success(
-        'MCP-SYS-S-900',
+        'WA-CFG-S-001',
         data=result,
         message="Workspace configuration loaded.",
     )
@@ -5387,7 +5407,7 @@ def ck3_db_query(
     # Help mode
     if help:
         return rb.success(
-            'MCP-SYS-S-900',
+            'WA-DB-S-001',
             data={
                 "usage": "ck3_db_query(table=..., filters={...}, limit=N) or ck3_db_query(sql=...)",
                 "tables": {
@@ -5414,12 +5434,12 @@ def ck3_db_query(
             
             # At this point sql must be a string
             if sql is None:
-                return rb.error('MCP-SYS-E-001', data={"error": "No SQL provided"}, message="No SQL provided")
+                return rb.invalid('WA-DB-I-001', data={"error": "No SQL provided"}, message="No SQL provided")
             
             # Safety: only allow SELECT
             sql_upper = sql.strip().upper()
             if not sql_upper.startswith("SELECT") and not sql_upper.startswith("WITH"):
-                return rb.denied('MCP-SYS-D-903', data={"mode": "query"}, message="Only SELECT queries allowed for safety")
+                return rb.denied('EN-DB-D-001', data={"mode": "query"}, message="Only SELECT queries allowed for safety")
             
             # Add LIMIT if not present
             if "LIMIT" not in sql_upper:
@@ -5432,19 +5452,34 @@ def ck3_db_query(
             
             results = [dict(zip(col_names, row)) for row in rows]
             return rb.success(
-                'MCP-SYS-S-900',
+                'WA-DB-S-001',
                 data={"count": len(results), "results": results},
                 message=f"Query returned {len(results)} rows.",
             )
+        except sqlite3.OperationalError as e:
+            # Predictable SQL errors (user mistakes): no such table, syntax error, unknown column
+            error_msg = str(e).lower()
+            if any(pattern in error_msg for pattern in [
+                "no such table", "no such column", "syntax error", 
+                "near", "unrecognized token", "incomplete input"
+            ]):
+                return rb.invalid(
+                    'WA-DB-I-003',
+                    data={"error": str(e), "sql": sql[:200] if sql else None},
+                    message=f"Invalid SQL query: {e}",
+                )
+            # Other OperationalError = actual system failure
+            return rb.error('WA-DB-E-001', data={"error": str(e)}, message=str(e))
         except Exception as e:
+            # Unexpected exceptions = system failure
             return rb.error('MCP-SYS-E-001', data={"error": str(e)}, message=str(e))
     
     # Table query mode
     if not table:
-        return rb.invalid('DB-QUERY-I-001', data={"error": "Provide table= or sql=, or use help=True"}, message="No table or SQL provided")
+        return rb.invalid('WA-DB-I-001', data={"error": "Provide table= or sql=, or use help=True"}, message="No table or SQL provided")
     
     if table not in _DB_QUERY_SCHEMA:
-        return rb.invalid('DB-QUERY-I-002', data={"table": table, "available": list(_DB_QUERY_SCHEMA.keys())}, message=f"Unknown table '{table}'. Use help=True to see options.")
+        return rb.invalid('WA-DB-I-002', data={"table": table, "available": list(_DB_QUERY_SCHEMA.keys())}, message=f"Unknown table '{table}'. Use help=True to see options.")
     
     schema = _DB_QUERY_SCHEMA[table]
     db_table = schema["table"]
@@ -5487,7 +5522,7 @@ def ck3_db_query(
         
         results = [dict(zip(select_cols, row)) for row in rows]
         return rb.success(
-            'MCP-SYS-S-900',
+            'WA-DB-S-001',
             data={"count": len(results), "table": table, "results": results},
             message=f"Query returned {len(results)} rows from {table}.",
         )
@@ -5576,9 +5611,9 @@ def ck3_journal(
     rb = ReplyBuilder(trace_info, tool='ck3_journal')
     
     if result.get("success", False):
-        return rb.success('JRN-S-001', data=result, message=result.get("message", "OK"))
+        return rb.success('WA-READ-S-001', data=result, message=result.get("message", "OK"))
     else:
-        return rb.error('JRN-E-001', data=result, message=result.get("error", "Unknown error"))
+        return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Unknown error"))
 
 
 # ============================================================================
@@ -5638,13 +5673,13 @@ def ck3_qbuilder(
                 status = daemon.get_queue_status()
                 status["daemon_available"] = True
                 return rb.success(
-                    'MCP-SYS-S-900',
+                    'MCP-SYS-S-001',
                     data=status,
                     message=f"Daemon running. Pending: {status.get('pending', 0)}, Processing: {status.get('processing', 0)}.",
                 )
             else:
                 return rb.invalid(
-                    'MCP-SYS-I-901',
+                    'MCP-SYS-I-001',
                     data={
                         "daemon_available": False,
                         "message": "Daemon not running. Use ck3_qbuilder(command='build') to start.",
@@ -5668,7 +5703,7 @@ def ck3_qbuilder(
         if daemon.is_available():
             health = daemon.health()
             return rb.success(
-                'MCP-SYS-S-900',
+                'MCP-SYS-S-001',
                 data={
                     "success": True,
                     "already_running": True,
@@ -5692,7 +5727,7 @@ def ck3_qbuilder(
                     if daemon.is_available(force_check=True):
                         health = daemon.health()
                         return rb.success(
-                            'MCP-SYS-S-900',
+                            'MCP-SYS-S-001',
                             data={
                                 "success": True,
                                 "already_running": True,
@@ -5734,7 +5769,7 @@ def ck3_qbuilder(
             time.sleep(1.0)
             
             return rb.success(
-                'MCP-SYS-S-900',
+                'MCP-SYS-S-001',
                 data={
                     "success": True,
                     "pid": proc.pid,
@@ -5762,7 +5797,7 @@ def ck3_qbuilder(
             
             result = daemon.enqueue_scan()
             result["note"] = "Discovery tasks enqueued. Daemon will process them."
-            return rb.success('MCP-SYS-S-900', data=result, message="Discovery tasks enqueued.")
+            return rb.success('MCP-SYS-S-001', data=result, message="Discovery tasks enqueued.")
             
         except DaemonNotAvailableError as e:
             return rb.error(
@@ -5780,7 +5815,7 @@ def ck3_qbuilder(
     elif command == "reset":
         # Reset is a write operation - must go through daemon
         return rb.denied(
-            'MCP-SYS-D-903',
+            'EN-DB-D-001',
             data={
                 "mode": "reset",
                 "error": "Reset requires daemon restart with --fresh flag",
@@ -5791,7 +5826,7 @@ def ck3_qbuilder(
         )
     
     else:
-        return rb.error('MCP-SYS-E-001', data={"error": f"Unknown command: {command}"}, message=f"Unknown command: {command}")
+        return rb.invalid('WA-SYS-I-001', data={"error": f"Unknown command: {command}", "valid_commands": ["status", "build", "discover", "reset"]}, message=f"Unknown command: {command}")
 
 
 # ============================================================================

@@ -70,19 +70,148 @@ class Reply:
         \# Rendered from Registry (Convenience Only)  
         return REGISTRY\[self.code\].format(\*\*self.params)
 
-### **3.2 Canonical Code Format**
+### **3.2 Canonical Reply Code Format**
 
-Format: LAYER-AREA-TYPE-NNN
+**Format**
 
-* **Layer:** WA (World), EN (Enforcement), MCP (Transport), CT (Contract).  
-* **Area:** RES (Resolution), IO, READ, WRITE, LINT, GATE, SYS.  
-* **Type:** S, I, D, E.
+`LAYER-AREA-TYPE-NNN`
+
+This code is a **semantic identifier**, not a tool label.
+It is stable, machine-checkable, and linter-enforced.
+
+Agents and callers must branch on **TYPE and CODE**, never on message text.
+
+---
+
+#### LAYER — who owns the decision (semantic authority)
+
+**LAYER identifies who is responsible for the decision being reported.**
+It answers: *"Which subsystem decided this outcome?"*
+
+The LAYER set is **small, stable, and closed**.
+
+Allowed LAYER values:
+
+**WA — World Adapter**
+Owns structural and world-mapping decisions: resolution, visibility, interpretation of world structure ("how the world is laid out").
+
+* Allowed TYPE: `S`, `I`, `E`
+* Forbidden TYPE: `D`
+* WA never performs governance or authorization.
+
+**EN — Enforcement**
+Owns governance and authorization decisions: policy, permissions, contract scope enforcement.
+
+* Allowed TYPE: `S`, `D`, `E`
+* Forbidden TYPE: `I`
+* All denials of governed operations originate here.
+
+**CT — Contract System**
+Owns contract lifecycle and contract request validity only (open, validate, close).
+
+* Allowed TYPE: `S`, `I`, `E`
+* Forbidden TYPE: `D`
+* CT does not enforce permissions; it validates contract requests and state.
+
+**MCP — Infrastructure / System**
+Owns transport, wrapper, protocol behavior, and **system-owned operations that are explicitly out of governance**.
+
+* Allowed TYPE:
+
+  * `E` — infrastructure or system failure
+  * `I` — tool-boundary input shape invalidity
+  * `S` — success of **system-owned / ungoverned operations**
+* Forbidden TYPE: `D`
+* MCP is the catch-all for **non-agentic, non-governed system activity**.
+
+**Rule (non-negotiable):**
+Adding a new LAYER is **not allowed** without an explicit architecture change (documentation update, registry update, linter update). Tool domains and dependencies do **not** justify new layers.
+
+---
+
+#### AREA — what domain the operation concerns (descriptive only)
+
+**AREA identifies the functional domain of the operation.**
+It answers: *"What kind of thing is this about?"*
+
+AREA is **orthogonal to LAYER**.
+
+> AREA does **not** imply ownership.
+> The same AREA may legitimately appear under different LAYERs.
+
+Canonical starting AREA set:
+
+* `SYS` — fallback / miscellaneous system semantics
+* `RES` — resolution / mapping
+* `VIS` — visibility / hidden / deprecated scopes
+* `IO` — generic I/O not cleanly read/write
+* `READ` — reads (files, folders, logs, metadata)
+* `WRITE` — writes / edits / mutations
+* `EXEC` — command execution
+* `DB` — database operations
+* `PARSE` — parsing / AST / syntax interpretation
+* `VAL` — validation (non-governance)
+* `GATE` — precondition checks (denials still EN-owned)
+* `LOG` — logging / journaling
+* `CFG` — configuration / setup / mode / state
+
+**Rule:**
+AREA names must never be tool names (e.g. `FILE`, `PLAYSET`, `QBUILDER`).
+Tool identity belongs in structured data, not in the reply code.
+
+**Extension rule:**
+New AREA values may be added, but only by updating this list and the reply-code registry. AREA sprawl without registry updates is forbidden.
+
+---
+
+#### TYPE — outcome classification
+
+* `S` — Success: the operation completed as requested
+* `I` — Invalid request: caller must self-correct and retry
+* `D` — Denied: valid request refused by governance
+* `E` — Error: unexpected failure; stop and report trace ID
+
+TYPE semantics are global and do not vary by LAYER.
+
+---
+
+#### NNN — numeric identifier
+
+Three-digit identifier (`001–999`), unique within a `(LAYER, AREA, TYPE)` cluster.
+Numbers are never reused. Messages may evolve; codes do not.
+
+---
+
+#### Examples (illustrative)
+
+* `WA-PARSE-S-001` — parsing completed successfully (world interpretation)
+* `WA-PARSE-I-001` — invalid syntax in input
+* `EN-WRITE-D-001` — write denied by policy / contract scope
+* `CT-OPEN-I-001` — invalid contract request
+* `MCP-DB-S-001` — system-owned database build/update completed
+* `MCP-SYS-E-001` — infrastructure failure in tool wrapper
+
+---
+
+#### Final ownership rule (to prevent drift)
+
+* **Governed mutations** → EN owns the decision
+* **Structural interpretation** → WA owns the decision
+* **Contract lifecycle validity** → CT owns the decision
+* **System-owned, ungoverned operations** → MCP owns the decision
+
+AREA describes *what*.
+LAYER describes *who decided*.
+
+They must never be conflated.
+
+---
 
 **Registry Examples:**
 
-* WA-RES-I-001: "Path '{path}' does not exist."  
-* EN-WRITE-D-002: "Write denied to '{path}'. Outside Contract Scope."  
-* MCP-SYS-S-900: "Legacy tool returned raw payload; wrapped as Success."
+* `WA-RES-I-001`: "Path '{path}' does not exist."  
+* `EN-WRITE-D-002`: "Write denied to '{path}'. Outside Contract Scope."  
+* `MCP-SYS-E-001`: "System failure; trace_id for debugging."
 
 ## ---
 
