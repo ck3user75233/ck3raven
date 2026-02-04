@@ -3985,7 +3985,7 @@ def _ck3_exec_internal(
         elif cat in (CommandCategory.WRITE_IN_SCOPE, CommandCategory.WRITE_OUT_OF_SCOPE, 
                      CommandCategory.GIT_MODIFY, CommandCategory.NETWORK, CommandCategory.SYSTEM):
             return OperationType.SHELL_WRITE
-        elif cat in (CommandCategory.DESTRUCTIVE, CommandCategory.GIT_DANGEROUS, CommandCategory.BLOCKED):
+        elif cat in (CommandCategory.DESTRUCTIVE, CommandCategory.GIT_NEEDS_APPROVAL, CommandCategory.BLOCKED):
             return OperationType.SHELL_DESTRUCTIVE
         else:
             return OperationType.SHELL_SAFE  # Default to safe for unknown

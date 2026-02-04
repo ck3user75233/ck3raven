@@ -75,7 +75,7 @@ class CommandCategory(Enum):
     DESTRUCTIVE = auto()        # File deletion, data loss
     GIT_SAFE = auto()           # git status, log, diff
     GIT_MODIFY = auto()         # git commit, branch
-    GIT_DANGEROUS = auto()      # git push, rebase, force
+    GIT_NEEDS_APPROVAL = auto() # git push, rebase, force - requires approval
     NETWORK = auto()            # curl, wget, etc.
     SYSTEM = auto()             # System commands
     BLOCKED = auto()            # Never allowed
@@ -120,6 +120,8 @@ BLOCKED_COMMANDS = frozenset({
 })
 
 # Patterns requiring tokens, keyed by token type
+# NOTE: Git operations are NOT token-gated here - they go through ck3_git tool
+# which uses _enforce_git_push() with contract-based SAFE PUSH auto-grant.
 TOKEN_REQUIRED_PATTERNS: dict[str, list[str]] = {
     "FS_DELETE_CODE": [
         r"rm\s+.*\.py",
@@ -132,17 +134,6 @@ TOKEN_REQUIRED_PATTERNS: dict[str, list[str]] = {
         r"drop\s+table",
         r"truncate\s+table",
         r"delete\s+from",
-    ],
-    "GIT_PUSH": [
-        r"git\s+push(?!\s+--force)",
-    ],
-    "GIT_FORCE_PUSH": [
-        r"git\s+push\s+(--force|-f)",
-    ],
-    "GIT_REWRITE_HISTORY": [
-        r"git\s+rebase",
-        r"git\s+reset\s+--hard",
-        r"git\s+cherry-pick",
     ],
     "CMD_RUN_ARBITRARY": [
         r"curl\s+.*\|\s*(bash|sh|python)",
@@ -217,9 +208,9 @@ def classify_command(command: str) -> CommandCategory:
     # Git classification
     if cmd_lower.startswith("git "):
         if any(re.search(p, cmd_lower) for p in [r"push.*--force", r"push.*-f"]):
-            return CommandCategory.GIT_DANGEROUS
+            return CommandCategory.GIT_NEEDS_APPROVAL
         if "push" in cmd_lower or "rebase" in cmd_lower or "reset --hard" in cmd_lower:
-            return CommandCategory.GIT_DANGEROUS
+            return CommandCategory.GIT_NEEDS_APPROVAL
         if any(re.search(p, cmd_lower) for p in GIT_MODIFY_PATTERNS):
             return CommandCategory.GIT_MODIFY
         return CommandCategory.GIT_SAFE

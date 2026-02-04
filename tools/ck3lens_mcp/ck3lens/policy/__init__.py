@@ -43,7 +43,7 @@ from .types import (
     # Git command classification
     GIT_COMMANDS_SAFE,
     GIT_COMMANDS_RISKY,
-    GIT_COMMANDS_DANGEROUS,
+    GIT_COMMANDS_NEEDS_APPROVAL,
 )
 from .loader import load_policy, get_policy
 from .validator import validate_policy, validate_for_mode, server_delivery_gate
@@ -161,7 +161,7 @@ __all__ = [
     # Git command classification
     "GIT_COMMANDS_SAFE",
     "GIT_COMMANDS_RISKY",
-    "GIT_COMMANDS_DANGEROUS",
+    "GIT_COMMANDS_NEEDS_APPROVAL",
     # CK3Lens Rules
     "validate_ck3lens_rules",
     "classify_path_domain",

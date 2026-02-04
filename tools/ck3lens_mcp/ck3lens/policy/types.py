@@ -136,13 +136,14 @@ GIT_COMMANDS_RISKY = frozenset({
     "branch",  # Creating/deleting branches (without -a/-v/-l flags)
 })
 
-# Dangerous git commands (require explicit token)
-GIT_COMMANDS_DANGEROUS = frozenset({
-    "push",           # Requires GIT_PUSH token
-    "push --force",   # Requires GIT_FORCE_PUSH token
-    "rebase",         # Requires GIT_HISTORY_REWRITE token
-    "reset --hard",   # Requires GIT_HISTORY_REWRITE token
-    "commit --amend", # Requires GIT_HISTORY_REWRITE token
+# Git commands requiring user approval (via ck3_git tool enforcement)
+# These go through _enforce_git_push() which implements SAFE PUSH auto-grant
+GIT_COMMANDS_NEEDS_APPROVAL = frozenset({
+    "push",           # Requires contract + valid branch + staged files in scope
+    "push --force",   # Requires user approval (never auto-granted)
+    "rebase",         # Requires user approval
+    "reset --hard",   # Requires user approval
+    "commit --amend", # Requires user approval
 })
 
 
