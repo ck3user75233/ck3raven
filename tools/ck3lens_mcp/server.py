@@ -220,6 +220,20 @@ def _get_db() -> DBQueries:
     return _db
 
 
+def _get_active_cvids() -> set[int]:
+    """
+    Get content_version_ids for the active playset.
+    
+    CANONICAL: Derives from session.mods[] - THE source of truth.
+    
+    Returns:
+        Set of cvids for vanilla + all mods in the active playset.
+        Empty set if no playset or CVIDs not resolved.
+    """
+    session = _get_session()
+    return {m.cvid for m in session.mods if m.cvid is not None}
+
+
 # BANNED: _get_lens, _get_cvids, _derive_search_cvids, db_visibility (December 2025 purge)
 # Derive CVIDs inline from session.mods[] - THE canonical way
 
@@ -285,17 +299,36 @@ def _reset_world_cache():
     _cached_world_mode = None
 
 
-# Cached session scope data
-_session_scope: Optional[dict] = None
+# REMOVED: _session_scope global (January 2026)
+# The dual session system caused playset state to always be null.
+# Use _get_session() instead - it returns a proper Session object.
 
 # Playset folder - JSON files here define available playsets
-# Located at ck3raven/playsets/ (repository root, not tools/)
-PLAYSETS_DIR = Path(__file__).parent.parent.parent / "playsets"
+# PRIMARY LOCATION: ~/.ck3raven/playsets/ (user data folder)
+# FALLBACK: ck3raven/playsets/ (repository root, for backward compatibility)
+USER_PLAYSETS_DIR = Path.home() / ".ck3raven" / "playsets"
+REPO_PLAYSETS_DIR = Path(__file__).parent.parent.parent / "playsets"
+
+def _get_playsets_dir() -> Path:
+    """Get the active playsets directory.
+    
+    Priority:
+    1. User data folder (~/.ck3raven/playsets/) if it exists
+    2. Repo folder (ck3raven/playsets/) as fallback
+    
+    This allows gradual migration from repo-based to user-based playsets.
+    """
+    if USER_PLAYSETS_DIR.exists():
+        return USER_PLAYSETS_DIR
+    return REPO_PLAYSETS_DIR
+
+# For backward compatibility, PLAYSETS_DIR is now a function call
+# TODO: Migrate all usages to _get_playsets_dir()
+PLAYSETS_DIR = REPO_PLAYSETS_DIR  # Legacy - will be deprecated
 
 # Manifest file - points to which playset is currently active
 # Lives in the playsets folder alongside the playset files
-PLAYSET_MANIFEST_FILE = PLAYSETS_DIR / "playset_manifest.json"
-
+PLAYSET_MANIFEST_FILE = _get_playsets_dir() / "playset_manifest.json"
 
 
 
@@ -325,6 +358,50 @@ def _list_available_playsets() -> list[dict]:
     return playsets
 
 
+def _validate_playset_schema(data: dict, file_path: str) -> tuple[bool, list[str]]:
+    """
+    Validate playset JSON against required schema.
+    
+    FAIL CLOSED: If validation fails, returns (False, errors).
+    The caller MUST NOT proceed with an invalid playset.
+    
+    Returns (is_valid, list of error messages).
+    """
+    errors = []
+    
+    # Required top-level fields
+    if "playset_name" not in data:
+        errors.append("Missing required field: playset_name")
+    elif not isinstance(data["playset_name"], str):
+        errors.append("playset_name must be a string")
+    
+    if "vanilla" not in data:
+        errors.append("Missing required field: vanilla")
+    elif not isinstance(data["vanilla"], dict):
+        errors.append("vanilla must be an object")
+    elif "path" not in data["vanilla"]:
+        errors.append("Missing required field: vanilla.path")
+    
+    if "mods" not in data:
+        errors.append("Missing required field: mods")
+    elif not isinstance(data["mods"], list):
+        errors.append("mods must be an array")
+    else:
+        # Validate each mod entry
+        for i, mod in enumerate(data["mods"]):
+            if not isinstance(mod, dict):
+                errors.append(f"mods[{i}] must be an object")
+                continue
+            if "name" not in mod:
+                errors.append(f"mods[{i}] missing required field: name")
+            if "path" not in mod:
+                errors.append(f"mods[{i}] missing required field: path")
+            if "load_order" not in mod:
+                errors.append(f"mods[{i}] missing required field: load_order")
+    
+    return (len(errors) == 0, errors)
+
+
 def _load_playset_from_json(playset_file: Path) -> Optional[dict]:
     """
     Load playset data from a ck3raven playset JSON file.
@@ -342,6 +419,20 @@ def _load_playset_from_json(playset_file: Path) -> Optional[dict]:
     
     try:
         data = json.loads(playset_file.read_text(encoding='utf-8-sig'))
+        
+        # FAIL CLOSED: Validate schema before proceeding
+        is_valid, schema_errors = _validate_playset_schema(data, str(playset_file))
+        if not is_valid:
+            print(f"[SCHEMA VALIDATION FAILED] {playset_file}")
+            for err in schema_errors:
+                print(f"  - {err}")
+            # Return error dict instead of None to signal validation failure
+            return {
+                "error": "PLAYSET_SCHEMA_INVALID",
+                "message": f"Playset failed schema validation: {playset_file.name}",
+                "validation_errors": schema_errors,
+                "reply_code": "WA-VIS-I-003",
+            }
         
         # Auto-migrate paths if they reference a different user profile
         try:
@@ -406,60 +497,17 @@ def _load_playset_from_json(playset_file: Path) -> Optional[dict]:
 # REMOVED: _load_legacy_playset - Legacy playset format BANNED (December 2025)
 # All playsets must use the canonical mods[] format in playsets/*.json
 
-
-def _get_session_scope(force_refresh: bool = False) -> dict:
-    """
-    Get all session scope data from a single source of truth.
-    
-    Source:
-    1. Manifest file (playsets/playset_manifest.json) -> points to active playset
-    2. Empty scope (no playset)
-    
-    NOTE: Database is NO LONGER used for playset storage.
-    
-    Returns dict with:
-        playset_id: None (JSON-based, no DB ID)
-        playset_name: Human-readable name
-        active_mod_ids: Set of workshop IDs for mods in playset
-        active_roots: Set of filesystem root paths for mods
-        vanilla_version_id: None (unused)
-        vanilla_root: Path to vanilla game files
-        source: "json" or "none"
-        agent_briefing: Dict with agent instructions (if available)
-    """
-    global _session_scope
-    
-    if _session_scope is not None and not force_refresh:
-        return _session_scope
-    
-    # Try manifest file first - this points to the active playset
-    if PLAYSET_MANIFEST_FILE.exists():
-        try:
-            manifest = json.loads(PLAYSET_MANIFEST_FILE.read_text(encoding='utf-8-sig'))
-            active_filename = manifest.get("active", "")
-            if active_filename:
-                active_file = PLAYSETS_DIR / active_filename
-                if active_file.exists():
-                    scope = _load_playset_from_json(active_file)
-                    if scope:
-                        _session_scope = scope
-                        return _session_scope
-                else:
-                    print(f"Warning: Manifest points to {active_filename} but file not found")
-        except Exception as e:
-            print(f"Warning: Failed to read playset manifest: {e}")
-    
-    # No playset available - legacy format support REMOVED
-    _session_scope = {
-        "playset_id": None,
-        "playset_name": None,
-        "active_mod_ids": set(),
-        "active_roots": set(),
-        "vanilla_version_id": None,
-        "vanilla_root": None,
-        "source": "none",
-    }
-    return _session_scope
+# REMOVED: _get_session_scope() function (January 2026)
+# This function was part of a dual session system that caused playset state to always be null.
+# The bug: _get_session_scope() reimplemented session loading with a path mismatch bug.
+# The fix: Use _get_session() which returns a proper Session object from load_config().
+#
+# If you need playset info, use:
+#   session = _get_session()
+#   session.playset_name  # Human-readable name
+#   session.mods          # List of ModEntry objects
+#   session.vanilla       # Vanilla entry (mods[0])
+#   session.local_mods_folder  # Path to editable mods
 
 
 def _get_trace_path() -> Path:
@@ -677,11 +725,10 @@ def _init_session_internal(
     """
     from ck3lens.workspace import load_config
 
-    global _session, _db, _trace, _playset_id, _session_scope, _session_cv_ids_resolved
+    global _session, _db, _trace, _playset_id, _session_cv_ids_resolved
 
-    # Reset playset and scope cache
+    # Reset playset cache
     _playset_id = None
-    _session_scope = None
     _session_cv_ids_resolved = False  # Reset so CVIDs are resolved on reconnect
 
     # Use load_config to get session from active playset
@@ -851,7 +898,7 @@ def ck3_close_db() -> Reply:
     Returns:
         {"success": bool, "message": str}
     """
-    global _db, _playset_id, _session_scope
+    global _db, _playset_id, _session
     
     trace = _get_trace()
     trace_info = get_current_trace_info()
@@ -866,7 +913,7 @@ def ck3_close_db() -> Reply:
         
         # Clear cached state that depends on DB
         _playset_id = None
-        _session_scope = None
+        _session = None  # Clear session so it reloads on next access
         
         # Clear thread-local connections from schema module
         try:
@@ -2125,7 +2172,7 @@ def _ck3_playset_internal(
     limit: int | None,
 ) -> dict:
     """Internal implementation returning dict."""
-    global _session_scope
+    global _session, _session_cv_ids_resolved
     
     trace = _get_trace()
     
@@ -2212,11 +2259,12 @@ def _ck3_playset_internal(
         }
         PLAYSET_MANIFEST_FILE.write_text(json.dumps(manifest, indent=2), encoding='utf-8')
         
-        # Clear cached scope to force reload
-        _session_scope = None
+        # Clear cached session to force reload from new playset
+        _session = None
+        _session_cv_ids_resolved = False
         
-        # Reload and return new scope
-        new_scope = _get_session_scope(force_refresh=True)
+        # Reload session from new playset
+        session = _get_session()
         
         # Check build status for all mods in this playset
         # NOTE: Inlined check logic (January 2026) - avoids qbuilder import hang
@@ -2298,15 +2346,15 @@ def _ck3_playset_internal(
             "success": True,
             "message": f"Switched to playset: {target_file.name}",
             "active_playset": target_file.name,
-            "playset_name": new_scope.get("playset_name"),
-            "mod_count": len(new_scope.get("active_mod_ids", set())),
+            "playset_name": session.playset_name,
+            "mod_count": len(session.mods),
         }
         
         # Report missing-from-disk mods (these cannot be built)
         if mods_missing_from_disk:
             result["mods_missing_from_disk"] = mods_missing_from_disk
             result["missing_warning"] = (
-                f"? {len(mods_missing_from_disk)} mod(s) are in playset but not on disk. "
+                f"⚠ {len(mods_missing_from_disk)} mod(s) are in playset but not on disk. "
                 f"These mods will be skipped: {mods_missing_from_disk}"
             )
         
@@ -2412,13 +2460,13 @@ def _ck3_playset_internal(
             }
         
         if not mods_needing_build and not mods_missing_from_disk and db_available and build_status and not build_status.get("error"):
-            result["build_status_message"] = "? All mods are ready. No build needed."
+            result["build_status_message"] = "✓ All mods are ready. No build needed."
         
         return result
     
     elif command == "get":
         # Get current active playset info
-        scope = _get_session_scope()
+        session = _get_session()
         manifest_active = None
         if PLAYSET_MANIFEST_FILE.exists():
             try:
@@ -2427,31 +2475,51 @@ def _ck3_playset_internal(
             except Exception:
                 pass
         
+        # Get vanilla root from session.vanilla (mods[0])
+        vanilla_root = None
+        if session.vanilla and session.vanilla.path:
+            vanilla_root = str(session.vanilla.path)
+        
         return {
             "success": True,
             "active_file": manifest_active,
-            "playset_name": scope.get("playset_name"),
-            "source": scope.get("source"),
-            "mod_count": len(scope.get("active_mod_ids", set())),
-            "has_agent_briefing": bool(scope.get("agent_briefing")),
-            "vanilla_root": scope.get("vanilla_root"),
+            "playset_name": session.playset_name,
+            "source": "json" if session.playset_name else "none",
+            "mod_count": len(session.mods),
+            "has_agent_briefing": False,  # TODO: Implement agent briefing in Session
+            "vanilla_root": vanilla_root,
+            "local_mods_folder": str(session.local_mods_folder) if session.local_mods_folder else None,
         }
     
     elif command == "mods":
         # Get mods in active playset
-        scope = _get_session_scope()
-        mod_list = scope.get("mod_list", [])
+        session = _get_session()
         
-        enabled = [m for m in mod_list if m.get("enabled", True)]
-        disabled = [m for m in mod_list if not m.get("enabled", True)]
+        # All mods in session.mods are "enabled" - they're part of the active playset
+        # The concept of enabled/disabled doesn't apply here - disabled mods wouldn't be loaded
+        mods_list = session.mods
+        
+        # Convert ModEntry to dict for JSON serialization
+        def mod_to_dict(m):
+            return {
+                "name": m.name,
+                "mod_id": m.mod_id,
+                "path": str(m.path) if m.path else None,
+                "load_order": m.load_order,
+                "workshop_id": m.workshop_id,  # Correct attribute name
+                "cvid": m.cvid,
+                "is_indexed": m.is_indexed,  # Property that exists
+                "is_vanilla": m.is_vanilla,  # Property that exists
+            }
+        
+        mods_to_return = mods_list[:limit] if limit else mods_list
         
         return {
             "success": True,
-            "playset_name": scope.get("playset_name"),
-            "enabled_count": len(enabled),
-            "disabled_count": len(disabled),
-            "mods": enabled[:limit] if limit else enabled,
-            "truncated": limit is not None and len(enabled) > limit,
+            "playset_name": session.playset_name,
+            "mod_count": len(mods_list),
+            "mods": [mod_to_dict(m) for m in mods_to_return],
+            "truncated": limit is not None and len(mods_list) > limit,
         }
     
     elif command == "add_mod":
@@ -2460,8 +2528,8 @@ def _ck3_playset_internal(
             return {"success": False, "error": "mod_name required for add_mod"}
         
         # Get the active playset file
-        scope = _get_session_scope()
-        if scope.get("source") == "none":
+        session = _get_session()
+        if not session.playset_name:
             return {"success": False, "error": "No active playset. Switch to one first."}
         
         # Find the active playset file
@@ -2570,8 +2638,9 @@ def _ck3_playset_internal(
         except Exception as e:
             return {"success": False, "error": f"Failed to write playset: {e}"}
         
-        # Clear cached scope
-        _session_scope = None
+        # Clear cached session to force reload
+        _session = None
+        _session_cv_ids_resolved = False
         
         # Check if mod needs building - pure SQL, no qbuilder import (January 2026)
         build_needed = False
@@ -4409,7 +4478,7 @@ def ck3_file_search(
     rb = ReplyBuilder(trace_info, tool='ck3_file_search')
     
     trace = _get_trace()
-    scope = _get_session_scope()
+    session = _get_session()
     world = _get_world()
     
     # Get agent mode first for path defaults
@@ -4421,8 +4490,8 @@ def ck3_file_search(
     elif mode == "ck3raven-dev":
         # In ck3raven-dev mode, default to repo root for infrastructure work
         search_base = Path(__file__).parent.parent.parent
-    elif scope.get("vanilla_root"):
-        search_base = Path(scope["vanilla_root"])
+    elif session.vanilla and session.vanilla.path:
+        search_base = session.vanilla.path
     else:
         search_base = Path("C:/Program Files (x86)/Steam/steamapps/common/Crusader Kings III/game")
     
@@ -4681,20 +4750,36 @@ def ck3_get_agent_briefing() -> Reply:
     trace_info = get_current_trace_info()
     rb = ReplyBuilder(trace_info, tool='ck3_get_agent_briefing')
     
-    scope = _get_session_scope()
+    session = _get_session()
     
-    if scope.get("source") == "none":
+    if not session.playset_name:
         return rb.invalid(
             'WA-VIS-I-001',
             data={"error": "No active playset", "hint": "Switch to a playset with ck3_playset(command='switch') first"},
             message="No active playset",
         )
     
-    briefing = scope.get("agent_briefing", {})
-    sub_agent = scope.get("sub_agent_config", {})
+    # TODO: Agent briefing should be added to Session class
+    # For now, read directly from playset file if needed
+    briefing = {}
+    sub_agent = {}
+    
+    # Try to load briefing from playset file directly
+    if PLAYSET_MANIFEST_FILE.exists():
+        try:
+            manifest = json.loads(PLAYSET_MANIFEST_FILE.read_text(encoding='utf-8-sig'))
+            active_file = manifest.get("active", "")
+            if active_file:
+                playset_path = PLAYSETS_DIR / active_file
+                if playset_path.exists():
+                    playset_data = json.loads(playset_path.read_text(encoding='utf-8-sig'))
+                    briefing = playset_data.get("agent_briefing", {})
+                    sub_agent = playset_data.get("sub_agent_config", {})
+        except Exception:
+            pass
     
     result = {
-        "playset_name": scope.get("playset_name"),
+        "playset_name": session.playset_name,
         "context": briefing.get("context", ""),
         "error_analysis_notes": briefing.get("error_analysis_notes", []),
         "conflict_resolution_notes": briefing.get("conflict_resolution_notes", []),
@@ -4704,9 +4789,8 @@ def ck3_get_agent_briefing() -> Reply:
         "sub_agent_config": sub_agent,
     }
     
-    # Count compatch mods
-    mod_list = scope.get("mod_list", [])
-    compatch_count = sum(1 for m in mod_list if m.get("is_compatch", False))
+    # Count compatch mods from session.mods
+    compatch_count = sum(1 for m in session.mods if m.is_compatch)
     result["compatch_mods_count"] = compatch_count
     result["compatch_mods"] = [m["name"] for m in mod_list if m.get("is_compatch", False)]
     
@@ -5369,11 +5453,17 @@ def ck3_db_query(
     sql_file: str | None = None,
     limit: int = 100,
     help: bool = False,
+    unfiltered: bool = False,
 ) -> Reply:
     """
     Unified database query tool for CK3 raven database.
     
     Use help=True to see available tables and their schemas.
+    
+    VISIBILITY FILTERING:
+        In ck3lens mode, queries are automatically filtered to the active playset.
+        Tables with content_version_id column only return rows from vanilla + active mods.
+        Set unfiltered=True to bypass filtering (advanced use only).
     
     SIMPLE QUERIES (recommended):
         table: Table name (provinces, characters, dynasties, titles, localization, symbols, files, refs)
@@ -5393,6 +5483,7 @@ def ck3_db_query(
         sql_file: Path to .sql file
         limit: Max results
         help: Show schema documentation
+        unfiltered: If True, bypass playset visibility filtering (ck3lens mode only)
         
     Examples:
         ck3_db_query(help=True)
@@ -5427,6 +5518,19 @@ def ck3_db_query(
     
     # Raw SQL mode
     if sql or sql_file:
+        # In ck3lens mode, raw SQL requires explicit opt-out of visibility filtering
+        from ck3lens.agent_mode import get_agent_mode
+        if get_agent_mode() == "ck3lens" and not unfiltered:
+            return rb.invalid(
+                'WA-DB-I-001',
+                data={
+                    "error": "Raw SQL not allowed without unfiltered=True in ck3lens mode",
+                    "reason": "Raw SQL bypasses playset visibility filtering. Use structured table queries (which are auto-filtered) or set unfiltered=True to explicitly bypass filtering.",
+                    "example": "ck3_db_query(table='files', filters={'relpath': '%traits%'}) — auto-filtered to playset",
+                },
+                message="Raw SQL requires unfiltered=True in ck3lens mode. Use table= for auto-filtered queries.",
+            )
+        
         try:
             if sql_file:
                 with open(sql_file, 'r', encoding='utf-8') as f:
@@ -5451,10 +5555,15 @@ def ck3_db_query(
             col_names = [d[0] for d in cursor.description] if cursor.description else []
             
             results = [dict(zip(col_names, row)) for row in rows]
+            
+            # Note: If we reach here, either:
+            # - Mode is ck3raven-dev (no visibility filter needed)
+            # - unfiltered=True was explicitly set (user opted out)
+            
             return rb.success(
                 'WA-DB-S-001',
-                data={"count": len(results), "results": results},
-                message=f"Query returned {len(results)} rows.",
+                data={"count": len(results), "results": results, "unfiltered": True},
+                message=f"Query returned {len(results)} rows (unfiltered).",
             )
         except sqlite3.OperationalError as e:
             # Predictable SQL errors (user mistakes): no such table, syntax error, unknown column
@@ -5514,6 +5623,21 @@ def ck3_db_query(
                 params.append(val)
     
     where_clause = " AND ".join(conditions) if conditions else "1=1"
+    
+    # AUTO-FILTER: Add content_version_id filter for tables that have it
+    # This ensures queries in ck3lens mode only see playset data
+    from ck3lens.agent_mode import get_agent_mode
+    visibility_applied = False
+    if get_agent_mode() == "ck3lens" and not unfiltered:
+        # Tables with content_version_id that need filtering
+        tables_with_cvid = {"files"}  # files table has content_version_id
+        if table in tables_with_cvid:
+            active_cvids = _get_active_cvids()
+            if active_cvids:
+                cvid_list = ",".join(str(c) for c in active_cvids)
+                where_clause = f"({where_clause}) AND content_version_id IN ({cvid_list})"
+                visibility_applied = True
+    
     params.append(limit)
     
     try:
@@ -5521,9 +5645,12 @@ def ck3_db_query(
         rows = db.conn.execute(query, params).fetchall()
         
         results = [dict(zip(select_cols, row)) for row in rows]
+        data = {"count": len(results), "table": table, "results": results}
+        if visibility_applied:
+            data["visibility_filter"] = "active_playset"
         return rb.success(
             'WA-DB-S-001',
-            data={"count": len(results), "table": table, "results": results},
+            data=data,
             message=f"Query returned {len(results)} rows from {table}.",
         )
     except Exception as e:

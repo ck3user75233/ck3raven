@@ -1,31 +1,12 @@
 """
-World Adapter - Capability-Gated Visibility Layer for CK3 Lens
+World Adapter - Path Resolution and Classification for CK3 Lens
 
-This module provides the WorldAdapter interface and implementations that
-determine what EXISTS and can be REFERENCED in each agent mode.
+This module provides the WorldAdapter interface that:
+1. RESOLVES inputs to absolute paths (mod:Name/path -> C:/mods/Name/path)
+2. CLASSIFIES absolute paths to RootCategory by containment
 
-CAPABILITY-GATED ARCHITECTURE (December 2025):
-- WorldAdapter is THE ONLY source of visibility and access handles
-- WorldAdapter.db_handle() -> DbHandle (carries capability + visible_cvids)
-- WorldAdapter.fs_handle() -> FsHandle (carries capability + allowed_roots)
-- Call sites MUST use handles for all DB/FS operations
-- Handles carry an unforgeable capability token (_CAP_TOKEN)
-- DB/FS layers REFUSE calls without valid capability
-
-CRITICAL: If WorldAdapter cannot be instantiated, tools MUST fail.
-The underlying error is sufficient - no special wrapper needed.
-
-BANNED CONCEPTS (December 2025 purge):
-- lens (parameter or variable)
-- PlaysetLens (class)
-- cvids as parameter to DB methods (use handle instead)
-- _derive_*cvid*() helpers
-- _build_cv_filter() helpers
-- _validate_visibility() helpers
-- _lens_cache or any cache of lens/scope/cvids
-- db_visibility() method (replaced by db_handle())
-- VisibilityScope (replaced by DbHandle)
-- _VISIBILITY_TOKEN (replaced by _CAP_TOKEN)
+WorldAdapter does NOT make permission decisions - enforcement.py does that
+using the RootCategory returned by classify_path.
 
 Address Scheme:
 - mod:<mod_id>/<relative_path>     - Mod files (ck3lens mode)
@@ -33,266 +14,23 @@ Address Scheme:
 - utility:/logs/<file>             - CK3 utility files (logs, saves, etc.)
 - ck3raven:/<relative_path>        - ck3raven source code (dev mode)
 - wip:/<relative_path>             - WIP workspace files
+
+BANNED CONCEPTS (January 2026):
+- DbHandle, FsHandle (dead code, never called)
+- _CAP_TOKEN (dead code)
+- CapabilityError (dead code)
+- self._vanilla_root, self._ck3raven_root, self._wip_root (parallel constructs)
+- self._utility_roots (parallel construct)
 """
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Optional, FrozenSet, TYPE_CHECKING, Any
+from typing import Optional, FrozenSet, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .db_queries import DBQueries
-
-
-# =============================================================================
-# CAPABILITY TOKEN - UNFORGEABLE HANDLE MINTING
-# =============================================================================
-
-# Private token for capability validation - ONLY WorldAdapter can use this
-# This is a module-private object() - impossible to forge from outside
-_CAP_TOKEN = object()
-
-
-class CapabilityError(Exception):
-    """Raised when an operation is attempted without valid capability."""
-    pass
-
-
-# NOTE: WorldAdapterNotAvailableError REMOVED (December 2025)
-# If WorldAdapter cannot be instantiated, the underlying error is sufficient.
-# No special wrapper error is needed - the root cause should be clear.
-
-
-# =============================================================================
-# DB HANDLE - CAPABILITY-GATED DB ACCESS
-# =============================================================================
-
-@dataclass(frozen=True)
-class DbHandle:
-    """
-    Capability-gated database access handle.
-    
-    This is THE ONLY legal way to access the database.
-    Minted ONLY by WorldAdapter.db_handle() - cannot be fabricated.
-    
-    Fields:
-    - visible_cvids: Frozenset of content_version_ids for queries.
-                     None means NO RESTRICTION (full DB access).
-    - purpose: Why this handle was requested (for audit/debug)
-    - _cap: Internal capability token (must be _CAP_TOKEN)
-    - _db: Reference to DBQueries for executing operations
-    
-    Usage:
-        dbh = world.db_handle(purpose="search")
-        results = dbh.search_symbols(query="brave")
-    """
-    visible_cvids: Optional[FrozenSet[int]]
-    purpose: str
-    _cap: object = field(repr=False, compare=False)
-    _db: Any = field(repr=False, compare=False)
-    
-    @property
-    def is_unrestricted(self) -> bool:
-        """True if this handle allows querying the entire DB."""
-        return self.visible_cvids is None
-    
-    def _validate_cap(self) -> None:
-        """Validate capability token. Raises CapabilityError if invalid."""
-        if self._cap is not _CAP_TOKEN:
-            raise CapabilityError(
-                "DbHandle was not minted by WorldAdapter. "
-                "Use world.db_handle() to get a valid handle."
-            )
-    
-    # -------------------------------------------------------------------------
-    # DB Query Methods (wrapping internal DB methods)
-    # These call _*_internal methods on DBQueries which require visible_cvids
-    # -------------------------------------------------------------------------
-    
-    def search_symbols(self, query: str, **kwargs) -> list:
-        """Search symbols with capability validation."""
-        self._validate_cap()
-        return self._db._search_symbols_internal(
-            query, visible_cvids=self.visible_cvids, **kwargs
-        )
-    
-    def search_files(self, query: str, **kwargs) -> list:
-        """Search files with capability validation."""
-        self._validate_cap()
-        return self._db._search_files_internal(
-            query, visible_cvids=self.visible_cvids, **kwargs
-        )
-    
-    def search_content(self, query: str, **kwargs) -> list:
-        """Search content with capability validation."""
-        self._validate_cap()
-        return self._db._search_content_internal(
-            query, visible_cvids=self.visible_cvids, **kwargs
-        )
-    
-    def get_file(self, relpath: str, **kwargs) -> Optional[dict]:
-        """Get file by path with capability validation."""
-        self._validate_cap()
-        return self._db._get_file_internal(
-            relpath, visible_cvids=self.visible_cvids, **kwargs
-        )
-    
-    def get_symbol(self, name: str, symbol_type: Optional[str] = None) -> Optional[dict]:
-        """Get symbol by name with capability validation."""
-        self._validate_cap()
-        return self._db._get_symbol_internal(
-            name, symbol_type, visible_cvids=self.visible_cvids
-        )
-    
-    def get_symbols_by_file(self, file_id: int) -> list:
-        """Get symbols in a file with capability validation."""
-        self._validate_cap()
-        return self._db._get_symbols_by_file_internal(
-            file_id, visible_cvids=self.visible_cvids
-        )
-    
-    def get_refs(self, symbol_name: str, **kwargs) -> list:
-        """Get references to a symbol with capability validation."""
-        self._validate_cap()
-        return self._db._get_refs_internal(
-            symbol_name, visible_cvids=self.visible_cvids, **kwargs
-        )
-    
-    def confirm_not_exists(self, query: str, symbol_type: Optional[str] = None) -> dict:
-        """Exhaustive search to confirm something truly doesn't exist."""
-        self._validate_cap()
-        return self._db._confirm_not_exists_internal(
-            query, symbol_type, visible_cvids=self.visible_cvids
-        )
-    
-    def unified_search(self, query: str, **kwargs) -> dict:
-        """Unified search across symbols and content with capability validation."""
-        self._validate_cap()
-        return self._db._unified_search_internal(
-            query, visible_cvids=self.visible_cvids, **kwargs
-        )
-    
-    def get_symbol_conflicts(self, **kwargs) -> dict:
-        """Get symbol conflicts with capability validation."""
-        self._validate_cap()
-        return self._db._get_symbol_conflicts_internal(
-            visible_cvids=self.visible_cvids, **kwargs
-        )
-
-
-# =============================================================================
-# FS HANDLE - CAPABILITY-GATED FILESYSTEM ACCESS
-# =============================================================================
-
-@dataclass(frozen=True)
-class FsHandle:
-    """
-    Capability-gated filesystem access handle.
-    
-    This is THE ONLY legal way to access the filesystem.
-    Minted ONLY by WorldAdapter.fs_handle() - cannot be fabricated.
-    
-    Fields:
-    - allowed_roots: Set of Path roots where operations are allowed.
-    - purpose: Why this handle was requested (for audit/debug)
-    - read_only: If True, only read operations are permitted
-    - _cap: Internal capability token (must be _CAP_TOKEN)
-    
-    Usage:
-        fsh = world.fs_handle(purpose="read_mod")
-        content = fsh.read_text(path)
-    """
-    allowed_roots: FrozenSet[Path]
-    purpose: str
-    read_only: bool
-    _cap: object = field(repr=False, compare=False)
-    
-    def _validate_cap(self) -> None:
-        """Validate capability token. Raises CapabilityError if invalid."""
-        if self._cap is not _CAP_TOKEN:
-            raise CapabilityError(
-                "FsHandle was not minted by WorldAdapter. "
-                "Use world.fs_handle() to get a valid handle."
-            )
-    
-    def _validate_path(self, path: Path) -> None:
-        """Validate path is within allowed roots."""
-        resolved = path.resolve()
-        for root in self.allowed_roots:
-            try:
-                resolved.relative_to(root.resolve())
-                return
-            except ValueError:
-                continue
-        raise CapabilityError(
-            f"Path {path} is outside allowed roots for this handle"
-        )
-    
-    # -------------------------------------------------------------------------
-    # FS Operation Methods
-    # -------------------------------------------------------------------------
-    
-    def read_text(self, path: Path, encoding: str = "utf-8") -> str:
-        """Read text file with capability validation."""
-        self._validate_cap()
-        self._validate_path(path)
-        return path.read_text(encoding=encoding)
-    
-    def read_bytes(self, path: Path) -> bytes:
-        """Read binary file with capability validation."""
-        self._validate_cap()
-        self._validate_path(path)
-        return path.read_bytes()
-    
-    def write_text(self, path: Path, content: str, encoding: str = "utf-8") -> None:
-        """Write text file with capability validation."""
-        self._validate_cap()
-        if self.read_only:
-            raise CapabilityError("This FsHandle is read-only")
-        self._validate_path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding=encoding)
-    
-    def write_bytes(self, path: Path, content: bytes) -> None:
-        """Write binary file with capability validation."""
-        self._validate_cap()
-        if self.read_only:
-            raise CapabilityError("This FsHandle is read-only")
-        self._validate_path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(content)
-    
-    def exists(self, path: Path) -> bool:
-        """Check if path exists with capability validation."""
-        self._validate_cap()
-        self._validate_path(path)
-        return path.exists()
-    
-    def is_file(self, path: Path) -> bool:
-        """Check if path is file with capability validation."""
-        self._validate_cap()
-        self._validate_path(path)
-        return path.is_file()
-    
-    def is_dir(self, path: Path) -> bool:
-        """Check if path is directory with capability validation."""
-        self._validate_cap()
-        self._validate_path(path)
-        return path.is_dir()
-    
-    def iterdir(self, path: Path):
-        """Iterate directory with capability validation."""
-        self._validate_cap()
-        self._validate_path(path)
-        return path.iterdir()
-    
-    def glob(self, path: Path, pattern: str):
-        """Glob pattern match with capability validation."""
-        self._validate_cap()
-        self._validate_path(path)
-        return path.glob(pattern)
 
 
 # =============================================================================
@@ -306,6 +44,7 @@ class AddressType(Enum):
     UTILITY = "utility"
     CK3RAVEN = "ck3raven"
     WIP = "wip"
+    DATA = "data"  # ~/.ck3raven/ (playsets, db, config)
     UNKNOWN = "unknown"
 
 
@@ -334,70 +73,13 @@ class CanonicalAddress:
             return f"ck3raven:/{self.relative_path}"
         elif self.address_type == AddressType.WIP:
             return f"wip:/{self.relative_path}"
+        elif self.address_type == AddressType.DATA:
+            return f"data:/{self.relative_path}"
         else:
             return f"unknown:{self.raw_input}"
     
     def __str__(self) -> str:
         return self.canonical_form
-
-
-class PathDomain(Enum):
-    """
-    Structural classification of a resolved path.
-    
-    This is for STRUCTURAL identification only, NOT permission decisions.
-    Enforcement.py makes all allow/deny decisions.
-    """
-    WIP = "wip"
-    LOCAL_MOD = "local_mod"
-    WORKSHOP_MOD = "workshop_mod"
-    VANILLA = "vanilla"
-    CK3RAVEN = "ck3raven"
-    UTILITY = "utility"
-    LAUNCHER_REGISTRY = "launcher_registry"
-    UNKNOWN = "unknown"
-
-
-@dataclass
-class EnforcementTarget:
-    """
-    The enforcement target derived from a canonical address.
-    
-    This is what gets passed to enforcement.py for allow/deny decisions.
-    """
-    mod_name: Optional[str]
-    rel_path: Optional[str]
-    canonical_address: str
-    domain: PathDomain
-    
-    @classmethod
-    def from_resolution(cls, result: "ResolutionResult") -> "EnforcementTarget":
-        """Create enforcement target from resolution result."""
-        if not result.found or not result.address:
-            return cls(
-                mod_name=None,
-                rel_path=None,
-                canonical_address=result.address.canonical_form if result.address else "",
-                domain=PathDomain.UNKNOWN,
-            )
-        
-        addr = result.address
-        domain = result.domain or PathDomain.UNKNOWN
-        
-        if addr.address_type == AddressType.MOD:
-            return cls(
-                mod_name=addr.identifier,
-                rel_path=addr.relative_path,
-                canonical_address=addr.canonical_form,
-                domain=domain,
-            )
-        else:
-            return cls(
-                mod_name=None,
-                rel_path=None,
-                canonical_address=addr.canonical_form,
-                domain=domain,
-            )
 
 
 @dataclass
@@ -407,13 +89,13 @@ class ResolutionResult:
     
     If found=False, the reference does not exist in this world.
     
-    NO-ORACLE RULE: This result contains NO writability information.
-    Writability is determined by enforcement.py at the write boundary.
+    The root_category is used by enforcement.py to check capability matrix.
+    This is STRUCTURAL classification only - enforcement makes all decisions.
     """
     found: bool
     address: Optional[CanonicalAddress] = None
     absolute_path: Optional[Path] = None
-    domain: Optional[PathDomain] = None
+    root_category: Optional["RootCategory"] = None  # From capability_matrix
     file_id: Optional[int] = None
     content_version_id: Optional[int] = None
     mod_name: Optional[str] = None
@@ -422,15 +104,12 @@ class ResolutionResult:
     @classmethod
     def not_found(cls, raw_input: str, reason: str = "Reference not found") -> "ResolutionResult":
         """Create a not-found result."""
+        from ck3lens.policy.capability_matrix import RootCategory
         return cls(
             found=False,
-            domain=PathDomain.UNKNOWN,
+            root_category=RootCategory.ROOT_OTHER,
             error_message=f"{reason}: {raw_input}"
         )
-    
-    def get_enforcement_target(self) -> EnforcementTarget:
-        """Get the enforcement target for this resolution."""
-        return EnforcementTarget.from_resolution(self)
 
 
 # =============================================================================
@@ -491,172 +170,143 @@ class WorldAdapterNotAvailableError(Exception):
 
 class WorldAdapter:
     """
-    Single mode-aware WorldAdapter (December 2025 consolidation).
+    Single mode-aware WorldAdapter using CANONICAL RootCategory domains.
     
-    This replaces the previous LensWorldAdapter, DevWorldAdapter, and
-    UninitiatedWorldAdapter classes. Mode is checked at runtime.
-    
-    Modes:
-    - ck3lens: Filtered to active playset, uses mod_name+rel_path addressing
-    - ck3raven-dev: Raw path addressing, ck3raven source + WIP only
-    - uninitiated: Limited access before mode is set
+    Root paths are organized by RootCategory (the ONLY domain classification):
+    - ROOT_REPO: ck3raven source
+    - ROOT_GAME: Vanilla CK3 installation
+    - ROOT_WIP: Scratch/experimental workspace
+    - ROOT_USER_DOCS: User-authored mod content (local mods)
+    - ROOT_STEAM: Steam Workshop content
+    - ROOT_UTILITIES: Runtime logs & diagnostics
+    - ROOT_CK3RAVEN_DATA: ~/.ck3raven/ (playsets, db, config)
     
     WorldAdapter determines:
     1. What EXISTS and can be REFERENCED (resolve, is_visible)
-    2. Provides capability-gated handles for DB/FS access
+    2. What RootCategory a path belongs to (classify_path)
     
-    WorldAdapter does NOT make permission decisions about what actions are allowed.
-    That is enforcement.py's job.
-    
-    Handle Contract:
-    - All DB queries MUST use DbHandle from db_handle()
-    - All FS operations MUST use FsHandle from fs_handle()
-    - Handles are the ONLY legal way to access DB/FS
-    
-    BANNED (December 2025): LensWorldAdapter, DevWorldAdapter, UninitiatedWorldAdapter
-    These separate classes are now consolidated here with mode-aware behavior.
+    WorldAdapter does NOT make permission decisions - enforcement.py does that
+    using the RootCategory returned by classify_path.
     """
     
     def __init__(
         self,
         mode: str,
-        db: Optional["DBQueries"] = None,  # Can be None - only needed for DB operations
+        db: Optional["DBQueries"] = None,
         *,
-        # ck3lens mode parameters
-        mods: Optional[list] = None,  # List of mod entries from session
-        local_mods_folder: Optional[Path] = None,
-        utility_roots: Optional[dict[str, Path]] = None,
-        # Shared parameters
-        vanilla_root: Optional[Path] = None,
-        ck3raven_root: Optional[Path] = None,
-        wip_root: Optional[Path] = None,
+        # Root paths by canonical domain
+        roots: Optional[dict["RootCategory", list[Path]]] = None,
+        # Mod name → path mapping (for mod: address resolution)
+        mod_paths: Optional[dict[str, Path]] = None,
+        # DB visibility filter (ck3lens only)
+        visible_cvids: Optional[FrozenSet[int]] = None,
     ):
         """
-        Initialize WorldAdapter for a specific mode.
+        Initialize WorldAdapter with canonical root paths.
         
         Args:
             mode: Agent mode ("ck3lens", "ck3raven-dev", or "uninitiated")
-            db: DBQueries instance (optional - only needed for DB operations, not path resolution)
-            mods: List of mod entries (REQUIRED for ck3lens mode)
-            local_mods_folder: Path to local mods folder (ck3lens)
-            utility_roots: Dict of utility type to path (ck3lens)
-            vanilla_root: Path to vanilla game folder
-            ck3raven_root: Path to ck3raven source
-            wip_root: Path to WIP workspace
-        
-        Raises:
-            WorldAdapterNotAvailableError: If required parameters are missing
+            db: DBQueries instance (optional)
+            roots: Dict mapping RootCategory to list of paths for that domain
+            mod_paths: Dict mapping mod names to their filesystem paths
+            visible_cvids: Set of content_version_ids visible in ck3lens mode
         """
+        from ck3lens.policy.capability_matrix import RootCategory
+        
         self._mode = mode
         self._db = db
-        self._vanilla_root = vanilla_root
-        self._ck3raven_root = ck3raven_root
-        
-        # Mode-specific initialization
-        if mode == "ck3lens":
-            if mods is None:
-                raise WorldAdapterNotAvailableError(
-                    "ck3lens mode requires mods[] from session"
-                )
-            self._init_lens_mode(mods, local_mods_folder, utility_roots, wip_root)
-        elif mode == "ck3raven-dev":
-            if ck3raven_root is None:
-                raise WorldAdapterNotAvailableError(
-                    "ck3raven-dev mode requires ck3raven_root"
-                )
-            self._init_dev_mode(wip_root)
-        else:
-            # Uninitiated mode - minimal setup
-            self._init_uninitiated_mode()
+        self._roots: dict[RootCategory, list[Path]] = roots or {}
+        self._mod_paths: dict[str, Path] = mod_paths or {}
+        self._visible_cvids = visible_cvids
     
-    def _init_lens_mode(
-        self,
-        mods: list,
-        local_mods_folder: Optional[Path],
-        utility_roots: Optional[dict[str, Path]],
-        wip_root: Optional[Path],
-    ) -> None:
-        """Initialize for ck3lens mode."""
-        self._mods = mods
-        self._local_mods_folder = local_mods_folder
-        self._wip_root = wip_root
-        self._utility_roots = utility_roots or {}
+    @classmethod
+    def create(
+        cls,
+        mode: str,
+        db: Optional["DBQueries"] = None,
+        *,
+        # Legacy parameters for backward compatibility during migration
+        mods: Optional[list] = None,
+        local_mods_folder: Optional[Path] = None,
+        utility_roots: Optional[dict[str, Path]] = None,
+        vanilla_root: Optional[Path] = None,
+        ck3raven_root: Optional[Path] = None,
+        wip_root: Optional[Path] = None,
+    ) -> "WorldAdapter":
+        """
+        Factory method that converts legacy parameters to canonical roots.
         
-        # Build mod path lookup from mods[]
-        self._mod_paths: dict[str, Path] = {}
-        for mod in self._mods:
-            if hasattr(mod, 'name') and hasattr(mod, 'path'):
-                self._mod_paths[mod.name] = Path(mod.path) if isinstance(mod.path, str) else mod.path
+        This is the migration path - callers use legacy parameter names,
+        this method converts to canonical RootCategory structure.
+        """
+        from ck3lens.policy.capability_matrix import RootCategory
         
-        # Pre-compute visibility CVIDs from mods[] (immutable)
-        self._visible_cvids: Optional[FrozenSet[int]] = frozenset(
-            m.cvid for m in self._mods 
-            if hasattr(m, 'cvid') and m.cvid is not None
-        )
-        if not self._visible_cvids:
-            self._visible_cvids = None  # Treat empty as unrestricted
+        roots: dict[RootCategory, list[Path]] = {}
+        mod_paths: dict[str, Path] = {}
+        visible_cvids: Optional[FrozenSet[int]] = None
         
-        # Pre-compute allowed FS roots
-        self._read_roots: set[Path] = set()
-        self._write_roots: set[Path] = set()
+        # ROOT_REPO
+        if ck3raven_root:
+            roots[RootCategory.ROOT_REPO] = [ck3raven_root]
         
-        if self._vanilla_root:
-            self._read_roots.add(self._vanilla_root)
-        if self._ck3raven_root:
-            self._read_roots.add(self._ck3raven_root)
+        # ROOT_GAME
+        if vanilla_root:
+            roots[RootCategory.ROOT_GAME] = [vanilla_root]
+        
+        # ROOT_WIP
         if wip_root:
-            self._read_roots.add(wip_root)
-            self._write_roots.add(wip_root)
-        for mod_path in self._mod_paths.values():
-            self._read_roots.add(mod_path)
-        for util_root in self._utility_roots.values():
-            self._read_roots.add(util_root)
+            roots[RootCategory.ROOT_WIP] = [wip_root]
+        elif mode == "ck3raven-dev" and ck3raven_root:
+            roots[RootCategory.ROOT_WIP] = [ck3raven_root / ".wip"]
         
-        # Write access - local mods only
-        if local_mods_folder:
-            for mod_path in self._mod_paths.values():
-                try:
-                    mod_path.resolve().relative_to(local_mods_folder.resolve())
-                    self._write_roots.add(mod_path)
-                except ValueError:
-                    pass
-    
-    def _init_dev_mode(self, wip_root: Optional[Path]) -> None:
-        """Initialize for ck3raven-dev mode."""
-        # Dev mode does NOT use mods[] - they are not part of the execution model
-        self._mods = []
-        self._local_mods_folder = None
-        self._utility_roots = {}
-        self._mod_paths = {}
-        self._visible_cvids = None  # UNRESTRICTED DB access
+        # ROOT_UTILITIES
+        if utility_roots:
+            roots[RootCategory.ROOT_UTILITIES] = list(utility_roots.values())
         
-        # Type assertion: constructor validates ck3raven_root is not None for dev mode
-        assert self._ck3raven_root is not None, "ck3raven-dev mode requires ck3raven_root"
+        # ROOT_CK3RAVEN_DATA
+        ck3raven_data = Path.home() / ".ck3raven"
+        roots[RootCategory.ROOT_CK3RAVEN_DATA] = [ck3raven_data]
         
-        # WIP is in the repo for dev mode
-        self._wip_root = wip_root or (self._ck3raven_root / ".wip")
+        # Process mods - classify as ROOT_USER_DOCS or ROOT_STEAM
+        if mods:
+            user_docs_paths: list[Path] = []
+            steam_paths: list[Path] = []
+            
+            for mod in mods:
+                if hasattr(mod, 'name') and hasattr(mod, 'path'):
+                    mod_path = Path(mod.path) if isinstance(mod.path, str) else mod.path
+                    mod_paths[mod.name] = mod_path
+                    
+                    # Classify by containment in local_mods_folder
+                    if local_mods_folder:
+                        try:
+                            mod_path.resolve().relative_to(local_mods_folder.resolve())
+                            user_docs_paths.append(mod_path)
+                        except ValueError:
+                            steam_paths.append(mod_path)
+                    else:
+                        steam_paths.append(mod_path)
+            
+            if user_docs_paths:
+                roots[RootCategory.ROOT_USER_DOCS] = user_docs_paths
+            if steam_paths:
+                roots[RootCategory.ROOT_STEAM] = steam_paths
+            
+            # Extract CVIDs for visibility filter
+            cvids = frozenset(
+                m.cvid for m in mods 
+                if hasattr(m, 'cvid') and m.cvid is not None
+            )
+            if cvids:
+                visible_cvids = cvids
         
-        # Pre-compute allowed FS roots - NO mod roots for dev mode
-        self._read_roots = {self._ck3raven_root, self._wip_root}
-        self._write_roots = {self._ck3raven_root, self._wip_root}
-        
-        if self._vanilla_root:
-            self._read_roots.add(self._vanilla_root)
-    
-    def _init_uninitiated_mode(self) -> None:
-        """Initialize for uninitiated mode (pre-initialization)."""
-        self._mods = []
-        self._local_mods_folder = None
-        self._utility_roots = {}
-        self._mod_paths = {}
-        self._visible_cvids = None  # UNRESTRICTED during init
-        self._wip_root = None
-        
-        # Limited FS access
-        self._read_roots = set()
-        self._write_roots = set()
-        if self._ck3raven_root:
-            self._read_roots.add(self._ck3raven_root)
+        return cls(
+            mode=mode,
+            db=db,
+            roots=roots,
+            mod_paths=mod_paths,
+            visible_cvids=visible_cvids,
+        )
     
     @property
     def mode(self) -> str:
@@ -664,58 +314,68 @@ class WorldAdapter:
         return self._mode
     
     # =========================================================================
-    # HANDLE MINTING (Capability-gated access)
+    # HELPER: Get root path for a category (single path, first in list)
     # =========================================================================
     
-    def db_handle(self, purpose: str = "db_read") -> DbHandle:
-        """
-        Get capability-gated DB access handle.
-        
-        This is THE ONLY legal way to obtain a DbHandle.
-        
-        For ck3lens: Returns handle limited to session.mods CVIDs.
-        For ck3raven-dev: Returns handle with full DB access.
-        For uninitiated: Returns handle with full DB access.
-        """
-        return DbHandle(
-            visible_cvids=self._visible_cvids,
-            purpose=purpose,
-            _cap=_CAP_TOKEN,
-            _db=self._db,
-        )
-    
-    def fs_handle(self, purpose: str = "fs_read", read_only: bool = True) -> FsHandle:
-        """
-        Get capability-gated filesystem access handle.
-        
-        This is THE ONLY legal way to obtain a FsHandle.
-        
-        Read-only handles get access to all visible roots.
-        Write handles get access only to writable roots (local mods + WIP for ck3lens,
-        ck3raven source + WIP for ck3raven-dev).
-        """
-        if read_only:
-            roots = frozenset(self._read_roots)
-        else:
-            roots = frozenset(self._write_roots)
-        
-        # Uninitiated mode is always read-only
-        if self._mode == "uninitiated":
-            read_only = True
-        
-        return FsHandle(
-            allowed_roots=roots,
-            purpose=purpose,
-            read_only=read_only,
-            _cap=_CAP_TOKEN,
-        )
+    def _get_root(self, category: "RootCategory") -> Optional[Path]:
+        """Get first root path for a category, or None if not configured."""
+        paths = self._roots.get(category)
+        return paths[0] if paths else None
     
     # =========================================================================
-    # RESOLUTION (mode-aware)
+    # PATH CLASSIFICATION (THE single source of truth for root_category)
+    # =========================================================================
+    
+    def classify_path(self, absolute_path: Path) -> "RootCategory":
+        """
+        Classify an absolute path into a RootCategory by containment.
+        
+        This is THE SINGLE source of truth for determining which geographic
+        root a path belongs to. Checks configured roots in priority order.
+        """
+        from ck3lens.policy.capability_matrix import RootCategory
+        
+        try:
+            resolved = absolute_path.resolve()
+        except (OSError, ValueError):
+            return RootCategory.ROOT_OTHER
+        
+        # Check roots in priority order (more specific first)
+        priority_order = [
+            RootCategory.ROOT_WIP,          # Most specific
+            RootCategory.ROOT_REPO,
+            RootCategory.ROOT_USER_DOCS,
+            RootCategory.ROOT_GAME,
+            RootCategory.ROOT_STEAM,
+            RootCategory.ROOT_UTILITIES,
+            RootCategory.ROOT_CK3RAVEN_DATA,
+        ]
+        
+        for category in priority_order:
+            if category in self._roots:
+                for root_path in self._roots[category]:
+                    try:
+                        resolved.relative_to(root_path.resolve())
+                        return category
+                    except ValueError:
+                        pass
+        
+        return RootCategory.ROOT_OTHER
+    
+    # =========================================================================
+    # RESOLUTION
     # =========================================================================
     
     def resolve(self, path_or_address: str) -> ResolutionResult:
-        """Resolve a path or address within this world (mode-aware)."""
+        """Resolve a path or address to absolute filesystem path.
+        
+        Resolution is MODE-AGNOSTIC - it determines structural identity only:
+        - What canonical domain does this path belong to?
+        - What is the absolute filesystem path?
+        
+        Enforcement (not resolution) determines what operations are allowed
+        on the resolved path based on mode + domain.
+        """
         if self._mode == "uninitiated":
             return ResolutionResult.not_found(
                 path_or_address,
@@ -730,44 +390,80 @@ class WorldAdapter:
                 "Could not resolve reference"
             )
         
-        # Mode-specific resolution
-        if self._mode == "ck3lens":
-            return self._resolve_lens(address)
-        elif self._mode == "ck3raven-dev":
-            return self._resolve_dev(address)
-        else:
-            return ResolutionResult.not_found(path_or_address)
+        # Resolve address to absolute path based on address_type
+        return self._resolve_to_absolute(address)
     
-    def _resolve_lens(self, address: CanonicalAddress) -> ResolutionResult:
-        """Resolve address in ck3lens mode (full playset visibility)."""
+    def _resolve_to_absolute(self, address: CanonicalAddress) -> ResolutionResult:
+        """Resolve CanonicalAddress to absolute path.
+        
+        Simple dispatch: look up root for address_type, join with relative_path.
+        """
+        from ck3lens.policy.capability_matrix import RootCategory
+        
+        abs_path: Optional[Path] = None
+        root_category: Optional[RootCategory] = None
+        mod_name: Optional[str] = None
+        
         if address.address_type == AddressType.MOD:
-            return self._resolve_mod(address)
+            # Mod addresses use _mod_paths lookup
+            mod_id = address.identifier
+            if mod_id in self._mod_paths:
+                abs_path = self._mod_paths[mod_id] / address.relative_path
+                root_category = self.classify_path(abs_path)
+                mod_name = mod_id
+            else:
+                return ResolutionResult.not_found(
+                    address.raw_input,
+                    f"Mod '{mod_id}' not in active playset"
+                )
+        
         elif address.address_type == AddressType.VANILLA:
-            return self._resolve_vanilla(address)
-        elif address.address_type == AddressType.UTILITY:
-            return self._resolve_utility(address)
+            root = self._get_root(RootCategory.ROOT_GAME)
+            if root:
+                abs_path = root / address.relative_path
+                root_category = RootCategory.ROOT_GAME
+                mod_name = "vanilla"
+        
+        elif address.address_type == AddressType.WIP:
+            root = self._get_root(RootCategory.ROOT_WIP)
+            if root:
+                abs_path = root / address.relative_path
+                root_category = RootCategory.ROOT_WIP
+        
         elif address.address_type == AddressType.CK3RAVEN:
-            return self._resolve_ck3raven(address)
-        elif address.address_type == AddressType.WIP:
-            return self._resolve_wip(address)
-        else:
-            return ResolutionResult.not_found(address.raw_input)
-    
-    def _resolve_dev(self, address: CanonicalAddress) -> ResolutionResult:
-        """Resolve address in ck3raven-dev mode (source + WIP only)."""
-        # Dev mode: only ck3raven source, WIP, and vanilla (read-only)
-        if address.address_type == AddressType.CK3RAVEN:
-            return self._resolve_ck3raven(address)
-        elif address.address_type == AddressType.WIP:
-            return self._resolve_wip(address)
-        elif address.address_type == AddressType.VANILLA:
-            return self._resolve_vanilla(address)
-        else:
-            # MOD and UTILITY not resolved in dev mode
-            return ResolutionResult.not_found(address.raw_input)
+            root = self._get_root(RootCategory.ROOT_REPO)
+            if root:
+                abs_path = root / address.relative_path
+                root_category = RootCategory.ROOT_REPO
+        
+        elif address.address_type == AddressType.DATA:
+            root = self._get_root(RootCategory.ROOT_CK3RAVEN_DATA)
+            if root:
+                abs_path = root / address.relative_path
+                root_category = RootCategory.ROOT_CK3RAVEN_DATA
+        
+        elif address.address_type == AddressType.UTILITY:
+            utility_paths = self._roots.get(RootCategory.ROOT_UTILITIES, [])
+            if utility_paths:
+                abs_path = utility_paths[0] / address.relative_path
+                root_category = RootCategory.ROOT_UTILITIES
+        
+        if abs_path is None:
+            return ResolutionResult.not_found(
+                address.raw_input,
+                f"No root configured for {address.address_type.value}"
+            )
+        
+        return ResolutionResult(
+            found=True,
+            address=address,
+            absolute_path=abs_path,
+            root_category=root_category,
+            mod_name=mod_name,
+        )
     
     def is_visible(self, path_or_address: str) -> bool:
-        """Quick visibility check."""
+        """Quick check if path can be resolved (exists in configured roots)."""
         result = self.resolve(path_or_address)
         return result.found
     
@@ -841,36 +537,80 @@ class WorldAdapter:
         )
     
     def _translate_raw_path(self, raw_path: str) -> CanonicalAddress:
-        """Translate a raw filesystem path to canonical address (mode-aware)."""
+        """Translate a raw filesystem path to canonical address (mode-agnostic).
+        
+        Path classification is structural - determines which domain a path
+        belongs to. This is the same regardless of agent mode.
+        """
+        from ck3lens.policy.capability_matrix import RootCategory
+        
         raw = Path(raw_path)
         
-        # In ck3raven-dev mode, resolve relative paths against ck3raven_root first
-        if self._mode == "ck3raven-dev" and not raw.is_absolute() and self._ck3raven_root:
-            # Try to resolve against ck3raven_root
-            candidate = self._ck3raven_root / raw_path
-            if candidate.exists():
-                return CanonicalAddress(
-                    address_type=AddressType.CK3RAVEN,
-                    identifier=None,
-                    relative_path=str(raw).replace("\\", "/"),
-                    raw_input=raw_path,
-                )
+        # Handle relative paths: try to resolve against repo root first
+        if not raw.is_absolute():
+            repo_root = self._get_root(RootCategory.ROOT_REPO)
+            if repo_root:
+                candidate = repo_root / raw_path
+                if candidate.exists():
+                    return CanonicalAddress(
+                        address_type=AddressType.CK3RAVEN,
+                        identifier=None,
+                        relative_path=str(raw).replace("\\", "/"),
+                        raw_input=raw_path,
+                    )
         
         path = raw.resolve()
         
-        if self._mode == "ck3raven-dev":
-            # Dev mode: prioritize ck3raven source
-            return self._translate_raw_path_dev(path, raw_path)
-        else:
-            # Lens mode: full translation
-            return self._translate_raw_path_lens(path, raw_path)
-    
-    def _translate_raw_path_lens(self, path: Path, raw_path: str) -> CanonicalAddress:
-        """Translate raw path in ck3lens mode."""
-        # Check vanilla
-        if self._vanilla_root:
+        # Check all roots in priority order (more specific first)
+        # This is mode-agnostic - any path can be classified
+        
+        # Check WIP first (most specific user workspace)
+        wip_root = self._get_root(RootCategory.ROOT_WIP)
+        if wip_root:
             try:
-                rel = path.relative_to(self._vanilla_root.resolve())
+                rel = path.relative_to(wip_root.resolve())
+                return CanonicalAddress(
+                    address_type=AddressType.WIP,
+                    identifier=None,
+                    relative_path=str(rel).replace("\\", "/"),
+                    raw_input=raw_path,
+                )
+            except ValueError:
+                pass
+        
+        # Check ck3raven source (ROOT_REPO)
+        repo_root = self._get_root(RootCategory.ROOT_REPO)
+        if repo_root:
+            try:
+                rel = path.relative_to(repo_root.resolve())
+                return CanonicalAddress(
+                    address_type=AddressType.CK3RAVEN,
+                    identifier=None,
+                    relative_path=str(rel).replace("\\", "/"),
+                    raw_input=raw_path,
+                )
+            except ValueError:
+                pass
+        
+        # Check ck3raven data folder (~/.ck3raven/) - playsets, db, config
+        data_root = self._get_root(RootCategory.ROOT_CK3RAVEN_DATA)
+        if data_root:
+            try:
+                rel = path.relative_to(data_root.resolve())
+                return CanonicalAddress(
+                    address_type=AddressType.DATA,
+                    identifier=None,
+                    relative_path=str(rel).replace("\\", "/"),
+                    raw_input=raw_path,
+                )
+            except ValueError:
+                pass
+        
+        # Check vanilla (ROOT_GAME)
+        vanilla_root = self._get_root(RootCategory.ROOT_GAME)
+        if vanilla_root:
+            try:
+                rel = path.relative_to(vanilla_root.resolve())
                 return CanonicalAddress(
                     address_type=AddressType.VANILLA,
                     identifier=None,
@@ -893,41 +633,16 @@ class WorldAdapter:
             except ValueError:
                 continue
         
-        # Check WIP
-        if self._wip_root:
-            try:
-                rel = path.relative_to(self._wip_root.resolve())
-                return CanonicalAddress(
-                    address_type=AddressType.WIP,
-                    identifier=None,
-                    relative_path=str(rel).replace("\\", "/"),
-                    raw_input=raw_path,
-                )
-            except ValueError:
-                pass
-        
-        # Check ck3raven source
-        if self._ck3raven_root:
-            try:
-                rel = path.relative_to(self._ck3raven_root.resolve())
-                return CanonicalAddress(
-                    address_type=AddressType.CK3RAVEN,
-                    identifier=None,
-                    relative_path=str(rel).replace("\\", "/"),
-                    raw_input=raw_path,
-                )
-            except ValueError:
-                pass
-        
-        # Check utility roots
-        for util_name, util_root in self._utility_roots.items():
+        # Check utility roots (ROOT_UTILITIES) - check each path
+        utility_paths = self._roots.get(RootCategory.ROOT_UTILITIES, [])
+        for util_root in utility_paths:
             try:
                 rel = path.relative_to(util_root.resolve())
                 rel_str = str(rel).replace("\\", "/")
                 return CanonicalAddress(
                     address_type=AddressType.UTILITY,
                     identifier=None,
-                    relative_path=f"{util_name}/{rel_str}",
+                    relative_path=rel_str,
                     raw_input=raw_path,
                 )
             except ValueError:
@@ -938,147 +653,6 @@ class WorldAdapter:
             identifier=None,
             relative_path="",
             raw_input=raw_path,
-        )
-    
-    def _translate_raw_path_dev(self, path: Path, raw_path: str) -> CanonicalAddress:
-        """Translate raw path in ck3raven-dev mode."""
-        # Check ck3raven source first (priority in dev mode)
-        if self._ck3raven_root:
-            try:
-                rel = path.relative_to(self._ck3raven_root.resolve())
-                return CanonicalAddress(
-                    address_type=AddressType.CK3RAVEN,
-                    identifier=None,
-                    relative_path=str(rel).replace("\\", "/"),
-                    raw_input=raw_path,
-                )
-            except ValueError:
-                pass
-        
-        # Check WIP
-        if self._wip_root:
-            try:
-                rel = path.relative_to(self._wip_root.resolve())
-                return CanonicalAddress(
-                    address_type=AddressType.WIP,
-                    identifier=None,
-                    relative_path=str(rel).replace("\\", "/"),
-                    raw_input=raw_path,
-                )
-            except ValueError:
-                pass
-        
-        # Check vanilla (read-only in dev mode)
-        if self._vanilla_root:
-            try:
-                rel = path.relative_to(self._vanilla_root.resolve())
-                return CanonicalAddress(
-                    address_type=AddressType.VANILLA,
-                    identifier=None,
-                    relative_path=str(rel).replace("\\", "/"),
-                    raw_input=raw_path,
-                )
-            except ValueError:
-                pass
-        
-        return CanonicalAddress(
-            address_type=AddressType.UNKNOWN,
-            identifier=None,
-            relative_path="",
-            raw_input=raw_path,
-        )
-    
-    # =========================================================================
-    # RESOLUTION HELPERS (shared)
-    # =========================================================================
-    
-    def _resolve_mod(self, address: CanonicalAddress) -> ResolutionResult:
-        """Resolve a mod address - check if in active playset."""
-        mod_name = address.identifier
-        
-        if mod_name in self._mod_paths:
-            mod_path = self._mod_paths[mod_name]
-            abs_path = mod_path / address.relative_path
-            
-            # Determine domain (local vs workshop)
-            domain = PathDomain.WORKSHOP_MOD
-            if self._local_mods_folder:
-                try:
-                    mod_path.resolve().relative_to(self._local_mods_folder.resolve())
-                    domain = PathDomain.LOCAL_MOD
-                except ValueError:
-                    pass
-            
-            return ResolutionResult(
-                found=True,
-                address=address,
-                absolute_path=abs_path,
-                domain=domain,
-                mod_name=mod_name,
-            )
-        
-        return ResolutionResult.not_found(
-            address.raw_input,
-            f"Mod '{mod_name}' not in active playset"
-        )
-    
-    def _resolve_vanilla(self, address: CanonicalAddress) -> ResolutionResult:
-        """Resolve a vanilla address."""
-        if not self._vanilla_root:
-            return ResolutionResult.not_found(address.raw_input, "Vanilla root not configured")
-        
-        abs_path = self._vanilla_root / address.relative_path
-        return ResolutionResult(
-            found=True,
-            address=address,
-            absolute_path=abs_path,
-            domain=PathDomain.VANILLA,
-            mod_name="vanilla",
-        )
-    
-    def _resolve_utility(self, address: CanonicalAddress) -> ResolutionResult:
-        """Resolve a utility address."""
-        # Parse utility type from path: utility:/logs/file.log
-        parts = address.relative_path.split("/", 1)
-        if len(parts) >= 1:
-            util_type = parts[0]
-            if util_type in self._utility_roots:
-                util_root = self._utility_roots[util_type]
-                rel = parts[1] if len(parts) > 1 else ""
-                abs_path = util_root / rel
-                return ResolutionResult(
-                    found=True,
-                    address=address,
-                    absolute_path=abs_path,
-                    domain=PathDomain.UTILITY,
-                )
-        
-        return ResolutionResult.not_found(address.raw_input, "Utility path not configured")
-    
-    def _resolve_ck3raven(self, address: CanonicalAddress) -> ResolutionResult:
-        """Resolve a ck3raven source address."""
-        if not self._ck3raven_root:
-            return ResolutionResult.not_found(address.raw_input, "CK3Raven root not configured")
-        
-        abs_path = self._ck3raven_root / address.relative_path
-        return ResolutionResult(
-            found=True,
-            address=address,
-            absolute_path=abs_path,
-            domain=PathDomain.CK3RAVEN,
-        )
-    
-    def _resolve_wip(self, address: CanonicalAddress) -> ResolutionResult:
-        """Resolve a WIP workspace address."""
-        if not self._wip_root:
-            return ResolutionResult.not_found(address.raw_input, "WIP root not configured")
-        
-        abs_path = self._wip_root / address.relative_path
-        return ResolutionResult(
-            found=True,
-            address=address,
-            absolute_path=abs_path,
-            domain=PathDomain.WIP,
         )
     
     # =========================================================================
@@ -1112,25 +686,9 @@ def get_world_adapter(
     """
     Factory function to create a WorldAdapter.
     
-    This is a convenience wrapper around WorldAdapter() constructor.
-    
-    Args:
-        mode: Agent mode ("ck3lens", "ck3raven-dev", or "uninitiated")
-        db: DBQueries instance
-        mods: List of mod entries (required for ck3lens mode)
-        local_mods_folder: Path to local mods folder (for ck3lens)
-        vanilla_root: Path to vanilla game folder
-        ck3raven_root: Path to ck3raven source
-        wip_root: Path to WIP workspace
-        utility_roots: Dict of utility type to path (logs, saves, etc.)
-    
-    Returns:
-        WorldAdapter configured for the specified mode
-    
-    Raises:
-        WorldAdapterNotAvailableError: If required parameters are missing
+    This is a convenience wrapper around WorldAdapter.create().
     """
-    return WorldAdapter(
+    return WorldAdapter.create(
         mode=mode,
         db=db,
         mods=mods,
@@ -1140,14 +698,3 @@ def get_world_adapter(
         wip_root=wip_root,
         utility_roots=utility_roots,
     )
-
-
-# =============================================================================
-# BANNED ALIASES (December 2025 - DELETED)
-# =============================================================================
-# The following classes have been DELETED as per canonical architecture:
-# - LensWorldAdapter (use WorldAdapter(mode="ck3lens", ...))
-# - DevWorldAdapter (use WorldAdapter(mode="ck3raven-dev", ...))  
-# - UninitiatedWorldAdapter (use WorldAdapter(mode="uninitiated", ...))
-#
-# See CANONICAL_ARCHITECTURE.md Section 10 for details.

@@ -200,15 +200,38 @@ Launcher Playset Ã¢â€ â€™ playsets/*.json Ã¢â€ â€™ Playset
 
 ### Canonical Path Utility Requirement
 
-A single shared path normalization utility must exist and be used by all tools.
+**`normalize_path_input()` in `world_adapter.py` is THE canonical path normalization utility.**
+
+This is THE single entry point for path resolution in MCP tools. All tools must use it.
+
+```python
+from ck3lens.world_adapter import normalize_path_input
+
+# Resolve any path input to canonical form
+result = normalize_path_input(world, path=user_input)
+if not result.found:
+    return {"error": result.error_message}
+```
 
 Its responsibilities are limited to:
-- Parsing user input
+- Parsing user input (absolute paths, canonical addresses, relative paths)
 - Calling `WorldAdapter.resolve()`
-- Exposing enforcement targets derived from canonical addresses
-- Exposing execution paths derived from absolute paths
+- Returning a `ResolutionResult` with `address`, `absolute_path`, `domain`, etc.
 
 **This utility must not perform permission checks or eligibility logic.**
+
+#### Related Utility: `WorldAdapter.normalize()`
+
+`WorldAdapter.normalize(path: str)` is a lower-level utility for filesystem path comparison:
+- Converts backslashes to forward slashes
+- Lowercases for case-insensitive comparison
+- Used internally for path matching, NOT for path resolution
+
+Do NOT confuse these two:
+| Function | Purpose | Use When |
+|----------|---------|----------|
+| `normalize_path_input()` | Path resolution entry point | Resolving user input to canonical address |
+| `WorldAdapter.normalize()` | Path comparison utility | Comparing filesystem paths |
 
 ### Domain Classification
 
@@ -708,39 +731,42 @@ CanonicalAddress(
 
 ## 10. Single WorldAdapter Architecture
 
-**CRITICAL: There is ONE WorldAdapter class with mode-aware behavior.**
+**CRITICAL: There is ONE WorldAdapter class. Path resolution is MODE-AGNOSTIC.**
 
-Previously, there were separate `LensWorldAdapter` and `DevWorldAdapter` classes. These have been consolidated into a single `WorldAdapter` that changes behavior based on mode.
+Previously, there were separate `LensWorldAdapter` and `DevWorldAdapter` classes. These have been consolidated into a single `WorldAdapter`.
 
-### Why Single Class?
+### Path Resolution is Structural, Not Permission-Based
 
-1. **Prevents calling wrong adapter** - No risk of using dev adapter in lens mode
-2. **Mode is runtime state** - The adapter checks `session.mode` at resolution time
-3. **Simpler testing** - One class to test, not two
-4. **No banned term leakage** - "Lens" prefix was a banned concept
+Resolution determines:
+- What canonical domain does this path belong to? (ROOT_REPO, ROOT_GAME, ROOT_WIP, etc.)
+- What is the absolute filesystem path?
 
-### Mode-Specific Behavior
+Resolution does NOT:
+- Filter based on agent mode
+- Decide what operations are allowed
+- Return different results for ck3lens vs ck3raven-dev
+
+### Mode Matters for Enforcement, Not Resolution
 
 ```python
-class WorldAdapter:
-    def resolve(self, path_or_address: str) -> ResolutionResult:
-        if self._mode == "ck3lens":
-            return self._resolve_lens(path_or_address)
-        elif self._mode == "ck3raven-dev":
-            return self._resolve_dev(path_or_address)
-    
-    def _resolve_lens(self, path_or_address: str) -> ResolutionResult:
-        # Filter to active playset
-        # Use mod_name + rel_path canonical form
-        # Check mods[] from session
-        ...
-    
-    def _resolve_dev(self, path_or_address: str) -> ResolutionResult:
-        # No playset filter
-        # Use raw path form
-        # Check ck3raven source, WIP only
-        ...
+# Resolution is the same regardless of mode
+result = world.resolve("C:/path/to/file.txt")
+# Returns: ResolutionResult with root_category, absolute_path, address
+
+# Enforcement uses mode + root_category to decide permissions
+from ck3lens.policy.capability_matrix import is_authorized
+allowed = is_authorized(mode="ck3lens", root=result.root_category, operation="write")
 ```
+
+### Visibility Filtering Applies to Database Queries Only
+
+The term "visibility" in this architecture refers to **database query filtering**, not path resolution:
+
+| Concept | Where It Applies | How |
+|---------|------------------|-----|
+| Path Resolution | WorldAdapter.resolve() | Mode-agnostic, structural |
+| DB Visibility | DbHandle CVID filter | Filters queries to active playset CVIDs |
+| Permissions | enforcement.py | Mode + domain → allow/deny |
 
 ### Banned Patterns
 

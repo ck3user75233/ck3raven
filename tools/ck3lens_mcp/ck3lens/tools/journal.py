@@ -190,8 +190,8 @@ def _get_status(workspace_key: str | None = None) -> dict[str, Any]:
         status["workspaces"] = []
         return status
     
-    # Count workspaces
-    workspaces = [e for e in base.iterdir() if e.is_dir() and len(e.name) == 64]
+    # Count workspaces (folder names are hex strings, typically 16 chars from truncated hash)
+    workspaces = [e for e in base.iterdir() if e.is_dir() and e.name.replace("-", "").isalnum()]
     status["workspace_count"] = len(workspaces)
     
     if workspace_key:

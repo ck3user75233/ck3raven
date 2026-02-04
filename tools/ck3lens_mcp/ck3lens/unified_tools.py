@@ -14,19 +14,9 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from .db.golden_join import GOLDEN_JOIN
-from .world_adapter import PathDomain
 
 # Canonical Reply System (Phase C migration)
 from ck3raven.core.reply import Reply, TraceInfo, MetaInfo
-
-
-# ============================================================================
-# Domain Categories for Routing
-# ============================================================================
-# Domains that use raw filesystem paths (resolution.absolute_path)
-RAW_PATH_DOMAINS = {PathDomain.WIP, PathDomain.CK3RAVEN, PathDomain.VANILLA, PathDomain.UTILITY}
-# Domains that use mod addressing (mod_name + rel_path via session.get_mod())
-MOD_PATH_DOMAINS = {PathDomain.LOCAL_MOD, PathDomain.WORKSHOP_MOD}
 
 
 # ============================================================================
@@ -880,7 +870,6 @@ def ck3_file_impl(
     # ==========================================================================
     
     resolution = None
-    enforcement_target = None
     
     if command in write_commands and world is not None:
         # Use canonical path normalization utility
@@ -894,13 +883,10 @@ def ck3_file_impl(
                 "visibility": "NOT_FOUND",
                 "guidance": "This path is outside your current lens/scope",
             }
-        
-        # Get enforcement target from resolution (the ONLY way to derive it)
-        enforcement_target = resolution.get_enforcement_target()
     
     # ==========================================================================
     # STEP 2: CENTRALIZED ENFORCEMENT GATE (AFTER resolution)
-    # Only reached if the path is visible. Now check policy.
+    # Only reached if the path is visible. Now check policy via capability matrix.
     # ==========================================================================
     
     if command in write_commands and mode:
@@ -915,14 +901,15 @@ def ck3_file_impl(
         # Get contract for scope validation
         contract = get_active_contract()
         
-        # Build enforcement request using enforcement_target (derived from resolution)
+        # Build enforcement request using resolution directly (no intermediate objects)
         request = EnforcementRequest(
             operation=op_type_map[command],
             mode=mode,
             tool_name="ck3_file",
-            target_path=enforcement_target.canonical_address if enforcement_target else path,
-            mod_name=enforcement_target.mod_name if enforcement_target else mod_name,
-            rel_path=enforcement_target.rel_path if enforcement_target else rel_path,
+            target_path=resolution.address.canonical_form if resolution and resolution.address else path,
+            mod_name=resolution.mod_name if resolution else mod_name,
+            rel_path=resolution.address.relative_path if resolution and resolution.address else rel_path,
+            root_category=resolution.root_category.value if resolution and resolution.root_category else None,
             contract_id=contract.contract_id if contract else None,
             token_id=token_id,
         )
@@ -986,57 +973,33 @@ def ck3_file_impl(
         if content is None:
             return {"error": "content required for write"}
         
-        # Route based on resolution.domain (the canonical way)
-        if resolution and resolution.domain in RAW_PATH_DOMAINS and resolution.absolute_path:
-            # WIP, vanilla, ck3raven, utility - use raw filesystem write
+        # Unified write path: always use absolute_path from resolution
+        if resolution and resolution.absolute_path:
             return _file_write_raw(str(resolution.absolute_path), content, validate_syntax, token_id, trace, world, trace_info=trace_info)
-        elif resolution and resolution.domain in MOD_PATH_DOMAINS and mod_name and rel_path:
-            # Local or workshop mod - use sandboxed mod write
-            return _file_write(mod_name, rel_path, content, validate_syntax, session, trace, trace_info=trace_info)
-        elif path and not resolution:
-            # Fallback for raw path when no resolution available
-            return _file_write_raw(path, content, validate_syntax, token_id, trace, world, trace_info=trace_info)
-        elif mod_name and rel_path and not resolution:
-            # Fallback for mod addressing when no resolution available
-            return _file_write(mod_name, rel_path, content, validate_syntax, session, trace, trace_info=trace_info)
         else:
-            return {"error": "Either 'path' or 'mod_name'+'rel_path' required for write"}
+            return {"error": "Path resolution failed - no absolute_path available"}
     
     elif command == "edit":
         if old_content is None or new_content is None:
             return {"error": "old_content and new_content required for edit"}
         
-        # Route based on resolution.domain (the canonical way)
-        if resolution and resolution.domain in RAW_PATH_DOMAINS and resolution.absolute_path:
-            # WIP, vanilla, ck3raven, utility - use raw filesystem edit
+        # Unified edit path: always use absolute_path from resolution
+        if resolution and resolution.absolute_path:
             return _file_edit_raw(str(resolution.absolute_path), old_content, new_content, validate_syntax, token_id, trace, world)
-        elif resolution and resolution.domain in MOD_PATH_DOMAINS and mod_name and rel_path:
-            # Local or workshop mod - use sandboxed mod edit
-            return _file_edit(mod_name, rel_path, old_content, new_content, validate_syntax, session, trace)
-        elif path and not resolution:
-            # Fallback for raw path when no resolution available
-            return _file_edit_raw(path, old_content, new_content, validate_syntax, token_id, trace, world)
-        elif mod_name and rel_path and not resolution:
-            # Fallback for mod addressing when no resolution available
-            return _file_edit(mod_name, rel_path, old_content, new_content, validate_syntax, session, trace)
         else:
-            return {"error": "Either 'path' or 'mod_name'+'rel_path' required for edit"}
+            return {"error": "Path resolution failed - no absolute_path available"}
     
     elif command == "delete":
-        if path and mode == "ck3raven-dev":
-            # Raw path delete for ck3raven-dev mode
-            return _file_delete_raw(path, token_id, trace, world)
-        elif mod_name and rel_path:
-            return _file_delete(mod_name, rel_path, session, trace)
+        if resolution and resolution.absolute_path:
+            return _file_delete_raw(str(resolution.absolute_path), token_id, trace, world)
         else:
-            return {"error": "mod_name and rel_path required for delete (or 'path' in ck3raven-dev mode)"}
+            return {"error": "Path resolution failed - no absolute_path available for delete"}
     
     elif command == "rename":
-        if path and new_path and mode == "ck3raven-dev":
-            # Raw path rename for ck3raven-dev mode
-            return _file_rename_raw(path, new_path, token_id, trace, world)
-        elif mod_name and rel_path and new_path:
-            return _file_rename(mod_name, rel_path, new_path, session, trace)
+        if resolution and resolution.absolute_path and new_path:
+            return _file_rename_raw(str(resolution.absolute_path), new_path, token_id, trace, world)
+        elif not new_path:
+            return {"error": "new_path required for rename"}
         else:
             return {"error": "mod_name, rel_path, new_path required for rename (or 'path' + 'new_path' in ck3raven-dev mode)"}
     

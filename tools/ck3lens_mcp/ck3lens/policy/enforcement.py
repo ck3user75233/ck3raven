@@ -6,28 +6,25 @@ ALL write-capable MCP tools MUST call enforce_policy() at the tool boundary
 before performing any mutation.
 
 Architecture:
-- WorldAdapter handles visibility + domain classification (FOUND vs NOT_FOUND, WIP vs LOCAL_MOD etc.)
-- This module handles policy (ALLOW vs DENY vs REQUIRE_TOKEN)
+- WorldAdapter handles visibility + root_category classification (FOUND vs NOT_FOUND)
+- This module handles policy via capability_matrix.is_authorized() (ALLOW vs DENY)
 - Policy only applies AFTER a reference is resolved by WorldAdapter
 
 Key Principles:
 1. Centralized: All enforcement flows through enforce_policy()
 2. Tool-boundary: Called at MCP tool entry, not in implementation helpers
 3. Mode-aware: Different rules for ck3lens vs ck3raven-dev
-4. Domain-aware: Decisions based on PathDomain from resolution (no re-checking paths)
+4. Matrix-driven: Decisions based on capability_matrix.is_authorized()
 5. Logged: Every decision is traced for analytics
 """
 from __future__ import annotations
 
+import fnmatch
+import re
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import Optional, List, Any, TYPE_CHECKING
-import fnmatch
-import re
-
-if TYPE_CHECKING:
-    from ..world_adapter import PathDomain
+from typing import Optional, List, Any
 
 # =============================================================================
 # OPERATION TYPES
@@ -307,24 +304,25 @@ class Decision(Enum):
 class EnforcementRequest:
     """Request to validate an operation.
     
-    The `domain` field is the resolved PathDomain from WorldAdapter.
-    Enforcement uses this to make decisions - it does NOT re-check paths.
+    The `root_category` field is the resolved RootCategory from WorldAdapter.
+    Enforcement uses this to check the capability matrix - it does NOT re-check paths.
     
-    Domain classification happens in WorldAdapter.resolve():
-    - WIP → always allowed
-    - LOCAL_MOD → requires contract
-    - WORKSHOP_MOD → denied
-    - VANILLA → denied
-    - LAUNCHER_REGISTRY → requires token
-    - CK3RAVEN → ck3raven-dev mode only
+    Root categories are geographic locations (from capability_matrix.py):
+    - ROOT_WIP → always allowed (both modes)
+    - ROOT_USER_DOCS → local mods (ck3lens: write, ck3raven-dev: read)
+    - ROOT_STEAM → workshop mods (read only)
+    - ROOT_GAME → vanilla (read only)
+    - ROOT_REPO → ck3raven source (ck3raven-dev: write, ck3lens: read)
+    - ROOT_LAUNCHER → launcher registry (ck3lens: write with token)
+    - ROOT_CK3RAVEN_DATA → ~/.ck3raven/ (both modes: read+write)
     """
     
     operation: OperationType
     mode: str  # "ck3lens" or "ck3raven-dev"
     tool_name: str  # The MCP tool making the request
     
-    # Domain from WorldAdapter resolution (THE source of truth for path classification)
-    domain: Optional[str] = None  # PathDomain value as string (WIP, LOCAL_MOD, etc.)
+    # RootCategory from WorldAdapter resolution (THE source of truth)
+    root_category: Optional[str] = None  # RootCategory value (ROOT_WIP, ROOT_USER_DOCS, etc.)
     
     # Context (varies by operation type)
     target_path: Optional[str] = None      # Canonical address (e.g., "wip:/test.py", "mod:MyMod/file.txt")
@@ -445,6 +443,8 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
     ALL write-capable tools MUST call this before performing their operation.
     This is the SINGLE source of truth for policy decisions.
     
+    Uses capability_matrix.is_authorized() as THE source of authorization truth.
+    
     Args:
         request: EnforcementRequest with operation details
         
@@ -453,9 +453,9 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
     """
     # Import from contract_v1 for new schema
     from .contract_v1 import get_active_contract, ContractV1, load_contract
-    from .capability_matrix import RootCategory
+    from .capability_matrix import RootCategory, Operation, AgentMode, is_authorized
     
-        # STEP 0: Normalize all paths ONCE at entry point
+    # STEP 0: Normalize all paths ONCE at entry point
     _normalize_request_paths(request)
     mode = request.mode
     op = request.operation
@@ -470,51 +470,48 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
         )
     
     # ==========================================================================
-    # STEP 2: Mode-specific hard gates
+    # STEP 2: Capability Matrix Check (THE source of authorization truth)
     # ==========================================================================
     
-    # ck3raven-dev cannot touch mods
-    if mode == "ck3raven-dev" and request.mod_name:
-        return EnforcementResult(
-            decision=Decision.DENY,
-            reason="ck3raven-dev mode cannot modify CK3 mods",
-        )
+    # Map operation type for matrix lookup
+    if op in {OperationType.FILE_WRITE, OperationType.FILE_DELETE, OperationType.FILE_RENAME}:
+        matrix_op = Operation.WRITE
+    elif op == OperationType.GIT_PUSH:
+        matrix_op = Operation.GIT_WRITE
+    elif op == OperationType.DB_WRITE:
+        matrix_op = Operation.DB_WRITE
+    else:
+        matrix_op = Operation.WRITE  # Default for other mutations
     
-    # ck3lens cannot touch ck3raven source
-    if mode == "ck3lens" and request.target_path:
-        # Check if path looks like ck3raven source
-        if _is_ck3raven_source_path(request.target_path):
+    # Get root_category from request (set by WorldAdapter resolution)
+    if request.root_category:
+        try:
+            root = RootCategory(request.root_category) if isinstance(request.root_category, str) else request.root_category
+        except ValueError:
             return EnforcementResult(
                 decision=Decision.DENY,
-                reason="ck3lens mode cannot modify ck3raven source",
+                reason=f"Unknown root category: {request.root_category}",
             )
+        
+        # Check capability matrix - this is the SINGLE authorization check
+        if not is_authorized(mode, root, matrix_op):
+            return EnforcementResult(
+                decision=Decision.DENY,
+                reason=f"{mode} mode cannot {matrix_op.value} in {root.value}",
+            )
+    else:
+        # No root_category = fail closed (path was not resolved)
+        return EnforcementResult(
+            decision=Decision.DENY,
+            reason="No root_category provided - path not resolved through WorldAdapter",
+        )
     
-    # ck3lens launcher/cache operations
+    # ck3lens launcher/cache operations (mode-specific operation types)
     if mode != "ck3lens" and op in {OperationType.LAUNCHER_REPAIR, OperationType.CACHE_DELETE}:
         return EnforcementResult(
             decision=Decision.DENY,
             reason="Launcher/cache operations only available in ck3lens mode",
         )
-    
-    # ==========================================================================
-    # STEP 2.5: WIP EXEMPTION (BEFORE contract check!)
-    # ==========================================================================
-    # WIP workspace writes are ALWAYS allowed without contract.
-    # This check MUST come before the contract requirement check.
-    
-    if op == OperationType.FILE_WRITE:
-        # Check domain from resolution
-        if request.domain == "wip":
-            return EnforcementResult(
-                decision=Decision.ALLOW,
-                reason="Write to WIP workspace allowed (no contract required)",
-            )
-        # Also check target_path format (legacy fallback)
-        if request.target_path and request.target_path.startswith("wip:/"):
-            return EnforcementResult(
-                decision=Decision.ALLOW,
-                reason="Write to WIP workspace allowed (no contract required)",
-            )
     
     # ==========================================================================
     # STEP 3: Contract requirement check
@@ -526,11 +523,18 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
     else:
         contract = get_active_contract()
     
-    # Most operations require a contract
+    # Most operations require a contract (except WIP which is always allowed by matrix)
     requires_contract = op not in {
         OperationType.READ, OperationType.GIT_READ, 
         OperationType.DB_READ, OperationType.SHELL_SAFE
     }
+    
+    # WIP doesn't require contract - already allowed by matrix
+    if request.root_category == "ROOT_WIP":
+        return EnforcementResult(
+            decision=Decision.ALLOW,
+            reason="Write to WIP workspace allowed (no contract required)",
+        )
     
     if requires_contract and contract is None:
         return EnforcementResult(
@@ -584,17 +588,13 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
     # ==========================================================================
     
     # --- File operations ---
+    # Capability matrix already checked in STEP 2, just return ALLOW
     if op == OperationType.FILE_WRITE:
-        if mode == "ck3lens":
-            return _enforce_ck3lens_write(request, contract)
-        else:
-            # ck3raven-dev: already validated by scope check in STEP 4
-            return EnforcementResult(
-                decision=Decision.ALLOW,
-                reason="File write allowed with valid contract scope",
-                contract_id=contract.contract_id if contract else None,
-                scope_check_details=scope_details,
-            )
+        return EnforcementResult(
+            decision=Decision.ALLOW,
+            reason="File write allowed (authorized by capability matrix)",
+            contract_id=contract.contract_id if contract else None,
+        )
     
     if op == OperationType.FILE_DELETE:
         # Deletes require explicit confirmation via token_id
@@ -827,128 +827,6 @@ def _enforce_git_push(
             "staged_files_count": len(request.staged_files),
             # repo_domains removed - was undefined variable
         },
-    )
-
-
-# =============================================================================
-# CK3LENS WRITE ENFORCEMENT
-# =============================================================================
-
-def _enforce_ck3lens_write(
-    request: EnforcementRequest,
-    contract: Any,  # WorkContract or None
-) -> EnforcementResult:
-    """
-    Enforce write operations for ck3lens mode.
-    
-    Uses request.domain (from WorldAdapter resolution) to make decisions.
-    Enforcement does NOT re-check paths - domain classification is WorldAdapter's job.
-    
-    Domain → Decision:
-    - WIP → always ALLOW (no contract needed)
-    - LOCAL_MOD → ALLOW with contract
-    - WORKSHOP_MOD → DENY
-    - VANILLA → DENY
-    - LAUNCHER_REGISTRY → REQUIRE_TOKEN
-    - CK3RAVEN → DENY (wrong mode)
-    - UNKNOWN → DENY
-    """
-    domain = request.domain
-    mod_name = request.mod_name
-    rel_path = request.rel_path
-    target_path = request.target_path
-    
-    # Case 1: WIP domain - always allowed (no contract needed)
-    if domain == "wip":
-        return EnforcementResult(
-            decision=Decision.ALLOW,
-            reason="Write to WIP workspace allowed",
-        )
-    
-    # Case 2: Local mod domain - requires contract
-    if domain == "local_mod":
-        if contract is None:
-            return EnforcementResult(
-                decision=Decision.REQUIRE_CONTRACT,
-                reason=f"Write to local mod requires active contract",
-                required_contract=True,
-            )
-        
-        return EnforcementResult(
-            decision=Decision.ALLOW,
-            reason=f"Write to local mod allowed with contract",
-            contract_id=contract.contract_id,
-            scope_check_details={
-                "mod_name": mod_name,
-                "rel_path": rel_path,
-            },
-        )
-    
-    # Case 3: Launcher registry - requires confirmation
-    if domain == "launcher_registry":
-        if not request.token_id:
-            return EnforcementResult(
-                decision=Decision.REQUIRE_TOKEN,
-                reason="Launcher registry writes require explicit confirmation (provide token_id)",
-                required_token_tier=TokenTier.TIER_B,
-            )
-        
-        # Token provided = user confirmed
-        return EnforcementResult(
-            decision=Decision.ALLOW,
-            reason="Launcher registry write allowed with confirmation",
-            token_id=request.token_id,
-        )
-    
-    # Case 4: Workshop mod - denied
-    if domain == "workshop_mod":
-        return EnforcementResult(
-            decision=Decision.DENY,
-            reason="Cannot write to workshop mods (Steam-managed)",
-        )
-    
-    # Case 5: Vanilla game files - denied
-    if domain == "vanilla":
-        return EnforcementResult(
-            decision=Decision.DENY,
-            reason="Cannot write to vanilla game files",
-        )
-    
-    # Case 6: ck3raven source - wrong mode
-    if domain == "ck3raven":
-        return EnforcementResult(
-            decision=Decision.DENY,
-            reason="Cannot write to ck3raven source in ck3lens mode (use ck3raven-dev mode)",
-        )
-    
-    # Case 7: No domain or unknown - fallback checks
-    # This handles legacy callers that haven't been updated to pass domain
-    if not domain:
-        # Legacy fallback: check target_path format
-        if target_path and target_path.startswith("wip:/"):
-            return EnforcementResult(
-                decision=Decision.ALLOW,
-                reason="Write to WIP workspace allowed",
-            )
-        
-        # Legacy fallback: mod_name + rel_path implies local mod
-        if mod_name and rel_path:
-            if contract is None:
-                return EnforcementResult(
-                    decision=Decision.REQUIRE_CONTRACT,
-                    reason=f"Write to mod '{mod_name}' requires active contract",
-                    required_contract=True,
-                )
-            return EnforcementResult(
-                decision=Decision.ALLOW,
-                reason=f"Write to local mod '{mod_name}' allowed with contract",
-                contract_id=contract.contract_id,
-            )
-    
-    # Default deny
-    return EnforcementResult(
-        decision=Decision.DENY,
-        reason=f"Write target not allowed in ck3lens mode (domain={domain})",
     )
 
 

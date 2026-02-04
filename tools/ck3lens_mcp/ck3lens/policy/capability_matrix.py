@@ -52,6 +52,7 @@ class RootCategory(str, Enum):
     ROOT_UTILITIES = "ROOT_UTILITIES" # Runtime logs & diagnostics
     ROOT_LAUNCHER = "ROOT_LAUNCHER"   # Paradox launcher registry
     ROOT_VSCODE = "ROOT_VSCODE"       # VS Code user config (%APPDATA%/Code/User)
+    ROOT_CK3RAVEN_DATA = "ROOT_CK3RAVEN_DATA"  # ~/.ck3raven/ (playsets, db, config)
     ROOT_OTHER = "ROOT_OTHER"         # Catch-all for paths outside known domains
 
 
@@ -90,6 +91,7 @@ _MATRIX: dict[tuple[AgentMode, RootCategory], _Capability] = {
     (AgentMode.CK3LENS, RootCategory.ROOT_UTILITIES): _Capability(read=True, write=False),
     (AgentMode.CK3LENS, RootCategory.ROOT_LAUNCHER): _Capability(read=True, write=True),  # Repair-only
     (AgentMode.CK3LENS, RootCategory.ROOT_VSCODE): _Capability(read=True, write=False),   # Read config only
+    (AgentMode.CK3LENS, RootCategory.ROOT_CK3RAVEN_DATA): _Capability(read=True, write=True),  # Playsets, config
     (AgentMode.CK3LENS, RootCategory.ROOT_OTHER): _Capability(read=False, write=False),   # Unknown paths denied
     
     # ck3raven-dev mode capabilities
@@ -101,6 +103,7 @@ _MATRIX: dict[tuple[AgentMode, RootCategory], _Capability] = {
     (AgentMode.CK3RAVEN_DEV, RootCategory.ROOT_UTILITIES): _Capability(read=True, write=False),
     (AgentMode.CK3RAVEN_DEV, RootCategory.ROOT_LAUNCHER): _Capability(read=True, write=False),
     (AgentMode.CK3RAVEN_DEV, RootCategory.ROOT_VSCODE): _Capability(read=True, write=True),  # Debug extension config
+    (AgentMode.CK3RAVEN_DEV, RootCategory.ROOT_CK3RAVEN_DATA): _Capability(read=True, write=True),  # DB, config
     (AgentMode.CK3RAVEN_DEV, RootCategory.ROOT_OTHER): _Capability(read=False, write=False), # Unknown paths denied
 }
 

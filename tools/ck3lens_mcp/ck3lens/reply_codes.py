@@ -152,6 +152,8 @@ class Codes:
         "NO_PLAYSET", "No active playset configured")
     WA_VIS_I_002 = ReplyCode("WA-VIS-I-002", Layer.WA, Area.VIS, ReplyType.I, 2,
         "PLAYSET_NOT_FOUND", "Requested playset not found")
+    WA_VIS_I_003 = ReplyCode("WA-VIS-I-003", Layer.WA, Area.VIS, ReplyType.I, 3,
+        "PLAYSET_SCHEMA_INVALID", "Playset JSON failed schema validation (fail closed)")
     WA_VIS_E_001 = ReplyCode("WA-VIS-E-001", Layer.WA, Area.VIS, ReplyType.E, 1,
         "VISIBILITY_ERROR", "Unexpected error in visibility operation")
     

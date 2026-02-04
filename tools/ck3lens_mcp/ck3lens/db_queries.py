@@ -230,11 +230,15 @@ class DBQueries:
         if not mods:
             return stats
         
-        # Get latest vanilla cvid
+        # Get vanilla cvid (mod_package_id=1 is always vanilla)
+        # Note: 'kind' column is deprecated - vanilla is identified by:
+        # - mod_package_id = 1 (by convention)
+        # - Being in ROOT_GAME path
+        # - Always load_order = 0 in playset
         vanilla_row = self.conn.execute("""
             SELECT content_version_id 
             FROM content_versions 
-            WHERE kind = 'vanilla' 
+            WHERE mod_package_id = 1 
             ORDER BY ingested_at DESC 
             LIMIT 1
         """).fetchone()
