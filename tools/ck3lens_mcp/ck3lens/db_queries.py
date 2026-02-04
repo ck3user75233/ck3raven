@@ -719,7 +719,6 @@ class DBQueries:
                 f.file_id,
                 f.relpath,
                 fc.size as file_size,
-                cv.kind,
                 COALESCE(mp.name, 'vanilla') as source_name,
                 mp.mod_package_id
             FROM files f
@@ -732,8 +731,9 @@ class DBQueries:
         params = [pattern]
         
         if source_filter:
-            sql += " AND (cv.kind = ? OR LOWER(mp.name) LIKE LOWER(?) OR CAST(mp.mod_package_id AS TEXT) = ?)"
-            params.extend([source_filter, f"%{source_filter}%", source_filter])
+            # Filter by mod name or mod_package_id (kind column deprecated)
+            sql += " AND (LOWER(mp.name) LIKE LOWER(?) OR CAST(mp.mod_package_id AS TEXT) = ?)"
+            params.extend([f"%{source_filter}%", source_filter])
         
         sql += " ORDER BY f.relpath LIMIT ?"
         params.append(limit)
@@ -744,7 +744,6 @@ class DBQueries:
                 "file_id": row["file_id"],
                 "relpath": row["relpath"],
                 "size": row["file_size"],
-                "source_kind": row["kind"],
                 "source_name": row["source_name"],
                 "mod_id": row["mod_package_id"],
             })
@@ -808,7 +807,6 @@ class DBQueries:
             SELECT 
                 f.file_id,
                 f.relpath,
-                cv.kind,
                 COALESCE(mp.name, 'vanilla') as source_name,
                 fc.content_text
             FROM files f
@@ -824,8 +822,9 @@ class DBQueries:
             params.append(file_pattern)
         
         if source_filter:
-            sql += " AND (cv.kind = ? OR LOWER(mp.name) LIKE LOWER(?))"
-            params.extend([source_filter, f"%{source_filter}%"])
+            # Filter by mod name only (kind column deprecated)
+            sql += " AND LOWER(mp.name) LIKE LOWER(?)"
+            params.append(f"%{source_filter}%")
         
         sql += " LIMIT ?"
         params.append(limit)
@@ -845,7 +844,6 @@ class DBQueries:
             results.append({
                 "file_id": row["file_id"],
                 "relpath": row["relpath"],
-                "source_kind": row["kind"],
                 "source_name": row["source_name"],
                 "match_count": self._count_matches(content, terms),
                 "matches": matches,
