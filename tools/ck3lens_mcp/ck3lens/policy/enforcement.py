@@ -476,7 +476,7 @@ def enforce_policy(request: EnforcementRequest) -> EnforcementResult:
     # Map operation type for matrix lookup
     if op in {OperationType.FILE_WRITE, OperationType.FILE_DELETE, OperationType.FILE_RENAME}:
         matrix_op = Operation.WRITE
-    elif op == OperationType.GIT_PUSH:
+    elif op == OperationType.GIT_PUBLISH:
         matrix_op = Operation.GIT_WRITE
     elif op == OperationType.DB_WRITE:
         matrix_op = Operation.DB_WRITE

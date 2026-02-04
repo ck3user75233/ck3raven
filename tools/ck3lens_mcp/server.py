@@ -1213,7 +1213,8 @@ def _ck3_db_delete_internal(
             return "", []
         elif scope == "mods_only":
             if table == "content_versions":
-                return "WHERE kind = 'mod'", []
+                # Exclude vanilla (mod_package_id=1). 'kind' column is deprecated.
+                return "WHERE mod_package_id > 1", []
             elif table in ("files", "asts"):
                 if table == "files":
                     return "WHERE content_version_id > 1", []

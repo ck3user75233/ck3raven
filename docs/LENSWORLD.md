@@ -96,6 +96,7 @@ We do not classify files by "Type" (e.g., Local Mod). We classify them by "Locat
 | `ROOT_GAME` | `steamapps/common/Crusader Kings III/` |
 | `ROOT_REPO` | The `ck3raven` repository root |
 | `ROOT_WIP` | `~/.ck3raven/wip/` |
+| `ROOT_CK3RAVEN_DATA` | `~/.ck3raven/` (db, logs, playsets, config) |
 | `ROOT_LAUNCHER` | Paradox Launcher data directory |
 
 ### Raw Path Handling
