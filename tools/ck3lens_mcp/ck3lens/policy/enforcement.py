@@ -53,6 +53,29 @@ class EnforcementResult:
     reason: str
     requires_contract: bool = False
     requires_token: bool = False
+    # For diagnostic failures (Reply I instead of D)
+    is_diagnostic_failure: bool = False
+    diagnostic_code: str | None = None
+
+
+# =============================================================================
+# HELPER: Detect subdirectory-aware roots
+# =============================================================================
+
+def _get_subdirectory_aware_roots() -> set:
+    """
+    Return set of (mode, root) pairs that have subdirectory-specific entries.
+    
+    These roots require subdirectory to be set for proper capability lookup.
+    If subdirectory is None for these roots during write/delete, it's a bug.
+    """
+    from ..capability_matrix import CAPABILITY_MATRIX
+    
+    subdir_roots = set()
+    for (mode, root, subdir) in CAPABILITY_MATRIX.keys():
+        if subdir is not None:
+            subdir_roots.add((mode, root))
+    return subdir_roots
 
 
 # =============================================================================
@@ -79,6 +102,11 @@ def enforce(
         
     Returns:
         EnforcementResult with decision and reason
+        
+    LOUD FAILURE POLICY:
+        If resolution is missing subdirectory for a root that requires it,
+        this returns DENY with is_diagnostic_failure=True and a clear error code.
+        This MUST be surfaced as Reply(I), not silently denied.
     """
     from ..paths import RootCategory
     from ..capability_matrix import get_capability
@@ -115,11 +143,30 @@ def enforce(
             )
     
     # ==========================================================================
+    # LOUD FAILURE: Missing subdirectory for subdirectory-aware roots
+    # ==========================================================================
+    # This catches the bug where WorldAdapter.resolve() doesn't set subdirectory
+    # for roots that have subdirectory-specific capability entries.
+    if operation in {OperationType.WRITE, OperationType.DELETE}:
+        subdir_aware = _get_subdirectory_aware_roots()
+        if (mode, resolved.root_category) in subdir_aware and resolved.subdirectory is None:
+            return EnforcementResult(
+                decision=Decision.DENY,
+                reason=(
+                    f"Resolution missing subdirectory for {resolved.root_category.name}. "
+                    f"WorldAdapter.resolve() must set subdirectory field for this root. "
+                    f"Path: {resolved.absolute_path}"
+                ),
+                is_diagnostic_failure=True,
+                diagnostic_code="EN-SUBDIR-I-001",
+            )
+    
+    # ==========================================================================
     # STEP 1: Look up capability from matrix
     # ==========================================================================
     # NOTE: .mod file protection is handled by subfolders_writable in capability_matrix.
     # Files directly in mod/ (like *.mod) are protected because subfolders_writable
-    # only allows writes to paths with 2+ components (e.g., mod/MyMod/file.txt).
+    # only allows writes to paths with 3+ components (e.g., mod/MyMod/file.txt).
     cap = get_capability(mode, resolved.root_category, resolved.subdirectory, resolved.relative_path)
     
     if cap is None:

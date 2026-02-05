@@ -5653,6 +5653,82 @@ def ck3_journal(
 
 
 # ============================================================================
+# Paths Doctor - Diagnostic Tool
+# ============================================================================
+
+@mcp.tool()
+@mcp_safe_tool
+def ck3_paths_doctor(
+    include_resolution_checks: bool = True,
+    verbose: bool = False,
+) -> Reply:
+    """
+    Run Paths Doctor to diagnose path configuration issues.
+    
+    A read-only diagnostic utility that validates:
+    - Required paths (ROOT_GAME, ROOT_STEAM)
+    - Optional paths (ROOT_USER_DOCS, ROOT_UTILITIES, etc.)
+    - Computed paths (ROOT_REPO, ROOT_CK3RAVEN_DATA)
+    - Data structure (WIP_DIR, PLAYSET_DIR, etc.)
+    - Local mods folder configuration
+    - Config file health
+    - Resolution cross-checks (optional)
+    
+    Args:
+        include_resolution_checks: Run WorldAdapter resolution cross-checks (default True)
+        verbose: Include OK findings in output (default False)
+    
+    Returns:
+        PathsDoctorReport with findings categorized by severity (ERROR, WARN, OK)
+        
+    Note:
+        This tool ALWAYS returns Reply(S) even if findings include ERRORs.
+        The report's 'ok' field indicates whether configuration is healthy.
+        Use this to diagnose path issues before reporting bugs.
+    """
+    from ck3lens.paths_doctor import run_paths_doctor, PathsDoctorReport
+    from dataclasses import asdict
+    
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_paths_doctor')
+    
+    try:
+        report = run_paths_doctor(include_resolution_checks=include_resolution_checks)
+        
+        # Convert to serializable dict
+        report_dict = {
+            "ok": report.ok,
+            "findings": [asdict(f) for f in report.findings],
+            "summary": report.summary,
+            "config_path": report.config_path,
+        }
+        
+        # Filter to non-OK findings unless verbose
+        if not verbose:
+            report_dict["findings"] = [
+                f for f in report_dict["findings"]
+                if f["severity"] != "OK"
+            ]
+            report_dict["verbose"] = False
+        else:
+            report_dict["verbose"] = True
+        
+        # Always Reply(S) - the report.ok field indicates health
+        status = "HEALTHY" if report.ok else "UNHEALTHY"
+        return rb.success(
+            'WA-DOCTOR-S-001',
+            data=report_dict,
+            message=f"Paths Doctor: {status} ({report.summary['ERROR']} errors, {report.summary['WARN']} warnings, {report.summary['OK']} ok)",
+        )
+    except Exception as e:
+        return rb.error(
+            'MCP-SYS-E-001',
+            data={"error": str(e)},
+            message=f"Paths Doctor failed: {e}",
+        )
+
+
+# ============================================================================
 # QBuilder - Build System Tools
 # ============================================================================
 
