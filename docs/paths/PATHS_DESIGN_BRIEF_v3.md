@@ -208,8 +208,6 @@ Subdirectory-based authority requires cooperation between three components:
 | **capability_matrix.py** | Permissions lookup | Entries keyed by `(mode, root, subdirectory)` tuple |
 | **enforcement.py** | Final decision | Logic that checks `resolved.subdirectory` for special handling |
 
-**If ANY component fails its responsibility, permissions break silently.**
-
 #### 4.4.2 Required ResolutionResult Fields
 
 When resolving paths that need subdirectory-based permissions:
@@ -272,22 +270,58 @@ elif resolved.subdirectory == "db":
     return deny("Database writes require daemon")
 ```
 
-#### 4.4.4 Common Failure Mode: Missing Subdirectory
+#### 4.4.4 ⚠️ TODO: Loud Failure on Missing Subdirectory
 
-**Symptom:** Writes denied with `EN-WRITE-D-001: Write not permitted for (mode, ROOT_X)`
+> **STATUS: MUST FIX** - Subdirectory authority failures must NOT fail silently.
 
-**Root cause:** `resolve()` returned ResolutionResult without setting `subdirectory` field
+**Current Problem:**
 
-**The capability lookup then:**
+When `resolve()` returns a ResolutionResult without setting `subdirectory`, the capability lookup:
 1. Looks for `(mode, ROOT_X, None)` - finds base entry (often read-only)
 2. Never sees the subdirectory-specific entry that grants write access
-3. Denies the operation
+3. **Silently denies the operation** with a generic "write not permitted" message
 
-**Prevention checklist:**
-- [ ] `_resolve_to_absolute()` extracts subdirectory from path
-- [ ] Subdirectory is first path component under root (e.g., `"mod"`, `"wip"`, `"config"`)
-- [ ] `relative_path` computed relative to the ROOT constant (not subdirectory)
-- [ ] Capability matrix has entry for `(mode, root, subdirectory)` tuple
+**Required Fix:**
+
+Enforcement MUST detect this condition and return a **Reply(I)** or **Reply(E)** with a clear diagnostic message:
+
+```python
+# In enforcement.py - PROPOSED FIX
+def validate_write(resolved: ResolutionResult, mode: str) -> Reply:
+    # Check if this root+mode combo has subdirectory-specific entries
+    has_subdir_entries = any(
+        key[0] == mode and key[1] == resolved.root_category and key[2] is not None
+        for key in CAPABILITY_MATRIX.keys()
+    )
+    
+    # If subdirectory entries exist but resolution didn't provide subdirectory
+    if has_subdir_entries and resolved.subdirectory is None:
+        return Reply.invalid(
+            code="EN-SUBDIR-I-001",
+            message=f"Resolution missing subdirectory for {resolved.root_category}",
+            data={
+                "root_category": resolved.root_category.value,
+                "path": str(resolved.absolute_path),
+                "hint": "WorldAdapter.resolve() must set subdirectory field for this root"
+            }
+        )
+    
+    # ... rest of validation
+```
+
+**Acceptable Failure Modes:**
+
+| Condition | Reply Type | Code |
+|-----------|------------|------|
+| Resolution missing required subdirectory | **I** (Invalid) | EN-SUBDIR-I-001 |
+| Subdirectory entry exists but has no write permission | **D** (Denied) | EN-WRITE-D-001 |
+| Infrastructure failure in capability lookup | **E** (Error) | EN-SYS-E-001 |
+
+**NOT Acceptable:**
+
+- ❌ Silent fallback to base entry that denies
+- ❌ Generic "write not permitted" when the real issue is missing subdirectory
+- ❌ Success with no write actually performed
 
 #### 4.4.5 Adding New Subdirectory Authority
 
@@ -551,9 +585,91 @@ Paths Doctor MUST NOT:
 - Consult the capability matrix to infer permissions
 - Implement its own path resolution logic
 
+### 8.8 Reply & Logging System Integration
+
+**Non-Optional:** Paths Doctor MUST be explicitly compliant with the **Canonical Reply System** AND the **Canonical Logging System**.
+
+#### 8.8.1 Separation of Concerns (Mandatory Model)
+
+Treat these as distinct layers:
+
+1. **Paths Doctor logic (Diagnostics)**
+   - Returns `PathsDoctorReport`
+   - Uses severities: OK | WARN | ERROR
+   - **Does not log and does not return Replies**
+
+2. **Reply System (Tool contract at MCP boundary)**
+   - Wraps doctor output in a **Reply**
+   - Reply indicates tool execution outcome, **NOT** doctor severity
+   - Doctor severities belong inside `Reply.data`
+
+3. **Logging System (Observability)**
+   - Emits structured logs about *running the tool*
+   - Logs summary, not the full report
+   - Logging levels are orthogonal to doctor severities
+
+#### 8.8.2 Reply System Rules
+
+The MCP tool returns:
+
+| Condition | Reply Type |
+|-----------|------------|
+| Tool runs successfully (even if doctor finds ERROR diagnostics) | **Reply(S)** |
+| Invalid tool arguments | **Reply(I)** |
+| Infrastructure failure/crash | **Reply(E)** |
+
+**Required Semantics:**
+- `reply.type == S` means "tool succeeded"
+- `reply.data.ok == False` means "doctor found ERROR findings"
+- **Never** treat doctor ERROR findings as Reply(E/D/W) - those are not tool failures
+
+#### 8.8.3 Logging Rules
+
+- Log execution lifecycle with trace_id:
+  - "started" (INFO)
+  - "completed" (INFO) with summary counts
+- **Do not** auto-map doctor WARN/ERROR to log WARN/ERROR
+- Only use log **ERROR** when invocation fails or tool crashes
+
+#### 8.8.4 CLI Flags vs. Systems
+
+| Flag | Controls |
+|------|----------|
+| `--verbose` | CLI presentation only (printing OK findings) |
+| `--json` | Output format only |
+
+**Neither changes Reply type nor logging behavior.**
+
+#### 8.8.5 Implementation Decisions
+
+| Question | Decision |
+|----------|----------|
+| OK findings — include by default or only with --verbose? | Show OK findings **only with --verbose**. Default CLI output: ERROR + WARN + summary counts. |
+| JSON output — worth implementing for CLI? | **Yes, implement --json** for automation. |
+| MCP tool — add ck3_paths_doctor tool? | **Yes, add it.** Read-only, returns full report in Reply.data. |
+
+### 8.9 Required Corrections for Implementation
+
+1. **Remediation wording must not imply Doctor creates anything**
+   - ❌ "will be created on first use"
+   - ✅ "Create manually", "Ensure component X initializes it", "Run daemon"
+
+2. **Missing .ck3raven / missing subdirs default to WARN**
+   - ROOT_CK3RAVEN_DATA and its subdirs may legitimately be absent on first run
+   - Doctor MUST NOT create them. Missing items should be WARN, not ERROR.
+
+3. **Resolution cross-check mismatch severity**
+   - Make mismatches **WARN by default**
+   - Upgrade to **ERROR** only when it clearly indicates a core routing regression
+
+4. **Config health must reflect load + parse status**
+   - Not just check if file exists
+   - Report: config path used, parse errors (ERROR), missing required keys (ERROR)
+
 ---
 
 ## 9. References
 
 - [CANONICAL_ARCHITECTURE.md](../CANONICAL_ARCHITECTURE.md)
 - [SINGLE_WRITER_ARCHITECTURE.md](../SINGLE_WRITER_ARCHITECTURE.md)
+- [Paths Doctor Integration Guidelines](Paths%20Doctor%20Integration%20Guidelines.md)
