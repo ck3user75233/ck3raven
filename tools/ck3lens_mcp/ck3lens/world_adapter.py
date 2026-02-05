@@ -19,8 +19,9 @@ BANNED CONCEPTS (January 2026):
 - DbHandle, FsHandle (dead code, never called)
 - _CAP_TOKEN (dead code)
 - CapabilityError (dead code)
-- self._vanilla_root, self._ck3raven_root, self._wip_root (parallel constructs)
-- self._utility_roots (parallel construct)
+- self._vanilla_root, self._ck3raven_root, self._wip_root (use paths.py constants)
+- vanilla_root, ck3raven_root, wip_root parameters (use paths.py constants)
+- world_router module (all routing is via WorldAdapter.resolve())
 """
 from __future__ import annotations
 
@@ -178,11 +179,12 @@ class WorldAdapter:
     Root paths are organized by RootCategory (the ONLY domain classification):
     - ROOT_REPO: ck3raven source
     - ROOT_GAME: Vanilla CK3 installation
-    - ROOT_WIP: Scratch/experimental workspace
+    - ROOT_CK3RAVEN_DATA: ~/.ck3raven/ (contains WIP, playsets, db, config)
     - ROOT_USER_DOCS: User-authored mod content (local mods)
     - ROOT_STEAM: Steam Workshop content
     - ROOT_UTILITIES: Runtime logs & diagnostics
-    - ROOT_CK3RAVEN_DATA: ~/.ck3raven/ (playsets, db, config)
+    - ROOT_LAUNCHER: CK3 launcher registry
+    - ROOT_VSCODE: VS Code user data
     
     WorldAdapter determines:
     1. What EXISTS and can be REFERENCED (resolve, is_visible)
@@ -190,6 +192,8 @@ class WorldAdapter:
     
     WorldAdapter does NOT make permission decisions - enforcement.py does that
     using the RootCategory returned by classify_path.
+    
+    NOTE: WIP is NOT a separate root - it's ROOT_CK3RAVEN_DATA with subdirectory="wip"
     """
     
     def __init__(
@@ -225,77 +229,81 @@ class WorldAdapter:
     @classmethod
     def create(
         cls,
-        mode: str,
+        mode: str = "uninitiated",
         db: Optional["DBQueries"] = None,
         *,
-        # Legacy parameters for backward compatibility during migration
+        # Mod list and local mods folder for ck3lens mode
         mods: Optional[list] = None,
         local_mods_folder: Optional[Path] = None,
-        utility_roots: Optional[dict[str, Path]] = None,
-        vanilla_root: Optional[Path] = None,
-        ck3raven_root: Optional[Path] = None,
-        wip_root: Optional[Path] = None,
     ) -> "WorldAdapter":
         """
-        Factory method that uses paths.py constants for defaults, then applies overrides.
+        Factory method using paths.py constants for all roots.
+        
+        NO LEGACY PARAMETERS - all paths come from paths.py constants.
+        
+        Args:
+            mode: Agent mode ("ck3lens", "ck3raven-dev", or "uninitiated")
+            db: DBQueries instance (optional)
+            mods: List of mod objects with .name and .path attributes (ck3lens mode)
+            local_mods_folder: Override for local mods folder (defaults to paths.LOCAL_MODS_FOLDER)
         """
         from ck3lens.paths import (
             RootCategory,
             ROOT_REPO,
             ROOT_CK3RAVEN_DATA,
             ROOT_GAME,
+            ROOT_STEAM,
+            ROOT_USER_DOCS,
             ROOT_UTILITIES,
+            ROOT_LAUNCHER,
+            ROOT_VSCODE,
+            LOCAL_MODS_FOLDER,
         )
         
         roots: dict[RootCategory, list[Path]] = {}
         mod_paths: dict[str, Path] = {}
         visible_cvids: Optional[FrozenSet[int]] = None
         
-        # ROOT_REPO - use explicit or constant
-        if ck3raven_root:
-            roots[RootCategory.ROOT_REPO] = [ck3raven_root]
-        elif ROOT_REPO:
+        # Use local_mods_folder parameter or fall back to paths.py constant
+        effective_local_mods = local_mods_folder or LOCAL_MODS_FOLDER
+        
+        # ROOT_REPO - always from paths.py (computed from __file__)
+        if ROOT_REPO and ROOT_REPO.exists():
             roots[RootCategory.ROOT_REPO] = [ROOT_REPO]
-        
-        # ROOT_GAME - use explicit or constant
-        if vanilla_root:
-            roots[RootCategory.ROOT_GAME] = [vanilla_root]
-        elif ROOT_GAME:
-            roots[RootCategory.ROOT_GAME] = [ROOT_GAME]
-        
-        # ROOT_UTILITIES - use explicit or constant
-        if utility_roots:
-            roots[RootCategory.ROOT_UTILITIES] = list(utility_roots.values())
-        elif ROOT_UTILITIES:
-            roots[RootCategory.ROOT_UTILITIES] = [ROOT_UTILITIES]
         
         # ROOT_CK3RAVEN_DATA - always set (constant is never None)
         roots[RootCategory.ROOT_CK3RAVEN_DATA] = [ROOT_CK3RAVEN_DATA]
         
-        # Process mods - classify as ROOT_USER_DOCS or ROOT_STEAM
+        # ROOT_GAME - from paths.py (config-driven)
+        if ROOT_GAME and ROOT_GAME.exists():
+            roots[RootCategory.ROOT_GAME] = [ROOT_GAME]
+        
+        # ROOT_STEAM - from paths.py (config-driven)
+        if ROOT_STEAM and ROOT_STEAM.exists():
+            roots[RootCategory.ROOT_STEAM] = [ROOT_STEAM]
+        
+        # ROOT_USER_DOCS - from paths.py (config-driven or OS-default)
+        if ROOT_USER_DOCS and ROOT_USER_DOCS.exists():
+            roots[RootCategory.ROOT_USER_DOCS] = [ROOT_USER_DOCS]
+        
+        # ROOT_UTILITIES - from paths.py (config-driven or OS-default)
+        if ROOT_UTILITIES and ROOT_UTILITIES.exists():
+            roots[RootCategory.ROOT_UTILITIES] = [ROOT_UTILITIES]
+        
+        # ROOT_LAUNCHER - from paths.py (config-driven or OS-default)
+        if ROOT_LAUNCHER and ROOT_LAUNCHER.exists():
+            roots[RootCategory.ROOT_LAUNCHER] = [ROOT_LAUNCHER]
+        
+        # ROOT_VSCODE - from paths.py (config-driven or OS-default)
+        if ROOT_VSCODE and ROOT_VSCODE.exists():
+            roots[RootCategory.ROOT_VSCODE] = [ROOT_VSCODE]
+        
+        # Process mods - build mod_paths lookup
         if mods:
-            user_docs_paths: list[Path] = []
-            steam_paths: list[Path] = []
-            
             for mod in mods:
                 if hasattr(mod, 'name') and hasattr(mod, 'path'):
                     mod_path = Path(mod.path) if isinstance(mod.path, str) else mod.path
                     mod_paths[mod.name] = mod_path
-                    
-                    # Classify by containment in local_mods_folder
-                    if local_mods_folder:
-                        try:
-                            mod_path.resolve().relative_to(local_mods_folder.resolve())
-                            user_docs_paths.append(mod_path)
-                        except ValueError:
-                            steam_paths.append(mod_path)
-                    else:
-                        steam_paths.append(mod_path)
-            
-            if user_docs_paths:
-                roots[RootCategory.ROOT_USER_DOCS] = user_docs_paths
-            if steam_paths:
-                roots[RootCategory.ROOT_STEAM] = steam_paths
             
             # Extract CVIDs for visibility filter
             cvids = frozenset(
@@ -353,6 +361,8 @@ class WorldAdapter:
             RootCategory.ROOT_GAME,
             RootCategory.ROOT_STEAM,
             RootCategory.ROOT_UTILITIES,
+            RootCategory.ROOT_LAUNCHER,
+            RootCategory.ROOT_VSCODE,
         ]
         
         for category in priority_order:
@@ -407,7 +417,7 @@ class WorldAdapter:
         - subdirectory: first path component under root (e.g., "mod", "wip")
         - relative_path: full path from root (for subfolders_writable check)
         """
-        from ck3lens.paths import RootCategory, ROOT_USER_DOCS
+        from ck3lens.paths import RootCategory, ROOT_USER_DOCS, ROOT_CK3RAVEN_DATA
         
         abs_path: Optional[Path] = None
         root_category: Optional[RootCategory] = None
@@ -451,12 +461,11 @@ class WorldAdapter:
         
         elif address.address_type == AddressType.WIP:
             # WIP is a subdirectory of ROOT_CK3RAVEN_DATA
-            root = self._get_root(RootCategory.ROOT_CK3RAVEN_DATA)
-            if root:
-                abs_path = root / "wip" / address.relative_path
-                root_category = RootCategory.ROOT_CK3RAVEN_DATA
-                subdirectory = "wip"  # CRITICAL: enforcement.py checks this
-                relative_path_for_cap = f"wip/{address.relative_path}"
+            # Use paths.py constant directly for consistency
+            abs_path = ROOT_CK3RAVEN_DATA / "wip" / address.relative_path
+            root_category = RootCategory.ROOT_CK3RAVEN_DATA
+            subdirectory = "wip"  # CRITICAL: enforcement.py checks this
+            relative_path_for_cap = f"wip/{address.relative_path}"
         
         elif address.address_type == AddressType.CK3RAVEN:
             root = self._get_root(RootCategory.ROOT_REPO)
@@ -465,15 +474,15 @@ class WorldAdapter:
                 root_category = RootCategory.ROOT_REPO
         
         elif address.address_type == AddressType.DATA:
-            root = self._get_root(RootCategory.ROOT_CK3RAVEN_DATA)
-            if root:
-                abs_path = root / address.relative_path
-                root_category = RootCategory.ROOT_CK3RAVEN_DATA
-                # Extract subdirectory from first component of relative_path
-                parts = address.relative_path.replace("\\", "/").strip("/").split("/")
-                if parts and parts[0]:
-                    subdirectory = parts[0]
-                    relative_path_for_cap = address.relative_path.replace("\\", "/")
+            # DATA addresses target ~/.ck3raven/ subdirectories
+            # Use paths.py constant directly
+            abs_path = ROOT_CK3RAVEN_DATA / address.relative_path
+            root_category = RootCategory.ROOT_CK3RAVEN_DATA
+            # Extract subdirectory from first component of relative_path
+            parts = address.relative_path.replace("\\", "/").strip("/").split("/")
+            if parts and parts[0]:
+                subdirectory = parts[0]
+                relative_path_for_cap = address.relative_path.replace("\\", "/")
         
         elif address.address_type == AddressType.UTILITY:
             utility_paths = self._roots.get(RootCategory.ROOT_UTILITIES, [])
@@ -563,6 +572,13 @@ class WorldAdapter:
                 relative_path=address[5:],
                 raw_input=address,
             )
+        elif address.startswith("data:/"):
+            return CanonicalAddress(
+                address_type=AddressType.DATA,
+                identifier=None,
+                relative_path=address[6:],
+                raw_input=address,
+            )
         
         return CanonicalAddress(
             address_type=AddressType.UNKNOWN,
@@ -577,7 +593,7 @@ class WorldAdapter:
         Path classification is structural - determines which domain a path
         belongs to. This is the same regardless of agent mode.
         """
-        from ck3lens.paths import RootCategory
+        from ck3lens.paths import RootCategory, ROOT_CK3RAVEN_DATA, WIP_DIR
         
         raw = Path(raw_path)
         
@@ -600,20 +616,17 @@ class WorldAdapter:
         # This is mode-agnostic - any path can be classified
         
         # Check WIP first (most specific user workspace)
-        # WIP is a subdirectory of ROOT_CK3RAVEN_DATA
-        data_root = self._get_root(RootCategory.ROOT_CK3RAVEN_DATA)
-        if data_root:
-            wip_root = data_root / "wip"
-            try:
-                rel = path.relative_to(wip_root.resolve())
-                return CanonicalAddress(
-                    address_type=AddressType.WIP,
-                    identifier=None,
-                    relative_path=str(rel).replace("\\", "/"),
-                    raw_input=raw_path,
-                )
-            except ValueError:
-                pass
+        # WIP is always ROOT_CK3RAVEN_DATA/wip - use paths.py constant
+        try:
+            rel = path.relative_to(WIP_DIR.resolve())
+            return CanonicalAddress(
+                address_type=AddressType.WIP,
+                identifier=None,
+                relative_path=str(rel).replace("\\", "/"),
+                raw_input=raw_path,
+            )
+        except ValueError:
+            pass
         
         # Check ck3raven source (ROOT_REPO)
         repo_root = self._get_root(RootCategory.ROOT_REPO)
@@ -630,24 +643,23 @@ class WorldAdapter:
                 pass
         
         # Check ck3raven data folder (~/.ck3raven/) - playsets, db, config
-        data_root = self._get_root(RootCategory.ROOT_CK3RAVEN_DATA)
-        if data_root:
-            try:
-                rel = path.relative_to(data_root.resolve())
-                return CanonicalAddress(
-                    address_type=AddressType.DATA,
-                    identifier=None,
-                    relative_path=str(rel).replace("\\", "/"),
-                    raw_input=raw_path,
-                )
-            except ValueError:
-                pass
+        # Use paths.py constant directly
+        try:
+            rel = path.relative_to(ROOT_CK3RAVEN_DATA.resolve())
+            return CanonicalAddress(
+                address_type=AddressType.DATA,
+                identifier=None,
+                relative_path=str(rel).replace("\\", "/"),
+                raw_input=raw_path,
+            )
+        except ValueError:
+            pass
         
         # Check vanilla (ROOT_GAME)
-        vanilla_root = self._get_root(RootCategory.ROOT_GAME)
-        if vanilla_root:
+        game_root = self._get_root(RootCategory.ROOT_GAME)
+        if game_root:
             try:
-                rel = path.relative_to(vanilla_root.resolve())
+                rel = path.relative_to(game_root.resolve())
                 return CanonicalAddress(
                     address_type=AddressType.VANILLA,
                     identifier=None,
@@ -706,32 +718,31 @@ class WorldAdapter:
 
 
 # =============================================================================
-# FACTORY FUNCTION (for backward compatibility)
+# FACTORY FUNCTION
 # =============================================================================
 
 def get_world_adapter(
-    mode: str,
-    db: "DBQueries",
+    mode: str = "uninitiated",
+    db: Optional["DBQueries"] = None,
     *,
     mods: Optional[list] = None,
     local_mods_folder: Optional[Path] = None,
-    vanilla_root: Optional[Path] = None,
-    ck3raven_root: Optional[Path] = None,
-    wip_root: Optional[Path] = None,
-    utility_roots: Optional[dict[str, Path]] = None,
 ) -> WorldAdapter:
     """
     Factory function to create a WorldAdapter.
     
     This is a convenience wrapper around WorldAdapter.create().
+    All paths come from paths.py constants - no legacy parameters.
+    
+    Args:
+        mode: Agent mode ("ck3lens", "ck3raven-dev", or "uninitiated")
+        db: DBQueries instance (optional)
+        mods: List of mod objects (for ck3lens mode)
+        local_mods_folder: Override for local mods folder (defaults to paths.LOCAL_MODS_FOLDER)
     """
     return WorldAdapter.create(
         mode=mode,
         db=db,
         mods=mods,
         local_mods_folder=local_mods_folder,
-        vanilla_root=vanilla_root,
-        ck3raven_root=ck3raven_root,
-        wip_root=wip_root,
-        utility_roots=utility_roots,
     )

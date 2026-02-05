@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from .db.golden_join import GOLDEN_JOIN
+# Canonical path constants - use these instead of computing paths from __file__
+from .paths import ROOT_REPO
 
 # Canonical Reply System (Phase C migration)
 from ck3raven.core.reply import Reply, TraceInfo, MetaInfo
@@ -48,6 +50,7 @@ def _create_reply_builder(trace_info: TraceInfo, tool: str, layer: str = "MCP", 
                 message=message or get_message(code, **data),
                 data=data,
                 trace=self.trace_info,
+
                 meta=self._meta(layer),
             )
         
@@ -1609,7 +1612,7 @@ def _file_refresh(mod_name, rel_path, session, trace):
 
 def _file_list(mod_name, path_prefix, pattern, session, trace):
     """List files in mod."""
-    from .world_router import get_world
+    from .world_adapter import get_world_adapter
     
     mod = session.get_mod(mod_name)
     if not mod:
@@ -1620,10 +1623,10 @@ def _file_list(mod_name, path_prefix, pattern, session, trace):
             result = {"files": [], "folder": path_prefix}
         else:
             # Get WorldAdapter for canonical path resolution
-            # Note: WorldAdapter should be pre-initialized; we use mods from session
-            adapter = get_world(
+            adapter = get_world_adapter(
+                mode=session.mode,
+                mods=session.mods,
                 local_mods_folder=session.local_mods_folder,
-                mods=session.mods
             )
             
             files = []
@@ -2539,7 +2542,7 @@ def ck3_git_impl(
     
     # Mode detection
     mode = get_agent_mode()
-    ck3raven_root = P(__file__).parent.parent.parent.parent
+    # Use ROOT_REPO from paths.py instead of computing from __file__
     
     # ==========================================================================
     # CENTRALIZED ENFORCEMENT GATE
@@ -2552,7 +2555,7 @@ def ck3_git_impl(
     if command in write_commands and mode and world:
         # Determine target path for enforcement
         if mode == "ck3raven-dev":
-            target_path = str(ck3raven_root)
+            target_path = str(ROOT_REPO)
         else:
             # ck3lens mode - resolve mod path
             mod = session.get_mod(mod_name) if mod_name else None
@@ -2565,6 +2568,7 @@ def ck3_git_impl(
         
         # Resolve path using WorldAdapter (canonical pattern)
         resolution = world.resolve(target_path)
+
         if not resolution.found:
             return {
                 "error": f"Cannot resolve path for enforcement: {target_path}",
@@ -2619,7 +2623,7 @@ def ck3_git_impl(
             # Log that we're ignoring mod_name but don't error
             pass  # Could trace.log a warning here
         
-        result = _git_ops_for_path(command, ck3raven_root, file_path, files, all_files, message, limit)
+        result = _git_ops_for_path(command, ROOT_REPO, file_path, files, all_files, message, limit)
         if trace:
             trace.log(f"ck3lens.git.{command}", {"target": "ck3raven"},
                       {"success": result.get("success", "error" not in result)})
@@ -2629,6 +2633,7 @@ def ck3_git_impl(
     if not mod_name:
         return {
             "error": "mod_name required for git operations in ck3lens mode",
+
             "hint": "Specify which mod to operate on"
         }
 

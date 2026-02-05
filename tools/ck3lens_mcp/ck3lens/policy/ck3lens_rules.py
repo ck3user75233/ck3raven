@@ -36,6 +36,9 @@ from .trace_helpers import (
     extract_search_scope_from_call,
 )
 
+# Import path constants - NO legacy root parameters
+from ..paths import ROOT_GAME, ROOT_REPO
+
 if TYPE_CHECKING:
     from ..contracts import ArtifactBundle
 
@@ -103,14 +106,13 @@ def classify_path_domain(
     path: str | Path,
     *,
     local_mods_folder: Path | None = None,
-    vanilla_root: str | None = None,
-    ck3raven_root: Path | None = None,
 ) -> ScopeDomain | None:
     """
     Classify a path into its scope domain.
     
     Returns the ScopeDomain for structural classification only (NOT permissions).
     
+    Uses paths.py constants for ROOT_GAME and ROOT_REPO - no legacy parameters.
     For mod paths, returns None - enforcement.py decides based on local_mods_folder.
     """
     if isinstance(path, str):
@@ -123,15 +125,15 @@ def classify_path_domain(
     if is_wip_path(path):
         return ScopeDomain.WIP_WORKSPACE
     
-    # CK3Raven source
-    if ck3raven_root:
-        ck3raven_str = str(ck3raven_root.resolve()).replace("\\", "/").lower()
+    # CK3Raven source - use ROOT_REPO constant from paths.py
+    if ROOT_REPO:
+        ck3raven_str = str(ROOT_REPO.resolve()).replace("\\", "/").lower()
         if path_str.startswith(ck3raven_str):
             return ScopeDomain.CK3RAVEN_SOURCE
     
-    # Vanilla game
-    if vanilla_root:
-        vanilla_str = vanilla_root.replace("\\", "/").lower()
+    # Vanilla game - use ROOT_GAME constant from paths.py
+    if ROOT_GAME:
+        vanilla_str = str(ROOT_GAME).replace("\\", "/").lower()
         if path_str.startswith(vanilla_str):
             return ScopeDomain.VANILLA_GAME
     
@@ -208,11 +210,10 @@ def enforce_ck3lens_file_restrictions(
             ext = ""
         
         # Classify the domain using local_mods_folder boundary
+        # Uses paths.py constants internally - no legacy params needed
         domain = classify_path_domain(
             path,
             local_mods_folder=ctx.local_mods_folder,
-            vanilla_root=ctx.vanilla_root,
-            ck3raven_root=ctx.ck3raven_root,
         )
         
         # HARD GATE: ck3raven source is NEVER writable
@@ -370,10 +371,11 @@ def enforce_active_playset_scope(
                 })
         
         # roots must be subset of allowed roots
+        # Use ROOT_GAME constant from paths.py instead of ctx.vanilla_root
         if ctx.active_roots is not None and scope["roots"]:
             allowed_roots = ctx.active_roots.copy()
-            if ctx.vanilla_root:
-                allowed_roots.add(ctx.vanilla_root)
+            if ROOT_GAME:
+                allowed_roots.add(str(ROOT_GAME))
             if not scope["roots"].issubset(allowed_roots):
                 extra = scope["roots"] - allowed_roots
                 out_of_scope_calls.append({

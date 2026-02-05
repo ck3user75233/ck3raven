@@ -264,6 +264,10 @@ class ValidationContext:
     
     Contains all information needed to validate agent behavior against policy.
     Session scope fields are auto-populated from _get_session_scope() in server.py.
+    
+    NOTE: vanilla_root and ck3raven_root fields REMOVED - January 2026
+    These are now sourced from paths.py constants (ROOT_GAME, ROOT_REPO).
+    No legacy fallbacks, no backwards compat.
     """
     mode: AgentMode
     policy: dict[str, Any]
@@ -276,13 +280,9 @@ class ValidationContext:
     # Active playset details (auto-populated from server session state)
     active_mod_ids: Optional[set[str]] = None
     active_roots: Optional[set[str]] = None
-    vanilla_root: Optional[str] = None
     
     # local_mods_folder boundary (mods here are editable)
     local_mods_folder: Optional[Path] = None
-    
-    # CK3Raven root path (for source read detection)
-    ck3raven_root: Optional[Path] = None
     
     # Contract context (for write operations)
     # intent_type REMOVED - BANNED per canonical spec
@@ -313,9 +313,10 @@ class ValidationContext:
                 - vanilla_version_id
                 - active_mod_ids
                 - active_roots
-                - vanilla_root
-                - local_mods
-                - ck3raven_root
+                - local_mods_folder
+                
+        NOTE: vanilla_root and ck3raven_root no longer populated here.
+        Use paths.py constants (ROOT_GAME, ROOT_REPO) directly.
         
         Returns:
             Self for chaining
@@ -328,12 +329,8 @@ class ValidationContext:
             self.active_mod_ids = scope["active_mod_ids"]
         if scope.get("active_roots") is not None:
             self.active_roots = scope["active_roots"]
-        if scope.get("vanilla_root") is not None:
-            self.vanilla_root = scope["vanilla_root"]
         if scope.get("local_mods_folder") is not None:
             self.local_mods_folder = Path(scope["local_mods_folder"])
-        if scope.get("ck3raven_root") is not None:
-            self.ck3raven_root = Path(scope["ck3raven_root"])
         return self
     
     # with_contract REMOVED - IntentType is BANNED per CANONICAL CONTRACT SYSTEM

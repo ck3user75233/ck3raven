@@ -293,20 +293,23 @@ def run_script_sandboxed(
         }
     """
     # Validate script is in WIP via WorldAdapter
-    from ..world_router import get_world
-    from ..world_adapter import PathDomain
+    from ..world_adapter import get_world_adapter, AddressType
+    from ..paths import RootCategory
     
-    adapter = get_world(session=session)
-    if not adapter:
-        return {
-            "success": False,
-            "error": "WorldAdapter not available",
-            "output": "",
-            "audit": {},
-        }
+    adapter = get_world_adapter(
+        mode=session.mode if hasattr(session, 'mode') else "ck3lens",
+        mods=session.mods if hasattr(session, 'mods') else None,
+        local_mods_folder=session.local_mods_folder if hasattr(session, 'local_mods_folder') else None,
+    )
     
     resolution = adapter.resolve(str(script_path))
-    if not resolution.found or resolution.domain != PathDomain.WIP:
+    # WIP is ROOT_CK3RAVEN_DATA with subdirectory="wip"
+    is_wip = (
+        resolution.found and 
+        resolution.root_category == RootCategory.ROOT_CK3RAVEN_DATA and 
+        resolution.subdirectory == "wip"
+    )
+    if not resolution.found or not is_wip:
         return {
             "success": False,
             "error": f"Script must be in WIP directory: {script_path}",

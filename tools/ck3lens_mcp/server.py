@@ -95,6 +95,9 @@ from ck3lens import git_ops
 from ck3lens.validate import parse_content, validate_artifact_bundle
 from ck3lens.contracts import ArtifactBundle
 from ck3lens.trace import ToolTrace
+# Canonical path constants - use these instead of computing paths from __file__
+from ck3lens.paths import ROOT_REPO, ROOT_CK3RAVEN_DATA
+
 
 # =============================================================================
 # Policy Health Check - Validate imports at module load time
@@ -282,27 +285,18 @@ def _get_world():
     # Get session for mod paths
     session = _get_session()
     
-    # Build adapter directly - no router needed
-    wip_root = ROOT_CK3RAVEN_DATA / "wip"
-    
+    # Build adapter - all paths from paths.py constants, no legacy params
     if mode == "ck3lens":
         adapter = WorldAdapter.create(
             mode="ck3lens",
             db=None,  # DB not needed for path resolution
             mods=session.mods or [],
             local_mods_folder=session.local_mods_folder,
-            vanilla_root=ROOT_GAME,
-            ck3raven_root=ROOT_REPO,
-            wip_root=wip_root,
-            utility_roots={},
         )
     elif mode == "ck3raven-dev":
         adapter = WorldAdapter.create(
             mode="ck3raven-dev",
             db=None,
-            ck3raven_root=ROOT_REPO,
-            wip_root=wip_root,
-            vanilla_root=ROOT_GAME,
         )
     else:
         raise RuntimeError(f"Unknown agent mode: {mode}")
@@ -542,12 +536,11 @@ def _get_trace_path() -> Path:
     mode = get_agent_mode()
     
     if mode == "ck3raven-dev":
-        # Trace goes in repo's .wip folder
-        ck3raven_root = Path(__file__).parent.parent
-        trace_dir = ck3raven_root / ".wip" / "traces"
+        # Trace goes in repo's .wip folder - use ROOT_REPO from paths.py
+        trace_dir = ROOT_REPO / ".wip" / "traces"
     else:
         # Trace goes in ~/.ck3raven/traces/
-        trace_dir = Path.home() / ".ck3raven" / "traces"
+        trace_dir = ROOT_CK3RAVEN_DATA / "traces"
     
     trace_dir.mkdir(parents=True, exist_ok=True)
     return trace_dir / "ck3lens_trace.jsonl"
@@ -4608,9 +4601,8 @@ def ck3_report_validation_issue(
         "status": "open",
     }
 
-    # Write to issues file in ck3raven project folder
-    ck3raven_root = Path(__file__).parent.parent.parent
-    issues_file = ck3raven_root / "ck3lens_validation_issues.jsonl"
+    # Write to issues file in ck3raven project folder - use ROOT_REPO from paths.py
+    issues_file = ROOT_REPO / "ck3lens_validation_issues.jsonl"
     with issues_file.open("a", encoding="utf-8") as f:
         f.write(json.dumps(issue, ensure_ascii=False) + "\n")
 
@@ -4625,6 +4617,7 @@ def ck3_report_validation_issue(
         data={
             "issue_id": issue_id,
             "issues_file": str(issues_file),
+
         },
         message=f"Validation issue recorded. ID: {issue_id}. Will be reviewed in ck3raven-dev mode.",
     )
@@ -4878,15 +4871,14 @@ def _ck3_get_mode_instructions_internal(mode: str) -> dict:
     _reset_world_cache()
     
     # =========================================================================
-    # STEP 3: Load mode-specific instructions
+    # STEP 3: Load mode-specific instructions (use ROOT_REPO from paths.py)
     # =========================================================================
     mode_files = {
         "ck3lens": "COPILOT_LENS_COMPATCH.md",
         "ck3raven-dev": "COPILOT_RAVEN_DEV.md",
     }
     
-    ck3raven_root = Path(__file__).parent.parent.parent
-    instructions_path = ck3raven_root / ".github" / mode_files[mode]
+    instructions_path = ROOT_REPO / ".github" / mode_files[mode]
     
     if not instructions_path.exists():
         return {
@@ -4907,7 +4899,7 @@ def _ck3_get_mode_instructions_internal(mode: str) -> dict:
         try:
             wip_info = initialize_workspace(
                 mode=agent_mode,
-                repo_root=ck3raven_root if mode == "ck3raven-dev" else None,
+                repo_root=ROOT_REPO if mode == "ck3raven-dev" else None,
                 wipe=False  # DO NOT auto-wipe - preserve WIP contents across sessions
             )
         except Exception as e:
@@ -4922,7 +4914,7 @@ def _ck3_get_mode_instructions_internal(mode: str) -> dict:
         trace = _get_trace()
         wip_path = get_wip_workspace_path(
             agent_mode,
-            ck3raven_root if mode == "ck3raven-dev" else None
+            ROOT_REPO if mode == "ck3raven-dev" else None
         )
         trace.log("ck3lens.mode_initialized", {"mode": mode}, {
             "mode": mode,
@@ -4935,6 +4927,7 @@ def _ck3_get_mode_instructions_internal(mode: str) -> dict:
         # =====================================================================
         # Build complete response
         # =====================================================================
+
         result = {
             "mode": mode,
             "instructions": content,
@@ -5775,7 +5768,8 @@ def ck3_qbuilder(
     trace_info = get_current_trace_info()
     rb = ReplyBuilder(trace_info, tool='ck3_qbuilder')
     
-    ck3raven_root = str(Path(__file__).parent.parent.parent)
+    # Use ROOT_REPO from paths.py instead of computing from __file__
+    repo_root = str(ROOT_REPO)
     python_exe = sys.executable
     
     if command == "status":
@@ -5800,6 +5794,7 @@ def ck3_qbuilder(
                     message="Daemon not running.",
                 )
         except Exception as e:
+
             return rb.error('MCP-SYS-E-001', data={"error": str(e), "daemon_available": False}, message=str(e))
     
     elif command == "build":
@@ -5871,7 +5866,7 @@ def ck3_qbuilder(
                 # Start daemon with IPC server
                 proc = subprocess.Popen(
                     [python_exe, "-m", "qbuilder.cli", "daemon"],
-                    cwd=ck3raven_root,
+                    cwd=repo_root,
                     stdout=log_handle,
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
@@ -5883,6 +5878,7 @@ def ck3_qbuilder(
             return rb.success(
                 'MCP-SYS-S-001',
                 data={
+
                     "success": True,
                     "pid": proc.pid,
                     "log_file": str(log_file),
