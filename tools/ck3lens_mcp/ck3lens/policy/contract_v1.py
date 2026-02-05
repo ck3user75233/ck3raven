@@ -35,7 +35,81 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from .capability_matrix import AgentMode, RootCategory, Operation, validate_operations
+# RootCategory comes from canonical paths module
+from ck3lens.paths import RootCategory
+
+
+# =============================================================================
+# CONTRACT-SPECIFIC ENUMS (for audit trail, not enforcement)
+# =============================================================================
+
+class AgentMode(str, Enum):
+    """Agent modes for contracts."""
+    CK3LENS = "ck3lens"
+    CK3RAVEN_DEV = "ck3raven-dev"
+
+
+class Operation(str, Enum):
+    """
+    Operations for contract audit trail.
+    
+    These are for recording what was requested, NOT for enforcement.
+    Enforcement uses the simplified READ/WRITE/DELETE from enforcement.py.
+    """
+    READ = "READ"
+    WRITE = "WRITE"
+    DELETE = "DELETE"
+    RENAME = "RENAME"
+    EXECUTE = "EXECUTE"
+    DB_WRITE = "DB_WRITE"
+    GIT_WRITE = "GIT_WRITE"
+
+
+def validate_operations(
+    mode: AgentMode | str,
+    root: RootCategory | str,
+    operations: list[Operation | str],
+) -> tuple[bool, list[str]]:
+    """
+    Validate operations for contract opening.
+    
+    This is a simplified check - actual enforcement happens in enforcement.py.
+    For contracts, we just verify the operations are valid enum values
+    and make sense for the mode/root combination.
+    """
+    from ck3lens.capability_matrix import get_capability
+    
+    # Normalize mode
+    if isinstance(mode, str):
+        mode = AgentMode(mode)
+    if isinstance(root, str):
+        root = RootCategory(root)
+    
+    # Get capability from matrix
+    cap = get_capability(mode.value, root, None)
+    
+    denied = []
+    for op in operations:
+        op_str = op.value if isinstance(op, Operation) else op
+        
+        # Map contract operations to capability checks
+        if op_str == "READ":
+            if not cap.read:
+                denied.append(op_str)
+        elif op_str in {"WRITE", "DELETE", "RENAME", "GIT_WRITE"}:
+            if not cap.write:
+                denied.append(op_str)
+        elif op_str == "EXECUTE":
+            # EXECUTE only in WIP
+            if root != RootCategory.ROOT_CK3RAVEN_DATA:
+                denied.append(op_str)
+            elif not cap.write:
+                denied.append(op_str)
+        elif op_str == "DB_WRITE":
+            # DB_WRITE never allowed via contracts (daemon only)
+            denied.append(op_str)
+    
+    return (len(denied) == 0, denied)
 
 
 # =============================================================================

@@ -48,10 +48,6 @@ from .types import (
 from .loader import load_policy, get_policy
 from .validator import validate_policy, validate_for_mode, server_delivery_gate
 
-# DEPRECATED: tokens.py exports removed (Jan 2026)
-# The deprecated token system has been replaced by tools/compliance/tokens.py
-# Only NST (New Symbol Token) and LXE (Lint Exception Token) are canonical tokens
-
 from .wip_workspace import (
     WipWorkspaceState,
     get_workspace_state,
@@ -79,36 +75,20 @@ from .ck3lens_rules import (
 )
 
 # =============================================================================
-# Centralized Enforcement Gate (Phase 1)
+# Centralized Enforcement Gate (Clean API)
 # =============================================================================
 from .enforcement import (
     # Operation types
     OperationType,
-    TokenTier,
-    Decision as EnforcementDecision,
-    # Request/Result
-    EnforcementRequest,
+    Decision,
+    # Result type
     EnforcementResult,
-    # Branch protection
-    PROTECTED_BRANCHES,
-    is_protected_branch,
-    is_agent_branch,
     # Main enforcement function
-    enforce_policy as enforce_policy_gate,
-    log_enforcement_decision,
-    enforce_and_log,
-    # Shell command classification
-    CommandCategory,
-    SAFE_COMMANDS,
-    BLOCKED_COMMANDS,
-    TOKEN_REQUIRED_PATTERNS,
-    GIT_MODIFY_PATTERNS,
-    classify_command,
-    check_path_in_contract_scope,
+    enforce,
 )
 
 # =============================================================================
-# Structured Audit Logging (Phase 1)
+# Structured Audit Logging
 # =============================================================================
 from .audit import (
     EventCategory,
@@ -169,27 +149,12 @@ __all__ = [
     "CK3LENS_FORBIDDEN_PATHS",
     "CK3LENS_FORBIDDEN_EXTENSIONS",
     "WIP_ONLY_EXTENSIONS",
-    # Centralized Enforcement (Phase 1)
+    # Centralized Enforcement (Clean API)
     "OperationType",
-    "TokenTier",
-    "EnforcementDecision",
-    "EnforcementRequest",
+    "Decision",
     "EnforcementResult",
-    "PROTECTED_BRANCHES",
-    "is_protected_branch",
-    "is_agent_branch",
-    "enforce_policy_gate",
-    "log_enforcement_decision",
-    "enforce_and_log",
-    # Shell command classification
-    "CommandCategory",
-    "SAFE_COMMANDS",
-    "BLOCKED_COMMANDS",
-    "TOKEN_REQUIRED_PATTERNS",
-    "GIT_MODIFY_PATTERNS",
-    "classify_command",
-    "check_path_in_contract_scope",
-    # Structured Audit Logging (Phase 1)
+    "enforce",
+    # Structured Audit Logging
     "EventCategory",
     "EnforcementLogEntry",
     "AuditLogger",

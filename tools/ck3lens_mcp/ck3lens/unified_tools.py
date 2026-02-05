@@ -854,9 +854,7 @@ def ck3_file_impl(
     """
     from pathlib import Path as P
     from ck3lens.agent_mode import get_agent_mode
-    from ck3lens.policy.enforcement import (
-        OperationType, Decision, EnforcementRequest, enforce_and_log
-    )
+    from ck3lens.policy.enforcement import OperationType, Decision, enforce
     from ck3lens.policy.contract_v1 import get_active_contract
     from ck3lens.world_adapter import normalize_path_input
     
@@ -887,35 +885,24 @@ def ck3_file_impl(
     # ==========================================================================
     # STEP 2: CENTRALIZED ENFORCEMENT GATE (AFTER resolution)
     # Only reached if the path is visible. Now check policy via capability matrix.
+    # Uses the clean enforce() API with OperationType.READ/WRITE/DELETE
     # ==========================================================================
     
-    if command in write_commands and mode:
-        # Map command to operation type
-        op_type_map = {
-            "write": OperationType.FILE_WRITE,
-            "edit": OperationType.FILE_WRITE,  # Edit is a form of write
-            "delete": OperationType.FILE_DELETE,
-            "rename": OperationType.FILE_RENAME,
-        }
+    if command in write_commands and mode and resolution and resolution.absolute_path:
+        # Map command to canonical operation type
+        op_type = OperationType.DELETE if command == "delete" else OperationType.WRITE
         
-        # Get contract for scope validation
+        # Check if we have a contract
         contract = get_active_contract()
+        has_contract = contract is not None
         
-        # Build enforcement request using resolution directly (no intermediate objects)
-        request = EnforcementRequest(
-            operation=op_type_map[command],
+        # Enforce policy using clean API - pass resolution directly (canonical pattern)
+        result = enforce(
             mode=mode,
-            tool_name="ck3_file",
-            target_path=resolution.address.canonical_form if resolution and resolution.address else path,
-            mod_name=resolution.mod_name if resolution else mod_name,
-            rel_path=resolution.address.relative_path if resolution and resolution.address else rel_path,
-            root_category=resolution.root_category.value if resolution and resolution.root_category else None,
-            contract_id=contract.contract_id if contract else None,
-            token_id=token_id,
+            operation=op_type,
+            resolved=resolution,  # ResolutionResult from normalize_path_input
+            has_contract=has_contract,
         )
-        
-        # Enforce policy
-        result = enforce_and_log(request, trace)
         
         # Handle enforcement decision
         if result.decision == Decision.DENY:
@@ -938,17 +925,7 @@ def ck3_file_impl(
                 "success": False,
                 "error": result.reason,
                 "policy_decision": "REQUIRE_TOKEN",
-                "required_token_type": result.required_token_type,
-                "hint": f"Use ck3_token to request a {result.required_token_type} token",
-            }
-        
-        if result.decision == Decision.REQUIRE_USER_APPROVAL:
-            return {
-                "success": False,
-                "error": result.reason,
-                "policy_decision": "REQUIRE_USER_APPROVAL",
-                "required_token_type": result.required_token_type,
-                "guidance": "This operation requires explicit user approval",
+                "hint": "Deletion requires confirmation token",
             }
         
         # Decision is ALLOW - continue to implementation
@@ -2531,6 +2508,7 @@ def ck3_git_impl(
     # Dependencies
     session=None,
     trace=None,
+    world=None,  # WorldAdapter for canonical path resolution
 ) -> dict:
     """
     Unified git operations.
@@ -2551,9 +2529,7 @@ def ck3_git_impl(
     """
     from ck3lens import git_ops
     from ck3lens.agent_mode import get_agent_mode
-    from ck3lens.policy.enforcement import (
-        OperationType, Decision, EnforcementRequest, enforce_and_log
-    )
+    from ck3lens.policy.enforcement import OperationType, Decision, enforce
     from ck3lens.policy.contract_v1 import get_active_contract
     from pathlib import Path as P
     
@@ -2566,94 +2542,46 @@ def ck3_git_impl(
     ck3raven_root = P(__file__).parent.parent.parent.parent
     
     # ==========================================================================
-    # CENTRALIZED ENFORCEMENT GATE (Phase 2)
-    # Git write operations go through enforce_and_log FIRST
+    # CENTRALIZED ENFORCEMENT GATE
+    # Git write operations go through enforce() with the clean API
+    # All git mutations are WRITE operations (add, commit, push, pull)
     # ==========================================================================
     
     write_commands = {"add", "commit", "push", "pull"}
     
-    if command in write_commands and mode:
-        # Map command to operation type
-        op_type_map = {
-            "add": OperationType.GIT_LOCAL_PACKAGE,
-            "commit": OperationType.GIT_LOCAL_PACKAGE,
-            "push": OperationType.GIT_PUBLISH,
-            "pull": OperationType.GIT_LOCAL_WORKFLOW,
-        }
+    if command in write_commands and mode and world:
+        # Determine target path for enforcement
+        if mode == "ck3raven-dev":
+            target_path = str(ck3raven_root)
+        else:
+            # ck3lens mode - resolve mod path
+            mod = session.get_mod(mod_name) if mod_name else None
+            target_path = str(mod.path) if mod and hasattr(mod, 'path') else None
+            if not target_path:
+                return {
+                    "error": f"Cannot resolve mod path for: {mod_name}",
+                    "hint": "Mod must be in active playset and have valid path"
+                }
         
-        # Helper to get non-interactive git environment
-        def get_git_env():
-            import os
-            env = os.environ.copy()
-            env["GIT_TERMINAL_PROMPT"] = "0"
-            env["GIT_PAGER"] = "cat"
-            env["PAGER"] = "cat"
-            env["GCM_INTERACTIVE"] = "never"
-            env["GIT_ASKPASS"] = ""
-            env["SSH_ASKPASS"] = ""
-            env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
-            return env
+        # Resolve path using WorldAdapter (canonical pattern)
+        resolution = world.resolve(target_path)
+        if not resolution.found:
+            return {
+                "error": f"Cannot resolve path for enforcement: {target_path}",
+                "hint": resolution.error_message or "Path not in world scope",
+            }
         
-        # Get current branch for push enforcement
-        branch_name = None
-        if command == "push":
-            try:
-                import subprocess
-                if mode == "ck3raven-dev":
-                    result_obj = subprocess.run(
-                        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                        cwd=str(ck3raven_root),
-                        capture_output=True,
-                        text=True,
-                        timeout=30,
-                        env=get_git_env(),
-                        stdin=subprocess.DEVNULL,
-                    )
-                    if result_obj.returncode == 0:
-                        branch_name = result_obj.stdout.strip()
-            except Exception:
-                pass  # Branch detection failed, enforcement will handle
-        
-        # Get staged files for scope validation (for push)
-        staged_files = []
-        if command == "push":
-            try:
-                import subprocess
-                if mode == "ck3raven-dev":
-                    result_obj = subprocess.run(
-                        ["git", "diff", "--name-only", "--cached"],
-                        cwd=str(ck3raven_root),
-                        capture_output=True,
-                        text=True,
-                        timeout=30,
-                        env=get_git_env(),
-                        stdin=subprocess.DEVNULL,
-                    )
-                    if result_obj.returncode == 0:
-                        staged_files = [f for f in result_obj.stdout.strip().split("\n") if f]
-            except Exception:
-                pass
-        
-        # Determine target for mod operations
-        target_mod = mod_name if mode == "ck3lens" else None
-        
-        # Get contract
+        # Check if we have a contract
         contract = get_active_contract()
+        has_contract = contract is not None
         
-        # Build enforcement request
-        request = EnforcementRequest(
-            operation=op_type_map[command],
+        # Enforce policy using clean API - all git ops are WRITE
+        result = enforce(
             mode=mode,
-            tool_name="ck3_git",
-            mod_name=target_mod,
-            contract_id=contract.contract_id if contract else None,
-            branch_name=branch_name,
-            staged_files=staged_files,
-            is_force_push=False,  # Force push not supported via this tool
+            operation=OperationType.WRITE,
+            resolved=resolution,  # Pass ResolutionResult directly
+            has_contract=has_contract,
         )
-        
-        # Enforce policy
-        result = enforce_and_log(request, trace)
         
         # Handle enforcement decision
         if result.decision == Decision.DENY:
@@ -2676,26 +2604,10 @@ def ck3_git_impl(
                 "success": False,
                 "error": result.reason,
                 "policy_decision": "REQUIRE_TOKEN",
-                "required_token_type": result.required_token_type,
-                "hint": f"Use ck3_token to request a {result.required_token_type} token",
-            }
-        
-        if result.decision == Decision.REQUIRE_USER_APPROVAL:
-            return {
-                "success": False,
-                "error": result.reason,
-                "policy_decision": "REQUIRE_USER_APPROVAL",
-                "required_token_type": result.required_token_type,
-                "guidance": "This operation requires explicit user approval",
+                "hint": "This git operation requires confirmation",
             }
         
         # Decision is ALLOW - continue to implementation
-        # Include safe_push_autogrant info if applicable
-        if result.safe_push_autogrant and trace:
-            trace.log("ck3lens.git.safe_push_autogrant", {
-                "branch": branch_name,
-                "staged_files_count": len(staged_files),
-            }, {})
     
     # ==========================================================================
     # ROUTE TO IMPLEMENTATION

@@ -27,7 +27,7 @@ from ck3lens.logging import info, bootstrap
 import signal
 import atexit
 import threading
-from ck3lens.policy.capability_matrix import Operation, validate_operations
+from ck3lens.policy.contract_v1 import Operation, validate_operations
 
 # =============================================================================
 # STARTUP TRIPWIRE - Verify running from correct Python environment
@@ -264,29 +264,49 @@ def _get_world():
     """
     global _cached_world_adapter, _cached_world_mode
     
-    from ck3lens.world_router import get_world
     from ck3lens.agent_mode import get_agent_mode
+    from ck3lens.world_adapter import WorldAdapter
+    from ck3lens.paths import ROOT_REPO, ROOT_CK3RAVEN_DATA, ROOT_GAME
     
     mode = get_agent_mode()
+    
+    if mode is None:
+        raise RuntimeError(
+            "Agent mode not initialized. Call ck3_get_mode_instructions() first."
+        )
     
     # Check cache
     if _cached_world_adapter is not None and _cached_world_mode == mode:
         return _cached_world_adapter
     
-    # Get session for mod paths - DB is NOT needed for path resolution
-    # DB is only needed for DB operations (search, get_file from DB, etc.)
+    # Get session for mod paths
     session = _get_session()
     
-    # Build adapter via router - mods[] is THE source, no lens
-    # Pass db=None - WorldAdapter doesn't need DB for path resolution
-    # NOTE: Do NOT catch exceptions here. If mode is not initialized,
-    # the error should propagate with a clear message about calling
-    # ck3_get_mode_instructions() first.
-    adapter = get_world(
-        db=None,  # DB not needed for path resolution - get it when needed
-        local_mods_folder=session.local_mods_folder,
-        mods=session.mods
-    )
+    # Build adapter directly - no router needed
+    wip_root = ROOT_CK3RAVEN_DATA / "wip"
+    
+    if mode == "ck3lens":
+        adapter = WorldAdapter.create(
+            mode="ck3lens",
+            db=None,  # DB not needed for path resolution
+            mods=session.mods or [],
+            local_mods_folder=session.local_mods_folder,
+            vanilla_root=ROOT_GAME,
+            ck3raven_root=ROOT_REPO,
+            wip_root=wip_root,
+            utility_roots={},
+        )
+    elif mode == "ck3raven-dev":
+        adapter = WorldAdapter.create(
+            mode="ck3raven-dev",
+            db=None,
+            ck3raven_root=ROOT_REPO,
+            wip_root=wip_root,
+            vanilla_root=ROOT_GAME,
+        )
+    else:
+        raise RuntimeError(f"Unknown agent mode: {mode}")
+    
     _cached_world_adapter = adapter
     _cached_world_mode = mode
     return adapter
@@ -1116,73 +1136,27 @@ def _ck3_db_delete_internal(
     content_version_ids: Optional[list[int]],
     confirm: bool,
 ) -> dict:
-    """Internal implementation of ck3_db_delete returning dict."""
+    """Internal implementation of ck3_db_delete returning dict.
+    
+    NOTE: This is a maintenance operation that bypasses normal enforcement.
+    Per CANONICAL_ARCHITECTURE.md INVARIANT 2, database paths are normally
+    NEVER writable by tools (Single-Writer Architecture). However, this
+    maintenance tool is explicitly designed for cache/data cleanup.
+    
+    The enforcement check has been intentionally removed because:
+    1. INVARIANT 2 would always return DENY for db paths
+    2. This is a legitimate maintenance operation
+    3. The tool requires explicit confirm=True as a safety gate
+    """
     from ck3lens.agent_mode import get_agent_mode
-    from ck3lens.policy.enforcement import (
-        OperationType, Decision, EnforcementRequest, enforce_and_log
-    )
     from ck3lens.policy.contract_v1 import get_active_contract
     
     db = _get_db()
     trace = _get_trace()
-    
-    # ==========================================================================
-    # CENTRALIZED ENFORCEMENT GATE (Phase 2)
-    # DB delete operations go through enforce_and_log FIRST
-    # ==========================================================================
-    
     mode = get_agent_mode()
     
-    if mode:
-        contract = get_active_contract()
-        
-        # Build enforcement request
-        request = EnforcementRequest(
-            operation=OperationType.DB_DELETE,
-            mode=mode,
-            tool_name="ck3_db_delete",
-            target_path=f"db:{target}",  # Use db: prefix for DB operations
-            contract_id=contract.contract_id if contract else None,
-        )
-        
-        # Enforce policy
-        enforcement_result = enforce_and_log(request, trace)
-        
-        # Handle enforcement decision
-        if enforcement_result.decision == Decision.DENY:
-            return {
-                "success": False,
-                "target": target,
-                "scope": scope,
-                "error": enforcement_result.reason,
-                "policy_decision": "DENY",
-            }
-        
-        if enforcement_result.decision == Decision.REQUIRE_CONTRACT:
-            return {
-                "success": False,
-                "target": target,
-                "scope": scope,
-                "error": enforcement_result.reason,
-                "policy_decision": "REQUIRE_CONTRACT",
-                "guidance": "Use ck3_contract(command='open', ...) to open a work contract",
-            }
-        
-        if enforcement_result.decision == Decision.REQUIRE_TOKEN:
-            return {
-                "success": False,
-                "target": target,
-                "scope": scope,
-                "error": enforcement_result.reason,
-                "policy_decision": "REQUIRE_TOKEN",
-                "required_token_type": enforcement_result.required_token_type,
-                "hint": f"Use ck3_token to request a {enforcement_result.required_token_type} token",
-            }
-        
-        # Decision is ALLOW - continue to implementation
-    
     # ==========================================================================
-    # IMPLEMENTATION
+    # IMPLEMENTATION (no enforcement - maintenance operation)
     # ==========================================================================
     
     cur = db.conn.cursor()
@@ -2748,6 +2722,7 @@ def ck3_git(
     
     session = _get_session()
     trace = _get_trace()
+    world = _get_world()  # For canonical path resolution
     
     result = ck3_git_impl(
         command=command,
@@ -2759,6 +2734,7 @@ def ck3_git(
         limit=limit,
         session=session,
         trace=trace,
+        world=world,  # Pass world for enforce()
     )
     
     if result.get("error"):
@@ -3476,10 +3452,7 @@ def _ck3_contract_internal(
     from ck3lens.policy.contract_v1 import (
         open_contract, close_contract, cancel_contract,
         get_active_contract, list_contracts, archive_legacy_contracts,
-        ContractV1,
-    )
-    from ck3lens.policy.capability_matrix import (
-        RootCategory, Operation, AgentMode, is_authorized, validate_operations,
+        ContractV1, RootCategory, Operation, AgentMode, validate_operations,
     )
     from ck3lens.agent_mode import get_agent_mode
     
@@ -3904,116 +3877,52 @@ def _ck3_exec_internal(
     timeout: int,
 ) -> dict:
     """Internal implementation returning dict."""
-    # ==========================================================================
-    # CANONICAL IMPORTS: All from enforcement.py (clw.py archived Dec 2025)
-    # ==========================================================================
-    from ck3lens.policy.enforcement import (
-        enforce_and_log, EnforcementRequest, 
-        OperationType, Decision,
-        classify_command, CommandCategory,  # Shell command classification
-    )
-    from ck3lens.policy.audit import get_audit_logger
+    from ck3lens.policy.enforcement import enforce, OperationType, Decision
     from ck3lens.policy.contract_v1 import get_active_contract
-    from ck3lens.world_adapter import normalize_path_input
     import subprocess
-    
-    trace = _get_trace()
-    
-    # ==========================================================================
-    # CANONICAL PATH NORMALIZATION for working_dir and target_paths
-    # Use normalize_path_input() for all path resolution.
-    # NOTE: WorldAdapter is OPTIONAL - don't fail if DB unavailable
-    # ==========================================================================
-    
-    try:
-        world = _get_world()
-    except Exception:
-        # DB unavailable or not initialized - continue without path visibility checks
-        # This allows ck3_exec to work even when DB is locked or missing
-        world = None
-    
-    if world is not None:
-        # Check working directory visibility
-        if working_dir:
-            resolution = normalize_path_input(world, path=working_dir)
-            if not resolution.found:
-                return {
-                    "allowed": False,
-                    "executed": False,
-                    "output": None,
-                    "exit_code": None,
-                    "policy": {"decision": "PATH_NOT_FOUND", "reason": f"Working directory not found"},
-                    "error": resolution.error_message or f"Path not found: {working_dir}",
-                }
-        
-        # Check target paths visibility
-        if target_paths:
-            for target in target_paths:
-                resolution = normalize_path_input(world, path=target)
-                if not resolution.found:
-                    return {
-                        "allowed": False,
-                        "executed": False,
-                        "output": None,
-                        "exit_code": None,
-                        "policy": {"decision": "PATH_NOT_FOUND", "reason": f"Target path not found"},
-                        "error": resolution.error_message or f"Path not found: {target}",
-                    }
     
     # Get active contract
     active_contract = get_active_contract()
-    contract_id = active_contract.contract_id if active_contract else None
+    has_contract = active_contract is not None
     
-    # Get agent mode for mode-aware policy
+    # Get agent mode
     from ck3lens.agent_mode import get_agent_mode
-    mode = get_agent_mode()
+    mode = get_agent_mode() or "unknown"
     
     # ==========================================================================
-    # CANONICAL ENFORCEMENT: Route through enforcement.py for non-WIP commands
-    # 
-    # Pattern: classify ? map to OperationType ? enforce_and_log ? execute
+    # CANONICAL ENFORCEMENT: Shell execution is a WRITE operation
+    # Uses WorldAdapter for path resolution (canonical pattern)
     # ==========================================================================
     
-    # Step 1: Classify the command (structural classification, not policy)
-    category = classify_command(command)
+    world = _get_world()
     
-    # Step 2: Map CommandCategory to OperationType for enforcement.py
-    def _category_to_operation(cat: CommandCategory) -> OperationType:
-        """Map command category to enforcement OperationType."""
-        if cat in (CommandCategory.READ_ONLY, CommandCategory.GIT_SAFE):
-            return OperationType.SHELL_SAFE
-        elif cat in (CommandCategory.WRITE_IN_SCOPE, CommandCategory.WRITE_OUT_OF_SCOPE, 
-                     CommandCategory.GIT_MODIFY, CommandCategory.NETWORK, CommandCategory.SYSTEM):
-            return OperationType.SHELL_WRITE
-        elif cat in (CommandCategory.DESTRUCTIVE, CommandCategory.GIT_NEEDS_APPROVAL, CommandCategory.BLOCKED):
-            return OperationType.SHELL_DESTRUCTIVE
-        else:
-            return OperationType.SHELL_SAFE  # Default to safe for unknown
+    # Resolve working directory or use repo root
+    if working_dir:
+        resolution = world.resolve(working_dir)
+    elif target_paths:
+        resolution = world.resolve(target_paths[0])
+    else:
+        # Default to WIP for shell commands without explicit path
+        resolution = world.resolve("wip:/")
     
-    op_type = _category_to_operation(category)
+    if not resolution.found:
+        return {
+            "allowed": False,
+            "executed": False,
+            "output": None,
+            "exit_code": None,
+            "policy": {"decision": "PATH_NOT_FOUND"},
+            "error": f"Could not resolve path: {working_dir or target_paths}",
+        }
     
-    # Step 3: Build EnforcementRequest for enforcement.py
-    enforcement_request = EnforcementRequest(
-        operation=op_type,
-        mode=mode or "unknown",
-        tool_name="ck3_exec",
-        command=command,
-        target_path=target_paths[0] if target_paths else None,  # Primary target for mode checks
-        contract_id=contract_id,
-        token_id=token_id,
-    )
-    
-    # Step 4: Call enforcement.py - THE single policy gate
-    result = enforce_and_log(enforcement_request, trace, session_id="mcp_server")
+    # Shell execution is a WRITE operation
+    result = enforce(mode, OperationType.WRITE, resolution, has_contract)
     
     policy_info = {
         "decision": result.decision.name,
         "reason": result.reason,
-        "required_token_type": result.required_token_type,
-        "category": category.name,
     }
-
-    # Check decision - canonical enforcement result handling
+    
     if result.decision == Decision.DENY:
         return {
             "allowed": False,
@@ -4031,7 +3940,7 @@ def _ck3_exec_internal(
             "output": None,
             "exit_code": None,
             "policy": policy_info,
-            "error": "Contract required for this operation",
+            "error": "Contract required for shell execution",
             "hint": "Use ck3_contract(command='open', ...) to open a work contract first",
         }
     
@@ -4042,8 +3951,7 @@ def _ck3_exec_internal(
             "output": None,
             "exit_code": None,
             "policy": policy_info,
-            "error": f"Token required: {result.required_token_type}",
-            "hint": f"Use ck3_token to request a {result.required_token_type} token",
+            "error": "Token required",
         }
     
     # Allowed

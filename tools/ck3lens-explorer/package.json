@@ -40,7 +40,7 @@
     ],
     "mcpServerDefinitionProviders": [
       {
-        "id": "ck3lens",
+        "id": "ck3lens-mcp",
         "label": "CK3 Lens MCP Server"
       }
     ],

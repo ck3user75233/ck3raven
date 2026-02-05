@@ -293,7 +293,7 @@ ENFORCEMENT_CALLER_ALLOWLIST: list[str] = [
     "policy/enforcement.py",
     "unified_tools.py",
     "server.py",
-    "script_sandbox.py",
+    # script_sandbox.py archived - was never completed
     "tests/",
     "test_",
     "tools/lint/",

@@ -118,48 +118,63 @@ class SandboxedIO:
     
     def _resolve_and_check_read(self, path: Path) -> Path:
         """
-        Check if path is readable via WorldAdapter.is_visible().
+        Check if path is readable via paths.resolve() + capability check.
         
         Returns resolved path if allowed, raises FileNotFoundError if not.
         """
-        from ..world_router import get_world
+        from .. import paths as paths_module
+        from ..capability_matrix import get_capability, RootCategory
         
         path_str = str(path)
         self.ctx.reads_attempted.append(path_str)
         
-        # Check via WorldAdapter.is_visible() - handles WIP, mods, vanilla
-        # WorldAdapter handles path resolution internally
-        adapter = get_world(session=self.ctx.session)
-        if adapter and adapter.is_visible(path_str):
+        # Use new paths.resolve() for path classification
+        resolved = paths_module.resolve(path_str)
+        
+        if resolved is None:
+            self.ctx.reads_denied.append(path_str)
+            raise FileNotFoundError(f"[Sandbox] Path not in any known root: {path}")
+        
+        # Check read capability for this root
+        cap = get_capability("ck3lens", resolved.root, resolved.subdirectory)
+        
+        if cap and cap.read:
             self.ctx.reads_allowed.append(path_str)
             return path
         
         self.ctx.reads_denied.append(path_str)
-        raise FileNotFoundError(f"[Sandbox] Path not visible in LensWorld: {path}")
+        raise FileNotFoundError(f"[Sandbox] Path not readable in ck3lens mode: {path}")
     
     def _check_write(self, path: Path) -> bool:
         """
-        Check if write is allowed via enforcement.enforce_policy().
+        Check if write is allowed via enforcement.enforce().
         
         Returns True if allowed, raises PermissionError if not.
         Enforcement handles WIP, local mods, etc. - no shortcuts here.
         """
-        from ..policy.enforcement import (
-            enforce_policy, EnforcementRequest, OperationType, Decision
-        )
+        from .. import paths as paths_module
+        from ..policy.enforcement import enforce, OperationType, Decision
         
-        path_str = str(path)  # Enforcement handles path normalization
+        path_str = str(path)
         self.ctx.writes_attempted.append(path_str)
         
-        # Delegate to enforcement - it handles WIP, mods, etc.
-        result = enforce_policy(EnforcementRequest(
-            operation=OperationType.FILE_WRITE,
+        # Resolve path first
+        resolved = paths_module.resolve(path_str)
+        
+        if resolved is None:
+            self.ctx.writes_denied.append(path_str)
+            raise PermissionError(f"[Sandbox] Path not in any known root: {path}")
+        
+        # Check if contract is active
+        has_contract = self.ctx.contract_id is not None
+        
+        # Delegate to new enforcement.enforce()
+        result = enforce(
             mode="ck3lens",
-            tool_name="sandbox_script",
-            target_path=path_str,
-            contract_id=self.ctx.contract_id,
-            token_id=self.ctx.token_id,
-        ))
+            operation=OperationType.WRITE,
+            resolved=resolved,
+            has_contract=has_contract,
+        )
         
         if result.decision == Decision.ALLOW:
             self.ctx.writes_allowed.append(path_str)
@@ -187,16 +202,22 @@ class SandboxedIO:
     
     def sandboxed_exists(self, path) -> bool:
         """Intercepted os.path.exists() - only visible paths exist."""
-        from ..world_router import get_world
+        from .. import paths as paths_module
+        from ..capability_matrix import get_capability
         
-        # WorldAdapter handles path resolution internally
         path_str = str(path)
         
-        # Check via WorldAdapter.is_visible() - handles WIP, mods, vanilla
-        adapter = get_world(session=self.ctx.session)
+        # Use paths.resolve() to check if path is in a known root
+        resolved = paths_module.resolve(path_str)
         
-        if not adapter or not adapter.is_visible(path_str):
-            return False  # Not in LensWorld = doesn't exist
+        if resolved is None:
+            return False  # Not in any known root = doesn't exist
+        
+        # Check read capability for this root
+        cap = get_capability("ck3lens", resolved.root, resolved.subdirectory)
+        
+        if not cap or not cap.read:
+            return False  # Not readable = doesn't exist for sandbox
         
         return self._original_exists(path)
     
