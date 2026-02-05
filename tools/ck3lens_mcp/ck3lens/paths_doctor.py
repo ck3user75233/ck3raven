@@ -182,14 +182,24 @@ def _check_computed_roots() -> list[DoctorFinding]:
     
     findings = []
     
-    # ROOT_REPO (computed from __file__)
-    if not ROOT_REPO.exists():
+    # ROOT_REPO (from config - NOT computed from __file__)
+    # For ck3lens mode: WARN if not configured
+    # For ck3raven-dev mode: ERROR if not configured
+    if ROOT_REPO is None:
+        findings.append(DoctorFinding(
+            id="PD-REPO-NOTCONFIGURED",
+            severity="WARN",  # WARN for ck3lens (optional), ERROR would be for ck3raven-dev
+            subject="ROOT_REPO",
+            message="ROOT_REPO is not configured in workspace.toml",
+            remediation="Set repo_path in ~/.ck3raven/config/workspace.toml to the ck3raven source directory"
+        ))
+    elif not ROOT_REPO.exists():
         findings.append(DoctorFinding(
             id="PD-REPO-NOTFOUND",
             severity="ERROR",
             subject="ROOT_REPO",
             message=f"ROOT_REPO does not exist: {ROOT_REPO}",
-            remediation="This indicates paths.py is not in expected location relative to repo root"
+            remediation="Verify repo_path in workspace.toml points to ck3raven source directory"
         ))
     elif not ROOT_REPO.is_dir():
         findings.append(DoctorFinding(
@@ -197,7 +207,7 @@ def _check_computed_roots() -> list[DoctorFinding]:
             severity="ERROR",
             subject="ROOT_REPO",
             message=f"ROOT_REPO is not a directory: {ROOT_REPO}",
-            remediation="Something is very wrong with paths.py location"
+            remediation="repo_path must be a directory, not a file"
         ))
     else:
         # Verify it looks like a repo (has pyproject.toml)
@@ -215,7 +225,7 @@ def _check_computed_roots() -> list[DoctorFinding]:
                 severity="WARN",
                 subject="ROOT_REPO",
                 message=f"ROOT_REPO exists but has no pyproject.toml: {ROOT_REPO}",
-                remediation="ROOT_REPO may be pointing to wrong directory"
+                remediation="repo_path may be pointing to wrong directory"
             ))
     
     # ROOT_CK3RAVEN_DATA (always ~/.ck3raven)
@@ -430,12 +440,13 @@ def _check_resolution() -> list[DoctorFinding]:
         (str(WIP_DIR / "doctor_probe.txt"), RootCategory.ROOT_CK3RAVEN_DATA, "WIP path"),
     ]
     
-    # Only test repo if it exists
-    repo_test_file = ROOT_REPO / "pyproject.toml"
-    if repo_test_file.exists():
-        test_cases.append(
-            (str(repo_test_file), RootCategory.ROOT_REPO, "Repo path")
-        )
+    # Only test repo if it's configured and exists
+    if ROOT_REPO is not None:
+        repo_test_file = ROOT_REPO / "pyproject.toml"
+        if repo_test_file.exists():
+            test_cases.append(
+                (str(repo_test_file), RootCategory.ROOT_REPO, "Repo path")
+            )
     
     # Only test local mods if configured and exists
     if LOCAL_MODS_FOLDER and LOCAL_MODS_FOLDER.exists():

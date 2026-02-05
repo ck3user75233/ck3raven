@@ -228,11 +228,24 @@ def enforce(
                 reason=f"Delete not permitted for ({mode}, {resolved.root_category.name})",
             )
         
-        # All deletes require token
+        # WIP workspace: no contract required (same as write)
+        if resolved.root_category == RootCategory.ROOT_CK3RAVEN_DATA and resolved.subdirectory == "wip":
+            return EnforcementResult(
+                decision=Decision.ALLOW,
+                reason="Delete in WIP allowed (no contract required)",
+            )
+        
+        # All other deletes require contract (same as write)
+        if not has_contract:
+            return EnforcementResult(
+                decision=Decision.REQUIRE_CONTRACT,
+                reason=f"Delete from {resolved.root_category.name} requires contract",
+                requires_contract=True,
+            )
+        
         return EnforcementResult(
-            decision=Decision.REQUIRE_TOKEN,
-            reason="Delete requires confirmation token",
-            requires_token=True,
+            decision=Decision.ALLOW,
+            reason="Delete allowed with contract",
         )
     
     # Unknown

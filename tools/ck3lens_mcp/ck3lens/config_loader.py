@@ -29,6 +29,9 @@ except ImportError:
 class PathsConfig:
     """Parsed paths configuration with source tracking."""
 
+    # ck3raven repository root (REQUIRED for ck3raven-dev mode)
+    root_repo: Path | None = None
+    
     game_path: Path | None = None
     workshop_path: Path | None = None
     user_docs_path: Path | None = None
@@ -76,6 +79,8 @@ def _get_os_defaults() -> dict[str, Path]:
 
     These are FALLBACKS only. When used, paths_doctor warns.
     They are NOT "baked into code as authority."
+    
+    NOTE: repo_path has NO default - it MUST be configured.
     """
     home = Path.home()
 
@@ -168,7 +173,10 @@ def load_config() -> WorkspaceConfig:
             )
         return None
 
-    # Load all paths
+    # Load root_repo - NO DEFAULT, must be configured for ck3raven-dev
+    config.paths.root_repo = load_path("root_repo", required=False)
+    
+    # Load all other paths
     config.paths.game_path = load_path("game_path", required=False)
     config.paths.workshop_path = load_path("workshop_path", required=False)
     config.paths.user_docs_path = load_path("user_docs_path")
@@ -200,6 +208,9 @@ def load_config() -> WorkspaceConfig:
 
 def _apply_all_defaults(config: WorkspaceConfig, os_defaults: dict[str, Path]) -> None:
     """Apply all OS-defaults when config can't be loaded."""
+    # root_repo has NO default - it stays None
+    config.paths.root_repo = None
+    
     config.paths.user_docs_path = os_defaults.get("user_docs_path")
     config.paths.utilities_path = os_defaults.get("utilities_path")
     config.paths.launcher_path = os_defaults.get("launcher_path")
@@ -235,6 +246,10 @@ def create_default_config() -> Path:
 # and paths_doctor will warn about each default being used.
 
 [paths]
+# REQUIRED for ck3raven-dev mode - path to ck3raven repository
+# This is auto-detected on first run if running from source.
+# root_repo = ""
+
 # Required - path to CK3 game installation
 game_path = ""
 

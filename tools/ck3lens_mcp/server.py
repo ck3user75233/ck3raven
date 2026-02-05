@@ -75,13 +75,56 @@ _verify_python_environment()
 
 from mcp.server.fastmcp import FastMCP
 
-# Add ck3raven to path BEFORE importing from it
-CK3RAVEN_ROOT = Path(__file__).parent.parent.parent / "src"
-if CK3RAVEN_ROOT.exists():
-    sys.path.insert(0, str(CK3RAVEN_ROOT))
+# =============================================================================
+# PYTHON PATH BOOTSTRAP
+# =============================================================================
+# ck3raven.core lives in ROOT_REPO/src/ck3raven/core/ - we need to add src/ to sys.path.
+#
+# ROOT_REPO comes from config. If not configured, FAIL LOUDLY.
+# No fallbacks, no __file__ computation (breaks in venvs).
+#
+def _setup_ck3raven_import_path() -> None:
+    """Set up sys.path to enable imports from ck3raven.core."""
+    from ck3lens.config_loader import load_config
+    config = load_config()
+    root_repo = config.paths.root_repo
+    
+    if root_repo is None:
+        print("=" * 70, file=sys.stderr)
+        print("FATAL: root_repo not configured in workspace.toml", file=sys.stderr)
+        print("=" * 70, file=sys.stderr)
+        print("", file=sys.stderr)
+        print("Run: python -m ck3lens.paths_doctor", file=sys.stderr)
+        print("Or add to ~/.ck3raven/config/workspace.toml:", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("  [paths]", file=sys.stderr)
+        print('  root_repo = "C:/path/to/ck3raven"', file=sys.stderr)
+        print("", file=sys.stderr)
+        print("=" * 70, file=sys.stderr)
+        sys.exit(1)
+    
+    if not root_repo.exists():
+        print("=" * 70, file=sys.stderr)
+        print(f"FATAL: root_repo does not exist: {root_repo}", file=sys.stderr)
+        print("=" * 70, file=sys.stderr)
+        print("Fix root_repo in ~/.ck3raven/config/workspace.toml", file=sys.stderr)
+        sys.exit(1)
+    
+    src_path = root_repo / "src"
+    if not src_path.exists():
+        print("=" * 70, file=sys.stderr)
+        print(f"FATAL: src/ not found in root_repo: {src_path}", file=sys.stderr)
+        print("=" * 70, file=sys.stderr)
+        print("Verify root_repo points to ck3raven repository root", file=sys.stderr)
+        sys.exit(1)
+    
+    if str(src_path) not in sys.path:
+        sys.path.insert(0, str(src_path))
+
+_setup_ck3raven_import_path()
 
 # Canonical Reply System (Phase C migration)
-# NOTE: Must be after path setup since ck3raven.core is in src/
+# NOTE: Must be after path setup since ck3raven.core is in ROOT_REPO/src/
 from ck3raven.core.reply import Reply, TraceInfo, MetaInfo
 from ck3raven.core.trace import generate_trace_id, get_or_create_session_id
 from .safety import mcp_safe_tool, ReplyBuilder, get_current_trace_info, initialize_window_trace

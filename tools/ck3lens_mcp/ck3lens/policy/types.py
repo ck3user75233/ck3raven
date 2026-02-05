@@ -5,7 +5,7 @@ Core data types for the agent policy validation system.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
-from enum import Enum, auto
+from enum import Enum
 from typing import Any, Optional
 from pathlib import Path
 
@@ -24,98 +24,7 @@ class AgentMode(str, Enum):
 
 
 # =============================================================================
-# CK3LENS SCOPE DOMAINS (From CK3LENS_POLICY_ARCHITECTURE.md)
-# =============================================================================
-
-class ScopeDomain(str, Enum):
-    """
-    Structural domains for ck3lens mode.
-    
-    These are purely structural classifications - NOT permission decisions.
-    Enforcement.py makes all allow/deny decisions at execution time.
-    
-    For mod files, there is just mods[] - no categories or qualifiers.
-    """
-    PLAYSET_DB = "playset_db"  # Indexed content from active playset
-    VANILLA_GAME = "vanilla_game"
-    CK3_UTILITY_FILES = "ck3_utility_files"
-    CK3RAVEN_SOURCE = "ck3raven_source"
-    WIP_WORKSPACE = "wip_workspace"
-    LAUNCHER_REGISTRY = "launcher_registry"
-
-
-# IntentType REMOVED - BANNED per CANONICAL CONTRACT SYSTEM
-# Authorization is based solely on root_category, not intent semantics
-# See contract_v1.py for the canonical contract schema
-
-
-# AcceptanceTest REMOVED - Part of legacy contract schema
-# Contract V1 uses work_declaration for audit, not acceptance tests
-
-
-# =============================================================================
-# TOKEN TYPES
-# =============================================================================
-# DEPRECATED: Token types have been moved to the canonical system.
-# See tools/compliance/tokens.py for canonical NST/LXE tokens.
-# The deprecated token types below are kept as comments for reference during migration.
-#
-# CK3LensTokenType (deprecated):
-#   DELETE_LOCALMOD, READ_INACTIVE_MOD, REGISTRY_REPAIR, CACHE_DELETE, SCRIPT_EXECUTE
-#
-# Ck3RavenDevTokenType (deprecated):
-#   TEST_EXECUTE, SCRIPT_RUN_WIP, READ_SAFE (Tier A)
-#   DELETE_SOURCE, GIT_PUSH, GIT_FORCE_PUSH, GIT_HISTORY_REWRITE, DB_MIGRATION_DESTRUCTIVE (Tier B)
-#
-# All operations that previously required deprecated tokens now use:
-# - Active contract for write operations
-# - token_id parameter for explicit confirmation (any value)
-# - Phase 2 will implement proper approval flows
-
-
-# =============================================================================
-# CK3RAVEN-DEV SCOPE DOMAINS (From CK3RAVEN_DEV_POLICY_ARCHITECTURE.md)
-# =============================================================================
-
-class Ck3RavenDevScopeDomain(str, Enum):
-    """
-    Scope domains for ck3raven-dev mode access control.
-    
-    ck3raven-dev is for infrastructure development of the CK3 Lens tooling itself.
-    It has NO write access to any mod files (absolute prohibition).
-    """
-    # Infrastructure source code (primary working area)
-    CK3RAVEN_SOURCE = "ck3raven_source"              # Full read/write for code
-    CK3LENS_MCP_SOURCE = "ck3lens_mcp_source"        # Full read/write for MCP tools
-    CK3LENS_EXPLORER_SOURCE = "ck3lens_explorer_source"  # Full read/write for VS Code ext
-    
-    # Mod filesystem access (read-only for parser/ingestion development)
-    MOD_FILESYSTEM = "mod_filesystem"                # Read-only (parser testing)
-    VANILLA_FILESYSTEM = "vanilla_filesystem"        # Read-only (parser testing)
-    
-    # Database (write with migration requirements)
-    CK3RAVEN_DATABASE = "ck3raven_database"          # Read + write (migration context required)
-    
-    # WIP workspace (strictly constrained, repo-local)
-    WIP_WORKSPACE = "wip_workspace"                  # <repo>/.wip/ - analysis/staging only
-    
-    # System logs and debug info
-    CK3_UTILITY_FILES = "ck3_utility_files"          # Read-only (logs, saves, debug)
-
-
-# Ck3RavenDevIntentType REMOVED - BANNED per CANONICAL CONTRACT SYSTEM
-# Authorization is based solely on root_category, not intent semantics
-# Intent is declared as free-text in work_declaration (for audit only)
-
-# Ck3RavenDevWipIntent REMOVED - BANNED per Phase 1 cleanup (January 2026)
-# WIP workspace constraints are documented in policy, not enforced via enum
-
-# Ck3RavenDevTokenType REMOVED - DEPRECATED January 2026
-# See tools/compliance/tokens.py for canonical NST/LXE tokens
-
-
-# =============================================================================
-# CK3RAVEN-DEV GIT COMMAND CLASSIFICATION
+# GIT COMMAND CLASSIFICATION
 # =============================================================================
 
 # Safe git commands (always allowed - per policy doc Section 9)
@@ -148,28 +57,27 @@ GIT_COMMANDS_NEEDS_APPROVAL = frozenset({
 
 
 # =============================================================================
-# WIP WORKSPACE (Common + Mode-Specific)
+# WIP WORKSPACE
 # =============================================================================
 
-def get_wip_workspace_path(mode: AgentMode = AgentMode.CK3LENS, repo_root: Path | None = None) -> Path:
+def get_wip_workspace_path(mode: AgentMode = AgentMode.CK3LENS) -> Path:
     """
     Get the WIP workspace path for the specified mode.
     
     ck3lens mode:       ~/.ck3raven/wip/  (general purpose)
-    ck3raven-dev mode:  <repo>/.wip/      (strictly constrained)
+    ck3raven-dev mode:  Uses ROOT_REPO/.wip/ via paths.py
     
     Args:
         mode: Agent mode to get WIP path for
-        repo_root: Repository root (required for ck3raven-dev mode)
     
     Returns:
         Path to WIP workspace directory
     """
     if mode == AgentMode.CK3RAVEN_DEV:
-        if repo_root is None:
-            # Default to finding the repo root from this file's location
-            repo_root = Path(__file__).parents[5]  # Up from policy/types.py to ck3raven root
-        return repo_root / ".wip"
+        from ..paths import ROOT_REPO
+        if ROOT_REPO is None:
+            raise RuntimeError("ROOT_REPO not configured - run paths_doctor")
+        return ROOT_REPO / ".wip"
     else:
         return Path.home() / ".ck3raven" / "wip"
 
@@ -179,7 +87,7 @@ def get_ck3lens_wip_path() -> Path:
     return Path.home() / ".ck3raven" / "wip"
 
 
-def get_ck3raven_dev_wip_path(repo_root: Path | None = None) -> Path:
+def get_ck3raven_dev_wip_path() -> Path:
     """
     Get the ck3raven-dev WIP workspace path (<repo>/.wip/).
     
@@ -188,9 +96,10 @@ def get_ck3raven_dev_wip_path(repo_root: Path | None = None) -> Path:
     - Strictly constrained to analysis/staging only
     - Cannot substitute for proper code fixes
     """
-    if repo_root is None:
-        repo_root = Path(__file__).parents[5]  # Up from policy/types.py to ck3raven root
-    return repo_root / ".wip"
+    from ..paths import ROOT_REPO
+    if ROOT_REPO is None:
+        raise RuntimeError("ROOT_REPO not configured - run paths_doctor")
+    return ROOT_REPO / ".wip"
 
 
 @dataclass
@@ -203,9 +112,9 @@ class WipWorkspaceInfo:
     last_wiped: Optional[float] = None  # timestamp
     
     @classmethod
-    def get_current(cls, mode: AgentMode = AgentMode.CK3LENS, repo_root: Path | None = None) -> "WipWorkspaceInfo":
+    def get_current(cls, mode: AgentMode = AgentMode.CK3LENS) -> "WipWorkspaceInfo":
         """Get current WIP workspace state for the specified mode."""
-        wip_path = get_wip_workspace_path(mode, repo_root)
+        wip_path = get_wip_workspace_path(mode)
         exists = wip_path.exists()
         file_count = 0
         if exists:
@@ -264,10 +173,6 @@ class ValidationContext:
     
     Contains all information needed to validate agent behavior against policy.
     Session scope fields are auto-populated from _get_session_scope() in server.py.
-    
-    NOTE: vanilla_root and ck3raven_root fields REMOVED - January 2026
-    These are now sourced from paths.py constants (ROOT_GAME, ROOT_REPO).
-    No legacy fallbacks, no backwards compat.
     """
     mode: AgentMode
     policy: dict[str, Any]
@@ -285,7 +190,6 @@ class ValidationContext:
     local_mods_folder: Optional[Path] = None
     
     # Contract context (for write operations)
-    # intent_type REMOVED - BANNED per canonical spec
     contract_id: Optional[str] = None
     
     @classmethod
@@ -315,9 +219,6 @@ class ValidationContext:
                 - active_roots
                 - local_mods_folder
                 
-        NOTE: vanilla_root and ck3raven_root no longer populated here.
-        Use paths.py constants (ROOT_GAME, ROOT_REPO) directly.
-        
         Returns:
             Self for chaining
         """
@@ -332,9 +233,6 @@ class ValidationContext:
         if scope.get("local_mods_folder") is not None:
             self.local_mods_folder = Path(scope["local_mods_folder"])
         return self
-    
-    # with_contract REMOVED - IntentType is BANNED per CANONICAL CONTRACT SYSTEM
-    # Contract context is now handled via contract_id only
 
 
 @dataclass

@@ -5,7 +5,7 @@ ALL paths are CONSTANTS loaded at module import time.
 Import directly: `from ck3lens.paths import ROOT_REPO, ROOT_GAME`
 
 9 Root Categories:
-- ROOT_REPO: computed from __file__
+- ROOT_REPO: from config (required for ck3raven-dev, optional for ck3lens)
 - ROOT_CK3RAVEN_DATA: always ~/.ck3raven
 - ROOT_GAME: from config (required)
 - ROOT_STEAM: from config (required)
@@ -14,6 +14,10 @@ Import directly: `from ck3lens.paths import ROOT_REPO, ROOT_GAME`
 - ROOT_LAUNCHER: from config or OS-default
 - ROOT_VSCODE: from config or OS-default
 - ROOT_EXTERNAL: not a path (catch-all classifier)
+
+CRITICAL: ROOT_REPO is CONFIG-BASED, not computed from __file__.
+This is required because __file__ computation breaks when the package
+is pip-installed into a venv at a different location.
 """
 
 from pathlib import Path
@@ -56,8 +60,11 @@ class RootCategory(Enum):
 # PATH CONSTANTS
 # =============================================================================
 
-# Computed (not from config)
-ROOT_REPO: Path = Path(__file__).resolve().parent.parent.parent.parent
+# From config (NO __file__ computation - that breaks in venvs)
+# ROOT_REPO is None if not configured - paths_doctor will warn
+ROOT_REPO: Path | None = _config.paths.root_repo
+
+# Always computed (not from config)
 ROOT_CK3RAVEN_DATA: Path = Path.home() / ".ck3raven"
 
 # From config (required)

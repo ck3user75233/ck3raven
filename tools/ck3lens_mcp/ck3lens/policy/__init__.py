@@ -1,23 +1,24 @@
 """
-Policy module for agent validation and CLI wrapping.
+Policy module - Enforcement and WIP workspace management.
 
-CANONICAL SOURCES (Jan 2026):
+CANONICAL SOURCES (Feb 2026):
 - enforcement.py: THE single gate for all policy/permission decisions
-- WorldAdapter.is_visible(): THE single source for path visibility
+- WorldAdapter.classify_path(): THE single source for path classification → RootCategory
 - tools/compliance/tokens.py: Canonical token types (NST, LXE only)
 
 Supporting modules:
 - loader.py: Policy file loading
-- validator.py: Policy validation logic
-- ck3lens_rules.py: CK3Lens-specific validation rules (POST-HOC, calls enforcement.py)
 - wip_workspace.py: WIP workspace lifecycle management
 - contract_v1.py: Contract V1 schema validation
 - audit.py: Structured audit logging
 
-DEPRECATED (Jan 2026):
-- tokens.py: Legacy token system - deprecated in favor of tools/compliance/tokens.py
-  - Only canonical tokens remain: NST (New Symbol Token), LXE (Lint Exception Token)
-  - All deprecated token types removed (GIT_PUSH, FS_DELETE, etc.)
+DELETED (Feb 2026):
+- ScopeDomain / Ck3RavenDevScopeDomain: Parallel to RootCategory - deleted
+- classify_path_domain(): Parallel to WorldAdapter.classify_path() - deleted
+- enforce_ck3lens_file_restrictions(): Enforcement outside enforcement.py - deleted
+- validator.py: Unused quality validation - deleted (revisit in Phase 2)
+- ck3lens_rules.py: Unused validation rules - deleted (revisit in Phase 2)
+- ck3raven_dev_rules.py: Unused validation rules - deleted (revisit in Phase 2)
 
 ARCHIVED (see archive/deprecated_policy/):
 - clw.py: Command Line Wrapper - oracle functions archived
@@ -32,9 +33,6 @@ from .types import (
     ToolCall,
     ValidationContext,
     PolicyOutcome,
-    # Scope domains
-    ScopeDomain,
-    Ck3RavenDevScopeDomain,
     # WIP workspace
     WipWorkspaceInfo,
     get_wip_workspace_path,
@@ -46,7 +44,6 @@ from .types import (
     GIT_COMMANDS_NEEDS_APPROVAL,
 )
 from .loader import load_policy, get_policy
-from .validator import validate_policy, validate_for_mode, server_delivery_gate
 
 from .wip_workspace import (
     WipWorkspaceState,
@@ -64,14 +61,6 @@ from .wip_workspace import (
     validate_script_syntax,
     ScriptDeclaration,
     validate_script_declarations,
-)
-from .ck3lens_rules import (
-    validate_ck3lens_rules,
-    classify_path_domain,
-    CK3_ALLOWED_EXTENSIONS,
-    CK3LENS_FORBIDDEN_PATHS,
-    CK3LENS_FORBIDDEN_EXTENSIONS,
-    WIP_ONLY_EXTENSIONS,
 )
 
 # =============================================================================
@@ -103,7 +92,7 @@ from .audit import (
 )
 
 __all__ = [
-    # Policy validation types
+    # Policy types
     "Severity",
     "AgentMode", 
     "Violation",
@@ -112,12 +101,6 @@ __all__ = [
     "PolicyOutcome",
     "load_policy",
     "get_policy",
-    "validate_policy",
-    "validate_for_mode",
-    "server_delivery_gate",
-    # Scope domains
-    "ScopeDomain",
-    "Ck3RavenDevScopeDomain",
     # WIP Workspace
     "WipWorkspaceInfo",
     "get_wip_workspace_path",
@@ -142,13 +125,6 @@ __all__ = [
     "GIT_COMMANDS_SAFE",
     "GIT_COMMANDS_RISKY",
     "GIT_COMMANDS_NEEDS_APPROVAL",
-    # CK3Lens Rules
-    "validate_ck3lens_rules",
-    "classify_path_domain",
-    "CK3_ALLOWED_EXTENSIONS",
-    "CK3LENS_FORBIDDEN_PATHS",
-    "CK3LENS_FORBIDDEN_EXTENSIONS",
-    "WIP_ONLY_EXTENSIONS",
     # Centralized Enforcement (Clean API)
     "OperationType",
     "Decision",
