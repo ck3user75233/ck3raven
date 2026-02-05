@@ -89,13 +89,16 @@ class ResolutionResult:
     
     If found=False, the reference does not exist in this world.
     
-    The root_category is used by enforcement.py to check capability matrix.
-    This is STRUCTURAL classification only - enforcement makes all decisions.
+    The root_category and subdirectory are used by enforcement.py to check
+    the capability matrix. This is STRUCTURAL classification only - 
+    enforcement.py makes all permission decisions.
     """
     found: bool
     address: Optional[CanonicalAddress] = None
     absolute_path: Optional[Path] = None
-    root_category: Optional["RootCategory"] = None  # From capability_matrix
+    root_category: Optional["RootCategory"] = None  # From paths.RootCategory
+    subdirectory: Optional[str] = None  # First path component under root (e.g., "wip", "mod")
+    relative_path: Optional[str] = None  # Full relative path from root (for subfolders_writable check)
     file_id: Optional[int] = None
     content_version_id: Optional[int] = None
     mod_name: Optional[str] = None
@@ -104,10 +107,10 @@ class ResolutionResult:
     @classmethod
     def not_found(cls, raw_input: str, reason: str = "Reference not found") -> "ResolutionResult":
         """Create a not-found result."""
-        from ck3lens.policy.capability_matrix import RootCategory
+        from ck3lens.paths import RootCategory
         return cls(
             found=False,
-            root_category=RootCategory.ROOT_OTHER,
+            root_category=RootCategory.ROOT_EXTERNAL,
             error_message=f"{reason}: {raw_input}"
         )
 
@@ -211,7 +214,7 @@ class WorldAdapter:
             mod_paths: Dict mapping mod names to their filesystem paths
             visible_cvids: Set of content_version_ids visible in ck3lens mode
         """
-        from ck3lens.policy.capability_matrix import RootCategory
+        from ck3lens.paths import RootCategory
         
         self._mode = mode
         self._db = db
@@ -234,38 +237,40 @@ class WorldAdapter:
         wip_root: Optional[Path] = None,
     ) -> "WorldAdapter":
         """
-        Factory method that converts legacy parameters to canonical roots.
-        
-        This is the migration path - callers use legacy parameter names,
-        this method converts to canonical RootCategory structure.
+        Factory method that uses paths.py constants for defaults, then applies overrides.
         """
-        from ck3lens.policy.capability_matrix import RootCategory
+        from ck3lens.paths import (
+            RootCategory,
+            ROOT_REPO,
+            ROOT_CK3RAVEN_DATA,
+            ROOT_GAME,
+            ROOT_UTILITIES,
+        )
         
         roots: dict[RootCategory, list[Path]] = {}
         mod_paths: dict[str, Path] = {}
         visible_cvids: Optional[FrozenSet[int]] = None
         
-        # ROOT_REPO
+        # ROOT_REPO - use explicit or constant
         if ck3raven_root:
             roots[RootCategory.ROOT_REPO] = [ck3raven_root]
+        elif ROOT_REPO:
+            roots[RootCategory.ROOT_REPO] = [ROOT_REPO]
         
-        # ROOT_GAME
+        # ROOT_GAME - use explicit or constant
         if vanilla_root:
             roots[RootCategory.ROOT_GAME] = [vanilla_root]
+        elif ROOT_GAME:
+            roots[RootCategory.ROOT_GAME] = [ROOT_GAME]
         
-        # ROOT_WIP
-        if wip_root:
-            roots[RootCategory.ROOT_WIP] = [wip_root]
-        elif mode == "ck3raven-dev" and ck3raven_root:
-            roots[RootCategory.ROOT_WIP] = [ck3raven_root / ".wip"]
-        
-        # ROOT_UTILITIES
+        # ROOT_UTILITIES - use explicit or constant
         if utility_roots:
             roots[RootCategory.ROOT_UTILITIES] = list(utility_roots.values())
+        elif ROOT_UTILITIES:
+            roots[RootCategory.ROOT_UTILITIES] = [ROOT_UTILITIES]
         
-        # ROOT_CK3RAVEN_DATA
-        ck3raven_data = Path.home() / ".ck3raven"
-        roots[RootCategory.ROOT_CK3RAVEN_DATA] = [ck3raven_data]
+        # ROOT_CK3RAVEN_DATA - always set (constant is never None)
+        roots[RootCategory.ROOT_CK3RAVEN_DATA] = [ROOT_CK3RAVEN_DATA]
         
         # Process mods - classify as ROOT_USER_DOCS or ROOT_STEAM
         if mods:
@@ -333,22 +338,21 @@ class WorldAdapter:
         This is THE SINGLE source of truth for determining which geographic
         root a path belongs to. Checks configured roots in priority order.
         """
-        from ck3lens.policy.capability_matrix import RootCategory
+        from ck3lens.paths import RootCategory
         
         try:
             resolved = absolute_path.resolve()
         except (OSError, ValueError):
-            return RootCategory.ROOT_OTHER
+            return RootCategory.ROOT_EXTERNAL
         
         # Check roots in priority order (more specific first)
         priority_order = [
-            RootCategory.ROOT_WIP,          # Most specific
+            RootCategory.ROOT_CK3RAVEN_DATA,  # Most specific (contains WIP)
             RootCategory.ROOT_REPO,
             RootCategory.ROOT_USER_DOCS,
             RootCategory.ROOT_GAME,
             RootCategory.ROOT_STEAM,
             RootCategory.ROOT_UTILITIES,
-            RootCategory.ROOT_CK3RAVEN_DATA,
         ]
         
         for category in priority_order:
@@ -360,7 +364,7 @@ class WorldAdapter:
                     except ValueError:
                         pass
         
-        return RootCategory.ROOT_OTHER
+        return RootCategory.ROOT_EXTERNAL
     
     # =========================================================================
     # RESOLUTION
@@ -397,20 +401,41 @@ class WorldAdapter:
         """Resolve CanonicalAddress to absolute path.
         
         Simple dispatch: look up root for address_type, join with relative_path.
+        
+        IMPORTANT: This method MUST set subdirectory and relative_path fields
+        for proper capability matrix lookup. The capability matrix uses:
+        - subdirectory: first path component under root (e.g., "mod", "wip")
+        - relative_path: full path from root (for subfolders_writable check)
         """
-        from ck3lens.policy.capability_matrix import RootCategory
+        from ck3lens.paths import RootCategory, ROOT_USER_DOCS
         
         abs_path: Optional[Path] = None
         root_category: Optional[RootCategory] = None
         mod_name: Optional[str] = None
+        subdirectory: Optional[str] = None
+        relative_path_for_cap: Optional[str] = None  # For capability matrix lookup
         
         if address.address_type == AddressType.MOD:
             # Mod addresses use _mod_paths lookup
             mod_id = address.identifier
             if mod_id in self._mod_paths:
-                abs_path = self._mod_paths[mod_id] / address.relative_path
+                mod_path = self._mod_paths[mod_id]
+                abs_path = mod_path / address.relative_path
                 root_category = self.classify_path(abs_path)
                 mod_name = mod_id
+                
+                # For mods in ROOT_USER_DOCS, set subdirectory="mod" and compute
+                # relative_path from ROOT_USER_DOCS for subfolders_writable check
+                if root_category == RootCategory.ROOT_USER_DOCS and ROOT_USER_DOCS:
+                    subdirectory = "mod"
+                    # Relative path from ROOT_USER_DOCS should be like:
+                    # "mod/ModName/common/traits/file.txt"
+                    try:
+                        rel_from_docs = abs_path.resolve().relative_to(ROOT_USER_DOCS.resolve())
+                        relative_path_for_cap = str(rel_from_docs).replace("\\", "/")
+                    except ValueError:
+                        # Fallback: construct the path manually
+                        relative_path_for_cap = f"mod/{mod_id}/{address.relative_path}"
             else:
                 return ResolutionResult.not_found(
                     address.raw_input,
@@ -425,10 +450,13 @@ class WorldAdapter:
                 mod_name = "vanilla"
         
         elif address.address_type == AddressType.WIP:
-            root = self._get_root(RootCategory.ROOT_WIP)
+            # WIP is a subdirectory of ROOT_CK3RAVEN_DATA
+            root = self._get_root(RootCategory.ROOT_CK3RAVEN_DATA)
             if root:
-                abs_path = root / address.relative_path
-                root_category = RootCategory.ROOT_WIP
+                abs_path = root / "wip" / address.relative_path
+                root_category = RootCategory.ROOT_CK3RAVEN_DATA
+                subdirectory = "wip"  # CRITICAL: enforcement.py checks this
+                relative_path_for_cap = f"wip/{address.relative_path}"
         
         elif address.address_type == AddressType.CK3RAVEN:
             root = self._get_root(RootCategory.ROOT_REPO)
@@ -441,6 +469,11 @@ class WorldAdapter:
             if root:
                 abs_path = root / address.relative_path
                 root_category = RootCategory.ROOT_CK3RAVEN_DATA
+                # Extract subdirectory from first component of relative_path
+                parts = address.relative_path.replace("\\", "/").strip("/").split("/")
+                if parts and parts[0]:
+                    subdirectory = parts[0]
+                    relative_path_for_cap = address.relative_path.replace("\\", "/")
         
         elif address.address_type == AddressType.UTILITY:
             utility_paths = self._roots.get(RootCategory.ROOT_UTILITIES, [])
@@ -459,6 +492,8 @@ class WorldAdapter:
             address=address,
             absolute_path=abs_path,
             root_category=root_category,
+            subdirectory=subdirectory,
+            relative_path=relative_path_for_cap,
             mod_name=mod_name,
         )
     
@@ -542,7 +577,7 @@ class WorldAdapter:
         Path classification is structural - determines which domain a path
         belongs to. This is the same regardless of agent mode.
         """
-        from ck3lens.policy.capability_matrix import RootCategory
+        from ck3lens.paths import RootCategory
         
         raw = Path(raw_path)
         
@@ -565,8 +600,10 @@ class WorldAdapter:
         # This is mode-agnostic - any path can be classified
         
         # Check WIP first (most specific user workspace)
-        wip_root = self._get_root(RootCategory.ROOT_WIP)
-        if wip_root:
+        # WIP is a subdirectory of ROOT_CK3RAVEN_DATA
+        data_root = self._get_root(RootCategory.ROOT_CK3RAVEN_DATA)
+        if data_root:
+            wip_root = data_root / "wip"
             try:
                 rel = path.relative_to(wip_root.resolve())
                 return CanonicalAddress(
