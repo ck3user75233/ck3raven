@@ -384,17 +384,25 @@ class ContractV1:
             if not target.description:
                 errors.append(f"Target {i}: description is required")
         
-        # Validate work_declaration has required content
-        if not self.work_declaration.work_summary:
-            errors.append("work_declaration.work_summary is required")
-        if len(self.work_declaration.work_plan) < 1:
-            errors.append("work_declaration.work_plan must have at least 1 item")
+        # GIT_WRITE-only contracts don't require work_declaration
+        # (git push/commit are pushing already-written changes)
+        git_only = all(
+            (op == Operation.GIT_WRITE or op == "GIT_WRITE" or op == Operation.READ or op == "READ")
+            for op in self.operations
+        )
         
-        # If mutating operations, edits should be declared
-        mutating = {Operation.WRITE, Operation.DELETE, Operation.RENAME}
-        has_mutating = any(op in mutating for op in self.operations)
-        if has_mutating and not self.work_declaration.edits:
-            errors.append("Mutating operations require edits in work_declaration")
+        if not git_only:
+            # Validate work_declaration has required content
+            if not self.work_declaration.work_summary:
+                errors.append("work_declaration.work_summary is required")
+            if len(self.work_declaration.work_plan) < 1:
+                errors.append("work_declaration.work_plan must have at least 1 item")
+        
+            # If mutating operations, edits should be declared
+            mutating = {Operation.WRITE, Operation.DELETE, Operation.RENAME}
+            has_mutating = any(op in mutating for op in self.operations)
+            if has_mutating and not self.work_declaration.edits:
+                errors.append("Mutating operations require edits in work_declaration")
         
         return (len(errors) == 0, errors)
     
