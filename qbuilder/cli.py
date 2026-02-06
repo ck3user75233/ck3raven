@@ -188,20 +188,35 @@ def cmd_daemon(args: argparse.Namespace) -> int:
                 conn.commit()
             reset_qbuilder_tables(conn)
             print("[OK] Data reset complete")
+            
+            # Enqueue discovery for active playset after fresh reset
+            playset_path = get_active_playset_file()
+            if playset_path and playset_path.exists():
+                print(f"Enqueuing discovery from {playset_path.name}...")
+                discovery_count = enqueue_playset_roots(conn, playset_path)
+                print(f"[OK] Enqueued {discovery_count} discovery tasks")
+            else:
+                print("[WARN] No active playset found - daemon will wait for IPC commands")
         
         # Start IPC server
         port = get_ipc_port()
-        ipc_server = DaemonIPCServer(conn, port=port, db_path=db_path)
+        
+        # Shared shutdown event for coordinated shutdown
+        import threading
+        shutdown_event = threading.Event()
+        
+        def shutdown_callback():
+            """Called by IPC server when shutdown command received."""
+            shutdown_event.set()
+        
+        ipc_server = DaemonIPCServer(conn, port=port, db_path=db_path, shutdown_callback=shutdown_callback)
         ipc_server.start()
         print(f"[OK] IPC server listening on port {port}")
         
         # Handle shutdown signals
-        shutdown_requested = False
-        
         def handle_signal(signum, frame):
-            nonlocal shutdown_requested
             print(f"\nReceived signal {signum}, shutting down...")
-            shutdown_requested = True
+            shutdown_event.set()
         
         signal.signal(signal.SIGINT, handle_signal)
         signal.signal(signal.SIGTERM, handle_signal)
@@ -241,6 +256,7 @@ def cmd_daemon(args: argparse.Namespace) -> int:
             logger=logger,
             continuous=True,
             poll_interval=args.poll_interval,
+            shutdown_event=shutdown_event,
         )
         
         elapsed = time.time() - start_time
@@ -542,6 +558,74 @@ def cmd_delete_file(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_stop(args: argparse.Namespace) -> int:
+    """Send shutdown command to running daemon via IPC."""
+    import socket
+    import json
+    from .ipc_server import get_ipc_port
+    
+    port = get_ipc_port()
+    timeout = getattr(args, 'timeout', 10)
+    
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(5.0)
+    
+    try:
+        sock.connect(("127.0.0.1", port))
+        request = {
+            "v": 1, 
+            "id": "cli-stop-1", 
+            "method": "shutdown", 
+            "params": {"graceful": True, "timeout": timeout}
+        }
+        sock.sendall((json.dumps(request) + "\n").encode())
+        
+        response = sock.recv(4096).decode().strip()
+        result = json.loads(response)
+        
+        if result.get("ok"):
+            print("[OK] Shutdown signal sent to daemon")
+            if args.wait:
+                print("Waiting for daemon to exit...")
+                _wait_for_daemon_exit(port, timeout)
+        else:
+            error = result.get("error", {})
+            print(f"[ERROR] {error.get('message', 'Unknown error')}")
+            return 1
+            
+    except ConnectionRefusedError:
+        print("[INFO] Daemon not running (connection refused)")
+        return 0
+    except socket.timeout:
+        print("[WARN] Daemon did not respond - may need to kill manually")
+        return 1
+    finally:
+        sock.close()
+    
+    return 0
+
+
+def _wait_for_daemon_exit(port: int, timeout: int = 10):
+    """Wait for daemon to actually exit."""
+    import socket
+    import time
+    
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1.0)
+            sock.connect(("127.0.0.1", port))
+            sock.close()
+            time.sleep(0.5)  # Still running, wait
+        except ConnectionRefusedError:
+            print("[OK] Daemon stopped")
+            return
+        except socket.timeout:
+            pass
+    print("[WARN] Daemon still running after timeout")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog='qbuilder',
@@ -613,6 +697,14 @@ def main():
     delete_parser.add_argument('mod_name', help='Mod name')
     delete_parser.add_argument('rel_path', help='Relative path within the mod')
     delete_parser.set_defaults(func=cmd_delete_file)
+    
+    # stop (send shutdown signal to daemon)
+    stop_parser = subparsers.add_parser('stop', help='Stop running daemon')
+    stop_parser.add_argument('--timeout', type=int, default=10, 
+                             help='Shutdown timeout seconds (default: 10)')
+    stop_parser.add_argument('--wait', action='store_true',
+                             help='Wait for daemon to exit')
+    stop_parser.set_defaults(func=cmd_stop)
     
     args = parser.parse_args()
     return args.func(args)

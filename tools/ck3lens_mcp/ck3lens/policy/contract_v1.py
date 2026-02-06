@@ -405,6 +405,7 @@ class ContractV1:
                 errors.append("Mutating operations require edits in work_declaration")
         
         return (len(errors) == 0, errors)
+
     
     def is_expired(self) -> bool:
         """Check if contract has expired."""

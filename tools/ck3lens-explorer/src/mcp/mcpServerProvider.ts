@@ -85,6 +85,7 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
     readonly onDidChangeMcpServerDefinitions = this._onDidChangeDefinitions.event;
 
     private readonly instanceId: string;
+    private readonly mitToken: string;  // MIT (Mode Initialization Token) for ck3raven-dev authorization
     private readonly logger: Logger;
     private disposables: vscode.Disposable[] = [];
     
@@ -100,7 +101,12 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
         // CRITICAL: Generate fresh instance ID every activation (no caching!)
         this.instanceId = generateInstanceId();
         
+        // Generate MIT (Mode Initialization Token) for ck3raven-dev authorization
+        // This token is passed to MCP via env var and injected into chat when user clicks "Initialize Dev Mode"
+        this.mitToken = crypto.randomBytes(8).toString('hex');
+        
         this.logger.info(`MCP activate: instanceId=${this.instanceId}`);
+        this.logger.debug(`ROOT_REPO: ${ROOT_REPO}`);
         this.logger.debug(`ROOT_REPO: ${ROOT_REPO}`);
         this.logger.debug(`ROOT_REPO_VALID: ${ROOT_REPO_VALID}`);
 
@@ -120,6 +126,14 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
      */
     getInstanceId(): string {
         return this.instanceId;
+    }
+
+    /**
+     * Get the MIT (Mode Initialization Token) for ck3raven-dev authorization.
+     * This token is single-use - once consumed by the MCP server, user must get a fresh one.
+     */
+    getMitToken(): string {
+        return this.mitToken;
     }
 
     /**
@@ -163,6 +177,7 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
         // Build environment with instance ID for isolation
         const env: Record<string, string | number | null> = {
             CK3LENS_INSTANCE_ID: this.instanceId,
+            CK3LENS_MIT_TOKEN: this.mitToken,  // MIT for ck3raven-dev authorization
             PYTHONPATH: `${ROOT_REPO}${path.delimiter}${path.join(ROOT_REPO, 'src')}`,
         };
 

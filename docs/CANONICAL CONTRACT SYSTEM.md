@@ -834,6 +834,7 @@ They are the **only** mechanism for:
 
 1. **NST (New Symbol Token)**: Declaring intentionally new identifiers
 2. **LXE (Lint Exception Token)**: Granting temporary lint rule exceptions
+3. **MIT (Mode Initialization Token)**: Authorizing agent switch to ck3raven-dev mode
 
 ### Token Schema
 
@@ -905,6 +906,26 @@ Required when:
     "max_violations": 5  # Optional cap
 }
 ```
+
+### MIT (Mode Initialization Token)
+
+MIT tokens are fundamentally different from NST/LXE - they authorize agent initialization, not contract exceptions.
+
+**Purpose:** Prevent agent self-initialization. User must click "Initialize Agent" to authorize.
+
+**Lifecycle (different from NST/LXE):**
+1. Extension generates token at MCP spawn, passes via env var `CK3LENS_MIT_TOKEN`
+2. User clicks "Initialize Agent" in VS Code sidebar (selects mode)
+3. Token is injected into chat (user authorization act)
+4. Agent passes token to `ck3_get_mode_instructions(mode="...", mit_token="...")`
+5. Server validates and **consumes** token (single-use)
+
+**Key Properties:**
+- **Single-use**: Token is invalidated after successful initialization
+- **User-initiated**: Agent cannot retrieve or generate tokens
+- **Session-scoped**: New token generated each VS Code window
+- **Required for ALL modes**: Both ck3lens and ck3raven-dev require MIT
+- **Not a contract exception**: MIT authorizes initialization, not rule-breaking
 
 ### Token Validation at Contract Close
 

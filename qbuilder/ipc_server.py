@@ -86,11 +86,13 @@ class DaemonIPCServer:
         port: int = DEFAULT_IPC_PORT,
         host: str = "127.0.0.1",
         db_path: Optional[Path] = None,
+        shutdown_callback: Optional[Callable[[], None]] = None,
     ):
         self.conn = conn  # Main thread connection (not used in handlers)
         self.port = port
         self.host = host
         self.db_path = db_path  # Store for thread-local connections
+        self.shutdown_callback = shutdown_callback  # Called on shutdown request
         
         self._server_socket: Optional[socket.socket] = None
         self._running = False
@@ -342,25 +344,17 @@ class DaemonIPCServer:
     def _handle_enqueue_scan(self, request: IPCRequest) -> dict:
         """Handle discovery scan request."""
         from qbuilder.discovery import enqueue_playset_roots
+        from qbuilder.cli import get_active_playset_file  # Use unified resolution
         
-        # Get playset file path
+        # Get playset file path - use param if provided, else active playset
         playset_file = request.params.get("playset_file")
         if playset_file:
             playset_path = Path(playset_file)
         else:
-            # Use active playset
-            playsets_dir = Path(__file__).parent.parent / 'playsets'
-            manifest_path = playsets_dir / 'playset_manifest.json'
-            if manifest_path.exists():
-                import json
-                manifest = json.loads(manifest_path.read_text())
-                active = manifest.get('active')
-                if active:
-                    playset_path = playsets_dir / active
-                else:
-                    return {"scheduled": False, "error": "No active playset"}
-            else:
-                return {"scheduled": False, "error": "No playset manifest"}
+            # Use unified active playset resolution
+            playset_path = get_active_playset_file()
+            if not playset_path:
+                return {"scheduled": False, "error": "No active playset configured"}
         
         if not playset_path.exists():
             return {"scheduled": False, "error": f"Playset file not found: {playset_path}"}
@@ -415,6 +409,10 @@ class DaemonIPCServer:
         
         # Signal shutdown (the main loop should check this)
         self._running = False
+        
+        # Invoke callback to signal main daemon/worker
+        if self.shutdown_callback:
+            self.shutdown_callback()
         
         return {"acknowledged": True, "graceful": graceful}
 

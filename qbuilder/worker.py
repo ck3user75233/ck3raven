@@ -22,6 +22,7 @@ import os
 import signal
 import sqlite3
 import sys
+import threading
 import time
 import traceback
 from dataclasses import dataclass
@@ -584,6 +585,7 @@ def run_build_worker(
     logger: Optional["QBuilderLogger"] = None,
     continuous: bool = True,  # DEFAULT: daemon mode - never exit on empty queue
     poll_interval: float = 5.0,
+    shutdown_event: Optional[threading.Event] = None,
 ) -> dict:
     """
     Run build worker as a continuous daemon.
@@ -600,6 +602,7 @@ def run_build_worker(
         logger: Optional JSONL logger for structured logging
         continuous: If True (default), keep polling forever. Only False for testing.
         poll_interval: Seconds between polls when queue empty
+        shutdown_event: If set, check this event to trigger graceful shutdown
     
     Returns summary.
     """
@@ -617,6 +620,14 @@ def run_build_worker(
     
     while True:
         try:
+            # Check for shutdown signal
+            if shutdown_event and shutdown_event.is_set():
+                exit_reason = "shutdown signal received"
+                if logger:
+                    logger.log_event("worker_exit", {"reason": exit_reason, "processed": items_processed})
+                _safe_print(f"[Worker] Shutting down ({items_processed} processed)")
+                break
+            
             # Check max_items limit (rare - mainly for testing)
             if max_items and items_processed >= max_items:
                 exit_reason = f"max_items limit reached ({max_items})"

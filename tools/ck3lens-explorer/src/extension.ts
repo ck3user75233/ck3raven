@@ -224,7 +224,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     
     // Get instance ID for agentProvider (enables mode file watching)
     // Note: instanceId was already declared at line ~124
-    const agentProvider = new AgentViewProvider(context, logger, instanceId);
+    // Pass MIT token getter for agent initialization authorization
+    const agentProvider = new AgentViewProvider(
+        context, 
+        logger, 
+        instanceId,
+        () => mcpServerProvider?.getMitToken() ?? ''
+    );
     // DEPRECATED: RulesView disabled - mode now controlled via MCP ck3_get_mode_instructions()
     // const rulesProvider = new RulesViewProvider(logger);
     

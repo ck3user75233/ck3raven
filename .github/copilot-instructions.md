@@ -1,6 +1,6 @@
 ﻿# CK3 Lens - Comprehensive Copilot Instructions
 
-> **Last Updated:** January 26, 2026  
+> **Last Updated:** February 6, 2026  
 > **For use with:** ck3raven, CK3 Lens MCP, CK3 Lens Explorer
 
 ---
@@ -176,15 +176,16 @@ ck3_file(command="write", path="wip:/analysis.py", content="...")
 
 ### Canonical Token Types
 
-**Only TWO token types exist in the canonical system:**
+**Two token types exist in the canonical system:**
 
 | Token | Purpose | TTL |
 |-------|---------|-----|
-| **NST** (New Symbol Token) | Required when creating new symbol identities not in baseline | 30 min |
-| **LXE** (Lint Exception) | Required when arch_lint violations exist at contract close | 15 min |
+| **NST** (New Symbol Token) | Required when creating new symbol identities not in baseline | 24 hours |
+| **LXE** (Lint Exception) | Required when arch_lint violations exist at contract close | 8 hours |
 
-All other token types have been deprecated. Tokens are requested via:
-`ck3_token(command="request", token_type="NST", reason="...")`
+Tokens are requested via `ck3_token(command="request", token_type="NST", reason="...")`
+
+Token library: `tools/compliance/tokens.py`
 
 ### Git Operations
 

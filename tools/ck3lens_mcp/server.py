@@ -201,6 +201,19 @@ _session_cv_ids_resolved: bool = False
 _cached_world_adapter = None
 _cached_world_mode: Optional[str] = None
 
+# MIT (Mode Initialization Token) - provided by extension via env var CK3LENS_MIT_TOKEN
+# User must click "Initialize Agent" in extension to inject token into chat
+# Token is SINGLE-USE - consumed on successful mode initialization
+# If env var not set, generate a fallback (for testing without extension)
+_mit_token: str = os.environ.get("CK3LENS_MIT_TOKEN", "") or os.environ.get("CK3LENS_DEV_TOKEN", "")
+if not _mit_token:
+    # Fallback for dev/testing - generate random token
+    import secrets
+    _mit_token = secrets.token_hex(8)
+
+# Track used MIT tokens - single-use enforcement
+_used_mit_tokens: set[str] = set()
+
 
 def _get_session() -> Session:
     global _session, _session_cv_ids_resolved, _db
@@ -3640,6 +3653,27 @@ def _ck3_contract_internal(
                 }
             
             return result
+        
+        except ValueError as ve:
+            # Contract validation errors - add contextual hints
+            from ck3lens.hints import get_hint_engine
+            
+            error_msg = str(ve)
+            hint_engine = get_hint_engine()
+            hints = hint_engine.for_contract_error(error_msg, {
+                "command": command,
+                "intent": intent,
+                "root_category": root_category,
+                "operations": operations,
+                "work_declaration": work_declaration,
+            })
+            
+            return {
+                "success": False,
+                "code": "CT-VAL-E-001",
+                "error": error_msg,
+                **hints  # Include checklist, example, schema
+            }
             
         except Exception as e:
             import traceback
@@ -4235,6 +4269,14 @@ def ck3_search(
     result["truncated"] = truncated
     if guidance:
         result["guidance"] = guidance
+    
+    # Add hints for empty results - help agent exhaust search options
+    total_results = result['symbols']['count'] + total_refs + content_count + result['files']['count']
+    if total_results == 0:
+        from ck3lens.hints import get_hint_engine
+        hint_engine = get_hint_engine()
+        hints = hint_engine.for_empty_search(query, search_type="unified")
+        result.update(hints)
     
     return rb.success(
         'WA-READ-S-001',
@@ -4838,7 +4880,8 @@ def ck3_search_mods(
 @mcp.tool()
 @mcp_safe_tool
 def ck3_get_mode_instructions(
-    mode: Literal["ck3lens", "ck3raven-dev"]
+    mode: Literal["ck3lens", "ck3raven-dev"],
+    mit_token: str | None = None,
 ) -> Reply:
     """
     Get the instruction content for a specific agent mode.
@@ -4856,6 +4899,7 @@ def ck3_get_mode_instructions(
         mode: The mode to initialize:
             - "ck3lens": CK3 modding with database search and mod editing
             - "ck3raven-dev": Full development mode for infrastructure
+        mit_token: Authorization token (if required - see error response for details)
     
     Returns:
         Mode instructions, policy boundaries, session context, and database status
@@ -4863,9 +4907,16 @@ def ck3_get_mode_instructions(
     trace_info = get_current_trace_info()
     rb = ReplyBuilder(trace_info, tool='ck3_get_mode_instructions')
     
-    result = _ck3_get_mode_instructions_internal(mode)
+    result = _ck3_get_mode_instructions_internal(mode, mit_token)
     
     if result.get("error"):
+        # MIT token errors should be reply_type I (invalid) - user action required
+        if result.get("requires_mit"):
+            return rb.invalid(
+                'MCP-CFG-I-001',
+                data=result,
+                message=result.get("error")
+            )
         return rb.error('MCP-SYS-E-001', data=result, message=result.get("error"))
     
     return rb.success(
@@ -4875,7 +4926,7 @@ def ck3_get_mode_instructions(
     )
 
 
-def _ck3_get_mode_instructions_internal(mode: str) -> dict:
+def _ck3_get_mode_instructions_internal(mode: str, mit_token: str | None = None) -> dict:
     """Internal implementation returning dict."""
     from pathlib import Path
     from ck3lens.policy import AgentMode, initialize_workspace
@@ -4888,6 +4939,32 @@ def _ck3_get_mode_instructions_internal(mode: str) -> dict:
             "error": f"Invalid mode: {mode}",
             "valid_modes": list(VALID_MODES),
         }
+    
+    # =========================================================================
+    # MIT TOKEN VALIDATION: ALL modes require user-provided MIT token
+    # This prevents agent self-initialization - user must click the button
+    # Token is SINGLE-USE - consumed on successful mode switch
+    # =========================================================================
+    if mit_token is None:
+        return {
+            "error": "Initialization requires MIT (Mode Initialization Token)",
+            "requires_mit": True,
+            "action": "Ask user to click 'Initialize Agent' in VS Code CK3 Lens sidebar. Token will be injected into chat.",
+        }
+    if mit_token in _used_mit_tokens:
+        return {
+            "error": "MIT token already consumed (single-use)",
+            "requires_mit": True,
+            "action": "Ask user to click 'Initialize Agent' again for a fresh token.",
+        }
+    if mit_token != _mit_token:
+        return {
+            "error": "Invalid MIT token",
+            "requires_mit": True,
+            "action": "Token incorrect. Ask user to click 'Initialize Agent' in CK3 Lens sidebar.",
+        }
+    # Consume the token - single use
+    _used_mit_tokens.add(mit_token)
     
     # =========================================================================
     # STEP 1: Initialize database connection (what ck3_init_session used to do)

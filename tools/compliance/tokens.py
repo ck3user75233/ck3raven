@@ -1,15 +1,23 @@
 """
-Token Management for Phase 1.5C - NST and LXE Tokens
+Token Management for Phase 1.5C - NST, LXE, and MIT Tokens
 
 This module implements the token lifecycle for the Canonical Contract System:
 - NST (New Symbol Token): Declares intentionally new identifiers
 - LXE (Lint Exception Token): Grants temporary lint rule exceptions
+- MIT (Mode Initialization Token): Authorizes agent initialization (all modes, single-use)
 
 Token Lifecycle:
 1. Agent proposes token → artifacts/tokens_proposed/<id>.token.json
 2. Human approves → moves to policy/tokens/<id>.token.json
 3. Token validated at contract close
 4. Token expires after TTL
+
+MIT Token Lifecycle (different):
+1. Extension generates token at MCP spawn
+2. Extension passes token via env var CK3LENS_MIT_TOKEN
+3. User clicks "Initialize Agent" → token injected into chat
+4. Agent passes token to ck3_get_mode_instructions(mode="...", mit_token="...")
+5. Server validates and consumes (single-use - prevents self-initialization)
 
 Location: tools/compliance/tokens.py
 Authority: CANONICAL CONTRACT SYSTEM Phase 1.5C
@@ -33,9 +41,10 @@ from typing import Optional, Any
 # =============================================================================
 
 class TokenType(str, Enum):
-    """Token types for exception handling."""
-    NST = "NST"  # New Symbol Token
-    LXE = "LXE"  # Lint Exception Token
+    """Token types for exception handling and authorization."""
+    NST = "NST"  # New Symbol Token - declares intentionally new identifiers
+    LXE = "LXE"  # Lint Exception Token - grants temporary lint rule exceptions
+    MIT = "MIT"  # Mode Initialization Token - authorizes agent mode switch (single-use)
 
 
 class TokenStatus(str, Enum):
@@ -50,6 +59,7 @@ class TokenStatus(str, Enum):
 TOKEN_TTLS = {
     TokenType.NST: 24,  # 24 hours
     TokenType.LXE: 8,   # 8 hours (work session)
+    TokenType.MIT: 0,   # Single-use, no TTL (consumed immediately on use)
 }
 
 

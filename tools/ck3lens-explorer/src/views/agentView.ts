@@ -53,29 +53,40 @@ export const MODE_DEFINITIONS: Record<string, {
 };
 
 /**
- * Generate initialization prompt with current MCP instance ID.
+ * Generate initialization prompt with current MCP instance ID and MIT token.
  * 
  * CRITICAL: The MCP server instance ID changes on window reload.
  * Tool names are prefixed with mcp_ck3_lens_{instanceId}_
  * Agents MUST use the current instance ID, not IDs from conversation history.
+ * 
+ * MIT (Mode Initialization Token) is required for any mode initialization.
+ * Without it, the agent cannot call ck3_get_mode_instructions.
  */
-export function generateInitPrompt(mode: LensMode, instanceId: string | undefined): string {
+export function generateInitPrompt(mode: LensMode, instanceId: string | undefined, mitToken: string | undefined): string {
     const modeDef = MODE_DEFINITIONS[mode];
     if (!modeDef) {
         return '';
     }
     
-    // If we have an instance ID, inject it prominently into the prompt
+    // Build prompt with instance ID and MIT token
+    let prompt = '';
+    
     if (instanceId) {
         const toolPrefix = `mcp_ck3_lens_${instanceId}_`;
-        return `⚠️ CRITICAL: The current MCP server instance ID is "${instanceId}". ` +
+        prompt += `⚠️ CRITICAL: The current MCP server instance ID is "${instanceId}". ` +
             `All tool names are prefixed with "${toolPrefix}" (e.g., ${toolPrefix}ck3_get_mode_instructions). ` +
-            `NEVER use tool names from conversation history - the instance ID changes on window reload.\n\n` +
-            modeDef.initPrompt;
+            `NEVER use tool names from conversation history - the instance ID changes on window reload.\n\n`;
     }
     
-    // Fallback to static prompt if no instance ID available
-    return modeDef.initPrompt;
+    // Include MIT token - required for initialization
+    if (mitToken) {
+        prompt += `🔑 MIT (Mode Initialization Token): ${mitToken}\n` +
+            `Pass this token to ck3_get_mode_instructions(mode="${mode}", mit_token="${mitToken}")\n\n`;
+    }
+    
+    prompt += modeDef.initPrompt;
+    
+    return prompt;
 }
 
 class AgentTreeItem extends vscode.TreeItem {
@@ -170,7 +181,8 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
     constructor(
         private readonly context: vscode.ExtensionContext,
         private readonly logger: Logger,
-        private readonly instanceId?: string
+        private readonly instanceId?: string,
+        private readonly getMitToken?: () => string
     ) {
         console.log('[CK3RAVEN] AgentViewProvider constructor ENTER');
         // Always start fresh - don't persist mode across sessions
@@ -867,9 +879,12 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
 
         this.logger.info(`Initialization requested for mode: ${mode}`);
 
-        // Open chat with initialization prompt (includes current MCP instance ID)
+        // Get MIT token for authorization
+        const mitToken = this.getMitToken?.();
+
+        // Open chat with initialization prompt (includes current MCP instance ID and MIT token)
         await vscode.commands.executeCommand('workbench.action.chat.open', {
-            query: generateInitPrompt(mode, this.instanceId)
+            query: generateInitPrompt(mode, this.instanceId, mitToken)
         });
 
         vscode.window.showInformationMessage(
@@ -892,11 +907,14 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
 
         this.logger.info(`Sub-agent initialization requested for mode: ${mode}`);
 
-        // Create new chat with initialization prompt (includes current MCP instance ID)
+        // Get MIT token for authorization
+        const mitToken = this.getMitToken?.();
+
+        // Create new chat with initialization prompt (includes current MCP instance ID and MIT token)
         await vscode.commands.executeCommand('workbench.action.chat.newChat');
         await new Promise(resolve => setTimeout(resolve, 100));
         await vscode.commands.executeCommand('workbench.action.chat.open', {
-            query: generateInitPrompt(mode, this.instanceId)
+            query: generateInitPrompt(mode, this.instanceId, mitToken)
         });
 
         vscode.window.showInformationMessage(
