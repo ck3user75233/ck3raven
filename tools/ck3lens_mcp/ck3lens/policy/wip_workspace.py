@@ -3,21 +3,15 @@ WIP Workspace Management
 
 Manages the disposable workspace for agent temporary scripts and outputs.
 
-CK3LENS Mode:
-  Location: ~/.ck3raven/wip/
-  - Auto-wiped at session start
-  - General purpose for analysis scripts
-  - Script output can go to WIP or active local mods
+Location: ~/.ck3raven/wip/ (WIP_DIR constant from paths.py)
 
-CK3RAVEN-DEV Mode:
-  Location: <repo>/.wip/
-  - Git-ignored
-  - Strictly constrained to analysis/staging only
-  - Cannot substitute for proper code fixes
-  - Requires WIP intent declaration
+Both modes share the same WIP workspace. WIP is:
+- A scratch area for analysis scripts and temporary outputs
+- Auto-cleaned of stale files (>24h) on session start
+- Writable without contract (enforcement.py handles this via capability matrix)
 
-Common Rules:
-1. Python is ONLY allowed in WIP (not in mod directories for ck3lens)
+Rules:
+1. Python scripts go in WIP (not in mod directories for ck3lens mode)
 2. Script execution via ck3_exec only
 3. Scripts must declare what files they read/write
 4. Mismatch between declaration and actual behavior → execution denied
@@ -51,27 +45,23 @@ class WipWorkspaceState:
     stale_files: list[str] = field(default_factory=list)  # Files older than 24h
 
 
-def get_workspace_state(
-    mode: AgentMode = AgentMode.CK3LENS,
-    repo_root: Path | None = None,
-) -> WipWorkspaceState:
-    """Get the current WIP workspace state for the specified mode."""
-    wip_path = WIP_DIR
-    exists = wip_path.exists()
+def get_workspace_state(mode: AgentMode = AgentMode.CK3LENS) -> WipWorkspaceState:
+    """Get the current WIP workspace state."""
+    exists = WIP_DIR.exists()
     files = []
     stale_files = []
     stale_threshold = time.time() - (24 * 60 * 60)  # 24 hours ago
     
     if exists:
-        for f in wip_path.rglob("*"):
+        for f in WIP_DIR.rglob("*"):
             if f.is_file():
-                rel_path = str(f.relative_to(wip_path))
+                rel_path = str(f.relative_to(WIP_DIR))
                 files.append(rel_path)
                 if f.stat().st_mtime < stale_threshold:
                     stale_files.append(rel_path)
     
     return WipWorkspaceState(
-        path=wip_path,
+        path=WIP_DIR,
         exists=exists,
         mode=mode,
         file_count=len(files),
@@ -82,53 +72,50 @@ def get_workspace_state(
 
 def initialize_workspace(
     mode: AgentMode = AgentMode.CK3LENS,
-    repo_root: Path | None = None,
     wipe: bool = False,
 ) -> dict[str, Any]:
     """
-    Initialize the WIP workspace for the specified mode.
+    Initialize the WIP workspace.
     
     Called on session start (ck3_get_mode_instructions).
     
     Args:
-        mode: Agent mode (affects WIP location)
-        repo_root: Repository root (required for ck3raven-dev mode)
+        mode: Agent mode (for logging)
         wipe: If True, wipe existing contents (disabled by default to preserve work)
     
     Returns:
         Status dict with path, wiped_count, etc.
     """
-    wip_path = WIP_DIR
     wiped_count = 0
     stale_cleaned = 0
     
-    if wipe and wip_path.exists():
+    if wipe and WIP_DIR.exists():
         # Count files before wiping
-        wiped_count = sum(1 for _ in wip_path.rglob("*") if _.is_file())
+        wiped_count = sum(1 for _ in WIP_DIR.rglob("*") if _.is_file())
         
         # Remove all contents but keep the directory
-        for item in wip_path.iterdir():
+        for item in WIP_DIR.iterdir():
             if item.is_dir():
                 shutil.rmtree(item)
             else:
                 item.unlink()
-    elif wip_path.exists():
+    elif WIP_DIR.exists():
         # Just clean stale files (older than 24h)
         stale_threshold = time.time() - (24 * 60 * 60)
-        for f in wip_path.rglob("*"):
+        for f in WIP_DIR.rglob("*"):
             if f.is_file() and f.stat().st_mtime < stale_threshold:
                 f.unlink()
                 stale_cleaned += 1
     
     # Ensure directory exists
-    wip_path.mkdir(parents=True, exist_ok=True)
+    WIP_DIR.mkdir(parents=True, exist_ok=True)
     
     # Write marker file with wipe timestamp
-    marker = wip_path / ".wip_session"
+    marker = WIP_DIR / ".wip_session"
     marker.write_text(f"wiped_at: {time.time()}\nmode: {mode.value}\n")
     
     return {
-        "path": str(wip_path),
+        "path": str(WIP_DIR),
         "mode": mode.value,
         "exists": True,
         "wiped": wipe,
@@ -138,32 +125,28 @@ def initialize_workspace(
     }
 
 
-def cleanup_stale_files(
-    mode: AgentMode = AgentMode.CK3LENS,
-    repo_root: Path | None = None,
-) -> dict[str, Any]:
+def cleanup_stale_files(mode: AgentMode = AgentMode.CK3LENS) -> dict[str, Any]:
     """
     Clean up files older than 24 hours (best-effort).
     
     Returns:
         Status dict with cleanup results
     """
-    wip_path = WIP_DIR
-    if not wip_path.exists():
-        return {"path": str(wip_path), "exists": False, "cleaned": 0}
+    if not WIP_DIR.exists():
+        return {"path": str(WIP_DIR), "exists": False, "cleaned": 0}
     
     stale_threshold = time.time() - (24 * 60 * 60)
     cleaned = []
     
-    for f in wip_path.rglob("*"):
+    for f in WIP_DIR.rglob("*"):
         if f.is_file() and f.name != ".wip_session":
             if f.stat().st_mtime < stale_threshold:
-                rel_path = str(f.relative_to(wip_path))
+                rel_path = str(f.relative_to(WIP_DIR))
                 f.unlink()
                 cleaned.append(rel_path)
     
     return {
-        "path": str(wip_path),
+        "path": str(WIP_DIR),
         "mode": mode.value,
         "exists": True,
         "cleaned": len(cleaned),
@@ -175,57 +158,45 @@ def cleanup_stale_files(
 # FILE OPERATIONS IN WIP
 # =============================================================================
 
-def is_wip_path(
-    path: Path | str,
-    mode: AgentMode = AgentMode.CK3LENS,
-    repo_root: Path | None = None,
-) -> bool:
-    """Check if a path is within the WIP workspace for the specified mode."""
-    wip_path = WIP_DIR
+def is_wip_path(path: Path | str) -> bool:
+    """Check if a path is within the WIP workspace."""
     if isinstance(path, str):
         path = Path(path)
     
     try:
-        path.resolve().relative_to(wip_path.resolve())
+        path.resolve().relative_to(WIP_DIR.resolve())
         return True
     except ValueError:
         return False
 
 
-def is_any_wip_path(path: Path | str, repo_root: Path | None = None) -> bool:
+def is_any_wip_path(path: Path | str) -> bool:
     """
-    Check if a path is within ANY WIP workspace (either mode).
+    Check if a path is within the WIP workspace.
     
-    Useful for general WIP detection without knowing the mode.
+    Alias for is_wip_path (both modes share same WIP).
     """
-    return (
-        is_wip_path(path, AgentMode.CK3LENS) or
-        is_wip_path(path, AgentMode.CK3RAVEN_DEV, repo_root)
-    )
+    return is_wip_path(path)
 
 
-def resolve_wip_path(
-    rel_path: str,
-    mode: AgentMode = AgentMode.CK3LENS,
-    repo_root: Path | None = None,
-) -> Path:
+def resolve_wip_path(rel_path: str) -> Path:
     """
     Resolve a relative path within WIP workspace.
     
     Args:
         rel_path: Path relative to WIP root
-        mode: Agent mode
-        repo_root: Repository root (for ck3raven-dev)
     
     Returns:
         Absolute path within WIP
+        
+    Raises:
+        ValueError: If path traversal detected
     """
-    wip_path = WIP_DIR
-    resolved = (wip_path / rel_path).resolve()
+    resolved = (WIP_DIR / rel_path).resolve()
     
     # Ensure it's still within WIP (prevent path traversal)
     try:
-        resolved.relative_to(wip_path.resolve())
+        resolved.relative_to(WIP_DIR.resolve())
     except ValueError:
         raise ValueError(f"Path traversal detected: {rel_path}")
     
@@ -236,7 +207,6 @@ def write_wip_file(
     rel_path: str,
     content: str | bytes,
     mode: AgentMode = AgentMode.CK3LENS,
-    repo_root: Path | None = None,
 ) -> dict[str, Any]:
     """
     Write a file to WIP workspace.
@@ -244,13 +214,12 @@ def write_wip_file(
     Args:
         rel_path: Path relative to WIP root
         content: File content
-        mode: Agent mode
-        repo_root: Repository root (for ck3raven-dev)
+        mode: Agent mode (for logging)
     
     Returns:
         Status dict with path, size, etc.
     """
-    file_path = resolve_wip_path(rel_path, mode, repo_root)
+    file_path = resolve_wip_path(rel_path)
     
     # Ensure parent directory exists
     file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -273,20 +242,18 @@ def write_wip_file(
 def read_wip_file(
     rel_path: str,
     mode: AgentMode = AgentMode.CK3LENS,
-    repo_root: Path | None = None,
 ) -> dict[str, Any]:
     """
     Read a file from WIP workspace.
     
     Args:
         rel_path: Path relative to WIP root
-        mode: Agent mode
-        repo_root: Repository root (for ck3raven-dev)
+        mode: Agent mode (for logging)
     
     Returns:
         Dict with content, path, etc.
     """
-    file_path = resolve_wip_path(rel_path, mode, repo_root)
+    file_path = resolve_wip_path(rel_path)
     
     if not file_path.exists():
         return {"error": f"File not found: {rel_path}", "exists": False}
@@ -312,7 +279,6 @@ def read_wip_file(
 def delete_wip_file(
     rel_path: str,
     mode: AgentMode = AgentMode.CK3LENS,
-    repo_root: Path | None = None,
 ) -> dict[str, Any]:
     """
     Delete a file from WIP workspace.
@@ -321,13 +287,12 @@ def delete_wip_file(
     
     Args:
         rel_path: Path relative to WIP root
-        mode: Agent mode
-        repo_root: Repository root (for ck3raven-dev)
+        mode: Agent mode (for logging)
     
     Returns:
         Status dict
     """
-    file_path = resolve_wip_path(rel_path, mode, repo_root)
+    file_path = resolve_wip_path(rel_path)
     
     if not file_path.exists():
         return {"path": str(file_path), "existed": False, "deleted": False}
@@ -361,23 +326,17 @@ def compute_script_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
-def validate_script_syntax(
-    rel_path: str,
-    mode: AgentMode = AgentMode.CK3LENS,
-    repo_root: Path | None = None,
-) -> ScriptValidation:
+def validate_script_syntax(rel_path: str) -> ScriptValidation:
     """
     Validate Python script syntax in WIP workspace.
     
     Args:
         rel_path: Path to script relative to WIP root
-        mode: Agent mode
-        repo_root: Repository root (for ck3raven-dev)
     
     Returns:
         ScriptValidation with hash and validation result
     """
-    file_path = resolve_wip_path(rel_path, mode, repo_root)
+    file_path = resolve_wip_path(rel_path)
     
     if not file_path.exists():
         return ScriptValidation(
