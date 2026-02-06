@@ -57,50 +57,8 @@ GIT_COMMANDS_NEEDS_APPROVAL = frozenset({
 
 
 # =============================================================================
-# WIP WORKSPACE
+# WIP WORKSPACE INFO
 # =============================================================================
-
-def get_wip_workspace_path(mode: AgentMode = AgentMode.CK3LENS) -> Path:
-    """
-    Get the WIP workspace path for the specified mode.
-    
-    ck3lens mode:       ~/.ck3raven/wip/  (general purpose)
-    ck3raven-dev mode:  Uses ROOT_REPO/.wip/ via paths.py
-    
-    Args:
-        mode: Agent mode to get WIP path for
-    
-    Returns:
-        Path to WIP workspace directory
-    """
-    if mode == AgentMode.CK3RAVEN_DEV:
-        from ..paths import ROOT_REPO
-        if ROOT_REPO is None:
-            raise RuntimeError("ROOT_REPO not configured - run paths_doctor")
-        return ROOT_REPO / ".wip"
-    else:
-        return Path.home() / ".ck3raven" / "wip"
-
-
-def get_ck3lens_wip_path() -> Path:
-    """Get the ck3lens WIP workspace path (~/.ck3raven/wip/)."""
-    return Path.home() / ".ck3raven" / "wip"
-
-
-def get_ck3raven_dev_wip_path() -> Path:
-    """
-    Get the ck3raven-dev WIP workspace path (<repo>/.wip/).
-    
-    This location is:
-    - Git-ignored
-    - Strictly constrained to analysis/staging only
-    - Cannot substitute for proper code fixes
-    """
-    from ..paths import ROOT_REPO
-    if ROOT_REPO is None:
-        raise RuntimeError("ROOT_REPO not configured - run paths_doctor")
-    return ROOT_REPO / ".wip"
-
 
 @dataclass
 class WipWorkspaceInfo:
@@ -113,13 +71,13 @@ class WipWorkspaceInfo:
     
     @classmethod
     def get_current(cls, mode: AgentMode = AgentMode.CK3LENS) -> "WipWorkspaceInfo":
-        """Get current WIP workspace state for the specified mode."""
-        wip_path = get_wip_workspace_path(mode)
-        exists = wip_path.exists()
+        """Get current WIP workspace state."""
+        from ..paths import WIP_DIR
+        exists = WIP_DIR.exists()
         file_count = 0
         if exists:
-            file_count = sum(1 for _ in wip_path.rglob("*") if _.is_file())
-        return cls(path=wip_path, exists=exists, mode=mode, file_count=file_count)
+            file_count = sum(1 for _ in WIP_DIR.rglob("*") if _.is_file())
+        return cls(path=WIP_DIR, exists=exists, mode=mode, file_count=file_count)
 
 
 # =============================================================================

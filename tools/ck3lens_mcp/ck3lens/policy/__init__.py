@@ -35,9 +35,6 @@ from .types import (
     PolicyOutcome,
     # WIP workspace
     WipWorkspaceInfo,
-    get_wip_workspace_path,
-    get_ck3lens_wip_path,
-    get_ck3raven_dev_wip_path,
     # Git command classification
     GIT_COMMANDS_SAFE,
     GIT_COMMANDS_RISKY,
@@ -103,9 +100,6 @@ __all__ = [
     "get_policy",
     # WIP Workspace
     "WipWorkspaceInfo",
-    "get_wip_workspace_path",
-    "get_ck3lens_wip_path",
-    "get_ck3raven_dev_wip_path",
     "WipWorkspaceState",
     "get_workspace_state",
     "initialize_workspace",

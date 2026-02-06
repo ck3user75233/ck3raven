@@ -31,12 +31,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from .types import (
-    AgentMode,
-    get_wip_workspace_path,
-    get_ck3lens_wip_path,
-    get_ck3raven_dev_wip_path,
-)
+from .types import AgentMode
+from ..paths import WIP_DIR
 
 
 # =============================================================================
@@ -60,7 +56,7 @@ def get_workspace_state(
     repo_root: Path | None = None,
 ) -> WipWorkspaceState:
     """Get the current WIP workspace state for the specified mode."""
-    wip_path = get_wip_workspace_path(mode, repo_root)
+    wip_path = WIP_DIR
     exists = wip_path.exists()
     files = []
     stale_files = []
@@ -102,7 +98,7 @@ def initialize_workspace(
     Returns:
         Status dict with path, wiped_count, etc.
     """
-    wip_path = get_wip_workspace_path(mode, repo_root)
+    wip_path = WIP_DIR
     wiped_count = 0
     stale_cleaned = 0
     
@@ -152,7 +148,7 @@ def cleanup_stale_files(
     Returns:
         Status dict with cleanup results
     """
-    wip_path = get_wip_workspace_path(mode, repo_root)
+    wip_path = WIP_DIR
     if not wip_path.exists():
         return {"path": str(wip_path), "exists": False, "cleaned": 0}
     
@@ -185,7 +181,7 @@ def is_wip_path(
     repo_root: Path | None = None,
 ) -> bool:
     """Check if a path is within the WIP workspace for the specified mode."""
-    wip_path = get_wip_workspace_path(mode, repo_root)
+    wip_path = WIP_DIR
     if isinstance(path, str):
         path = Path(path)
     
@@ -224,7 +220,7 @@ def resolve_wip_path(
     Returns:
         Absolute path within WIP
     """
-    wip_path = get_wip_workspace_path(mode, repo_root)
+    wip_path = WIP_DIR
     resolved = (wip_path / rel_path).resolve()
     
     # Ensure it's still within WIP (prevent path traversal)

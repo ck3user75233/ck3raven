@@ -4885,10 +4885,8 @@ def ck3_get_mode_instructions(
 def _ck3_get_mode_instructions_internal(mode: str) -> dict:
     """Internal implementation returning dict."""
     from pathlib import Path
-    from ck3lens.policy import (
-        ScopeDomain, AgentMode,
-        get_wip_workspace_path, initialize_workspace,
-    )
+    from ck3lens.policy import AgentMode, initialize_workspace
+    from ck3lens.paths import WIP_DIR
     from ck3lens.agent_mode import set_agent_mode, VALID_MODES
     
     # Validate mode before proceeding
@@ -4942,7 +4940,6 @@ def _ck3_get_mode_instructions_internal(mode: str) -> dict:
         try:
             wip_info = initialize_workspace(
                 mode=agent_mode,
-                repo_root=ROOT_REPO if mode == "ck3raven-dev" else None,
                 wipe=False  # DO NOT auto-wipe - preserve WIP contents across sessions
             )
         except Exception as e:
@@ -4955,14 +4952,10 @@ def _ck3_get_mode_instructions_internal(mode: str) -> dict:
         # STEP 5: Log initialization to trace
         # =====================================================================
         trace = _get_trace()
-        wip_path = get_wip_workspace_path(
-            agent_mode,
-            ROOT_REPO if mode == "ck3raven-dev" else None
-        )
         trace.log("ck3lens.mode_initialized", {"mode": mode}, {
             "mode": mode,
             "source_file": str(instructions_path),
-            "wip_workspace": str(wip_path),
+            "wip_workspace": str(WIP_DIR),
             "playset_id": session_info.get("playset_id"),
             "playset_name": session_info.get("playset_name"),
         })
@@ -5004,11 +4997,10 @@ def _ck3_get_mode_instructions_internal(mode: str) -> dict:
 def _get_mode_policy_context(mode: str) -> dict:
     """
     Build policy context for a mode showing boundaries and capabilities.
+    
+    Uses RootCategory (from paths.py) - the canonical path classification.
     """
-    from ck3lens.policy import (
-        ScopeDomain,
-        Ck3RavenDevScopeDomain,
-    )
+    from ck3lens.paths import RootCategory
     
     if mode == "ck3lens":
         return {
@@ -5016,30 +5008,24 @@ def _get_mode_policy_context(mode: str) -> dict:
             "description": "CK3 modding: Database search + mod file editing",
             "scope_domains": {
                 "read_allowed": [
-                    ScopeDomain.PLAYSET_DB.value,  # Indexed playset content
-                    "mods[]",  # All mods in active playset
-                    ScopeDomain.VANILLA_GAME.value,
-                    ScopeDomain.CK3_UTILITY_FILES.value,
-                    ScopeDomain.CK3RAVEN_SOURCE.value,  # Read OK for error context
-                    ScopeDomain.WIP_WORKSPACE.value,
+                    "Indexed playset content (database)",
+                    "mods[] in active playset",
+                    RootCategory.ROOT_GAME.value,
+                    RootCategory.ROOT_CK3RAVEN_DATA.value,
                 ],
                 "write_allowed": [
-                    "mods[] under local_mods_folder",  # Enforcement decides at execution time
-                    ScopeDomain.WIP_WORKSPACE.value,
-                ],
-                "delete_requires_token": [
-                    "mods[] under local_mods_folder",
+                    "mods[] under local_mods_folder (enforcement decides at execution)",
+                    "WIP workspace (~/.ck3raven/wip/)",
                 ],
                 "always_denied": [
                     "write to mods[] NOT under local_mods_folder",
-                    "write to VANILLA_GAME",
-                    "write to CK3RAVEN_SOURCE",
+                    "write to ROOT_GAME (vanilla)",
+                    "write to ROOT_REPO (source code)",
                 ],
             },
-            "available_tokens": ["Token system deprecated - see tools/compliance/tokens.py for NST/LXE"],
             "hard_rules": [
                 "Python files only allowed in WIP workspace",
-                "Delete requires explicit token with user prompt evidence",
+                "Delete requires contract with DELETE operation",
             ],
         }
     elif mode == "ck3raven-dev":
@@ -5048,52 +5034,29 @@ def _get_mode_policy_context(mode: str) -> dict:
             "description": "Development mode: CK3 Lens infrastructure development",
             "scope_domains": {
                 "read_allowed": [
-                    Ck3RavenDevScopeDomain.CK3RAVEN_SOURCE.value,
-                    Ck3RavenDevScopeDomain.CK3LENS_MCP_SOURCE.value,
-                    Ck3RavenDevScopeDomain.CK3LENS_EXPLORER_SOURCE.value,
-                    Ck3RavenDevScopeDomain.MOD_FILESYSTEM.value,  # Read-only for parser testing
-                    Ck3RavenDevScopeDomain.VANILLA_FILESYSTEM.value,  # Read-only for parser testing
-                    Ck3RavenDevScopeDomain.CK3RAVEN_DATABASE.value,
-                    Ck3RavenDevScopeDomain.WIP_WORKSPACE.value,
-                    Ck3RavenDevScopeDomain.CK3_UTILITY_FILES.value,
+                    RootCategory.ROOT_REPO.value,
+                    RootCategory.ROOT_CK3RAVEN_DATA.value,
+                    RootCategory.ROOT_GAME.value,
+                    RootCategory.ROOT_STEAM.value,
                 ],
                 "write_allowed": [
-                    Ck3RavenDevScopeDomain.CK3RAVEN_SOURCE.value,
-                    Ck3RavenDevScopeDomain.CK3LENS_MCP_SOURCE.value,
-                    Ck3RavenDevScopeDomain.CK3LENS_EXPLORER_SOURCE.value,
-                    Ck3RavenDevScopeDomain.CK3RAVEN_DATABASE.value,  # With migration context
-                    Ck3RavenDevScopeDomain.WIP_WORKSPACE.value,  # <repo>/.wip/ only
-                ],
-                "delete_requires_token": [
-                    Ck3RavenDevScopeDomain.CK3RAVEN_SOURCE.value,
-                    Ck3RavenDevScopeDomain.CK3LENS_MCP_SOURCE.value,
-                    Ck3RavenDevScopeDomain.CK3LENS_EXPLORER_SOURCE.value,
+                    RootCategory.ROOT_REPO.value,
+                    "WIP workspace (~/.ck3raven/wip/)",
                 ],
                 "always_denied": [
-                    "write to MOD_FILESYSTEM (absolute prohibition)",
-                    "write to VANILLA_FILESYSTEM (absolute prohibition)",
-                    "launcher/registry repair (ck3lens mode only)",
-                    "run_in_terminal (use ck3_exec instead)",
+                    "write to ROOT_GAME (vanilla files)",
+                    "write to ROOT_STEAM (workshop mods)",
+                    "write to ROOT_USER_DOCS/mod (local mods in dev mode)",
                 ],
             },
-            "available_tokens": {"note": "Token system deprecated - see tools/compliance/tokens.py for NST/LXE"},
             "hard_rules": [
-                "ABSOLUTE PROHIBITION: Cannot write to ANY mod files (local, workshop, vanilla)",
-                "PROHIBITION: Cannot use run_in_terminal (use ck3_exec)",
-                "Git push/force push requires explicit token",
-                "Git history rewrite (rebase, amend) requires explicit token",
-                "DB destructive ops require migration context + rollback plan + token",
-                "WIP scripts cannot substitute for proper code fixes",
-                "Repeated script execution without core changes = AUTO_DENY",
+                "ABSOLUTE PROHIBITION: Cannot write to ANY mod files",
+                "Git push/force push allowed with contract",
+                "DB files owned by QBuilder daemon - read only",
             ],
             "wip_workspace": {
-                "location": "<repo>/.wip/",
-                "note": "Git-ignored, strictly constrained to analysis/staging only",
-                "constraints": [
-                    "ANALYSIS_ONLY: Read-only analysis, no writes",
-                    "REFACTOR_ASSIST: Generate patches, requires core_change_plan",
-                    "MIGRATION_HELPER: Generate migrations, requires core_change_plan",
-                ],
+                "location": "~/.ck3raven/wip/",
+                "note": "Analysis and staging area",
             },
         }
     else:
