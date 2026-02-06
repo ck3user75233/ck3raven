@@ -106,6 +106,7 @@ class CK3LensBridge:
         self._local_mods_folder: Path = None  # Canonical path for local mods
         self.initialized = False
         self._playset_name: str = None
+        self._shutdown_requested = False  # For graceful shutdown
         
     def handle_request(self, request: dict) -> dict:
         """Handle a JSON-RPC request."""
@@ -154,6 +155,7 @@ class CK3LensBridge:
             "create_override_patch": self.create_override_patch,
             "list_playsets": self.list_playsets,
             "reorder_mod": self.reorder_mod,
+            "shutdown": self.shutdown,
         }
         
         handler = handlers.get(method)
@@ -161,6 +163,16 @@ class CK3LensBridge:
             raise ValueError(f"Unknown method: {method}")
         
         return handler(params)
+    
+    def shutdown(self, params: dict) -> dict:
+        """Graceful shutdown - close DB and exit cleanly."""
+        if self._db:
+            try:
+                self._db.close()
+            except Exception:
+                pass
+        self._shutdown_requested = True
+        return {"status": "ok"}
     
     def _get_db_handle(self, purpose: str = "bridge") -> "DbHandle":
         """Get a DbHandle with visibility filtering from WorldAdapter.
@@ -1061,6 +1073,10 @@ def main():
             request = json.loads(line)
             response = bridge.handle_request(request)
             print(json.dumps(response), flush=True)
+            
+            # Check for graceful shutdown
+            if bridge._shutdown_requested:
+                break
         except json.JSONDecodeError as e:
             error_response = {
                 "jsonrpc": "2.0",

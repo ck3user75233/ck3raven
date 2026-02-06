@@ -348,9 +348,24 @@ export class PythonBridge implements vscode.Disposable {
         });
     }
 
-    dispose(): void {
+    async dispose(): Promise<void> {
         if (this.process && !this.process.killed) {
-            this.process.kill();
+            // Try graceful shutdown first
+            try {
+                const shutdownPromise = this.call('shutdown', {});
+                const timeoutPromise = new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error('timeout')), 2000)
+                );
+                await Promise.race([shutdownPromise, timeoutPromise]);
+                this.logger.info('Python bridge shutdown gracefully');
+            } catch {
+                this.logger.debug('Graceful shutdown failed, forcing kill');
+            }
+            
+            // Force kill if still running
+            if (this.process && !this.process.killed) {
+                this.process.kill();
+            }
             this.process = null;
         }
 
