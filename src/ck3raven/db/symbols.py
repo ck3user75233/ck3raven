@@ -51,6 +51,7 @@ PATH_TYPE_HINTS = {
     'common/relations': 'relation',
     
     # Culture & Religion
+    'common/culture/cultures': 'culture',  # Individual culture definitions
     'common/culture/traditions': 'tradition',
     'common/culture/pillars': 'cultural_pillar',
     'common/culture/eras': 'cultural_era',
@@ -394,6 +395,142 @@ def get_symbol_kind_from_path(relpath: str) -> str:
     return 'definition'
 
 
+def _extract_nested_block_symbols(
+    parent_block: Dict[str, Any],
+    nested_block_name: str,
+    symbol_kind: str,
+    source_text: str,
+    content_hash: str
+) -> Iterator[ExtractedSymbol]:
+    """
+    Extract symbols from a named nested block within a parent block.
+    
+    Used for: faiths inside religion blocks (faiths = { catholic = {...} })
+    
+    The parser may represent "faiths = { ... }" as either:
+    - An assignment with key="faiths" and value=block
+    - A block with name="faiths"
+    
+    This function handles both cases.
+    
+    Args:
+        parent_block: The parent AST block (e.g., christianity_religion)
+        nested_block_name: Name of the nested container block (e.g., "faiths")
+        symbol_kind: Symbol type for extracted items (e.g., "faith")
+        source_text: Original source text for hash computation
+        content_hash: Fallback hash if offsets unavailable
+    """
+    for child in parent_block.get('children', []):
+        container_block = None
+        
+        # Case 1: assignment (key = { ... })
+        if child.get('_type') == 'assignment':
+            key = child.get('key')
+            if key == nested_block_name:
+                value = child.get('value', {})
+                if value.get('_type') == 'block':
+                    container_block = value
+        
+        # Case 2: block with name (name = { ... } parsed as block)
+        elif child.get('_type') == 'block':
+            block_name = child.get('_name') or child.get('name')
+            if block_name == nested_block_name:
+                container_block = child
+        
+        # Extract children from the container block
+        if container_block:
+            for nested_child in container_block.get('children', []):
+                if nested_child.get('_type') == 'block':
+                    name = nested_child.get('_name') or nested_child.get('name')
+                    if name and _is_valid_symbol_name(name):
+                        line = nested_child.get('line', 0)
+                        column = nested_child.get('column', 0)
+                        start_offset = nested_child.get('start_offset', 0)
+                        end_offset = nested_child.get('end_offset', 0)
+                        
+                        if source_text and end_offset > start_offset:
+                            node_span = source_text[start_offset:end_offset]
+                            node_hash = compute_node_hash(node_span)
+                        else:
+                            node_hash = content_hash
+                        
+                        yield ExtractedSymbol(
+                            name=name,
+                            kind=symbol_kind,
+                            line=line,
+                            column=column,
+                            signature=None,
+                            doc=None,
+                            node_hash_norm=node_hash,
+                            node_start_offset=start_offset,
+                            node_end_offset=end_offset
+                        )
+
+
+def _extract_title_hierarchy(
+    block: Dict[str, Any],
+    source_text: str,
+    content_hash: str,
+    depth: int = 0
+) -> Iterator[ExtractedSymbol]:
+    """
+    Recursively extract title symbols from landed_titles hierarchy.
+    
+    CK3 title hierarchy: empire > kingdom > duchy > county > barony
+    All nested blocks with valid title prefixes (e_, k_, d_, c_, b_) are titles.
+    
+    Args:
+        block: AST block node (title block)
+        source_text: Original source text for hash computation
+        content_hash: Fallback hash if offsets unavailable
+        depth: Recursion depth (for debugging, max ~5 levels)
+    """
+    # Safety limit - CK3 titles never go deeper than 5 levels
+    if depth > 6:
+        return
+    
+    for child in block.get('children', []):
+        if child.get('_type') == 'block':
+            name = child.get('_name') or child.get('name')
+            if name and _is_valid_symbol_name(name):
+                # Check if it's a title (starts with standard prefix)
+                # Also accept names without prefix as potential modded titles
+                is_title = (
+                    name.startswith(('e_', 'k_', 'd_', 'c_', 'b_')) or
+                    # Some mods/vanilla use non-prefixed names
+                    depth > 0  # If we're inside a title, nested blocks are likely titles
+                )
+                
+                if is_title:
+                    line = child.get('line', 0)
+                    column = child.get('column', 0)
+                    start_offset = child.get('start_offset', 0)
+                    end_offset = child.get('end_offset', 0)
+                    
+                    if source_text and end_offset > start_offset:
+                        node_span = source_text[start_offset:end_offset]
+                        node_hash = compute_node_hash(node_span)
+                    else:
+                        node_hash = content_hash
+                    
+                    yield ExtractedSymbol(
+                        name=name,
+                        kind='title',
+                        line=line,
+                        column=column,
+                        signature=None,
+                        doc=None,
+                        node_hash_norm=node_hash,
+                        node_start_offset=start_offset,
+                        node_end_offset=end_offset
+                    )
+                    
+                    # Recurse into this title's children
+                    yield from _extract_title_hierarchy(
+                        child, source_text, content_hash, depth + 1
+                    )
+
+
 def extract_symbols_from_ast(
     ast_dict: Dict[str, Any],
     relpath: str,
@@ -534,6 +671,37 @@ def extract_symbols_from_ast(
                     node_hash_norm=node_hash,
                     node_start_offset=start_offset,
                     node_end_offset=end_offset
+                )
+    
+    # ==========================================================================
+    # NESTED SYMBOL EXTRACTION
+    # Some content types have important nested structures that aren't top-level
+    # ==========================================================================
+    
+    # Extract faiths from religion files
+    # Structure: religion_name = { faiths = { faith_name = {...} } }
+    if kind == 'religion':
+        for child in children:
+            if child.get('_type') == 'block':
+                yield from _extract_nested_block_symbols(
+                    parent_block=child,
+                    nested_block_name='faiths',
+                    symbol_kind='faith',
+                    source_text=source_text,
+                    content_hash=content_hash
+                )
+    
+    # Extract full title hierarchy from landed_titles
+    # Structure: e_empire = { k_kingdom = { d_duchy = { c_county = { b_barony = {...} } } } }
+    if kind == 'title':
+        for child in children:
+            if child.get('_type') == 'block':
+                # Top-level is already extracted, recurse into nested titles
+                yield from _extract_title_hierarchy(
+                    block=child,
+                    source_text=source_text,
+                    content_hash=content_hash,
+                    depth=1  # Start at 1 since top-level already extracted
                 )
 
 

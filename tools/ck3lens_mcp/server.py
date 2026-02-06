@@ -574,16 +574,8 @@ def _get_trace_path() -> Path:
     - ck3raven-dev mode: {repo}/.wip/traces/ck3lens_trace.jsonl
     - ck3lens mode: ~/.ck3raven/traces/ck3lens_trace.jsonl
     """
-    from ck3lens.agent_mode import get_agent_mode
-    
-    mode = get_agent_mode()
-    
-    if mode == "ck3raven-dev":
-        # Trace goes in repo's .wip folder - use ROOT_REPO from paths.py
-        trace_dir = ROOT_REPO / ".wip" / "traces"
-    else:
-        # Trace goes in ~/.ck3raven/traces/
-        trace_dir = ROOT_CK3RAVEN_DATA / "traces"
+    # All traces go in ~/.ck3raven/traces/ (unified, no mode-specific location)
+    trace_dir = ROOT_CK3RAVEN_DATA / "traces"
     
     trace_dir.mkdir(parents=True, exist_ok=True)
     return trace_dir / "ck3lens_trace.jsonl"
@@ -4644,7 +4636,13 @@ def ck3_report_validation_issue(
         "status": "open",
     }
 
-    # Write to issues file in ck3raven project folder - use ROOT_REPO from paths.py
+    # Write to issues file in ck3raven project folder - requires ROOT_REPO from paths.py
+    if ROOT_REPO is None:
+        return rb.error(
+            "GEN-E-001",
+            message="ROOT_REPO not configured - cannot write validation issues. Run in ck3raven-dev mode.",
+            data={},
+        )
     issues_file = ROOT_REPO / "ck3lens_validation_issues.jsonl"
     with issues_file.open("a", encoding="utf-8") as f:
         f.write(json.dumps(issue, ensure_ascii=False) + "\n")
@@ -4734,15 +4732,10 @@ def ck3_get_agent_briefing() -> Reply:
         "sub_agent_config": sub_agent,
     }
     
-    # Count compatch mods from session.mods
-    compatch_count = sum(1 for m in session.mods if m.is_compatch)
-    result["compatch_mods_count"] = compatch_count
-    result["compatch_mods"] = [m["name"] for m in mod_list if m.get("is_compatch", False)]
-    
     return rb.success(
         'WA-CFG-S-001',
         data=result,
-        message=f"Agent briefing loaded: {compatch_count} compatch mods.",
+        message=f"Agent briefing loaded for playset: {session.playset_name}",
     )
 
 
@@ -4918,6 +4911,12 @@ def _ck3_get_mode_instructions_internal(mode: str) -> dict:
         "ck3lens": "COPILOT_LENS_COMPATCH.md",
         "ck3raven-dev": "COPILOT_RAVEN_DEV.md",
     }
+    
+    if ROOT_REPO is None:
+        return {
+            "error": "ROOT_REPO not configured - mode instructions unavailable",
+            "session": session_info,
+        }
     
     instructions_path = ROOT_REPO / ".github" / mode_files[mode]
     
