@@ -19,30 +19,56 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import { Logger } from '../utils/logger';
-
-// =============================================================================
-// CANONICAL PATHS (computed once at module load)
+import * as os from 'os';
+/// =============================================================================
+// CANONICAL PATHS
 // =============================================================================
 
 /**
- * ROOT_REPO: The ck3raven repository root.
+ * Get ROOT_REPO path.
  * 
- * This extension lives at tools/ck3lens-explorer/dist/mcp/mcpServerProvider.js
- * So ROOT_REPO is 4 levels up from __dirname.
+ * Priority:
+ * 1. ~/.ck3raven/config/workspace.toml (canonical source - shared with Python)
+ * 2. ck3lens.ck3ravenPath VS Code setting (fallback)
+ * 3. __dirname computation (dev mode only)
  * 
- * This is THE path constant. WorldAdapter handles "is X inside ROOT_REPO?"
+ * Returns undefined if not found - MCP server won't start.
  */
-const ROOT_REPO = path.resolve(__dirname, '..', '..', '..');
+function getRootRepo(): string | undefined {
+    // Priority 1: workspace.toml (canonical - same config as Python MCP server)
+    const configPath = path.join(os.homedir(), '.ck3raven', 'config', 'workspace.toml');
+    if (fs.existsSync(configPath)) {
+        const content = fs.readFileSync(configPath, 'utf8');
+        const match = content.match(/^root_repo\s*=\s*"([^"]+)"/m);
+        if (match?.[1] && fs.existsSync(path.join(match[1], 'pyproject.toml'))) {
+            return match[1];
+        }
+    }
 
-/** Python executable in the repo's venv */
-const VENV_PYTHON_WIN = path.join(ROOT_REPO, '.venv', 'Scripts', 'python.exe');
-const VENV_PYTHON_UNIX = path.join(ROOT_REPO, '.venv', 'bin', 'python');
+    // Priority 2: VS Code setting (explicit override)
+    const ck3ravenPath = vscode.workspace.getConfiguration('ck3lens').get<string>('ck3ravenPath');
+    if (ck3ravenPath && fs.existsSync(path.join(ck3ravenPath, 'pyproject.toml'))) {
+        return ck3ravenPath;
+    }
 
-/** MCP server entry point */
-const MCP_SERVER_PATH = path.join(ROOT_REPO, 'tools', 'ck3lens_mcp', 'server.py');
+    // Priority 3: __dirname computation (dev mode only)
+    const devRoot = path.resolve(__dirname, '..', '..', '..', '..');
+    if (fs.existsSync(path.join(devRoot, 'pyproject.toml'))) {
+        return devRoot;
+    }
 
-/** Verify ROOT_REPO is valid (has pyproject.toml) */
-const ROOT_REPO_VALID = fs.existsSync(path.join(ROOT_REPO, 'pyproject.toml'));
+    return undefined;
+}
+
+// Module-level derived paths (computed at load time)
+const ROOT_REPO = getRootRepo();
+const ROOT_REPO_VALID = ROOT_REPO !== undefined;
+const MCP_SERVER_PATH = ROOT_REPO ? path.join(ROOT_REPO, 'tools', 'ck3lens_mcp', 'server.py') : '';
+const VENV_PYTHON_WIN = ROOT_REPO ? path.join(ROOT_REPO, '.venv', 'Scripts', 'python.exe') : '';
+const VENV_PYTHON_UNIX = ROOT_REPO ? path.join(ROOT_REPO, '.venv', 'bin', 'python') : '';
+
+/** MCP server entry point (relative to ROOT_REPO) */
+const MCP_SERVER_REL_PATH = path.join('tools', 'ck3lens_mcp', 'server.py');
 
 // =============================================================================
 // INSTANCE ID GENERATION
@@ -106,7 +132,6 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
         this.mitToken = crypto.randomBytes(8).toString('hex');
         
         this.logger.info(`MCP activate: instanceId=${this.instanceId}`);
-        this.logger.debug(`ROOT_REPO: ${ROOT_REPO}`);
         this.logger.debug(`ROOT_REPO: ${ROOT_REPO}`);
         this.logger.debug(`ROOT_REPO_VALID: ${ROOT_REPO_VALID}`);
 

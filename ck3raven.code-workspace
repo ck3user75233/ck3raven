@@ -3,5 +3,10 @@
 		{
 			"path": "."
 		}
-	]
+	],
+	"settings": {
+		"chat.restoreLastPanelSession": true,
+		"chat.tips.enabled": true,
+		"chat.checkpoints.showFileChanges": true
+	}
 }
