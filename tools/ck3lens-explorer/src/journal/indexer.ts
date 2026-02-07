@@ -149,7 +149,7 @@ export async function rebuildTagIndex(
                         tag,
                         session_id: exp.session_id,
                         window_id: windowId,
-                        workspace_key: workspaceKey,
+                        indexed_at: new Date().toISOString(),
                     });
                 }
             }

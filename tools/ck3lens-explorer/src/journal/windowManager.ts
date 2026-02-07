@@ -6,11 +6,17 @@
  * Rules:
  * - Only one window can be active at a time
  * - Starting a new window auto-closes the previous (reason: overlap_new_window)
- * - Extension deactivate auto-closes any active window (reason: deactivate)
- * - Manifest is ALWAYS written on close (JRN-VIS-001)
+ * - Extension deactivate SKIPS extraction to prevent blocking VS Code shutdown
+ * - Extraction happens at startup via copy-then-read (see startupExtractor.ts)
+ * 
+ * CRITICAL: Never perform I/O against VS Code's chatSessions during shutdown.
+ * This causes file locks on Windows that prevent VS Code from persisting chat history.
+ * See: docs/bugs/JOURNAL_EXTRACTOR_CHAT_SESSION_LOSS.md
  */
 
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 import { 
     WindowState, 
     CloseReason, 
@@ -26,9 +32,80 @@ import {
     initializeWindow, 
     generateWindowId,
     getWindowPath,
+    getWorkspaceJournalPath,
 } from './storage';
 import { createBaseline } from './baseline';
 import { extractWindow } from './extractor';
+
+/** Global shutdown flag - prevents any chatSessions I/O during deactivate */
+let isShuttingDown = false;
+
+/**
+ * Check if the extension is shutting down.
+ * Any code that touches chatSessions must check this first.
+ */
+export function getIsShuttingDown(): boolean {
+    return isShuttingDown;
+}
+
+/**
+ * Set the shutdown flag. Called from deactivate() BEFORE any cleanup.
+ */
+export function setShuttingDown(value: boolean): void {
+    isShuttingDown = value;
+}
+
+/**
+ * Pending extraction marker - written during shutdown, processed at startup.
+ */
+export interface PendingExtractionMarker {
+    window_id: string;
+    workspace_key: string;
+    started_at: string;
+    shutdown_at: string;
+    chat_sessions_path: string;
+    reason: 'deactivate';
+}
+
+/**
+ * Get path to pending extraction marker for a workspace.
+ */
+export function getPendingMarkerPath(workspaceKey: string): string {
+    return path.join(getWorkspaceJournalPath(workspaceKey), 'pending_extraction.json');
+}
+
+/**
+ * Write a pending extraction marker (called during shutdown).
+ * This file signals to startup extractor that extraction was skipped.
+ */
+function writePendingMarker(window: WindowState, logger: StructuredLogger): void {
+    const marker: PendingExtractionMarker = {
+        window_id: window.window_id,
+        workspace_key: window.workspace_key,
+        started_at: window.started_at,
+        shutdown_at: new Date().toISOString(),
+        chat_sessions_path: window.chatSessionsPath,
+        reason: 'deactivate',
+    };
+    
+    const markerPath = getPendingMarkerPath(window.workspace_key);
+    
+    try {
+        // Ensure parent directory exists
+        fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+        fs.writeFileSync(markerPath, JSON.stringify(marker, null, 2), 'utf-8');
+        logger.info(LOG_CATEGORIES.WINDOW_END, 'Pending extraction marker written', {
+            window_id: window.window_id,
+            marker_path: markerPath,
+        });
+    } catch (err) {
+        // Non-fatal - startup extractor will handle missing marker
+        logger.warn(LOG_CATEGORIES.WINDOW_END, 'Failed to write pending marker', {
+            window_id: window.window_id,
+            error: (err as Error).message,
+        });
+    }
+}
 
 /**
  * Singleton window manager for the Journal Extractor.
@@ -71,6 +148,12 @@ export class WindowManager {
      * @returns The new window state, or null if start failed
      */
     public async startWindow(): Promise<WindowState | null> {
+        // GUARD: Never start during shutdown
+        if (isShuttingDown) {
+            this.logger.warn(LOG_CATEGORIES.WINDOW_START, 'Cannot start window during shutdown', {});
+            return null;
+        }
+
         // Get workspace key
         const workspaceKey = deriveActiveWorkspaceKey();
         if (!workspaceKey) {
@@ -142,10 +225,13 @@ export class WindowManager {
     }
 
     /**
-     * Close the active window and run extraction.
+     * Close the active window.
+     * 
+     * CRITICAL: If reason is 'deactivate', we SKIP extraction entirely.
+     * Extraction during shutdown causes file locks that break VS Code's chat persistence.
      * 
      * @param reason - Reason for closing
-     * @returns Extraction result, or null if no window was active
+     * @returns Extraction result, or null if no window was active or extraction was skipped
      */
     public async closeWindow(reason: CloseReason = 'user_command'): Promise<ExtractionResult | null> {
         if (!this.activeWindow) {
@@ -156,7 +242,28 @@ export class WindowManager {
         const window = this.activeWindow;
         this.activeWindow = null;
 
-        // Run extraction (writes manifest per JRN-VIS-001)
+        // =====================================================================
+        // CRITICAL: Skip extraction during shutdown (reason: deactivate)
+        // Performing I/O against chatSessions during VS Code shutdown causes
+        // file locks on Windows that prevent VS Code from persisting chat history.
+        // See: docs/bugs/JOURNAL_EXTRACTOR_CHAT_SESSION_LOSS.md
+        // =====================================================================
+        if (reason === 'deactivate' || isShuttingDown) {
+            this.logger.info(LOG_CATEGORIES.WINDOW_END, 'Skip extraction during deactivate', {
+                window_id: window.window_id,
+                reason,
+                is_shutting_down: isShuttingDown,
+            });
+            
+            // Write pending marker for startup extractor to process
+            writePendingMarker(window, this.logger);
+            
+            // Fire event and return immediately - NO chatSessions I/O
+            this.onWindowStateChanged.fire(null);
+            return null;
+        }
+
+        // Normal close (user_command or overlap_new_window) - run extraction
         let extractionResult: ExtractionResult;
         try {
             extractionResult = await extractWindow(window, reason, this.logger);
@@ -173,12 +280,13 @@ export class WindowManager {
                     sessions_scanned: 0,
                     sessions_changed: 0,
                     sessions_exported: 0,
+                    duplicates_skipped: 0,
                     extraction_duration_ms: 0,
                 },
                 errors: [{
                     code: 'JRN-EXT-E-001',
                     message: (err as Error).message,
-                    context: { stack: (err as Error).stack },
+                    stack: (err as Error).stack,
                 }],
             };
         }
@@ -230,13 +338,23 @@ export class WindowManager {
 
     /**
      * Dispose the window manager.
-     * Called on extension deactivate - auto-closes any active window.
+     * Called on extension deactivate - DOES NOT run extraction.
+     * 
+     * CRITICAL: This method must return quickly without blocking.
+     * Any chatSessions I/O here causes VS Code chat history loss on Windows.
      */
     public async dispose(): Promise<void> {
+        // Mark as shutting down FIRST - prevents any further chatSessions I/O
+        setShuttingDown(true);
+        
         if (this.activeWindow) {
+            // closeWindow with 'deactivate' skips extraction and writes pending marker
             await this.closeWindow('deactivate');
         }
+        
         this.onWindowStateChanged.dispose();
+        
+        this.logger.info(LOG_CATEGORIES.WINDOW_END, 'WindowManager disposed (no chatSessions I/O)', {});
     }
 }
 
@@ -251,6 +369,8 @@ export function initializeWindowManager(
     context: vscode.ExtensionContext,
     logger: StructuredLogger
 ): WindowManager {
+    // Reset shutdown flag on new activation
+    setShuttingDown(false);
     windowManagerInstance = new WindowManager(context, logger);
     return windowManagerInstance;
 }

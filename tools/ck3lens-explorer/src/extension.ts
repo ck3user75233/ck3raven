@@ -42,7 +42,9 @@ import {
     registerJournalCommands, 
     createJournalStatusBar,
     WindowManager,
-    JournalStatusBar 
+    JournalStatusBar,
+    scheduleStartupExtraction,
+    setShuttingDown,
 } from './journal';
 import { registerJournalTreeView } from './journal/journalTreeProvider';
 
@@ -169,6 +171,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             // This enables extraction on window close
             await journalWindowManager.startWindow();
             structuredLogger.info('ext.journal', 'Journal window auto-started');
+            
+            // Schedule startup extraction (Phase 1 - copy-then-read safety)
+            // This handles pending extractions from previous sessions
+            scheduleStartupExtraction(context, structuredLogger);
         } catch (err) {
             // Journal init failure is non-fatal - log and continue
             // Even partial init means deactivate() might still work
@@ -1241,6 +1247,11 @@ except Exception as e:
  * preventing it from caching a stale connection to the old server.
  */
 export async function deactivate(): Promise<void> {
+    // CRITICAL: Set shutdown flag FIRST to prevent any chatSession access
+    // This guards against file locking issues with VS Code's workspaceStorage
+    // See: docs/bugs/JOURNAL_EXTRACTOR_CHAT_SESSION_LOSS.md
+    setShuttingDown(true);
+    
     // Log deactivation start with structured logger (CANONICAL per docs/CANONICAL_LOGS.md)
     structuredLogger?.info('ext.deactivate', 'Extension deactivating');
     logger?.info('CK3 Lens Explorer deactivating...');

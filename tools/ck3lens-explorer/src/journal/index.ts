@@ -50,8 +50,18 @@ export { detectDelta, getChangedFiles, hasChanges } from './delta';
 export { 
     WindowManager, 
     initializeWindowManager, 
-    getWindowManager 
+    getWindowManager,
+    getIsShuttingDown,
+    setShuttingDown,
+    getPendingMarkerPath,
+    type PendingExtractionMarker,
 } from './windowManager';
+
+// Startup Extractor (Phase 1 - copy-then-read)
+export {
+    runStartupExtraction,
+    scheduleStartupExtraction,
+} from './startupExtractor';
 
 // Commands
 export { registerJournalCommands, JOURNAL_COMMANDS } from './commands';

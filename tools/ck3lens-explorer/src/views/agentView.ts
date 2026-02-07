@@ -41,14 +41,14 @@ export const MODE_DEFINITIONS: Record<string, {
         shortName: 'Lens',
         description: 'Full CK3 modding - conflict detection, local mod editing',
         icon: 'merge',
-        initPrompt: `You have access to the ck3lens MCP server tools (prefixed with ck3_). Initialize as CK3 Lens agent by calling the ck3_get_mode_instructions tool with mode "ck3lens". Follow the instructions returned to complete initialization.`
+        initPrompt: `Call ck3_get_mode_instructions(mode="ck3lens") to initialize.`
     },
     'ck3raven-dev': {
         displayName: 'CK3 Raven Dev',
         shortName: 'Raven',
         description: 'Infrastructure development - Python, MCP server',
         icon: 'beaker',
-        initPrompt: `You have access to the ck3lens MCP server tools (prefixed with ck3_). Initialize as CK3 Raven Dev agent by calling the ck3_get_mode_instructions tool with mode "ck3raven-dev". Follow the instructions returned to complete initialization.`
+        initPrompt: `Call ck3_get_mode_instructions(mode="ck3raven-dev") to initialize.`
     }
 };
 
@@ -68,23 +68,19 @@ export function generateInitPrompt(mode: LensMode, instanceId: string | undefine
         return '';
     }
     
-    // Build prompt with instance ID and MIT token
+    // Compact prompt with essential info only
     let prompt = '';
     
     if (instanceId) {
-        const toolPrefix = `mcp_ck3_lens_${instanceId}_`;
-        prompt += `⚠️ CRITICAL: The current MCP server instance ID is "${instanceId}". ` +
-            `All tool names are prefixed with "${toolPrefix}" (e.g., ${toolPrefix}ck3_get_mode_instructions). ` +
-            `NEVER use tool names from conversation history - the instance ID changes on window reload.\n\n`;
+        prompt += `**Instance:** ${instanceId} (tool prefix: mcp_ck3_lens_${instanceId}_)\n`;
     }
     
-    // Include MIT token - required for initialization
     if (mitToken) {
-        prompt += `🔑 MIT (Mode Initialization Token): ${mitToken}\n` +
-            `Pass this token to ck3_get_mode_instructions(mode="${mode}", mit_token="${mitToken}")\n\n`;
+        prompt += `**MIT:** ${mitToken}\n\n`;
+        prompt += `${modeDef.initPrompt.replace(')', `, mit_token="${mitToken}")`)}\n`;
+    } else {
+        prompt += `\n${modeDef.initPrompt}\n`;
     }
-    
-    prompt += modeDef.initPrompt;
     
     return prompt;
 }
@@ -830,11 +826,9 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
                         vscode.window.showInformationMessage(`Copied tool prefix: ${toolPrefix}`);
                         break;
                     case 'chat':
-                        const message = `⚠️ CRITICAL: The current MCP server instance ID is "${this.instanceId}". ` +
-                            `All tool names are prefixed with "${toolPrefix}" (e.g., ${toolPrefix}ck3_get_mode_instructions). ` +
-                            `NEVER use tool names from conversation history - the instance ID changes on window reload.`;
+                        const message = `Instance: ${this.instanceId} | Tool prefix: ${toolPrefix}`;
                         await vscode.commands.executeCommand('workbench.action.chat.open', { query: message });
-                        vscode.window.showInformationMessage('Instance ID sent to chat - press Enter to send');
+                        vscode.window.showInformationMessage('Instance ID sent to chat');
                         break;
                 }
             })

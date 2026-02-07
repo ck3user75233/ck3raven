@@ -3,6 +3,10 @@
  * 
  * Main extraction logic for journal windows.
  * Ties together parsing, fingerprinting, tag scraping, and export.
+ * 
+ * SAFETY: Extraction is guarded by isShuttingDown flag.
+ * During VS Code shutdown, do NOT call extractWindow().
+ * See: docs/bugs/JOURNAL_EXTRACTOR_CHAT_SESSION_LOSS.md
  */
 
 import * as fs from 'fs';
@@ -36,9 +40,12 @@ import {
     traceFileExists,
     ToolCallEvent,
 } from './traceReader';
+import { getIsShuttingDown } from './windowManager';
 
 /**
  * Run extraction for a journal window.
+ * 
+ * SAFETY: Returns empty result if extension is shutting down.
  * 
  * @param window - The active window state
  * @param closeReason - Reason for closing
@@ -50,6 +57,24 @@ export async function extractWindow(
     closeReason: CloseReason,
     logger: StructuredLogger
 ): Promise<ExtractionResult> {
+    // CRITICAL: Block extraction during shutdown
+    // This prevents file locking issues with VS Code's workspaceStorage
+    if (getIsShuttingDown()) {
+        logger.warn(LOG_CATEGORIES.EXTRACTION, 'Extraction blocked during shutdown', {
+            window_id: window.window_id,
+            close_reason: closeReason,
+        });
+        return {
+            success: false,
+            exports: [],
+            telemetry: createEmptyTelemetry(),
+            errors: [{
+                code: 'JRN-EXT-E-003',
+                message: 'Extraction blocked: extension is shutting down',
+            }],
+        };
+    }
+
     const startTime = Date.now();
     const telemetry: ManifestTelemetry = createEmptyTelemetry();
     const exports: ManifestExport[] = [];

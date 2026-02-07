@@ -5,6 +5,10 @@
  *   workspaceStorage/{workspace_id}/chatSessions/
  * 
  * NO FALLBACKS: If no workspace is open, discovery fails with a clear error.
+ * 
+ * SAFETY: All chatSessions access is guarded by isShuttingDown flag.
+ * During VS Code shutdown, these functions may cause file lock issues.
+ * See: docs/bugs/JOURNAL_EXTRACTOR_CHAT_SESSION_LOSS.md
  */
 
 import * as fs from 'fs';
@@ -16,6 +20,7 @@ import {
     LOG_CATEGORIES 
 } from './types';
 import { StructuredLogger } from '../utils/structuredLogger';
+import { getIsShuttingDown } from './windowManager';
 
 /** Maximum age (in ms) for "recent activity" ranking - 7 days */
 const RECENT_ACTIVITY_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;
@@ -33,6 +38,8 @@ export const DISCOVERY_ERRORS = {
     NO_CHAT_SESSIONS_DIR: 'JRN-DISC-E-002',
     /** chatSessions exists but contains no session files */
     NO_SESSION_FILES: 'JRN-DISC-E-003',
+    /** Operation blocked during shutdown */
+    SHUTDOWN_BLOCKED: 'JRN-DISC-E-004',
 } as const;
 
 /**
@@ -40,6 +47,7 @@ export const DISCOVERY_ERRORS = {
  * 
  * REQUIRES: A workspace must be open (storageUri must exist).
  * NO FALLBACKS: Fails fast with specific error codes.
+ * SAFETY: Returns immediately if extension is shutting down.
  * 
  * @param context - VS Code extension context
  * @param logger - Structured logger for discovery events
@@ -49,6 +57,21 @@ export async function discoverChatSessions(
     context: vscode.ExtensionContext,
     logger: StructuredLogger
 ): Promise<DiscoveryResult> {
+    // CRITICAL: Block chatSessions access during shutdown
+    // This prevents file locking issues with VS Code's workspaceStorage
+    if (getIsShuttingDown()) {
+        logger.warn(LOG_CATEGORIES.DISCOVERY, 'Discovery blocked during shutdown', {
+            error_code: DISCOVERY_ERRORS.SHUTDOWN_BLOCKED,
+        });
+        return {
+            success: false,
+            chatSessionsPath: undefined,
+            candidates: [],
+            error: DISCOVERY_ERRORS.SHUTDOWN_BLOCKED,
+            errorMessage: 'Discovery blocked: extension is shutting down',
+        };
+    }
+
     logger.info(LOG_CATEGORIES.DISCOVERY, 'Starting chatSessions discovery', {
         storageUri: context.storageUri?.fsPath || 'undefined',
     });
@@ -79,6 +102,17 @@ export async function discoverChatSessions(
         workspaceStorageRoot,
         chatSessionsPath,
     });
+
+    // Re-check shutdown flag before file system access
+    if (getIsShuttingDown()) {
+        return {
+            success: false,
+            chatSessionsPath: undefined,
+            candidates: [],
+            error: DISCOVERY_ERRORS.SHUTDOWN_BLOCKED,
+            errorMessage: 'Discovery blocked: extension is shutting down',
+        };
+    }
 
     // Check if directory exists
     if (!fs.existsSync(chatSessionsPath)) {
@@ -150,6 +184,11 @@ export async function discoverChatSessions(
  * Calculate score for a valid chatSessions directory.
  */
 function calculateScore(chatSessionsPath: string, jsonFiles: string[], logger: StructuredLogger): number {
+    // Abort scoring during shutdown
+    if (getIsShuttingDown()) {
+        return 0;
+    }
+
     let score = 10; // Base: directory exists
     score += 20; // Has JSON files
     score += 5; // API context source
@@ -179,8 +218,13 @@ function calculateScore(chatSessionsPath: string, jsonFiles: string[], logger: S
 
 /**
  * Check if a chatSessions directory is valid and usable.
+ * SAFETY: Returns false during shutdown.
  */
 export function validateChatSessionsPath(chatSessionsPath: string): boolean {
+    if (getIsShuttingDown()) {
+        return false;
+    }
+
     if (!fs.existsSync(chatSessionsPath)) {
         return false;
     }

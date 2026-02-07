@@ -3,11 +3,16 @@
  * 
  * Parses Copilot Chat session JSON files.
  * This is the primary backend for Phase 1 (SQLite backend is Phase 2+).
+ * 
+ * SAFETY: File reads are guarded by isShuttingDown flag.
+ * During VS Code shutdown, these functions return null/empty results.
+ * See: docs/bugs/JOURNAL_EXTRACTOR_CHAT_SESSION_LOSS.md
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { SessionMetadata } from './types';
+import { SessionMetadata } from '../types';
+import { getIsShuttingDown } from '../windowManager';
 
 /**
  * Structure of a Copilot Chat message in the session JSON.
@@ -63,10 +68,23 @@ export interface CopilotSession {
 /**
  * Read and parse a session JSON file.
  * 
+ * SAFETY: Returns null during shutdown.
+ * 
  * @param filePath - Path to the session JSON file
  * @returns Parsed session or null on error
  */
 export function parseSessionFile(filePath: string): CopilotSession | null {
+    // CRITICAL: Block chatSessions file reading during shutdown
+    if (getIsShuttingDown()) {
+        return {
+            id: path.basename(filePath, '.json'),
+            filePath,
+            messages: [],
+            raw: null,
+            errors: ['Blocked during shutdown'],
+        };
+    }
+
     try {
         const content = fs.readFileSync(filePath, 'utf-8');
         const raw = JSON.parse(content);
@@ -267,8 +285,15 @@ function normalizeMessages(arr: unknown[]): CopilotMessage[] {
 
 /**
  * Get metadata for a session file without fully parsing it.
+ * 
+ * SAFETY: Returns null during shutdown.
  */
 export function getSessionMetadata(filePath: string): SessionMetadata | null {
+    // CRITICAL: Block file access during shutdown
+    if (getIsShuttingDown()) {
+        return null;
+    }
+
     try {
         const stat = fs.statSync(filePath);
         const id = path.basename(filePath, '.json');
@@ -286,8 +311,15 @@ export function getSessionMetadata(filePath: string): SessionMetadata | null {
 
 /**
  * List all session files in a chatSessions directory.
+ * 
+ * SAFETY: Returns empty array during shutdown.
  */
 export function listSessionFiles(chatSessionsPath: string): string[] {
+    // CRITICAL: Block directory access during shutdown
+    if (getIsShuttingDown()) {
+        return [];
+    }
+
     try {
         if (!fs.existsSync(chatSessionsPath)) {
             return [];

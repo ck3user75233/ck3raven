@@ -3,21 +3,33 @@
  * 
  * Captures the state of chatSessions files at window start
  * for delta detection on window close.
+ * 
+ * SAFETY: All chatSessions access is guarded by isShuttingDown flag.
+ * During VS Code shutdown, these functions return empty results.
+ * See: docs/bugs/JOURNAL_EXTRACTOR_CHAT_SESSION_LOSS.md
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import { BaselineSnapshot, FileState } from './types';
+import { getIsShuttingDown } from './windowManager';
 
 /**
  * Create a baseline snapshot of all files in a directory.
  * Records mtime and size for each file.
+ * 
+ * SAFETY: Returns empty map during shutdown.
  * 
  * @param chatSessionsPath - Path to the chatSessions directory
  * @returns Map of file path -> FileState
  */
 export function createBaseline(chatSessionsPath: string): BaselineSnapshot {
     const baseline: BaselineSnapshot = new Map();
+
+    // CRITICAL: Block chatSessions access during shutdown
+    if (getIsShuttingDown()) {
+        return baseline;
+    }
 
     if (!fs.existsSync(chatSessionsPath)) {
         return baseline;
@@ -29,6 +41,11 @@ export function createBaseline(chatSessionsPath: string): BaselineSnapshot {
         for (const file of files) {
             if (!file.endsWith('.json')) {
                 continue;
+            }
+
+            // Re-check shutdown during iteration
+            if (getIsShuttingDown()) {
+                return baseline;
             }
 
             const filePath = path.join(chatSessionsPath, file);

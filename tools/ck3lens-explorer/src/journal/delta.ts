@@ -2,14 +2,21 @@
  * Delta Detection
  * 
  * Compares current file state against baseline to find changes.
+ * 
+ * SAFETY: All chatSessions access is guarded by isShuttingDown flag.
+ * During VS Code shutdown, these functions return empty results.
+ * See: docs/bugs/JOURNAL_EXTRACTOR_CHAT_SESSION_LOSS.md
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import { BaselineSnapshot, DeltaResult, FileState } from './types';
+import { getIsShuttingDown } from './windowManager';
 
 /**
  * Detect changes in a directory since baseline was captured.
+ * 
+ * SAFETY: Returns empty delta during shutdown.
  * 
  * @param chatSessionsPath - Path to the chatSessions directory
  * @param baseline - Baseline snapshot from window start
@@ -24,6 +31,11 @@ export function detectDelta(
         modified: [],
         deleted: [],
     };
+
+    // CRITICAL: Block chatSessions access during shutdown
+    if (getIsShuttingDown()) {
+        return result;
+    }
 
     if (!fs.existsSync(chatSessionsPath)) {
         // If directory doesn't exist, all baseline files are "deleted"
@@ -40,6 +52,11 @@ export function detectDelta(
         for (const file of files) {
             if (!file.endsWith('.json')) {
                 continue;
+            }
+
+            // Re-check shutdown during iteration
+            if (getIsShuttingDown()) {
+                return result;
             }
 
             const filePath = path.join(chatSessionsPath, file);
