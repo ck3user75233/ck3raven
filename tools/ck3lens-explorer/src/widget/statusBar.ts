@@ -11,14 +11,12 @@ import { Logger } from '../utils/logger';
 export type ConnectionStatus = 'connected' | 'disconnected';
 
 export interface StatusBarState {
-    pythonBridge: ConnectionStatus;
     mcpServer: ConnectionStatus;
 }
 
 export class LensStatusBar implements vscode.Disposable {
     private statusBarItem: vscode.StatusBarItem;
     private state: StatusBarState = {
-        pythonBridge: 'disconnected',
         mcpServer: 'disconnected'
     };
     private disposables: vscode.Disposable[] = [];
@@ -47,14 +45,6 @@ export class LensStatusBar implements vscode.Disposable {
     }
 
     /**
-     * Set Python Bridge connection status
-     */
-    public setPythonBridgeStatus(status: ConnectionStatus): void {
-        this.state.pythonBridge = status;
-        this.updateStatusBar();
-    }
-
-    /**
      * Set MCP Server connection status
      */
     public setMcpServerStatus(status: ConnectionStatus): void {
@@ -63,19 +53,12 @@ export class LensStatusBar implements vscode.Disposable {
     }
 
     private updateStatusBar(): void {
-        const bridgeOk = this.state.pythonBridge === 'connected';
         const mcpOk = this.state.mcpServer === 'connected';
 
         let icon: string;
         let label: string;
 
-        if (bridgeOk && mcpOk) {
-            icon = '$(check-all)';
-            label = 'CK3 Lens';
-        } else if (bridgeOk) {
-            icon = '$(check)';
-            label = 'CK3 Lens';
-        } else if (mcpOk) {
+        if (mcpOk) {
             icon = '$(plug)';
             label = 'CK3 Lens';
         } else {
@@ -86,16 +69,13 @@ export class LensStatusBar implements vscode.Disposable {
         this.statusBarItem.text = `${icon} ${label}`;
         this.statusBarItem.tooltip = new vscode.MarkdownString(
             `**CK3 Lens**\n\n` +
-            `- Python Bridge: ${this.state.pythonBridge}\n` +
             `- MCP Server: ${this.state.mcpServer}\n\n` +
             `Click to open Tools view`
         );
 
         // Color based on connection status
-        if (!bridgeOk && !mcpOk) {
+        if (!mcpOk) {
             this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
-        } else if (!bridgeOk || !mcpOk) {
-            this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
         } else {
             this.statusBarItem.backgroundColor = undefined;
         }

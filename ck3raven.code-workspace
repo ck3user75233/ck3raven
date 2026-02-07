@@ -1,12 +1,30 @@
-{
+﻿{
 	"folders": [
 		{
 			"path": "."
 		}
 	],
 	"settings": {
-		"chat.restoreLastPanelSession": true,
-		"chat.tips.enabled": true,
-		"chat.checkpoints.showFileChanges": true
+		"python.analysis.typeCheckingMode": "standard",
+		"python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+		"ck3lens.pythonPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+		"ck3lens.ck3ravenPath": "${workspaceFolder}",
+		"ck3lens.autoInitialize": true,
+		"files.exclude": {
+			"**/__pycache__": true,
+			"**/*.pyc": true,
+			".venv": true
+		},
+		"search.exclude": {
+			"**/__pycache__": true,
+			"**/node_modules": true,
+			".venv": true
+		}
+	},
+	"extensions": {
+		"recommendations": [
+			"ms-python.python",
+			"ms-python.vscode-pylance"
+		]
 	}
 }

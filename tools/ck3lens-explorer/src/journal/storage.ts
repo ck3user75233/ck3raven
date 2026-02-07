@@ -5,7 +5,10 @@
  * 
  * Directory structure:
  *   ~/.ck3raven/journals/{workspace_key}/
- *   ├── windows/
+ *   ├── chat_archives/           # Primary storage for extracted sessions
+ *   │   ├── {session_id}.json
+ *   │   └── {session_id}.md
+ *   ├── windows/                 # DEPRECATED: Legacy window-based extraction
  *   │   └── {window_id}/
  *   │       ├── manifest.json
  *   │       ├── {session_id}.json
@@ -48,7 +51,16 @@ export function getWorkspaceJournalPath(workspaceKey: string): string {
 }
 
 /**
+ * Get the chat_archives directory for a workspace.
+ * This is the primary storage location for extracted chat sessions.
+ */
+export function getChatArchivesPath(workspaceKey: string): string {
+    return path.join(getWorkspaceJournalPath(workspaceKey), 'chat_archives');
+}
+
+/**
  * Get the windows directory for a workspace.
+ * @deprecated Use getChatArchivesPath instead - windows extraction is legacy
  */
 export function getWindowsPath(workspaceKey: string): string {
     return path.join(getWorkspaceJournalPath(workspaceKey), 'windows');
@@ -66,6 +78,7 @@ export function getIndexPath(workspaceKey: string): string {
  * 
  * @param workspaceKey - Workspace identifier
  * @param windowId - Window identifier (ISO timestamp + counter)
+ * @deprecated Use getChatArchivesPath for new code
  */
 export function getWindowPath(workspaceKey: string, windowId: string): string {
     return path.join(getWindowsPath(workspaceKey), windowId);

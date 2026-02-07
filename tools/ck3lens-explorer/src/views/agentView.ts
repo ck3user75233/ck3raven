@@ -7,6 +7,7 @@ import { Logger } from '../utils/logger';
 
 export type LensMode = 'ck3lens' | 'ck3raven-dev' | 'none' | 'initializing';
 export type ConnectionStatus = 'connected' | 'disconnected';
+export type PathsStatus = 'healthy' | 'warnings' | 'errors' | 'unchecked';
 
 export interface AgentInstance {
     id: string;
@@ -19,7 +20,7 @@ export interface AgentInstance {
 }
 
 export interface AgentState {
-    pythonBridge: { status: ConnectionStatus; latencyMs?: number };
+    pathsDoctor: { status: PathsStatus; errorCount: number; warnCount: number; configPath?: string };
     mcpServer: { status: ConnectionStatus; serverName?: string };
     policyEnforcement: { status: ConnectionStatus; message?: string };
     agents: AgentInstance[];
@@ -88,7 +89,7 @@ export function generateInitPrompt(mode: LensMode, instanceId: string | undefine
 class AgentTreeItem extends vscode.TreeItem {
     constructor(
         public readonly label: string,
-        public readonly itemType: 'python-bridge' | 'mcp-server' | 'policy-enforcement' | 'agent' | 'action' | 'info' | 'instance-id',
+        public readonly itemType: 'paths-doctor' | 'mcp-server' | 'policy-enforcement' | 'agent' | 'action' | 'info' | 'instance-id',
         public readonly collapsibleState: vscode.TreeItemCollapsibleState = vscode.TreeItemCollapsibleState.None,
         public readonly agent?: AgentInstance,
         public readonly actionCommand?: string
@@ -100,7 +101,7 @@ class AgentTreeItem extends vscode.TreeItem {
 
     private setupItem(): void {
         switch (this.itemType) {
-            case 'python-bridge':
+            case 'paths-doctor':
             case 'mcp-server':
                 // Icon set by caller based on status
                 break;
@@ -206,6 +207,13 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
         this.checkMcpConfiguration();
         console.log('[CK3RAVEN] AgentViewProvider checkMcpConfiguration done');
         
+        // Run paths doctor on startup (independent of MCP status)
+        // Delay slightly to let extension fully activate
+        setTimeout(() => {
+            this.runPathsDoctor();
+            console.log('[CK3RAVEN] AgentViewProvider initial runPathsDoctor triggered');
+        }, 1000);
+        
         // Start ongoing MCP monitoring (every 30 seconds)
         this.startMcpMonitoring();
         console.log('[CK3RAVEN] AgentViewProvider startMcpMonitoring done');
@@ -272,6 +280,9 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
                     this.toolsLastSeen = now;
                     this.lastToolCount = ck3Tools.length;
                     this.logger.info(`MCP tools refreshed: ${ck3Tools.length} tools detected`);
+                    
+                    // Run paths doctor when MCP tools first become available (or count changes)
+                    this.runPathsDoctor();
                 }
 
                 // Dynamic provider: if tools are registered, MCP is working
@@ -310,6 +321,7 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
         // CRITICAL FIX: Only refresh if state actually changed
         // This prevents listener leak from accumulating VS Code internal listeners
         const currentSignature = JSON.stringify({
+            pathsDoctor: this.state.pathsDoctor,
             mcpServer: this.state.mcpServer,
             policyEnforcement: this.state.policyEnforcement
         });
@@ -321,6 +333,89 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
             this.logger.debug('MCP state changed, refreshed tree view');
         }
         // else: state unchanged, skip refresh to avoid listener accumulation
+    }
+
+    /**
+     * Run paths doctor CLI to check configuration health.
+     * Updates pathsDoctor state with results.
+     * 
+     * Note: The ck3lens module is in tools/ck3lens_mcp/, so we need to set
+     * PYTHONPATH to include that directory for the module to be found.
+     */
+    private runPathsDoctor(): void {
+        const { exec } = require('child_process');
+        const os = require('os');
+        const path = require('path');
+        
+        // Get config path for the open command
+        const configPath = path.join(os.homedir(), '.ck3raven', 'config', 'workspace.toml');
+        
+        // Try to find Python executable in the repo .venv
+        // This is best-effort - if it fails, we just mark as unchecked
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders || workspaceFolders.length === 0) {
+            this.state.pathsDoctor = { status: 'unchecked', errorCount: 0, warnCount: 0, configPath };
+            return;
+        }
+        
+        const workspaceRoot = workspaceFolders[0].uri.fsPath;
+        const pythonPath = process.platform === 'win32'
+            ? path.join(workspaceRoot, '.venv', 'Scripts', 'python.exe')
+            : path.join(workspaceRoot, '.venv', 'bin', 'python');
+        
+        const fs = require('fs');
+        if (!fs.existsSync(pythonPath)) {
+            this.logger.debug('Python venv not found, paths doctor status will be unchecked');
+            this.state.pathsDoctor = { status: 'unchecked', errorCount: 0, warnCount: 0, configPath };
+            return;
+        }
+        
+        // Run paths_doctor with JSON output
+        // PYTHONPATH must include tools/ck3lens_mcp where the ck3lens module lives
+        const ck3lensMcpPath = path.join(workspaceRoot, 'tools', 'ck3lens_mcp');
+        const env = {
+            ...process.env,
+            PYTHONPATH: ck3lensMcpPath + (process.env.PYTHONPATH ? path.delimiter + process.env.PYTHONPATH : '')
+        };
+        const cmd = `"${pythonPath}" -m ck3lens.paths_doctor --json`;
+        
+        exec(cmd, { timeout: 10000, env }, (error: Error | null, stdout: string, stderr: string) => {
+            try {
+                if (error) {
+                    this.logger.warn('Paths doctor failed:', error.message);
+                    this.state.pathsDoctor = { status: 'unchecked', errorCount: 0, warnCount: 0, configPath };
+                    this.refresh();
+                    return;
+                }
+                
+                const report = JSON.parse(stdout);
+                const errorCount = report.summary?.ERROR || 0;
+                const warnCount = report.summary?.WARN || 0;
+                
+                let status: PathsStatus;
+                if (errorCount > 0) {
+                    status = 'errors';
+                } else if (warnCount > 0) {
+                    status = 'warnings';
+                } else {
+                    status = 'healthy';
+                }
+                
+                this.state.pathsDoctor = { 
+                    status, 
+                    errorCount, 
+                    warnCount, 
+                    configPath: report.config_path || configPath 
+                };
+                this.persistState();
+                this.refresh();
+                this.logger.info(`Paths doctor: ${status} (${errorCount} errors, ${warnCount} warnings)`);
+            } catch (parseError) {
+                this.logger.warn('Failed to parse paths doctor output:', parseError);
+                this.state.pathsDoctor = { status: 'unchecked', errorCount: 0, warnCount: 0, configPath };
+                this.refresh();
+            }
+        });
     }
 
     /**
@@ -357,7 +452,7 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
         }
         
         return {
-            pythonBridge: stored?.pythonBridge || { status: 'disconnected' },
+            pathsDoctor: stored?.pathsDoctor || { status: 'unchecked', errorCount: 0, warnCount: 0 },
             mcpServer: stored?.mcpServer || { status: 'disconnected' },
             policyEnforcement: stored?.policyEnforcement || { status: 'disconnected' },
             agents: agents,  // Use restored or default agents
@@ -375,7 +470,7 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
      */
     private createFreshState(): AgentState {
         return {
-            pythonBridge: { status: 'disconnected' },
+            pathsDoctor: { status: 'unchecked', errorCount: 0, warnCount: 0 },
             mcpServer: { status: 'disconnected' },
             policyEnforcement: { status: 'disconnected' },
             agents: [{
@@ -580,21 +675,45 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
 
         const items: AgentTreeItem[] = [];
 
-        // Python Bridge status
-        const bridgeItem = new AgentTreeItem(
-            `Python Bridge: ${this.state.pythonBridge.status}`,
-            'python-bridge'
+        // Paths Doctor status (configuration health)
+        const pathsStatusLabels: Record<PathsStatus, string> = {
+            healthy: 'Paths: Healthy',
+            warnings: `Paths: ${this.state.pathsDoctor.warnCount} warning(s)`,
+            errors: `Paths: ${this.state.pathsDoctor.errorCount} error(s)`,
+            unchecked: 'Paths: Not checked'
+        };
+        const pathsItem = new AgentTreeItem(
+            pathsStatusLabels[this.state.pathsDoctor.status],
+            'paths-doctor',
+            vscode.TreeItemCollapsibleState.None,
+            undefined,
+            'ck3lens.openPathsConfig'
         );
-        bridgeItem.iconPath = new vscode.ThemeIcon(
-            this.state.pythonBridge.status === 'connected' ? 'check' : 'close',
-            this.state.pythonBridge.status === 'connected' 
-                ? new vscode.ThemeColor('testing.iconPassed')
-                : new vscode.ThemeColor('testing.iconFailed')
+        const pathsIcons: Record<PathsStatus, string> = {
+            healthy: 'check',
+            warnings: 'warning',
+            errors: 'error',
+            unchecked: 'question'
+        };
+        const pathsColors: Record<PathsStatus, string> = {
+            healthy: 'testing.iconPassed',
+            warnings: 'problemsWarningIcon.foreground',
+            errors: 'testing.iconFailed',
+            unchecked: 'disabledForeground'
+        };
+        pathsItem.iconPath = new vscode.ThemeIcon(
+            pathsIcons[this.state.pathsDoctor.status],
+            new vscode.ThemeColor(pathsColors[this.state.pathsDoctor.status])
         );
-        if (this.state.pythonBridge.latencyMs) {
-            bridgeItem.description = `${this.state.pythonBridge.latencyMs}ms`;
-        }
-        items.push(bridgeItem);
+        pathsItem.description = 'click to configure';
+        pathsItem.tooltip = new vscode.MarkdownString(
+            `**Paths Configuration**\n\n` +
+            `Status: ${this.state.pathsDoctor.status}\n` +
+            `Errors: ${this.state.pathsDoctor.errorCount}\n` +
+            `Warnings: ${this.state.pathsDoctor.warnCount}\n\n` +
+            `Click to open configuration file.`
+        );
+        items.push(pathsItem);
 
         // MCP Server status (actually tests the server)
         const mcpLabel = this.state.mcpServer.status === 'connected' 
@@ -833,6 +952,32 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
                 }
             })
         );
+
+        // Open paths configuration file
+        this.disposables.push(
+            vscode.commands.registerCommand('ck3lens.openPathsConfig', async () => {
+                const configPath = this.state.pathsDoctor.configPath;
+                if (configPath) {
+                    const uri = vscode.Uri.file(configPath);
+                    await vscode.commands.executeCommand('vscode.open', uri);
+                } else {
+                    // Fall back to default location
+                    const os = require('os');
+                    const path = require('path');
+                    const defaultPath = path.join(os.homedir(), '.ck3raven', 'config', 'workspace.toml');
+                    const uri = vscode.Uri.file(defaultPath);
+                    await vscode.commands.executeCommand('vscode.open', uri);
+                }
+            })
+        );
+
+        // Re-run paths doctor check
+        this.disposables.push(
+            vscode.commands.registerCommand('ck3lens.recheckPaths', () => {
+                this.runPathsDoctor();
+                vscode.window.showInformationMessage('Checking paths configuration...');
+            })
+        );
     }
 
     /**
@@ -917,10 +1062,15 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
     }
 
     /**
-     * Set Python Bridge connection status
+     * Set Paths Doctor status
      */
-    public setPythonBridgeStatus(status: ConnectionStatus, latencyMs?: number): void {
-        this.state.pythonBridge = { status, latencyMs };
+    public setPathsDoctorStatus(status: PathsStatus, errorCount: number = 0, warnCount: number = 0): void {
+        this.state.pathsDoctor = { 
+            ...this.state.pathsDoctor,
+            status, 
+            errorCount, 
+            warnCount 
+        };
         this.persistState();
         this.refresh();
     }

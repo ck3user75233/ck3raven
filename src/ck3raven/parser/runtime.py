@@ -162,6 +162,7 @@ def _run_parse_subprocess(
 
 
 # Subprocess code for file parsing
+# IMPORT FIX: Uses ast_serde instead of db.ast_cache to avoid DB layer imports
 _PARSE_FILE_CODE = '''
 import json
 import sys
@@ -174,7 +175,7 @@ try:
     sys.path.insert(0, str(Path(os.environ.get("CK3RAVEN_ROOT", ".")) / "src"))
     
     from ck3raven.parser.parser import parse_file as _parse_file
-    from ck3raven.db.ast_cache import serialize_ast, count_ast_nodes, deserialize_ast
+    from ck3raven.parser.ast_serde import serialize_ast, count_ast_nodes, deserialize_ast
     
     ast_node = _parse_file(str(filepath))
     ast_blob = serialize_ast(ast_node)
@@ -200,6 +201,7 @@ print(json.dumps(result))
 
 
 # Subprocess code for text parsing (content via stdin)
+# IMPORT FIX: Uses ast_serde instead of db.ast_cache to avoid DB layer imports
 _PARSE_TEXT_CODE = '''
 import json
 import sys
@@ -213,7 +215,7 @@ try:
     sys.path.insert(0, str(Path(os.environ.get("CK3RAVEN_ROOT", ".")) / "src"))
     
     from ck3raven.parser.parser import parse_source as _parse_source
-    from ck3raven.db.ast_cache import serialize_ast, count_ast_nodes, deserialize_ast
+    from ck3raven.parser.ast_serde import serialize_ast, count_ast_nodes, deserialize_ast
     
     ast_node = _parse_source(content, filename)
     ast_blob = serialize_ast(ast_node)
@@ -239,6 +241,7 @@ print(json.dumps(result))
 
 
 # Subprocess code for text parsing with error recovery
+# IMPORT FIX: Uses ast_serde instead of db.ast_cache to avoid DB layer imports
 _PARSE_TEXT_RECOVERING_CODE = '''
 import json
 import sys
@@ -252,7 +255,7 @@ try:
     sys.path.insert(0, str(Path(os.environ.get("CK3RAVEN_ROOT", ".")) / "src"))
     
     from ck3raven.parser.parser import parse_source_recovering as _parse_source_recovering
-    from ck3raven.db.ast_cache import serialize_ast, count_ast_nodes, deserialize_ast
+    from ck3raven.parser.ast_serde import serialize_ast, count_ast_nodes, deserialize_ast
     
     parse_result = _parse_source_recovering(content, filename)
     

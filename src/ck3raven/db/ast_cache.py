@@ -3,6 +3,11 @@ AST Cache with Deduplication
 
 Stores parsed AST keyed by (content_hash, parser_version_id).
 Enables cache reuse across playsets and versions.
+
+ARCHITECTURE NOTE: Serialization functions (serialize_ast, deserialize_ast,
+count_ast_nodes) are imported from ck3raven.parser.ast_serde which has no
+database dependencies. This allows subprocess parsing to serialize ASTs
+without loading the heavy database layer.
 """
 
 import sqlite3
@@ -15,80 +20,31 @@ from ck3raven.db.schema import get_connection
 from ck3raven.db.models import ASTRecord
 from ck3raven.db.parser_version import get_current_parser_version
 from ck3raven.parser import parse_file
-from ck3raven.parser.parser import RootNode, BlockNode, AssignmentNode, ValueNode, ListNode
+from ck3raven.parser.parser import RootNode
+
+# Re-export serialization functions from ast_serde for backward compatibility
+# These have ZERO database dependencies and can be used in subprocesses
+from ck3raven.parser.ast_serde import (
+    serialize_ast,
+    deserialize_ast,
+    count_ast_nodes,
+)
 
 logger = logging.getLogger(__name__)
 
-
-def serialize_ast(ast: RootNode) -> bytes:
-    """Serialize AST to JSON bytes."""
-    
-    def node_to_dict(node) -> Dict[str, Any]:
-        """Convert AST node to serializable dict."""
-        if isinstance(node, RootNode):
-            return {
-                '_type': 'root',
-                'filename': str(node.filename),  # Convert Path to string
-                'children': [node_to_dict(c) for c in node.children]
-            }
-        elif isinstance(node, BlockNode):
-            return {
-                '_type': 'block',
-                'name': node.name,
-                'operator': node.operator,
-                'line': node.line,
-                'column': node.column,
-                'children': [node_to_dict(c) for c in node.children]
-            }
-        elif isinstance(node, AssignmentNode):
-            return {
-                '_type': 'assignment',
-                'key': node.key,
-                'operator': node.operator,
-                'line': node.line,
-                'column': node.column,
-                'value': node_to_dict(node.value)
-            }
-        elif isinstance(node, ValueNode):
-            return {
-                '_type': 'value',
-                'value': node.value,
-                'value_type': node.value_type,
-                'line': node.line,
-                'column': node.column,
-            }
-        elif isinstance(node, ListNode):
-            return {
-                '_type': 'list',
-                'line': node.line,
-                'column': node.column,
-                'items': [node_to_dict(i) for i in node.items]
-            }
-        else:
-            return {'_type': 'unknown', 'repr': repr(node)}
-    
-    data = node_to_dict(ast)
-    return json.dumps(data, separators=(',', ':')).encode('utf-8')
-
-
-def deserialize_ast(data: bytes) -> Dict[str, Any]:
-    """Deserialize AST from JSON bytes."""
-    return json.loads(data.decode('utf-8'))
-
-
-def count_ast_nodes(ast_dict: Dict[str, Any]) -> int:
-    """Count nodes in a serialized AST."""
-    count = 1
-    for key in ('children', 'items', 'value'):
-        if key in ast_dict:
-            val = ast_dict[key]
-            if isinstance(val, list):
-                for item in val:
-                    if isinstance(item, dict):
-                        count += count_ast_nodes(item)
-            elif isinstance(val, dict):
-                count += count_ast_nodes(val)
-    return count
+# Make sure re-exports are visible to importers
+__all__ = [
+    'serialize_ast',
+    'deserialize_ast', 
+    'count_ast_nodes',
+    'get_cached_ast',
+    'store_ast',
+    'store_parse_failure',
+    'parse_and_cache',
+    'parse_file_cached',
+    'get_ast_stats',
+    'clear_ast_cache_for_parser',
+]
 
 
 def get_cached_ast(

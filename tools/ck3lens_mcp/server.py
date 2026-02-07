@@ -5791,7 +5791,7 @@ def ck3_paths_doctor(
         # Always Reply(S) - the report.ok field indicates health
         status = "HEALTHY" if report.ok else "UNHEALTHY"
         return rb.success(
-            'WA-DOCTOR-S-001',
+            'WA-CFG-S-001',
             data=report_dict,
             message=f"Paths Doctor: {status} ({report.summary['ERROR']} errors, {report.summary['WARN']} warnings, {report.summary['OK']} ok)",
         )

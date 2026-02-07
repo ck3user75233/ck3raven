@@ -872,12 +872,22 @@ def ck3_file_impl(
     
     resolution = None
     
-    if command in write_commands and world is not None:
-        # Use canonical path normalization utility
+    # HARD INVARIANT (Proposal V3 Instruction 1):
+    # All commands except get/create_patch resolve through normalize_path_input() FIRST.
+    # This ensures mod_name="wip" and path="wip:/..." work uniformly for read/list/refresh.
+    resolve_commands = {"read", "write", "edit", "delete", "rename", "refresh", "list"}
+    if command in resolve_commands and world is not None and (path or mod_name):
         resolution = normalize_path_input(world, path=path, mod_name=mod_name, rel_path=rel_path)
         
         if not resolution.found:
-            # Path is outside this world's scope - structural error
+            # Reply conformance (Instruction 3): use Reply system, not raw dict
+            rb = _create_reply_builder(trace_info, "ck3_file", layer="WA") if trace_info else None
+            if rb:
+                return rb.invalid("WA-RES-I-001", {
+                    "error": resolution.error_message or "Path not in world scope",
+                    "input_path": path or f"{mod_name or ''}:{rel_path or ''}",
+                    "mode": world.mode,
+                })
             return {
                 "success": False,
                 "error": resolution.error_message or "Path not in world scope",
@@ -950,11 +960,9 @@ def ck3_file_impl(
         return _file_get(path, include_ast, max_bytes, db, trace, visibility)
     
     elif command == "read":
-        if path:
-            # Use WorldAdapter for visibility check if available
-            return _file_read_raw(path, start_line, end_line, trace, world, trace_info=trace_info)
-        elif mod_name and rel_path:
-            return _file_read_live(mod_name, rel_path, max_bytes, session, trace, trace_info=trace_info)
+        # No hidden fallback (Instruction 4): use resolution.absolute_path or fail
+        if resolution and resolution.absolute_path:
+            return _file_read_raw(str(resolution.absolute_path), start_line, end_line, trace, world, trace_info=trace_info)
         else:
             return {"error": "Either 'path' or 'mod_name'+'rel_path' required for read"}
     
@@ -995,16 +1003,23 @@ def ck3_file_impl(
     elif command == "refresh":
         if not all([mod_name, rel_path]):
             return {"error": "mod_name and rel_path required for refresh"}
-        return _file_refresh(mod_name, rel_path, session, trace)
+        # No hidden fallback (Instruction 4): use resolution.absolute_path or fail
+        if resolution and resolution.absolute_path:
+            return _file_refresh(str(resolution.absolute_path), mod_name, rel_path, trace)
+        else:
+            return {"error": "Path resolution failed for refresh"}
     
     elif command == "list":
-        if path and mode == "ck3raven-dev":
-            # Raw path list for ck3raven-dev mode
-            return _file_list_raw(path, pattern, trace, world)
-        elif mod_name:
-            return _file_list(mod_name, path_prefix, pattern, session, trace)
+        # No hidden fallback (Instruction 4): use resolution.absolute_path or fail
+        if resolution and resolution.absolute_path:
+            from pathlib import Path as P
+            list_path = str(resolution.absolute_path)
+            # Append path_prefix if provided (e.g., "common/traits" within the mod/wip root)
+            if path_prefix:
+                list_path = str(P(list_path) / path_prefix)
+            return _file_list_raw(list_path, pattern, trace, world)
         else:
-            return {"error": "mod_name required for list (or 'path' in ck3raven-dev mode)"}
+            return {"error": "Either 'path' or 'mod_name' required for list"}
     
     elif command == "create_patch":
         # ck3lens mode only - creates override patch file
@@ -1129,72 +1144,8 @@ def _file_read_raw(path, start_line, end_line, trace, world=None, *, trace_info:
         return {"success": False, "error": str(e)}
 
 
-def _file_read_live(mod_name, rel_path, max_bytes, session, trace, *, trace_info: TraceInfo | None = None) -> Reply | dict:
-    """
-    Read file from mod.
-    
-    Returns Reply if trace_info provided, otherwise legacy dict for backward compat during migration.
-    """
-    from ck3lens.workspace import validate_relpath
-    
-    # Create reply builder if we have trace_info
-    rb = None
-    if trace_info:
-        rb = _create_reply_builder(trace_info, "ck3_file", layer="WA")
-    
-    mod = session.get_mod(mod_name)
-    if not mod:
-        if rb:
-            return rb.invalid("WA-RES-I-001", {"input_path": f"{mod_name}:{rel_path}", "mod_name": mod_name})
-        return {"error": f"Unknown mod_id: {mod_name}", "exists": False}
-    
-    valid, err = validate_relpath(rel_path)
-    if not valid:
-        if rb:
-            return rb.error("WA-RES-E-002", {"input_path": rel_path, "error": err})
-        return {"error": err, "exists": False}
-    
-    file_path = mod.path / rel_path
-    
-    if not file_path.exists():
-        if rb:
-            return rb.invalid("WA-RES-I-001", {
-                "input_path": f"{mod_name}:{rel_path}",
-                "mod_id": mod_name,
-                "relpath": rel_path,
-                "exists": False,
-            })
-        return {"mod_id": mod_name, "relpath": rel_path, "exists": False, "content": None}
-    
-    try:
-        content = file_path.read_text(encoding="utf-8-sig")
-        if max_bytes and len(content.encode("utf-8")) > max_bytes:
-            content = content[:max_bytes]
-        
-        data = {
-            "mod_id": mod_name,
-            "relpath": rel_path,
-            "exists": True,
-            "content": content,
-            "size": len(content),
-            "canonical_path": str(file_path),
-        }
-        
-        if trace:
-            trace.log("ck3lens.file.read_live", {"mod_name": mod_name, "rel_path": rel_path},
-                      {"success": True})
-        
-        if rb:
-            return rb.success("WA-RES-S-001", data)
-        return data
-        
-    except Exception as e:
-        if trace:
-            trace.log("ck3lens.file.read_live", {"mod_name": mod_name, "rel_path": rel_path},
-                      {"success": False})
-        if rb:
-            return rb.error("WA-RES-E-001", {"error": str(e), "input_path": f"{mod_name}:{rel_path}"})
-        return {"error": str(e), "exists": True}
+# _file_read_live DELETED by path addressing refactor (proposal V3).
+# All read operations now go through _file_read_raw with pre-resolved absolute path.
 
 
 def _file_write(mod_name, rel_path, content, validate_syntax, session, trace, *, trace_info: TraceInfo | None = None) -> Reply | dict:
@@ -1590,27 +1541,25 @@ def _file_rename(mod_name, old_path, new_path, session, trace):
     return result
 
 
-def _file_refresh(mod_name, rel_path, session, trace):
-    """Refresh file in database."""
-    from ck3lens.workspace import validate_relpath
+def _file_refresh(absolute_path, mod_name, rel_path, trace):
+    """Refresh file in database using pre-resolved absolute path.
     
-    mod = session.get_mod(mod_name)
-    if not mod:
-        result = {"success": False, "error": f"Unknown mod_id: {mod_name}"}
+    The absolute_path comes from normalize_path_input() resolution.
+    mod_name and rel_path are passed through to _refresh_file_in_db_internal
+    for database record identification.
+    """
+    from pathlib import Path as P
+    
+    file_path = P(absolute_path)
+    
+    if not file_path.exists():
+        result = _refresh_file_in_db_internal(str(file_path), mod_name, rel_path, deleted=True)
     else:
-        valid, err = validate_relpath(rel_path)
-        if not valid:
-            result = {"success": False, "error": err}
-        else:
-            file_path = mod.path / rel_path
-            if not file_path.exists():
-                result = _refresh_file_in_db_internal(str(file_path), mod_name, rel_path, deleted=True)
-            else:
-                try:
-                    content = file_path.read_text(encoding="utf-8-sig")
-                    result = _refresh_file_in_db_internal(str(file_path), mod_name, rel_path)
-                except Exception as e:
-                    result = {"success": False, "error": str(e)}
+        try:
+            content = file_path.read_text(encoding="utf-8-sig")
+            result = _refresh_file_in_db_internal(str(file_path), mod_name, rel_path)
+        except Exception as e:
+            result = {"success": False, "error": str(e)}
     
     if trace:
         trace.log("ck3lens.file.refresh", {"mod_name": mod_name, "rel_path": rel_path},
@@ -1619,57 +1568,8 @@ def _file_refresh(mod_name, rel_path, session, trace):
     return result
 
 
-def _file_list(mod_name, path_prefix, pattern, session, trace):
-    """List files in mod."""
-    from .world_adapter import get_world_adapter
-    
-    mod = session.get_mod(mod_name)
-    if not mod:
-        result = {"error": f"Unknown mod_id: {mod_name}"}
-    else:
-        target = mod.path / path_prefix if path_prefix else mod.path
-        if not target.exists():
-            result = {"files": [], "folder": path_prefix}
-        else:
-            # Get WorldAdapter for canonical path resolution
-            adapter = get_world_adapter(
-                mode=session.mode,
-                mods=session.mods,
-                local_mods_folder=session.local_mods_folder,
-            )
-            
-            files = []
-            glob_pattern = pattern or "*.txt"
-            for f in target.rglob(glob_pattern):
-                if f.is_file():
-                    try:
-                        # Use WorldAdapter.resolve() to get canonical address
-                        resolution = adapter.resolve(str(f)) if adapter else None
-                        if resolution and resolution.found and resolution.address:
-                            rel = resolution.address.relative_path
-                        else:
-                            # Fallback: just use filename
-                            rel = str(f.name)
-                        stat = f.stat()
-                        files.append({
-                            "relpath": rel,
-                            "size": stat.st_size,
-                            "modified": stat.st_mtime
-                        })
-                    except Exception:
-                        pass
-            result = {
-                "mod_id": mod_name,
-                "folder": path_prefix,
-                "pattern": glob_pattern,
-                "files": sorted(files, key=lambda x: x["relpath"])
-            }
-    
-    if trace:
-        trace.log("ck3lens.file.list", {"mod_name": mod_name, "path_prefix": path_prefix},
-                  {"files_count": len(result.get("files", []))})
-    
-    return result
+# _file_list DELETED by path addressing refactor (proposal V3).
+# All list operations now go through _file_list_raw with pre-resolved absolute path.
 
 
 def _file_delete_raw(path, token_id, trace, world=None):

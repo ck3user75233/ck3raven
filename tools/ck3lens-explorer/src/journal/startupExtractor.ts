@@ -23,6 +23,7 @@ import { StructuredLogger } from '../utils/structuredLogger';
 import { LOG_CATEGORIES } from './types';
 import { 
     getWorkspaceJournalPath, 
+    getChatArchivesPath,
     initializeStorage,
     enforceJournalsBoundary,
 } from './storage';
@@ -185,7 +186,7 @@ async function extractFromSnapshot(
     }
     
     const files = fs.readdirSync(snapshotPath).filter(f => f.endsWith('.json'));
-    const outputDir = path.join(getWorkspaceJournalPath(workspaceKey), 'startup_exports');
+    const outputDir = getChatArchivesPath(workspaceKey);
     fs.mkdirSync(outputDir, { recursive: true });
     
     let batch = 0;

@@ -8,6 +8,7 @@ Stores current parser version and allows registering new versions.
 import sqlite3
 import hashlib
 import subprocess
+import functools
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
@@ -26,8 +27,13 @@ PARSER_VERSION = "1.0.0"
 PARSER_DESCRIPTION = "Initial parser with edge cases fixed"
 
 
+@functools.cache
 def get_git_commit() -> Optional[str]:
-    """Get current git commit hash if in a git repo."""
+    """
+    Get current git commit hash if in a git repo.
+    
+    Cached to avoid repeated subprocess calls per process.
+    """
     try:
         result = subprocess.run(
             ['git', 'rev-parse', 'HEAD'],
@@ -42,11 +48,13 @@ def get_git_commit() -> Optional[str]:
     return None
 
 
+@functools.cache
 def get_parser_source_hash() -> str:
     """
     Compute a hash of the parser source code.
     
     This provides automatic version detection when source changes.
+    Cached per process since source doesn't change during runtime.
     """
     parser_dir = Path(__file__).parent.parent / 'parser'
     

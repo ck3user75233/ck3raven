@@ -479,12 +479,7 @@ function registerCommands(
             try {
                 await session?.initialize();
                 
-                // Update status bar to show connected
-                statusBar?.setPythonBridgeStatus('connected');
-                
-                // Update agent view - Python Bridge is now connected
-                agentProvider.setPythonBridgeStatus('connected');
-                
+                // Session initialized - MCP monitors connection status automatically
                 vscode.window.showInformationMessage('CK3 Lens session initialized');
                 
                 // Refresh all views
@@ -493,13 +488,6 @@ function registerCommands(
                 playsetProvider.refresh();
             } catch (error) {
                 logger.error('Failed to initialize session', error);
-                
-                // Update status bar to show disconnected
-                statusBar?.setPythonBridgeStatus('disconnected');
-                
-                // Update agent view - Python Bridge failed
-                agentProvider.setPythonBridgeStatus('disconnected');
-                
                 vscode.window.showErrorMessage(`Failed to initialize CK3 Lens: ${error}`);
             }
         })
