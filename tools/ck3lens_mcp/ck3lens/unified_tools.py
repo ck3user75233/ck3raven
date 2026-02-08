@@ -901,56 +901,75 @@ def ck3_file_impl(
     # Uses the clean enforce() API with OperationType.READ/WRITE/DELETE
     # ==========================================================================
     
-    if command in write_commands and mode and resolution and resolution.absolute_path:
-        # Map command to canonical operation type
-        op_type = OperationType.DELETE if command == "delete" else OperationType.WRITE
-        
-        # Check if we have a contract
-        contract = get_active_contract()
-        has_contract = contract is not None
-        
-        # Enforce policy using clean API - pass resolution directly (canonical pattern)
-        result = enforce(
-            mode=mode,
-            operation=op_type,
-            resolved=resolution,  # ResolutionResult from normalize_path_input
-            has_contract=has_contract,
-        )
-        
-        # Handle enforcement decision with contextual hints
-        if result.decision == Decision.DENY:
-            from ck3lens.hints import get_hint_engine
-            hint_engine = get_hint_engine()
-            hints = hint_engine.for_write_denial(
-                denial_reason=result.reason,
-                target_path=str(resolution.absolute_path),
-                mode=mode or "ck3lens"
-            )
+    if command in write_commands:
+        # CRITICAL FIX: No mode = no capabilities - deny all writes immediately
+        # This closes the fail-open loophole where 'and mode' would skip enforcement
+        if not mode:
+            rb = _create_reply_builder(trace_info, "ck3_file", layer="WA") if trace_info else None
+            if rb:
+                return rb.invalid("WA-MODE-I-001", {
+                    "error": "Agent mode not initialized - all writes denied",
+                    "policy_decision": "DENY",
+                    "guidance": "Call ck3_get_mode_instructions(mode='ck3lens' or 'ck3raven-dev') to initialize",
+                })
             return {
                 "success": False,
-                "error": result.reason,
+                "error": "Agent mode not initialized - all writes denied",
                 "policy_decision": "DENY",
-                **hints  # Include writable paths and escalation guidance
+                "guidance": "Call ck3_get_mode_instructions(mode='ck3lens' or 'ck3raven-dev') to initialize",
             }
         
-        if result.decision == Decision.REQUIRE_CONTRACT:
-            return {
-                "success": False,
-                "error": result.reason,
-                "policy_decision": "REQUIRE_CONTRACT",
-                "guidance": "Use ck3_contract(command='open', ...) to open a work contract",
-                "contract_example": "ck3_contract(command='open', intent='bugfix', root_category='ROOT_REPO', work_declaration={...})",
-            }
-        
-        if result.decision == Decision.REQUIRE_TOKEN:
-            return {
-                "success": False,
-                "error": result.reason,
-                "policy_decision": "REQUIRE_TOKEN",
-                "hint": "Deletion requires confirmation token",
-            }
-        
-        # Decision is ALLOW - continue to implementation
+        # Now proceed with enforcement if we have resolved path
+        if resolution and resolution.absolute_path:
+            # Map command to canonical operation type
+            op_type = OperationType.DELETE if command == "delete" else OperationType.WRITE
+            
+            # Check if we have a contract
+            contract = get_active_contract()
+            has_contract = contract is not None
+            
+            # Enforce policy using clean API - pass resolution directly (canonical pattern)
+            result = enforce(
+                mode=mode,
+                operation=op_type,
+                resolved=resolution,  # ResolutionResult from normalize_path_input
+                has_contract=has_contract,
+            )
+            
+            # Handle enforcement decision with contextual hints
+            if result.decision == Decision.DENY:
+                from ck3lens.hints import get_hint_engine
+                hint_engine = get_hint_engine()
+                hints = hint_engine.for_write_denial(
+                    denial_reason=result.reason,
+                    target_path=str(resolution.absolute_path),
+                    mode=mode or "ck3lens"
+                )
+                return {
+                    "success": False,
+                    "error": result.reason,
+                    "policy_decision": "DENY",
+                    **hints  # Include writable paths and escalation guidance
+                }
+            
+            if result.decision == Decision.REQUIRE_CONTRACT:
+                return {
+                    "success": False,
+                    "error": result.reason,
+                    "policy_decision": "REQUIRE_CONTRACT",
+                    "guidance": "Use ck3_contract(command='open', ...) to open a work contract",
+                    "contract_example": "ck3_contract(command='open', intent='bugfix', root_category='ROOT_REPO', work_declaration={...})",
+                }
+            
+            if result.decision == Decision.REQUIRE_TOKEN:
+                return {
+                    "success": False,
+                    "error": result.reason,
+                    "policy_decision": "REQUIRE_TOKEN",
+                    "hint": "Deletion requires confirmation token",
+                }
+            
+            # Decision is ALLOW - continue to implementation
     
     # ==========================================================================
     # ROUTE TO IMPLEMENTATION
