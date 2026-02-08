@@ -2693,6 +2693,205 @@ def _ck3_playset_internal(
         
         return result
     
+    elif command == "import":
+        # Import playset from CK3 launcher database
+        # Uses read-only connection - safe for concurrent launcher access
+        from pathlib import Path
+        from datetime import date
+        
+        launcher_db_path = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "launcher-v2.sqlite"
+        local_mods_folder = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
+        steam_workshop = Path("C:/Program Files (x86)/Steam/steamapps/workshop/content/1158310")
+        vanilla_path = "C:/Program Files (x86)/Steam/steamapps/common/Crusader Kings III/game"
+        
+        if not launcher_db_path.exists():
+            return {"success": False, "error": f"Launcher database not found: {launcher_db_path}"}
+        
+        # Connect in read-only mode (safe for concurrent access)
+        import sqlite3
+        try:
+            conn = sqlite3.connect(f"file:{launcher_db_path}?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+        except Exception as e:
+            return {"success": False, "error": f"Failed to connect to launcher DB: {e}"}
+        
+        try:
+            # If no playset name specified, list available playsets
+            if not launcher_playset_name:
+                rows = conn.execute("""
+                    SELECT id, name, isActive,
+                        (SELECT COUNT(*) FROM playsets_mods WHERE playsetId = playsets.id) as mod_count
+                    FROM playsets
+                    ORDER BY name
+                """).fetchall()
+                
+                available = []
+                for row in rows:
+                    available.append({
+                        "name": row["name"],
+                        "mod_count": row["mod_count"],
+                        "is_active": bool(row["isActive"]),
+                    })
+                
+                return {
+                    "success": True,
+                    "message": "Use launcher_playset_name parameter to import a specific playset",
+                    "available_playsets": available,
+                    "hint": "ck3_playset(command='import', launcher_playset_name='YourPlaysetName')"
+                }
+            
+            # Find the requested playset
+            # Try exact match first
+            row = conn.execute(
+                "SELECT id, name, isActive FROM playsets WHERE name = ?", 
+                (launcher_playset_name,)
+            ).fetchone()
+            
+            if not row:
+                # Try case-insensitive partial match
+                row = conn.execute(
+                    "SELECT id, name, isActive FROM playsets WHERE name LIKE ?", 
+                    (f"%{launcher_playset_name}%",)
+                ).fetchone()
+            
+            if not row:
+                return {"success": False, "error": f"Playset '{launcher_playset_name}' not found in launcher DB"}
+            
+            playset_id = row["id"]
+            playset_name_actual = row["name"]
+            
+            # Get all mods in this playset
+            mods_rows = conn.execute("""
+                SELECT pm.position, pm.enabled, m.displayName, m.steamId, m.dirPath, m.source
+                FROM playsets_mods pm
+                JOIN mods m ON pm.modId = m.id
+                WHERE pm.playsetId = ?
+                ORDER BY pm.position
+            """, (playset_id,)).fetchall()
+            
+            # Build mods array
+            mods_list = []
+            steam_count = 0
+            local_count = 0
+            local_positions = []
+            
+            for mod_row in mods_rows:
+                position = mod_row["position"]
+                enabled = bool(mod_row["enabled"])
+                display_name = mod_row["displayName"]
+                steam_id = mod_row["steamId"]
+                dir_path = mod_row["dirPath"]
+                source = mod_row["source"]
+                
+                # Determine path
+                is_local = source in ("local", None) or (dir_path and "mod" in str(dir_path).lower() and "workshop" not in str(dir_path).lower())
+                
+                if steam_id and not is_local:
+                    # Steam workshop mod
+                    mod_path = str(steam_workshop / steam_id)
+                    steam_count += 1
+                elif dir_path:
+                    # Local mod - use dirPath
+                    mod_path = str(Path(dir_path).resolve())
+                    local_count += 1
+                    local_positions.append(position)
+                    is_local = True
+                else:
+                    # Fallback - try to construct path
+                    mod_path = str(local_mods_folder / display_name.replace(" ", ""))
+                    local_count += 1
+                    local_positions.append(position)
+                    is_local = True
+                
+                # Detect compatch
+                name_lower = display_name.lower()
+                is_compatch = any(kw in name_lower for kw in ["compatch", "compatibility", "patch"]) and "unofficial" not in name_lower
+                
+                mod_entry = {
+                    "name": display_name,
+                    "path": mod_path.replace("/", "\\"),
+                    "load_order": position,
+                    "enabled": enabled,
+                    "is_compatch": is_compatch,
+                    "notes": "local mod" if is_local else "",
+                }
+                
+                if steam_id and not is_local:
+                    mod_entry["steam_id"] = steam_id
+                
+                mods_list.append(mod_entry)
+            
+            # Build playset JSON
+            today = date.today().isoformat()
+            safe_name = playset_name_actual.replace(" ", "_").replace("/", "_")
+            output_filename = f"{safe_name}_playset.json"
+            output_path = PLAYSETS_DIR / output_filename
+            
+            playset_data = {
+                "$schema": "./playset.schema.json",
+                "playset_name": playset_name_actual,
+                "description": f"Imported from CK3 Launcher DB on {today} ({steam_count} Steam, {local_count} local mods)",
+                "created": today,
+                "last_modified": today,
+                "vanilla": {
+                    "version": "1.18",
+                    "path": vanilla_path,
+                    "enabled": True
+                },
+                "mods": mods_list,
+                "local_mods_folder": str(local_mods_folder),
+                "agent_briefing": {
+                    "context": f"Playset '{playset_name_actual}' with {len(mods_list)} mods",
+                    "error_analysis_notes": [
+                        "Focus on runtime errors during gameplay",
+                        "Loading errors from compatch targets may be expected"
+                    ],
+                    "conflict_resolution_notes": [
+                        "Mods marked is_compatch=true are expected to override others"
+                    ],
+                    "mod_relationships": [],
+                    "priorities": [
+                        "1. Crashes and game-breaking errors",
+                        "2. Gameplay-affecting bugs during steady play",
+                        "3. Minor visual/localization issues"
+                    ],
+                    "custom_instructions": ""
+                },
+                "sub_agent_config": {
+                    "error_analysis": {
+                        "enabled": True,
+                        "auto_spawn_threshold": 50,
+                        "output_format": "markdown",
+                        "include_recommendations": True
+                    },
+                    "conflict_review": {
+                        "enabled": False,
+                        "min_risk_score": 70,
+                        "require_approval": True
+                    }
+                }
+            }
+            
+            # Write the playset file
+            output_path.write_text(json.dumps(playset_data, indent=2), encoding="utf-8")
+            
+            enabled_count = sum(1 for m in mods_list if m.get("enabled", True))
+            
+            return {
+                "success": True,
+                "message": f"Imported playset '{playset_name_actual}'",
+                "playset_file": str(output_path),
+                "total_mods": len(mods_list),
+                "enabled_mods": enabled_count,
+                "steam_mods": steam_count,
+                "local_mods": local_count,
+                "local_positions": local_positions,
+                "hint": f"Switch with: ck3_playset(command='switch', playset_name='{playset_name_actual}')"
+            }
+            
+        finally:
+            conn.close()
+    
     else:
         # Other commands not yet implemented for file-based
         return {
