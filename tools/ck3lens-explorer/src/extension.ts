@@ -43,7 +43,6 @@ import {
     createJournalStatusBar,
     WindowManager,
     JournalStatusBar,
-    scheduleStartupExtraction,
     setShuttingDown,
 } from './journal';
 import { registerJournalTreeView } from './journal/journalTreeProvider';
