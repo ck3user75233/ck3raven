@@ -2,7 +2,8 @@
 
 **Date**: 2026-02-07  
 **Severity**: Medium (breaks read, list, refresh for WIP; write works by accident)  
-**Component**: `ck3_file` tool — `unified_tools.py` + `world_adapter.py`
+**Component**: `ck3_file` tool — `unified_tools.py` + `world_adapter.py`  
+**Status**: **RESOLVED** — 2026-02-07, commit `6f1d4ad` (Option A refactor per proposal_path_addressing.md V3)
 
 ---
 

@@ -89,7 +89,7 @@ SCRIPT_PARSER_FOLDERS: List[str] = [
     'common/game_rules',
     'common/important_actions',
     'common/nicknames',
-    'common/bookmark_portraits',
+    # 'common/bookmark_portraits',  # DISABLED: Parser timeouts (30s+) - see SKIP_PATTERNS below
     'common/landed_titles',  # Has symbols (title definitions)
     'common/accolade_names',  # Has scripted triggers - needs full AST
     'history/titles/',  # Has effect blocks - needs AST (no extractor)
@@ -177,6 +177,12 @@ SKIP_PATTERNS: List[str] = [
     'tests/',
     'test_',
     '_test.txt',
+    
+    # =========================================================================
+    # PARSER TIMEOUT - Files that hang parser (temporary until parser fixed)
+    # See: docs/bugs/SUGGESTION_routing_table_exclusions.md
+    # =========================================================================
+    'common/bookmark_portraits/',  # 2026-02-07: Causes 4-30s+ parse times, many timeouts
 ]
 
 
