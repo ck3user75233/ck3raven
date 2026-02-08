@@ -54,8 +54,8 @@ def _create_reply_builder(trace_info: TraceInfo, tool: str, layer: str = "MCP", 
                 meta=self._meta(layer),
             )
         
-        def info(self, code: str, data: dict, message: str | None = None, layer: str | None = None) -> Reply:
-            return Reply.info(
+        def invalid(self, code: str, data: dict, message: str | None = None, layer: str | None = None) -> Reply:
+            return Reply.invalid(
                 code=code,
                 message=message or get_message(code, **data),
                 data=data,
@@ -2821,29 +2821,18 @@ def _validate_bundle(artifact_bundle, trace):
 
 
 def _validate_policy(mode, trace_path, trace_obj):
-    """Validate against policy rules."""
-    from typing import Any
-    from ck3lens.policy import validate_for_mode
-    from pathlib import Path as P
+    """Validate against policy rules.
     
-    trace_list: list[dict[str, Any]] | None = None
-    if trace_path:
-        path = P(trace_path)
-        if not path.exists():
-            return {"error": f"Trace file not found: {trace_path}"}
-        import json
-        try:
-            trace_list = json.loads(path.read_text())
-        except json.JSONDecodeError:
-            return {"error": f"Trace file is not valid JSON: {trace_path}"}
-    
-    result = validate_for_mode(mode, trace=trace_list)
-    
-    if trace_obj:
-        trace_obj.log("ck3lens.validate.policy", {"mode": mode},
-                      {"valid": result.get("valid", False)})
-    
-    return result
+    NOTE: validate_for_mode was deleted in the canonical architecture cleanup.
+    This function now returns a placeholder - policy validation has been
+    superseded by the enforcement.py single-gate approach.
+    """
+    # DEPRECATED: The old policy validation system was removed.
+    # See docs/CANONICAL_ARCHITECTURE.md - enforcement.py is now THE gate.
+    return {
+        "error": "Policy validation target is deprecated. Use enforcement.py directly.",
+        "hint": "Policy is now enforced at operation time via ck3lens.policy.enforce()",
+    }
 
 
 # =============================================================================
