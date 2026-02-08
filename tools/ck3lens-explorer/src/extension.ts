@@ -153,13 +153,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // ========================================================================
     // CRITICAL: Journal Extractor - "Flight Recorder" (HOISTED - MUST init before risky subsystems)
     // ========================================================================
+    // EMERGENCY KILL SWITCH - Chat Journaling v1.0 DISABLED
+    // ========================================================================
+    // Reason: Suspected file locking conflict with VS Code's ChatSessionStore
+    // Evidence: "ChatSessionStore: Error writing chat session Unreachable" errors
+    // Date: 2026-02-08
+    // Issue: Our fs.readFileSync on chatSessions may block VS Code's write access
+    // Solution: v2.0 will use external process extraction when VS Code is CLOSED
+    // See: docs/CHAT_JOURNALING_V2.md
+    // ========================================================================
+    const JOURNAL_V1_ENABLED = false;  // DO NOT ENABLE until v2.0 is ready
+    
+    // A5b-e: Journal subsystem (LIFEBOAT FIRST)
+    // ========================================================================
     // The journal is a passive filesystem observer that does NOT need Python, sockets, or MCP.
     // If we initialize it AFTER risky subsystems (PythonBridge, DiagnosticsServer, etc.) and
     // any of those hang, journalWindowManager stays undefined and deactivate() skips extraction.
     // This caused 4 sessions on 2026-02-03 to produce zero journal exports despite hours of use.
     // See: "Lifeboat First Protocol" - flight recorder must start before the engine.
     console.log('[CK3RAVEN] A5b LIFEBOAT: Journal init (early)');
-    if (structuredLogger) {
+    if (structuredLogger && JOURNAL_V1_ENABLED) {
         try {
             journalWindowManager = initializeWindowManager(context, structuredLogger);
             journalStatusBar = createJournalStatusBar(journalWindowManager);
@@ -182,6 +195,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 error: (err as Error).message,
             });
         }
+    } else if (structuredLogger) {
+        structuredLogger.warn('ext.journal', 'Journal v1.0 DISABLED - awaiting v2.0 implementation', {
+            reason: 'ChatSessionStore file locking conflict suspected',
+            kill_switch: 'JOURNAL_V1_ENABLED = false',
+        });
     }
     console.log('[CK3RAVEN] A5c LIFEBOAT: Journal init complete');
     
