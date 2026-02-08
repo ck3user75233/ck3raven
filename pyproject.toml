@@ -52,6 +52,7 @@ Issues = "https://github.com/ck3user75233/ck3raven/issues"
 
 [project.scripts]
 ck3raven = "ck3raven.cli:main"
+ck3lens-export-chats = "ck3raven.tools.journal_extractor:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

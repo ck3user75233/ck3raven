@@ -153,55 +153,94 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // ========================================================================
     // CRITICAL: Journal Extractor - "Flight Recorder" (HOISTED - MUST init before risky subsystems)
     // ========================================================================
-    // EMERGENCY KILL SWITCH - Chat Journaling v1.0 DISABLED
+    // Chat Journaling v2.0 - Manifest Only (NO file reads from chatSessions)
     // ========================================================================
-    // Reason: Suspected file locking conflict with VS Code's ChatSessionStore
-    // Evidence: "ChatSessionStore: Error writing chat session Unreachable" errors
-    // Date: 2026-02-08
-    // Issue: Our fs.readFileSync on chatSessions may block VS Code's write access
-    // Solution: v2.0 will use external process extraction when VS Code is CLOSED
+    // v1.0 was disabled due to ChatSessionStore file locking conflicts.
+    // v2.0 approach: Extension ONLY writes workspace paths to manifest.
+    // Extraction happens via external CLI when VS Code is CLOSED.
     // See: docs/CHAT_JOURNALING_V2.md
     // ========================================================================
-    const JOURNAL_V1_ENABLED = false;  // DO NOT ENABLE until v2.0 is ready
     
-    // A5b-e: Journal subsystem (LIFEBOAT FIRST)
-    // ========================================================================
-    // The journal is a passive filesystem observer that does NOT need Python, sockets, or MCP.
-    // If we initialize it AFTER risky subsystems (PythonBridge, DiagnosticsServer, etc.) and
-    // any of those hang, journalWindowManager stays undefined and deactivate() skips extraction.
-    // This caused 4 sessions on 2026-02-03 to produce zero journal exports despite hours of use.
-    // See: "Lifeboat First Protocol" - flight recorder must start before the engine.
-    console.log('[CK3RAVEN] A5b LIFEBOAT: Journal init (early)');
-    if (structuredLogger && JOURNAL_V1_ENABLED) {
+    // A5b-e: Journal subsystem - Manifest Collection (Phase 2)
+    console.log('[CK3RAVEN] A5b JOURNAL: Writing manifest (v2.0 - no file reads)');
+    if (structuredLogger) {
         try {
-            journalWindowManager = initializeWindowManager(context, structuredLogger);
-            journalStatusBar = createJournalStatusBar(journalWindowManager);
-            context.subscriptions.push(journalStatusBar);
-            registerJournalCommands(context, journalWindowManager);
-            structuredLogger.info('ext.journal', 'Journal subsystem initialized (early boot)');
+            // Derive chatSessions path from context.storageUri (safe - VS Code API only)
+            const storageUri = context.storageUri;
+            if (storageUri) {
+                const workspaceStorageRoot = path.dirname(storageUri.fsPath);
+                const chatSessionsPath = path.join(workspaceStorageRoot, 'chatSessions');
+                const workspaceKey = path.basename(workspaceStorageRoot);
+                
+                // Get workspace name for debugging
+                const workspaceName = vscode.workspace.name || 'unnamed-workspace';
+                
+                // Write/update manifest (safe - our own file in ~/.ck3raven)
+                const manifestPath = path.join(os.homedir(), '.ck3raven', 'journal_manifest.json');
+                let manifest: {
+                    version: string;
+                    last_updated: string;
+                    workspaces: Array<{
+                        workspace_key: string;
+                        workspace_name: string;
+                        storage_root: string;
+                        chat_sessions_path: string;
+                        last_seen: string;
+                    }>;
+                } = { version: '2.0', last_updated: '', workspaces: [] };
+                
+                // Load existing manifest if present
+                if (fs.existsSync(manifestPath)) {
+                    try {
+                        manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+                    } catch {
+                        // Corrupted manifest - start fresh
+                    }
+                }
+                
+                // Update or add this workspace
+                const now = new Date().toISOString();
+                const existingIdx = manifest.workspaces.findIndex(w => w.workspace_key === workspaceKey);
+                const workspaceEntry = {
+                    workspace_key: workspaceKey,
+                    workspace_name: workspaceName,
+                    storage_root: workspaceStorageRoot,
+                    chat_sessions_path: chatSessionsPath,
+                    last_seen: now,
+                };
+                
+                if (existingIdx >= 0) {
+                    manifest.workspaces[existingIdx] = workspaceEntry;
+                } else {
+                    manifest.workspaces.push(workspaceEntry);
+                }
+                manifest.last_updated = now;
+                
+                // Write manifest
+                fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
+                fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+                
+                structuredLogger.info('ext.journal', 'Journal manifest updated (v2.0)', {
+                    workspace_key: workspaceKey,
+                    manifest_path: manifestPath,
+                    workspaces_tracked: manifest.workspaces.length,
+                });
+            } else {
+                structuredLogger.warn('ext.journal', 'No storageUri - cannot write manifest', {});
+            }
             
-            // Auto-start journal window to capture baseline
-            // This enables extraction on window close
-            await journalWindowManager.startWindow();
-            structuredLogger.info('ext.journal', 'Journal window auto-started');
+            // Register tree view for existing archives (safe - reads our own files)
+            registerJournalTreeView(context);
+            structuredLogger.info('ext.journal', 'Journal tree view registered');
             
-            // Schedule startup extraction (Phase 1 - copy-then-read safety)
-            // This handles pending extractions from previous sessions
-            scheduleStartupExtraction(context, structuredLogger);
         } catch (err) {
-            // Journal init failure is non-fatal - log and continue
-            // Even partial init means deactivate() might still work
-            structuredLogger.warn('ext.journal', 'Journal early-init failed (non-fatal)', {
+            structuredLogger.warn('ext.journal', 'Journal manifest write failed (non-fatal)', {
                 error: (err as Error).message,
             });
         }
-    } else if (structuredLogger) {
-        structuredLogger.warn('ext.journal', 'Journal v1.0 DISABLED - awaiting v2.0 implementation', {
-            reason: 'ChatSessionStore file locking conflict suspected',
-            kill_switch: 'JOURNAL_V1_ENABLED = false',
-        });
     }
-    console.log('[CK3RAVEN] A5c LIFEBOAT: Journal init complete');
+    console.log('[CK3RAVEN] A5c JOURNAL: Manifest complete');
+
     
     // CRITICAL: Per-instance mode blanking
     // Must happen AFTER mcpServerProvider is created so we have the instance ID
