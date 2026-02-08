@@ -156,9 +156,13 @@ class EnvelopeExecutor:
         CRITICAL: Uses canonical parser runtime (subprocess + timeout).
         This prevents pathological files from blocking the queue indefinitely.
         On timeout, ParseTimeoutError is raised and the file is marked as error.
+        
+        PERFORMANCE: If QBUILDER_PERSISTENT_PARSE=1, uses persistent worker pool
+        which amortizes subprocess spawn + import overhead across many files.
         """
+        from src.ck3raven.parser.parse_pool import is_pool_enabled, get_pool
         from src.ck3raven.parser.runtime import (
-            parse_file,
+            parse_file as runtime_parse_file,
             ParseTimeoutError,
             ParseSubprocessError,
             DEFAULT_PARSE_TIMEOUT,
@@ -180,8 +184,14 @@ class EnvelopeExecutor:
             # Symbol/ref extraction will use the existing AST
             return
         
-        # Parse file using canonical runtime (subprocess with timeout)
-        result = parse_file(ctx.abspath, timeout=DEFAULT_PARSE_TIMEOUT)
+        # Choose parse method based on environment flag
+        if is_pool_enabled():
+            # Persistent worker pool - amortizes spawn overhead
+            pool = get_pool()
+            result = pool.parse_file(ctx.abspath, timeout_ms=DEFAULT_PARSE_TIMEOUT * 1000)
+        else:
+            # Legacy subprocess-per-file (default until pool is proven)
+            result = runtime_parse_file(ctx.abspath, timeout=DEFAULT_PARSE_TIMEOUT)
         
         if not result.success:
             # Parse failed (syntax error, etc.) - raise so it's recorded as error
