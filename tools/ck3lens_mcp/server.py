@@ -139,7 +139,7 @@ from ck3lens.validate import parse_content, validate_artifact_bundle
 from ck3lens.contracts import ArtifactBundle
 from ck3lens.trace import ToolTrace
 # Canonical path constants - use these instead of computing paths from __file__
-from ck3lens.paths import ROOT_REPO, ROOT_CK3RAVEN_DATA
+from ck3lens.paths import ROOT_REPO, ROOT_CK3RAVEN_DATA, PLAYSET_DIR
 
 
 # =============================================================================
@@ -201,15 +201,33 @@ _session_cv_ids_resolved: bool = False
 _cached_world_adapter = None
 _cached_world_mode: Optional[str] = None
 
-# MIT (Mode Initialization Token) - provided by extension via env var CK3LENS_MIT_TOKEN
-# User must click "Initialize Agent" in extension to inject token into chat
+# MIT (Mode Initialization Token) - written by extension to file
+# User must click "Initialize Agent" in extension to generate fresh token
 # Token is SINGLE-USE - consumed on successful mode initialization
-# If env var not set, generate a fallback (for testing without extension)
-_mit_token: str = os.environ.get("CK3LENS_MIT_TOKEN", "") or os.environ.get("CK3LENS_DEV_TOKEN", "")
-if not _mit_token:
-    # Fallback for dev/testing - generate random token
+MIT_TOKEN_PATH = Path.home() / ".ck3raven" / "config" / "mit_token.txt"
+
+def _read_current_mit_token() -> str:
+    """
+    Read current MIT token from file (written by extension on each Initialize click).
+    
+    Falls back to env var for testing without extension, or generates random token.
+    This is called on EACH validation to get the FRESH token from file.
+    """
+    # Priority 1: File (canonical - written by extension on each click)
+    if MIT_TOKEN_PATH.exists():
+        try:
+            return MIT_TOKEN_PATH.read_text().strip()
+        except Exception:
+            pass
+    
+    # Priority 2: Env var (legacy/testing)
+    env_token = os.environ.get("CK3LENS_MIT_TOKEN", "") or os.environ.get("CK3LENS_DEV_TOKEN", "")
+    if env_token:
+        return env_token
+    
+    # Fallback: generate random (testing without extension)
     import secrets
-    _mit_token = secrets.token_hex(8)
+    return secrets.token_hex(8)
 
 # Track used MIT tokens - single-use enforcement
 _used_mit_tokens: set[str] = set()
@@ -374,31 +392,22 @@ def _reset_world_cache():
 # Use _get_session() instead - it returns a proper Session object.
 
 # Playset folder - JSON files here define available playsets
-# PRIMARY LOCATION: ~/.ck3raven/playsets/ (user data folder)
-# FALLBACK: ck3raven/playsets/ (repository root, for backward compatibility)
-USER_PLAYSETS_DIR = Path.home() / ".ck3raven" / "playsets"
-REPO_PLAYSETS_DIR = Path(__file__).parent.parent.parent / "playsets"
+# CANONICAL LOCATION: ~/.ck3raven/playsets/ (from paths.py PLAYSET_DIR)
+# NOTE: PLAYSET_DIR imported from ck3lens.paths - THE single source of truth
 
 def _get_playsets_dir() -> Path:
-    """Get the active playsets directory.
+    """Get the canonical playsets directory.
     
-    Priority:
-    1. User data folder (~/.ck3raven/playsets/) if it exists
-    2. Repo folder (ck3raven/playsets/) as fallback
-    
-    This allows gradual migration from repo-based to user-based playsets.
+    Returns PLAYSET_DIR from paths.py - the single source of truth.
     """
-    if USER_PLAYSETS_DIR.exists():
-        return USER_PLAYSETS_DIR
-    return REPO_PLAYSETS_DIR
+    return PLAYSET_DIR
 
-# For backward compatibility, PLAYSETS_DIR is now a function call
-# TODO: Migrate all usages to _get_playsets_dir()
-PLAYSETS_DIR = REPO_PLAYSETS_DIR  # Legacy - will be deprecated
+# For backward compatibility during migration
+PLAYSETS_DIR = PLAYSET_DIR
 
 # Manifest file - points to which playset is currently active
 # Lives in the playsets folder alongside the playset files
-PLAYSET_MANIFEST_FILE = _get_playsets_dir() / "playset_manifest.json"
+PLAYSET_MANIFEST_FILE = PLAYSET_DIR / "playset_manifest.json"
 
 
 
@@ -963,7 +972,7 @@ def ck3_close_db() -> Reply:
     
     trace = _get_trace()
     trace_info = get_current_trace_info()
-    rb = ReplyBuilder(trace_info, tool="ck3_close_db", layer="DB")
+    rb = ReplyBuilder(trace_info, tool="ck3_close_db")
     
     try:
         # Use db_api to disable (which handles WAL mode, close, and blocks reconnect)
@@ -1035,7 +1044,7 @@ def ck3_db(
     
     trace = _get_trace()
     trace_info = get_current_trace_info()
-    rb = ReplyBuilder(trace_info, tool="ck3_db", layer="DB")
+    rb = ReplyBuilder(trace_info, tool="ck3_db")
     
     if command == "status":
         result = db_api.status()
@@ -1154,9 +1163,23 @@ def ck3_db_delete(
     
     # Convert to Reply
     if result.get("error"):
-        if result.get("policy_decision") in ("DENY", "REQUIRE_CONTRACT", "REQUIRE_TOKEN"):
+        policy_decision = result.get("policy_decision", "")
+        err_msg = str(result.get("error", "")).lower()
+        
+        # DENY only → Denied (actual policy refusal)
+        if policy_decision == "DENY":
             return rb.denied('EN-DB-D-001', data=result, message=result.get("error", "Policy denied"))
-        return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Unknown error"))
+        
+        # REQUIRE_CONTRACT/REQUIRE_TOKEN → Invalid (missing prerequisite)
+        if policy_decision in ("REQUIRE_CONTRACT", "REQUIRE_TOKEN"):
+            return rb.invalid('MCP-DB-I-001', data=result, message=result.get("error", "Missing prerequisite"))
+        
+        # System failure requires POSITIVE evidence
+        if "failed to" in err_msg or "timeout" in err_msg or "connection" in err_msg or "exception" in err_msg:
+            return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "System error"))
+        
+        # Default: Invalid (agent mistake / bad input)
+        return rb.invalid('MCP-DB-I-001', data=result, message=result.get("error", "Invalid input"))
     
     # DB delete is system-owned/ungoverned -> MCP layer owns success
     if result.get("success"):
@@ -1989,22 +2012,32 @@ def ck3_file(
     
     if result.get("error"):
         err = result.get("error", "File operation failed")
+        err_lower = err.lower()
         policy_decision = result.get("policy_decision", "")
         visibility = result.get("visibility", "")
         
-        # Governance denial (policy/contract/authority refusal) -> EN layer
-        if policy_decision in ("DENY", "REQUIRE_CONTRACT", "REQUIRE_TOKEN"):
-            return rb.denied('EN-WRITE-D-001', data=result, message=err)
-        if "denied" in err.lower() or "not allowed" in err.lower() or "permission" in err.lower():
+        # DENY only → Denied (actual policy refusal)
+        if policy_decision == "DENY":
             return rb.denied('EN-WRITE-D-001', data=result, message=err)
         
-        # Invalid reference / not found (caller's input cannot be resolved) -> WA layer
-        # NOTE: "not visible" and "outside scope" are WA resolution failures, NOT governance denials
-        if visibility == "NOT_FOUND" or "not found" in err.lower() or "unknown" in err.lower():
+        # Text signals of governance denial (EN string cues)
+        if "denied" in err_lower or "not allowed" in err_lower or "permission" in err_lower:
+            return rb.denied('EN-WRITE-D-001', data=result, message=err)
+        
+        # REQUIRE_CONTRACT/REQUIRE_TOKEN → Invalid (missing prerequisite)
+        if policy_decision in ("REQUIRE_CONTRACT", "REQUIRE_TOKEN"):
             return rb.invalid('WA-RES-I-001', data=result, message=err)
         
-        # System error (actual exception / unexpected failure) -> MCP layer
-        return rb.error('MCP-SYS-E-001', data=result, message=err)
+        # Invalid reference / not found (caller's input cannot be resolved) -> WA layer
+        if visibility == "NOT_FOUND" or "not found" in err_lower or "unknown" in err_lower:
+            return rb.invalid('WA-RES-I-001', data=result, message=err)
+        
+        # System failure requires POSITIVE evidence
+        if "failed to" in err_lower or "timeout" in err_lower or "connection" in err_lower or "exception" in err_lower:
+            return rb.error('MCP-SYS-E-001', data=result, message=err)
+        
+        # Default: Invalid (agent mistake / bad input)
+        return rb.invalid('WA-RES-I-001', data=result, message=err)
     
     # Determine if this was a read or write operation for correct code
     # Write operations pass through enforcement -> EN layer owns success
@@ -2092,7 +2125,12 @@ def ck3_folder(
     )
     
     if result.get("error"):
-        return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Folder operation failed"))
+        err_msg = str(result.get("error", "")).lower()
+        # System failure requires POSITIVE evidence
+        if "failed to" in err_msg or "timeout" in err_msg or "connection" in err_msg or "exception" in err_msg:
+            return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Folder operation failed"))
+        # Default: Invalid (agent mistake / bad input)
+        return rb.invalid('WA-RES-I-001', data=result, message=result.get("error", "Folder operation failed"))
     
     return rb.success('WA-READ-S-001', data=result, message=f"Folder {command} complete.")
 
@@ -2163,7 +2201,12 @@ def ck3_playset(
     )
     
     if result.get("error"):
-        return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Playset operation failed"))
+        err_msg = str(result.get("error", "")).lower()
+        # System failure requires POSITIVE evidence
+        if "failed to" in err_msg or "timeout" in err_msg or "connection" in err_msg or "exception" in err_msg:
+            return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Playset operation failed"))
+        # Default: Invalid (agent mistake / bad input)
+        return rb.invalid('WA-VIS-I-001', data=result, message=result.get("error", "Playset operation failed"))
     
     if command == "switch":
         return rb.success('WA-VIS-S-001', data=result, message=f"Switched to playset: {result.get('playset_name')}")
@@ -2978,9 +3021,25 @@ def ck3_git(
     )
     
     if result.get("error"):
-        return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Git command failed"))
+        err_msg = str(result.get("error", "")).lower()
+        policy_decision = result.get("policy_decision", "")
+        
+        # DENY only → Denied (actual policy refusal)
+        if policy_decision == "DENY":
+            return rb.denied('EN-EXEC-D-001', data=result, message=result.get("error", "Git command denied"))
+        
+        # REQUIRE_CONTRACT/REQUIRE_TOKEN → Invalid (missing prerequisite)
+        if policy_decision in ("REQUIRE_CONTRACT", "REQUIRE_TOKEN"):
+            return rb.invalid('WA-RES-I-001', data=result, message=result.get("error", "Missing prerequisite"))
+        
+        # System failure requires POSITIVE evidence
+        if "failed to" in err_msg or "timeout" in err_msg or "connection" in err_msg or "exception" in err_msg:
+            return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Git command failed"))
+        
+        # Default: Invalid (agent mistake / bad input)
+        return rb.invalid('WA-RES-I-001', data=result, message=result.get("error", "Git command failed"))
     
-    return rb.success('WA-GIT-S-001', data=result, message=f"Git {command} complete.")
+    return rb.success('WA-EXEC-S-001', data=result, message=f"Git {command} complete.")
 
 
 # ============================================================================
@@ -3187,7 +3246,12 @@ def ck3_repair(
     result = _ck3_repair_internal(command, target, dry_run, backup_name)
     
     if result.get("error"):
-        return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Repair failed"))
+        err_msg = str(result.get("error", "")).lower()
+        # System failure requires POSITIVE evidence
+        if "failed to" in err_msg or "timeout" in err_msg or "connection" in err_msg or "exception" in err_msg:
+            return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Repair failed"))
+        # Default: Invalid (agent mistake / bad input)
+        return rb.invalid('MCP-SYS-I-001', data=result, message=result.get("error", "Repair failed"))
     
     # Repair operations are system-owned/ungoverned -> MCP layer owns success
     if result.get("dry_run"):
@@ -3373,7 +3437,7 @@ def _ck3_repair_internal(
             return {"error": "No active playset. Use ck3_playset to switch to a playset first."}
         
         # Find the playset file
-        playsets_dir = Path(__file__).parent.parent.parent / "playsets"
+        playsets_dir = PLAYSET_DIR  # Use canonical path from paths.py
         playset_file = None
         playset_data = None
         
@@ -3653,23 +3717,23 @@ def ck3_contract(
     if result.get("error"):
         # Authorization denial -> EN layer (CT cannot emit D)
         if "not authorized" in str(result.get("error", "")).lower():
-            return rb.denied('EN-OPEN-D-001', data=result, message=result.get("error", "Not authorized"))
+            return rb.denied('EN-GATE-D-001', data=result, message=result.get("error", "Not authorized"))
         return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Contract operation failed"))
     
     if command == "status":
         if result.get("has_active_contract"):
             return rb.success('CT-VAL-S-001', data=result, message=f"Active contract: {result.get('contract_id')}")
         # "No active contract" is informational, not governance denial
-        return rb.invalid('CT-CLOSE-I-001', data=result, message="No active contract.")
+        return rb.invalid('CT-GATE-I-001', data=result, message="No active contract.")
     
     if command == "open":
-        return rb.success('CT-OPEN-S-001', data=result, message=f"Contract opened: {result.get('contract_id')}")
+        return rb.success('CT-GATE-S-001', data=result, message=f"Contract opened: {result.get('contract_id')}")
     
     if command == "close":
-        return rb.success('CT-CLOSE-S-001', data=result, message="Contract closed.")
+        return rb.success('CT-GATE-S-002', data=result, message="Contract closed.")
     
     if command == "cancel":
-        return rb.success('CT-CLOSE-S-002', data=result, message="Contract cancelled.")
+        return rb.success('CT-GATE-S-003', data=result, message="Contract cancelled.")
     
     return rb.success('CT-VAL-S-001', data=result, message=f"Contract {command} complete.")
 
@@ -4108,14 +4172,27 @@ def ck3_exec(
     result = _ck3_exec_internal(command, working_dir, target_paths, token_id, dry_run, timeout)
     
     if result.get("error") and not result.get("allowed"):
-        decision = result.get("policy", {}).get("decision", "DENY")
-        # Governance denial -> EN layer
-        if decision in ("DENY", "REQUIRE_CONTRACT", "REQUIRE_TOKEN"):
+        decision = result.get("policy", {}).get("decision", "")
+        err_msg = str(result.get("error", "")).lower()
+        
+        # DENY only → Denied (actual policy refusal)
+        if decision == "DENY":
             return rb.denied('EN-EXEC-D-001', data=result, message=result.get("error", "Command denied"))
-        # Path not found is a resolution failure, not governance -> WA layer
+        
+        # REQUIRE_CONTRACT/REQUIRE_TOKEN → Invalid (missing prerequisite)
+        if decision in ("REQUIRE_CONTRACT", "REQUIRE_TOKEN"):
+            return rb.invalid('WA-RES-I-001', data=result, message=result.get("error", "Missing prerequisite"))
+        
+        # Path not found is a resolution failure -> WA layer
         if decision == "PATH_NOT_FOUND":
             return rb.invalid('WA-RES-I-001', data=result, message=result.get("error", "Path not found"))
-        return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Command failed"))
+        
+        # System failure requires POSITIVE evidence
+        if "failed to" in err_msg or "timeout" in err_msg or "connection" in err_msg or "exception" in err_msg:
+            return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Command failed"))
+        
+        # Default: Invalid (agent mistake / bad input)
+        return rb.invalid('WA-RES-I-001', data=result, message=result.get("error", "Command failed"))
     
     if result.get("executed"):
         exit_code = result.get("exit_code", 0)
@@ -5156,7 +5233,9 @@ def _ck3_get_mode_instructions_internal(mode: str, mit_token: str | None = None)
             "requires_mit": True,
             "action": "Ask user to click 'Initialize Agent' again for a fresh token.",
         }
-    if mit_token != _mit_token:
+    # Read CURRENT token from file (written fresh on each Initialize click)
+    current_valid_token = _read_current_mit_token()
+    if mit_token != current_valid_token:
         return {
             "error": "Invalid MIT token",
             "requires_mit": True,
@@ -5164,6 +5243,7 @@ def _ck3_get_mode_instructions_internal(mode: str, mit_token: str | None = None)
         }
     # Consume the token - single use
     _used_mit_tokens.add(mit_token)
+
     
     # =========================================================================
     # STEP 1: Initialize database connection (what ck3_init_session used to do)
@@ -5923,7 +6003,12 @@ def ck3_journal(
     if result.get("success", False):
         return rb.success('WA-READ-S-001', data=result, message=result.get("message", "OK"))
     else:
-        return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Unknown error"))
+        # Differentiate error types - Error requires POSITIVE evidence
+        err_msg = str(result.get("error", "")).lower()
+        if "failed to" in err_msg or "timeout" in err_msg or "connection" in err_msg or "exception" in err_msg:
+            return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "System error"))
+        # Default: Invalid (agent mistake / bad input)
+        return rb.invalid('WA-LOG-I-001', data=result, message=result.get("error", "Invalid input"))
 
 
 # ============================================================================

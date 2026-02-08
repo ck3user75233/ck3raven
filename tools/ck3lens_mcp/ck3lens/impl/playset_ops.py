@@ -23,8 +23,9 @@ from typing import Optional, Literal
 
 def get_playsets_dir() -> Path:
     """Get the canonical playsets directory path."""
-    # Located at ck3raven/playsets/ (repository root)
-    return Path(__file__).parent.parent.parent.parent.parent / "playsets"
+    # Use PLAYSET_DIR from paths.py (ROOT_CK3RAVEN_DATA/playsets/)
+    from ..paths import PLAYSET_DIR
+    return PLAYSET_DIR
 
 
 def get_manifest_file() -> Path:

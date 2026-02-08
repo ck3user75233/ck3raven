@@ -150,8 +150,9 @@ DEFAULT_CK3_MOD_DIR = Path.home() / "Documents" / "Paradox Interactive" / "Crusa
 # Default ck3raven database
 DEFAULT_DB_PATH = Path.home() / ".ck3raven" / "ck3raven.db"
 
-# Playsets directory - in ck3raven repo
-REPO_PLAYSETS_DIR = Path(__file__).parent.parent.parent.parent / "playsets"
+# Playsets directory - canonical location from paths.py
+# NOTE: Import PLAYSET_DIR at function scope to avoid circular imports
+# The canonical path is: ~/.ck3raven/playsets/
 
 # Legacy location (deprecated)
 LEGACY_PLAYSETS_DIR = Path.home() / ".ck3raven" / "playsets"
@@ -264,7 +265,9 @@ def _load_active_playset() -> Optional[dict]:
     Handles UTF-8 BOM gracefully (common from Windows/PowerShell tools).
     Returns None if no active playset or if loading fails.
     """
-    manifest_file = REPO_PLAYSETS_DIR / "playset_manifest.json"
+    from .paths import PLAYSET_DIR  # Import here to avoid circular imports
+    
+    manifest_file = PLAYSET_DIR / "playset_manifest.json"
     
     if not manifest_file.exists():
         return None
@@ -277,7 +280,7 @@ def _load_active_playset() -> Optional[dict]:
     if not active_filename:
         return None
     
-    playset_file = REPO_PLAYSETS_DIR / active_filename
+    playset_file = PLAYSET_DIR / active_filename
     
     if not playset_file.exists():
         _logger.warning(f"Active playset file not found: {playset_file}")

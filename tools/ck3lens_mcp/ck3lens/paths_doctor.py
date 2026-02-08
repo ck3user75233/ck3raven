@@ -46,38 +46,121 @@ class PathsDoctorReport:
 
 
 # =============================================================================
+# PLAYSET FALLBACK
+# =============================================================================
+
+def _get_playset_paths() -> dict[str, Path | None]:
+    """
+    Get vanilla_path and workshop root from active playset.
+    
+    This provides fallback paths when workspace.toml doesn't have them configured.
+    The qbuilder uses playset JSON files as the source of truth for paths, so we
+    should check there too.
+    
+    Playsets are at ROOT_CK3RAVEN_DATA/playsets/ (~/.ck3raven/playsets/).
+    
+    Returns dict with 'vanilla_path' and 'workshop_root' (either may be None).
+    """
+    import json
+    from .paths import PLAYSET_DIR
+    
+    result: dict[str, Path | None] = {'vanilla_path': None, 'workshop_root': None}
+    
+    try:
+        manifest_path = PLAYSET_DIR / "playset_manifest.json"
+        
+        if not manifest_path.exists():
+            logger.debug(f"No playset manifest at {manifest_path}")
+            return result
+        
+        with open(manifest_path, 'r', encoding='utf-8-sig') as f:
+            manifest = json.load(f)
+        
+        # Manifest uses 'active' key (filename of active playset)
+        active_filename = manifest.get('active')
+        if not active_filename:
+            logger.debug("No active playset in manifest")
+            return result
+        
+        playset_path = PLAYSET_DIR / active_filename
+        if not playset_path.exists():
+            logger.debug(f"Active playset file not found: {playset_path}")
+            return result
+        
+        with open(playset_path, 'r', encoding='utf-8-sig') as f:
+            playset = json.load(f)
+        
+        # Get vanilla path (check both formats)
+        vanilla = playset.get('vanilla') or {}
+        vanilla_path_str = playset.get('vanilla_path') or vanilla.get('path')
+        if vanilla_path_str:
+            result['vanilla_path'] = Path(vanilla_path_str)
+        
+        # Derive workshop root from first workshop mod path
+        # Workshop mods are at: <steam_workshop>/ugc_XXXXXXX/
+        # So we go up two levels from a mod's source_path
+        for mod in playset.get('mods', []):
+            mod_path = mod.get('path') or mod.get('source_path')
+            if mod_path and 'workshop' in mod_path.lower():
+                # This looks like a workshop mod - derive the root
+                mod_p = Path(mod_path)
+                if mod_p.exists() and mod_p.parent.parent.exists():
+                    result['workshop_root'] = mod_p.parent.parent
+                    break
+        
+        logger.debug(f"Playset paths: vanilla={result['vanilla_path']}, workshop={result['workshop_root']}")
+        
+    except Exception as e:
+        logger.debug(f"Could not read playset paths: {e}")
+    
+    return result
+
+
+# =============================================================================
 # CHECK FUNCTIONS
 # =============================================================================
 
 def _check_required_roots() -> list[DoctorFinding]:
-    """Check ROOT_GAME and ROOT_STEAM are configured and exist."""
+    """Check ROOT_GAME and ROOT_STEAM are configured and exist.
+    
+    Falls back to active playset paths when workspace.toml doesn't have them.
+    """
     from .paths import ROOT_GAME, ROOT_STEAM
     
     findings = []
     
-    # ROOT_GAME
-    if ROOT_GAME is None:
+    # Get fallback paths from active playset
+    playset_paths = _get_playset_paths()
+    
+    # ROOT_GAME - use config, fall back to playset vanilla_path
+    game_path = ROOT_GAME
+    game_source = "config"
+    if game_path is None and playset_paths['vanilla_path']:
+        game_path = playset_paths['vanilla_path']
+        game_source = "playset"
+    
+    if game_path is None:
         findings.append(DoctorFinding(
             id="PD-ROOT-GAME-MISSING",
             severity="ERROR",
             subject="ROOT_GAME",
-            message="ROOT_GAME is not configured",
+            message="ROOT_GAME is not configured (checked workspace.toml and active playset)",
             remediation="Set game_path in ~/.ck3raven/config/workspace.toml"
         ))
-    elif not ROOT_GAME.exists():
+    elif not game_path.exists():
         findings.append(DoctorFinding(
             id="PD-ROOT-GAME-NOTFOUND",
             severity="ERROR",
             subject="ROOT_GAME",
-            message=f"ROOT_GAME path does not exist: {ROOT_GAME}",
+            message=f"ROOT_GAME path does not exist: {game_path} (from {game_source})",
             remediation="Verify game_path points to CK3 install directory"
         ))
-    elif not ROOT_GAME.is_dir():
+    elif not game_path.is_dir():
         findings.append(DoctorFinding(
             id="PD-ROOT-GAME-NOTDIR",
             severity="ERROR",
             subject="ROOT_GAME",
-            message=f"ROOT_GAME is not a directory: {ROOT_GAME}",
+            message=f"ROOT_GAME is not a directory: {game_path}",
             remediation="game_path must be a directory, not a file"
         ))
     else:
@@ -85,33 +168,39 @@ def _check_required_roots() -> list[DoctorFinding]:
             id="PD-ROOT-GAME-OK",
             severity="OK",
             subject="ROOT_GAME",
-            message=f"ROOT_GAME: {ROOT_GAME}",
+            message=f"ROOT_GAME: {game_path} (from {game_source})",
             remediation=None
         ))
     
-    # ROOT_STEAM
-    if ROOT_STEAM is None:
+    # ROOT_STEAM - use config, fall back to playset workshop_root
+    steam_path = ROOT_STEAM
+    steam_source = "config"
+    if steam_path is None and playset_paths['workshop_root']:
+        steam_path = playset_paths['workshop_root']
+        steam_source = "playset"
+    
+    if steam_path is None:
         findings.append(DoctorFinding(
             id="PD-ROOT-STEAM-MISSING",
             severity="ERROR",
             subject="ROOT_STEAM",
-            message="ROOT_STEAM is not configured",
+            message="ROOT_STEAM is not configured (checked workspace.toml and active playset)",
             remediation="Set workshop_path in ~/.ck3raven/config/workspace.toml"
         ))
-    elif not ROOT_STEAM.exists():
+    elif not steam_path.exists():
         findings.append(DoctorFinding(
             id="PD-ROOT-STEAM-NOTFOUND",
             severity="ERROR",
             subject="ROOT_STEAM",
-            message=f"ROOT_STEAM path does not exist: {ROOT_STEAM}",
+            message=f"ROOT_STEAM path does not exist: {steam_path} (from {steam_source})",
             remediation="Verify workshop_path points to Steam Workshop mods folder"
         ))
-    elif not ROOT_STEAM.is_dir():
+    elif not steam_path.is_dir():
         findings.append(DoctorFinding(
             id="PD-ROOT-STEAM-NOTDIR",
             severity="ERROR",
             subject="ROOT_STEAM",
-            message=f"ROOT_STEAM is not a directory: {ROOT_STEAM}",
+            message=f"ROOT_STEAM is not a directory: {steam_path}",
             remediation="workshop_path must be a directory, not a file"
         ))
     else:
@@ -119,7 +208,7 @@ def _check_required_roots() -> list[DoctorFinding]:
             id="PD-ROOT-STEAM-OK",
             severity="OK",
             subject="ROOT_STEAM",
-            message=f"ROOT_STEAM: {ROOT_STEAM}",
+            message=f"ROOT_STEAM: {steam_path} (from {steam_source})",
             remediation=None
         ))
     
