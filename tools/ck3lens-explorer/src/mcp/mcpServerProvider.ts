@@ -13,12 +13,13 @@
  * - Python server exits on stdin EOF
  * See docs/MCP_SERVER_ARCHITECTURE.md for full lifecycle documentation.
  * 
- * MIT TOKEN FIX (February 2026):
- * - MIT token is generated once per activation, stored in memory only
- * - Token is passed to MCP server via CK3LENS_MIT_TOKEN env var
- * - NEVER written to disk (agent could read it with read_file and self-init)
- * - Agent cannot read subprocess env vars, so human-in-the-loop is enforced
- * - Re-initialization allowed (token lifetime = process lifetime)
+ * MIT TOKEN SECURITY (February 2026):
+ * - Uses HMAC-based challenge-response: secret in env var, tokens are signed nonces
+ * - Secret is generated once per activation, passed to MCP as CK3LENS_MIT_SECRET env var
+ * - Each "Initialize Agent" click generates a fresh nonce, signs with HMAC-SHA256
+ * - Agent can read the token from chat but cannot FORGE a new one without the secret
+ * - Agent cannot read subprocess env vars (all tools gated behind mode init)
+ * - Unlimited tokens per session (new nonce each click, same stable secret)
  */
 
 import * as vscode from 'vscode';
@@ -128,12 +129,17 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
     private isShutdown: boolean = false;
     
     /**
-     * MIT token - stored in memory only, passed to MCP server via env var.
-     * NEVER written to disk (agent could read it with read_file and self-init).
-     * Generated once in constructor, returned by getMitToken(), injected as
-     * CK3LENS_MIT_TOKEN env var in provideMcpServerDefinitions().
+     * MIT secret — the "private key" for HMAC-based token verification.
+     * Stored in memory only. Passed to MCP server as CK3LENS_MIT_SECRET env var.
+     * 
+     * Security model:
+     * - Secret is in extension memory + MCP subprocess env var (both inaccessible to agent)
+     * - getMitToken() signs a fresh nonce with HMAC(secret, nonce) → gives to user
+     * - MCP server verifies HMAC using secret from its env var
+     * - Agent can re-paste a token from chat but cannot forge a new one
+     * - NEVER written to disk
      */
-    private readonly mitToken: string;
+    private readonly mitSecret: string;
 
     constructor(context: vscode.ExtensionContext, logger: Logger) {
         this.logger = logger;
@@ -141,11 +147,9 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
         // CRITICAL: Generate fresh instance ID every activation (no caching!)
         this.instanceId = generateInstanceId();
         
-        // Generate MIT token — memory only, never on disk.
-        // Security model: agent cannot read env vars of the MCP subprocess,
-        // and all tools (ck3_exec etc.) are blocked before mode initialization.
-        // So the agent must receive this token from the user (human-in-the-loop).
-        this.mitToken = crypto.randomBytes(8).toString('hex');
+        // Generate MIT secret — the HMAC key used to sign/verify tokens.
+        // This never leaves memory (extension side) and the MCP process env var.
+        this.mitSecret = crypto.randomBytes(16).toString('hex');
         
         // Clean up legacy token file if it exists (was a security hole)
         const legacyTokenPath = path.join(os.homedir(), '.ck3raven', 'config', 'mit_token.txt');
@@ -179,14 +183,22 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
     }
 
     /**
-     * Get the MIT (Mode Initialization Token) for agent authorization.
+     * Get a fresh MIT (Mode Initialization Token) for agent authorization.
      * 
-     * Returns the in-memory token that was also passed to the MCP server
-     * as CK3LENS_MIT_TOKEN env var at startup. The agent cannot access
-     * this token on its own — it must be given by the user via chat.
+     * Generates a random nonce and signs it with HMAC-SHA256 using the secret.
+     * Returns "nonce.mac" — the nonce is public, the mac proves knowledge of secret.
+     * 
+     * Each call produces a unique token (fresh nonce). The MCP server verifies
+     * by recomputing HMAC(secret, nonce) using the secret from its env var.
+     * Agent can re-paste this token but cannot forge a new one without the secret.
      */
     getMitToken(): string {
-        return this.mitToken;
+        const nonce = crypto.randomBytes(8).toString('hex');
+        const mac = crypto.createHmac('sha256', this.mitSecret)
+            .update(nonce)
+            .digest('hex')
+            .substring(0, 16);  // truncate to 16 hex chars for brevity
+        return `${nonce}.${mac}`;
     }
 
     /**
@@ -225,12 +237,12 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
             return [];
         }
 
-        // Build environment with instance ID and MIT token for isolation
-        // MIT token is passed via env var — agent cannot read MCP subprocess env
-        // vars before initialization (all tools require _get_world() which needs init)
+        // Build environment with instance ID and MIT secret for isolation
+        // MIT SECRET is the HMAC key — agent cannot read subprocess env vars.
+        // Tokens are nonce.HMAC(secret, nonce) — verifiable but not forgeable.
         const env: Record<string, string | number | null> = {
             CK3LENS_INSTANCE_ID: this.instanceId,
-            CK3LENS_MIT_TOKEN: this.mitToken,
+            CK3LENS_MIT_SECRET: this.mitSecret,
             PYTHONPATH: `${ROOT_REPO}${path.delimiter}${path.join(ROOT_REPO, 'src')}`,
         };
 

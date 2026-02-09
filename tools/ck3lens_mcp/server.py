@@ -201,31 +201,54 @@ _session_cv_ids_resolved: bool = False
 _cached_world_adapter = None
 _cached_world_mode: Optional[str] = None
 
-# MIT (Mode Initialization Token) - passed via CK3LENS_MIT_TOKEN env var
-# Extension generates token in memory, injects into MCP server process env.
-# Agent CANNOT read this: all tools require mode init, which requires the token.
-# This prevents spontaneous agent self-initialization without human involvement.
+# MIT (Mode Initialization Token) - HMAC-based challenge-response
+# Extension generates a secret, passes it as CK3LENS_MIT_SECRET env var.
+# Tokens are "nonce.mac" where mac = HMAC-SHA256(secret, nonce)[:16].
+# Agent can re-paste a token from chat but cannot FORGE a new one.
+# Agent cannot read subprocess env vars (all tools gated behind init).
 
-def _read_current_mit_token() -> str:
+def _verify_mit_token(mit_token: str) -> bool:
     """
-    Read MIT token from process environment variable.
+    Verify an HMAC-signed MIT token.
     
-    The extension passes CK3LENS_MIT_TOKEN when launching the MCP server process.
-    Token never touches disk — agent cannot read it via read_file.
+    Token format: "nonce.mac" where mac = HMAC-SHA256(secret, nonce)[:16 hex chars].
+    The secret is in CK3LENS_MIT_SECRET env var (set by extension at launch).
+    
+    Returns True if the token's HMAC is valid.
     """
-    # Primary: env var set by extension at process launch
-    env_token = os.environ.get("CK3LENS_MIT_TOKEN", "")
-    if env_token:
-        return env_token
+    import hmac
+    import hashlib
     
-    # Legacy: CK3LENS_DEV_TOKEN for testing without extension
-    dev_token = os.environ.get("CK3LENS_DEV_TOKEN", "")
-    if dev_token:
-        return dev_token
+    # Get secret from env var
+    secret = os.environ.get("CK3LENS_MIT_SECRET", "")
     
-    # Fallback: generate random (testing without extension)
-    import secrets
-    return secrets.token_hex(8)
+    # Legacy: direct token comparison for CK3LENS_DEV_TOKEN (testing only)
+    if not secret:
+        dev_token = os.environ.get("CK3LENS_DEV_TOKEN", "")
+        if dev_token:
+            return mit_token == dev_token
+        # No secret and no dev token — can't verify anything
+        return False
+    
+    # Parse "nonce.mac" format
+    if "." not in mit_token:
+        return False
+    
+    parts = mit_token.split(".", 1)
+    if len(parts) != 2:
+        return False
+    
+    nonce, claimed_mac = parts
+    
+    # Compute expected HMAC
+    expected_mac = hmac.new(
+        secret.encode('utf-8'),
+        nonce.encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()[:16]
+    
+    # Constant-time comparison
+    return hmac.compare_digest(claimed_mac, expected_mac)
 
 
 def _get_session() -> Session:
@@ -5209,8 +5232,9 @@ def _ck3_get_mode_instructions_internal(mode: str, mit_token: str | None = None)
     # =========================================================================
     # MIT TOKEN VALIDATION: ALL modes require user-provided MIT token
     # This prevents agent self-initialization - user must click the button.
-    # Token is passed via env var (CK3LENS_MIT_TOKEN) — agent cannot read it.
-    # Re-initialization with same token is allowed (token lifetime = process).
+    # Token format: "nonce.mac" where mac = HMAC-SHA256(secret, nonce).
+    # Secret is in CK3LENS_MIT_SECRET env var — agent cannot read it.
+    # Agent can re-paste a valid token but cannot forge a new one.
     # =========================================================================
     if mit_token is None:
         return {
@@ -5218,11 +5242,10 @@ def _ck3_get_mode_instructions_internal(mode: str, mit_token: str | None = None)
             "requires_mit": True,
             "action": "Ask user to click 'Initialize Agent' in VS Code CK3 Lens sidebar. Token will be injected into chat.",
         }
-    # Read token from env var (set by extension at MCP server startup)
-    current_valid_token = _read_current_mit_token()
-    if mit_token != current_valid_token:
+    # Verify HMAC signature (constant-time comparison)
+    if not _verify_mit_token(mit_token):
         return {
-            "error": "Invalid MIT token",
+            "error": "Invalid MIT token (HMAC verification failed)",
             "requires_mit": True,
             "action": "Token incorrect. Ask user to click 'Initialize Agent' in CK3 Lens sidebar.",
         }
