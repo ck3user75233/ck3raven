@@ -145,7 +145,7 @@ def _check_required_roots() -> list[DoctorFinding]:
             severity="ERROR",
             subject="ROOT_GAME",
             message="ROOT_GAME is not configured (checked workspace.toml and active playset)",
-            remediation="Set game_path in ~/.ck3raven/config/workspace.toml"
+            remediation="Set root_game in ~/.ck3raven/config/workspace.toml"
         ))
     elif not game_path.exists():
         findings.append(DoctorFinding(
@@ -153,7 +153,7 @@ def _check_required_roots() -> list[DoctorFinding]:
             severity="ERROR",
             subject="ROOT_GAME",
             message=f"ROOT_GAME path does not exist: {game_path} (from {game_source})",
-            remediation="Verify game_path points to CK3 install directory"
+            remediation="Verify root_game points to CK3 install directory"
         ))
     elif not game_path.is_dir():
         findings.append(DoctorFinding(
@@ -161,7 +161,7 @@ def _check_required_roots() -> list[DoctorFinding]:
             severity="ERROR",
             subject="ROOT_GAME",
             message=f"ROOT_GAME is not a directory: {game_path}",
-            remediation="game_path must be a directory, not a file"
+            remediation="root_game must be a directory, not a file"
         ))
     else:
         findings.append(DoctorFinding(
@@ -185,7 +185,7 @@ def _check_required_roots() -> list[DoctorFinding]:
             severity="ERROR",
             subject="ROOT_STEAM",
             message="ROOT_STEAM is not configured (checked workspace.toml and active playset)",
-            remediation="Set workshop_path in ~/.ck3raven/config/workspace.toml"
+            remediation="Set root_steam in ~/.ck3raven/config/workspace.toml"
         ))
     elif not steam_path.exists():
         findings.append(DoctorFinding(
@@ -193,7 +193,7 @@ def _check_required_roots() -> list[DoctorFinding]:
             severity="ERROR",
             subject="ROOT_STEAM",
             message=f"ROOT_STEAM path does not exist: {steam_path} (from {steam_source})",
-            remediation="Verify workshop_path points to Steam Workshop mods folder"
+            remediation="Verify root_steam points to Steam Workshop mods folder"
         ))
     elif not steam_path.is_dir():
         findings.append(DoctorFinding(
@@ -201,7 +201,7 @@ def _check_required_roots() -> list[DoctorFinding]:
             severity="ERROR",
             subject="ROOT_STEAM",
             message=f"ROOT_STEAM is not a directory: {steam_path}",
-            remediation="workshop_path must be a directory, not a file"
+            remediation="root_steam must be a directory, not a file"
         ))
     else:
         findings.append(DoctorFinding(
@@ -216,16 +216,14 @@ def _check_required_roots() -> list[DoctorFinding]:
 
 
 def _check_optional_roots() -> list[DoctorFinding]:
-    """Check optional roots (ROOT_USER_DOCS, ROOT_UTILITIES, etc.)."""
-    from .paths import ROOT_USER_DOCS, ROOT_UTILITIES, ROOT_LAUNCHER, ROOT_VSCODE
+    """Check optional roots (ROOT_USER_DOCS, ROOT_VSCODE)."""
+    from .paths import ROOT_USER_DOCS, ROOT_VSCODE
     
     findings = []
     
     optional_roots = [
-        ("ROOT_USER_DOCS", ROOT_USER_DOCS, "user_docs_path"),
-        ("ROOT_UTILITIES", ROOT_UTILITIES, "utilities_path"),
-        ("ROOT_LAUNCHER", ROOT_LAUNCHER, "launcher_path"),
-        ("ROOT_VSCODE", ROOT_VSCODE, "vscode_path"),
+        ("ROOT_USER_DOCS", ROOT_USER_DOCS, "root_user_docs"),
+        ("ROOT_VSCODE", ROOT_VSCODE, "root_vscode"),
     ]
     
     for name, path, config_key in optional_roots:

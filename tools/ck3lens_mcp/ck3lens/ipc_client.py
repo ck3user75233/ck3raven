@@ -69,7 +69,7 @@ class VSCodeIPCClient:
                 data = json.loads(port_file.read_text())
                 # Check if the port file is recent (within last hour)
                 import time
-                if time.time() - data.get("timestamp", 0) < 3600:
+                if time.time() - data.get("timestamp", 0) < 300:
                     return data["port"]
             except (json.JSONDecodeError, KeyError):
                 pass

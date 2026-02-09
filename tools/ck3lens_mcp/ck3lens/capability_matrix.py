@@ -85,9 +85,7 @@ CAPABILITY_MATRIX: dict[MatrixKey, Capability] = {
         read=True, write=True
     ),
     #
-    # Utilities (read-only)
-    ("ck3lens", RootCategory.ROOT_LAUNCHER, None): Capability(read=True),
-    ("ck3lens", RootCategory.ROOT_UTILITIES, None): Capability(read=True),
+    # VS Code (read-only)
     ("ck3lens", RootCategory.ROOT_VSCODE, None): Capability(read=True),
     #
     # Repo not visible in ck3lens mode
@@ -146,10 +144,6 @@ CAPABILITY_MATRIX: dict[MatrixKey, Capability] = {
     ("ck3raven-dev", RootCategory.ROOT_CK3RAVEN_DATA, "artifacts"): Capability(
         read=True, write=True, delete=True
     ),
-    #
-    # Utilities (read-only)
-    ("ck3raven-dev", RootCategory.ROOT_LAUNCHER, None): Capability(read=True),
-    ("ck3raven-dev", RootCategory.ROOT_UTILITIES, None): Capability(read=True),
     #
     # VS Code - write settings (no delete)
     ("ck3raven-dev", RootCategory.ROOT_VSCODE, None): Capability(read=True, write=True),

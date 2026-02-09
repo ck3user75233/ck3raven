@@ -5,6 +5,9 @@ Loads user-editable configuration for ALL machine-specific paths.
 OS-defaults are fallbacks only - paths_doctor warns when defaults are used.
 
 CRITICAL: No path is "baked into code as authority." All flow through config.
+
+Path naming convention: All path fields use canonical ROOT_* names from RootCategory enum:
+  - root_repo, root_game, root_steam, root_user_docs, root_vscode
 """
 
 from pathlib import Path
@@ -27,17 +30,27 @@ except ImportError:
 
 @dataclass
 class PathsConfig:
-    """Parsed paths configuration with source tracking."""
+    """Parsed paths configuration with source tracking.
+    
+    Field names match canonical RootCategory enum values (lowercase).
+    """
 
     # ck3raven repository root (REQUIRED for ck3raven-dev mode)
     root_repo: Path | None = None
     
-    game_path: Path | None = None
-    workshop_path: Path | None = None
-    user_docs_path: Path | None = None
-    utilities_path: Path | None = None
-    launcher_path: Path | None = None
-    vscode_path: Path | None = None
+    # CK3 game installation (vanilla files)
+    root_game: Path | None = None
+    
+    # Steam Workshop mods folder
+    root_steam: Path | None = None
+    
+    # CK3 user documents folder (contains launcher-v2.sqlite, dlc_load.json, saves, local mods)
+    root_user_docs: Path | None = None
+    
+    # VS Code user settings folder
+    root_vscode: Path | None = None
+    
+    # Local mods folder (derived from root_user_docs if not set)
     local_mods_folder: Path | None = None
 
     # Track which paths are using defaults (for doctor warnings)
@@ -80,39 +93,27 @@ def _get_os_defaults() -> dict[str, Path]:
     These are FALLBACKS only. When used, paths_doctor warns.
     They are NOT "baked into code as authority."
     
-    NOTE: repo_path has NO default - it MUST be configured.
+    NOTE: root_repo, root_game, root_steam have NO defaults - must be configured.
     """
     home = Path.home()
 
     if platform.system() == "Windows":
         return {
-            "user_docs_path": home
+            "root_user_docs": home
             / "Documents"
             / "Paradox Interactive"
             / "Crusader Kings III",
-            "utilities_path": home / "AppData" / "Local",
-            "launcher_path": home
-            / "AppData"
-            / "Local"
-            / "Paradox Interactive"
-            / "launcher-v2",
-            "vscode_path": home / "AppData" / "Roaming" / "Code" / "User",
+            "root_vscode": home / "AppData" / "Roaming" / "Code" / "User",
         }
     else:
         # macOS/Linux
         return {
-            "user_docs_path": home
+            "root_user_docs": home
             / ".local"
             / "share"
             / "Paradox Interactive"
             / "Crusader Kings III",
-            "utilities_path": home / ".local" / "share",
-            "launcher_path": home
-            / ".local"
-            / "share"
-            / "Paradox Interactive"
-            / "launcher-v2",
-            "vscode_path": home / ".config" / "Code" / "User",
+            "root_vscode": home / ".config" / "Code" / "User",
         }
 
 
@@ -176,19 +177,17 @@ def load_config() -> WorkspaceConfig:
     # Load root_repo - NO DEFAULT, must be configured for ck3raven-dev
     config.paths.root_repo = load_path("root_repo", required=False)
     
-    # Load all other paths
-    config.paths.game_path = load_path("game_path", required=False)
-    config.paths.workshop_path = load_path("workshop_path", required=False)
-    config.paths.user_docs_path = load_path("user_docs_path")
-    config.paths.utilities_path = load_path("utilities_path")
-    config.paths.launcher_path = load_path("launcher_path")
-    config.paths.vscode_path = load_path("vscode_path")
+    # Load all other paths (canonical names)
+    config.paths.root_game = load_path("root_game", required=False)
+    config.paths.root_steam = load_path("root_steam", required=False)
+    config.paths.root_user_docs = load_path("root_user_docs")
+    config.paths.root_vscode = load_path("root_vscode")
 
-    # Local mods folder defaults to user_docs/mod
+    # Local mods folder defaults to root_user_docs/mod
     if local_mods := paths_section.get("local_mods_folder"):
         config.paths.local_mods_folder = Path(local_mods)
-    elif config.paths.user_docs_path:
-        config.paths.local_mods_folder = config.paths.user_docs_path / "mod"
+    elif config.paths.root_user_docs:
+        config.paths.local_mods_folder = config.paths.root_user_docs / "mod"
         config.paths.using_defaults.add("local_mods_folder")
 
     # Parse [options] section
@@ -208,16 +207,16 @@ def load_config() -> WorkspaceConfig:
 
 def _apply_all_defaults(config: WorkspaceConfig, os_defaults: dict[str, Path]) -> None:
     """Apply all OS-defaults when config can't be loaded."""
-    # root_repo has NO default - it stays None
+    # root_repo, root_game, root_steam have NO defaults - they stay None
     config.paths.root_repo = None
+    config.paths.root_game = None
+    config.paths.root_steam = None
     
-    config.paths.user_docs_path = os_defaults.get("user_docs_path")
-    config.paths.utilities_path = os_defaults.get("utilities_path")
-    config.paths.launcher_path = os_defaults.get("launcher_path")
-    config.paths.vscode_path = os_defaults.get("vscode_path")
+    config.paths.root_user_docs = os_defaults.get("root_user_docs")
+    config.paths.root_vscode = os_defaults.get("root_vscode")
 
-    if config.paths.user_docs_path:
-        config.paths.local_mods_folder = config.paths.user_docs_path / "mod"
+    if config.paths.root_user_docs:
+        config.paths.local_mods_folder = config.paths.root_user_docs / "mod"
 
     config.paths.using_defaults = set(os_defaults.keys())
     config.paths.using_defaults.add("local_mods_folder")
@@ -251,26 +250,19 @@ def create_default_config() -> Path:
 # root_repo = ""
 
 # Required - path to CK3 game installation
-game_path = ""
+root_game = ""
 
 # Required - path to Steam Workshop mods
-workshop_path = ""
+root_steam = ""
 
 # Optional - CK3 user documents folder
-# Current OS default: {defaults.get("user_docs_path", "N/A")}
-# user_docs_path = ""
-
-# Optional - Local utilities folder (launcher DB, caches)
-# Current OS default: {defaults.get("utilities_path", "N/A")}
-# utilities_path = ""
-
-# Optional - CK3 launcher folder
-# Current OS default: {defaults.get("launcher_path", "N/A")}
-# launcher_path = ""
+# Contains: launcher-v2.sqlite, dlc_load.json, save games, local mods
+# Current OS default: {defaults.get("root_user_docs", "N/A")}
+# root_user_docs = ""
 
 # Optional - VS Code user settings folder
-# Current OS default: {defaults.get("vscode_path", "N/A")}
-# vscode_path = ""
+# Current OS default: {defaults.get("root_vscode", "N/A")}
+# root_vscode = ""
 
 # Optional - override local mods folder
 # local_mods_folder = ""

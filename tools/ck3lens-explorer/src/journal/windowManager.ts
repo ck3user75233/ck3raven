@@ -7,7 +7,7 @@
  * - Only one window can be active at a time
  * - Starting a new window auto-closes the previous (reason: overlap_new_window)
  * - Extension deactivate SKIPS extraction to prevent blocking VS Code shutdown
- * - Extraction happens at startup via copy-then-read (see startupExtractor.ts)
+ * - Extraction happens via offline CLI (tools/journal_extractor/extract.py) when VS Code is closed
  * 
  * CRITICAL: Never perform I/O against VS Code's chatSessions during shutdown.
  * This causes file locks on Windows that prevent VS Code from persisting chat history.
@@ -53,58 +53,6 @@ export function getIsShuttingDown(): boolean {
  */
 export function setShuttingDown(value: boolean): void {
     isShuttingDown = value;
-}
-
-/**
- * Pending extraction marker - written during shutdown, processed at startup.
- */
-export interface PendingExtractionMarker {
-    window_id: string;
-    workspace_key: string;
-    started_at: string;
-    shutdown_at: string;
-    chat_sessions_path: string;
-    reason: 'deactivate';
-}
-
-/**
- * Get path to pending extraction marker for a workspace.
- */
-export function getPendingMarkerPath(workspaceKey: string): string {
-    return path.join(getWorkspaceJournalPath(workspaceKey), 'pending_extraction.json');
-}
-
-/**
- * Write a pending extraction marker (called during shutdown).
- * This file signals to startup extractor that extraction was skipped.
- */
-function writePendingMarker(window: WindowState, logger: StructuredLogger): void {
-    const marker: PendingExtractionMarker = {
-        window_id: window.window_id,
-        workspace_key: window.workspace_key,
-        started_at: window.started_at,
-        shutdown_at: new Date().toISOString(),
-        chat_sessions_path: window.chatSessionsPath,
-        reason: 'deactivate',
-    };
-    
-    const markerPath = getPendingMarkerPath(window.workspace_key);
-    
-    try {
-        // Ensure parent directory exists
-        fs.mkdirSync(path.dirname(markerPath), { recursive: true });
-        fs.writeFileSync(markerPath, JSON.stringify(marker, null, 2), 'utf-8');
-        logger.info(LOG_CATEGORIES.WINDOW_END, 'Pending extraction marker written', {
-            window_id: window.window_id,
-            marker_path: markerPath,
-        });
-    } catch (err) {
-        // Non-fatal - startup extractor will handle missing marker
-        logger.warn(LOG_CATEGORIES.WINDOW_END, 'Failed to write pending marker', {
-            window_id: window.window_id,
-            error: (err as Error).message,
-        });
-    }
 }
 
 /**
@@ -254,9 +202,6 @@ export class WindowManager {
                 reason,
                 is_shutting_down: isShuttingDown,
             });
-            
-            // Write pending marker for startup extractor to process
-            writePendingMarker(window, this.logger);
             
             // Fire event and return immediately - NO chatSessions I/O
             this.onWindowStateChanged.fire(null);

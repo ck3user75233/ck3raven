@@ -180,10 +180,8 @@ class WorldAdapter:
     - ROOT_REPO: ck3raven source
     - ROOT_GAME: Vanilla CK3 installation
     - ROOT_CK3RAVEN_DATA: ~/.ck3raven/ (contains WIP, playsets, db, config)
-    - ROOT_USER_DOCS: User-authored mod content (local mods)
+    - ROOT_USER_DOCS: User data folder (local mods, launcher-v2.sqlite, saves)
     - ROOT_STEAM: Steam Workshop content
-    - ROOT_UTILITIES: Runtime logs & diagnostics
-    - ROOT_LAUNCHER: CK3 launcher registry
     - ROOT_VSCODE: VS Code user data
     
     WorldAdapter determines:
@@ -254,8 +252,6 @@ class WorldAdapter:
             ROOT_GAME,
             ROOT_STEAM,
             ROOT_USER_DOCS,
-            ROOT_UTILITIES,
-            ROOT_LAUNCHER,
             ROOT_VSCODE,
             LOCAL_MODS_FOLDER,
         )
@@ -285,14 +281,6 @@ class WorldAdapter:
         # ROOT_USER_DOCS - from paths.py (config-driven or OS-default)
         if ROOT_USER_DOCS and ROOT_USER_DOCS.exists():
             roots[RootCategory.ROOT_USER_DOCS] = [ROOT_USER_DOCS]
-        
-        # ROOT_UTILITIES - from paths.py (config-driven or OS-default)
-        if ROOT_UTILITIES and ROOT_UTILITIES.exists():
-            roots[RootCategory.ROOT_UTILITIES] = [ROOT_UTILITIES]
-        
-        # ROOT_LAUNCHER - from paths.py (config-driven or OS-default)
-        if ROOT_LAUNCHER and ROOT_LAUNCHER.exists():
-            roots[RootCategory.ROOT_LAUNCHER] = [ROOT_LAUNCHER]
         
         # ROOT_VSCODE - from paths.py (config-driven or OS-default)
         if ROOT_VSCODE and ROOT_VSCODE.exists():
@@ -360,8 +348,6 @@ class WorldAdapter:
             RootCategory.ROOT_USER_DOCS,
             RootCategory.ROOT_GAME,
             RootCategory.ROOT_STEAM,
-            RootCategory.ROOT_UTILITIES,
-            RootCategory.ROOT_LAUNCHER,
             RootCategory.ROOT_VSCODE,
         ]
         
@@ -485,10 +471,12 @@ class WorldAdapter:
                 relative_path_for_cap = address.relative_path.replace("\\", "/")
         
         elif address.address_type == AddressType.UTILITY:
-            utility_paths = self._roots.get(RootCategory.ROOT_UTILITIES, [])
-            if utility_paths:
-                abs_path = utility_paths[0] / address.relative_path
-                root_category = RootCategory.ROOT_UTILITIES
+            # UTILITY addresses are deprecated - ROOT_UTILITIES was removed
+            # Return not found for any utility:/ addresses
+            return ResolutionResult.not_found(
+                address.raw_input,
+                "utility:/ addresses are no longer supported (ROOT_UTILITIES removed)"
+            )
         
         if abs_path is None:
             return ResolutionResult.not_found(
@@ -677,21 +665,6 @@ class WorldAdapter:
                     address_type=AddressType.MOD,
                     identifier=mod_name,
                     relative_path=str(rel).replace("\\", "/"),
-                    raw_input=raw_path,
-                )
-            except ValueError:
-                continue
-        
-        # Check utility roots (ROOT_UTILITIES) - check each path
-        utility_paths = self._roots.get(RootCategory.ROOT_UTILITIES, [])
-        for util_root in utility_paths:
-            try:
-                rel = path.relative_to(util_root.resolve())
-                rel_str = str(rel).replace("\\", "/")
-                return CanonicalAddress(
-                    address_type=AddressType.UTILITY,
-                    identifier=None,
-                    relative_path=rel_str,
                     raw_input=raw_path,
                 )
             except ValueError:

@@ -4,14 +4,12 @@ Canonical path CONSTANTS for CK3 Lens.
 ALL paths are CONSTANTS loaded at module import time.
 Import directly: `from ck3lens.paths import ROOT_REPO, ROOT_GAME`
 
-9 Root Categories:
+7 Root Categories:
 - ROOT_REPO: from config (required for ck3raven-dev, optional for ck3lens)
 - ROOT_CK3RAVEN_DATA: always ~/.ck3raven
 - ROOT_GAME: from config (required)
 - ROOT_STEAM: from config (required)
-- ROOT_USER_DOCS: from config or OS-default
-- ROOT_UTILITIES: from config or OS-default
-- ROOT_LAUNCHER: from config or OS-default
+- ROOT_USER_DOCS: from config or OS-default (contains launcher-v2.sqlite, dlc_load.json, saves, local mods)
 - ROOT_VSCODE: from config or OS-default
 - ROOT_EXTERNAL: not a path (catch-all classifier)
 
@@ -50,8 +48,6 @@ class RootCategory(Enum):
     ROOT_GAME = "ROOT_GAME"
     ROOT_STEAM = "ROOT_STEAM"
     ROOT_USER_DOCS = "ROOT_USER_DOCS"
-    ROOT_UTILITIES = "ROOT_UTILITIES"
-    ROOT_LAUNCHER = "ROOT_LAUNCHER"
     ROOT_VSCODE = "ROOT_VSCODE"
     ROOT_EXTERNAL = "ROOT_EXTERNAL"
 
@@ -68,14 +64,12 @@ ROOT_REPO: Path | None = _config.paths.root_repo
 ROOT_CK3RAVEN_DATA: Path = Path.home() / ".ck3raven"
 
 # From config (required)
-ROOT_GAME: Path | None = _config.paths.game_path
-ROOT_STEAM: Path | None = _config.paths.workshop_path
+ROOT_GAME: Path | None = _config.paths.root_game
+ROOT_STEAM: Path | None = _config.paths.root_steam
 
 # From config (with OS-default fallback)
-ROOT_USER_DOCS: Path | None = _config.paths.user_docs_path
-ROOT_UTILITIES: Path | None = _config.paths.utilities_path
-ROOT_LAUNCHER: Path | None = _config.paths.launcher_path
-ROOT_VSCODE: Path | None = _config.paths.vscode_path
+ROOT_USER_DOCS: Path | None = _config.paths.root_user_docs
+ROOT_VSCODE: Path | None = _config.paths.root_vscode
 
 
 # =============================================================================

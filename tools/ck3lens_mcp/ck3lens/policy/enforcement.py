@@ -132,17 +132,6 @@ def enforce(
                 )
     
     # ==========================================================================
-    # INVARIANT 3: ROOT_LAUNCHER modifications need token
-    # ==========================================================================
-    if resolved.root_category == RootCategory.ROOT_LAUNCHER:
-        if operation in {OperationType.WRITE, OperationType.DELETE}:
-            return EnforcementResult(
-                decision=Decision.REQUIRE_TOKEN,
-                reason="Launcher registry modification requires confirmation",
-                requires_token=True,
-            )
-    
-    # ==========================================================================
     # LOUD FAILURE: Missing subdirectory for subdirectory-aware roots
     # ==========================================================================
     # This catches the bug where WorldAdapter.resolve() doesn't set subdirectory

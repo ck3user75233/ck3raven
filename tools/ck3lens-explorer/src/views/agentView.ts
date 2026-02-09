@@ -102,6 +102,14 @@ class AgentTreeItem extends vscode.TreeItem {
     private setupItem(): void {
         switch (this.itemType) {
             case 'paths-doctor':
+                // Set command for click handler
+                if (this.actionCommand) {
+                    this.command = {
+                        command: this.actionCommand,
+                        title: this.label
+                    };
+                }
+                break;
             case 'mcp-server':
                 // Icon set by caller based on status
                 break;
@@ -343,7 +351,7 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
      * PYTHONPATH to include that directory for the module to be found.
      */
     private runPathsDoctor(): void {
-        const { exec } = require('child_process');
+        const { execFile } = require('child_process');
         const os = require('os');
         const path = require('path');
         
@@ -371,18 +379,23 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
         }
         
         // Run paths_doctor with JSON output
+        // Use execFile to avoid shell quoting issues (especially with .venv paths on Windows)
         // PYTHONPATH must include tools/ck3lens_mcp where the ck3lens module lives
         const ck3lensMcpPath = path.join(workspaceRoot, 'tools', 'ck3lens_mcp');
         const env = {
             ...process.env,
             PYTHONPATH: ck3lensMcpPath + (process.env.PYTHONPATH ? path.delimiter + process.env.PYTHONPATH : '')
         };
-        const cmd = `"${pythonPath}" -m ck3lens.paths_doctor --json`;
+        const args = ['-m', 'ck3lens.paths_doctor', '--json'];
         
-        exec(cmd, { timeout: 10000, env }, (error: Error | null, stdout: string, stderr: string) => {
+        execFile(pythonPath, args, { timeout: 10000, env }, (error: Error | null, stdout: string, stderr: string) => {
             try {
                 if (error) {
-                    this.logger.warn('Paths doctor failed:', error.message);
+                    // Log full details for debugging
+                    this.logger.warn('Paths doctor failed:', error.message || '(no message)');
+                    if (stderr) {
+                        this.logger.debug('Paths doctor stderr:', stderr);
+                    }
                     this.state.pathsDoctor = { status: 'unchecked', errorCount: 0, warnCount: 0, configPath };
                     this.refresh();
                     return;

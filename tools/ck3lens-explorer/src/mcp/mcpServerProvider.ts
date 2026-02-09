@@ -12,6 +12,12 @@
  * - shutdown() method clears definitions to [] before dispose
  * - Python server exits on stdin EOF
  * See docs/MCP_SERVER_ARCHITECTURE.md for full lifecycle documentation.
+ * 
+ * MIT TOKEN FIX (February 2026):
+ * - MIT token is regenerated on EACH getMitToken() call (not once at startup)
+ * - Token is written to ~/.ck3raven/config/mit_token.txt
+ * - MCP server reads from file on each validation (not env var)
+ * - This ensures user must click "Initialize Agent" for each initialization attempt
  */
 
 import * as vscode from 'vscode';
@@ -111,7 +117,6 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
     readonly onDidChangeMcpServerDefinitions = this._onDidChangeDefinitions.event;
 
     private readonly instanceId: string;
-    private readonly mitToken: string;  // MIT (Mode Initialization Token) for ck3raven-dev authorization
     private readonly logger: Logger;
     private disposables: vscode.Disposable[] = [];
     
@@ -120,6 +125,12 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
      * Set by shutdown() before dispose to force VS Code to see empty definitions.
      */
     private isShutdown: boolean = false;
+    
+    /**
+     * Path to MIT token file - shared with MCP server.
+     * Token is written here on each getMitToken() call.
+     */
+    private readonly mitTokenPath: string;
 
     constructor(context: vscode.ExtensionContext, logger: Logger) {
         this.logger = logger;
@@ -127,9 +138,20 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
         // CRITICAL: Generate fresh instance ID every activation (no caching!)
         this.instanceId = generateInstanceId();
         
-        // Generate MIT (Mode Initialization Token) for ck3raven-dev authorization
-        // This token is passed to MCP via env var and injected into chat when user clicks "Initialize Dev Mode"
-        this.mitToken = crypto.randomBytes(8).toString('hex');
+        // MIT token file path - in ~/.ck3raven/config/ alongside workspace.toml
+        this.mitTokenPath = path.join(os.homedir(), '.ck3raven', 'config', 'mit_token.txt');
+        
+        // Ensure config directory exists
+        const configDir = path.dirname(this.mitTokenPath);
+        if (!fs.existsSync(configDir)) {
+            fs.mkdirSync(configDir, { recursive: true });
+        }
+        
+        // NOTE: Do NOT call writeFreshMitToken() here!
+        // Writing a token in the constructor causes a race condition:
+        // extension reactivation overwrites the token file, invalidating
+        // any token the user already received via getMitToken().
+        // Token is only written when user clicks "Initialize Agent".
         
         this.logger.info(`MCP activate: instanceId=${this.instanceId}`);
         this.logger.debug(`ROOT_REPO: ${ROOT_REPO}`);
@@ -145,6 +167,21 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
             })
         );
     }
+    
+    /**
+     * Generate a fresh MIT token and write to shared file.
+     * Returns the new token.
+     */
+    private writeFreshMitToken(): string {
+        const token = crypto.randomBytes(8).toString('hex');
+        try {
+            fs.writeFileSync(this.mitTokenPath, token, 'utf8');
+            this.logger.debug(`MIT token refreshed: ${token.substring(0, 8)}...`);
+        } catch (err) {
+            this.logger.error(`Failed to write MIT token: ${err}`);
+        }
+        return token;
+    }
 
     /**
      * Get the instance ID for this provider.
@@ -154,15 +191,16 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
     }
 
     /**
-     * Get the MIT (Mode Initialization Token) for ck3raven-dev authorization.
-     * This token is single-use - once consumed by the MCP server, user must get a fresh one.
+     * Get a fresh MIT (Mode Initialization Token) for agent authorization.
+     * 
+     * CRITICAL: This generates and writes a NEW token every call.
+     * The MCP server reads from the same file, ensuring coordination.
+     * Token is single-use - once consumed, user must click again for a fresh one.
      */
     getMitToken(): string {
-        return this.mitToken;
+        return this.writeFreshMitToken();
     }
 
-    /**
-     * Provides MCP server definitions to VS Code.
     /**
      * Called by VS Code's MCP system when it needs available servers.
      * 
@@ -200,9 +238,9 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
         }
 
         // Build environment with instance ID for isolation
+        // NOTE: MIT token is NOT passed via env var - MCP reads from file
         const env: Record<string, string | number | null> = {
             CK3LENS_INSTANCE_ID: this.instanceId,
-            CK3LENS_MIT_TOKEN: this.mitToken,  // MIT for ck3raven-dev authorization
             PYTHONPATH: `${ROOT_REPO}${path.delimiter}${path.join(ROOT_REPO, 'src')}`,
         };
 
