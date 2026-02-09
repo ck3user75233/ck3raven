@@ -201,36 +201,31 @@ _session_cv_ids_resolved: bool = False
 _cached_world_adapter = None
 _cached_world_mode: Optional[str] = None
 
-# MIT (Mode Initialization Token) - written by extension to file
-# User must click "Initialize Agent" in extension to generate fresh token
-# Token is SINGLE-USE - consumed on successful mode initialization
-MIT_TOKEN_PATH = Path.home() / ".ck3raven" / "config" / "mit_token.txt"
+# MIT (Mode Initialization Token) - passed via CK3LENS_MIT_TOKEN env var
+# Extension generates token in memory, injects into MCP server process env.
+# Agent CANNOT read this: all tools require mode init, which requires the token.
+# This prevents spontaneous agent self-initialization without human involvement.
 
 def _read_current_mit_token() -> str:
     """
-    Read current MIT token from file (written by extension on each Initialize click).
+    Read MIT token from process environment variable.
     
-    Falls back to env var for testing without extension, or generates random token.
-    This is called on EACH validation to get the FRESH token from file.
+    The extension passes CK3LENS_MIT_TOKEN when launching the MCP server process.
+    Token never touches disk — agent cannot read it via read_file.
     """
-    # Priority 1: File (canonical - written by extension on each click)
-    if MIT_TOKEN_PATH.exists():
-        try:
-            return MIT_TOKEN_PATH.read_text().strip()
-        except Exception:
-            pass
-    
-    # Priority 2: Env var (legacy/testing)
-    env_token = os.environ.get("CK3LENS_MIT_TOKEN", "") or os.environ.get("CK3LENS_DEV_TOKEN", "")
+    # Primary: env var set by extension at process launch
+    env_token = os.environ.get("CK3LENS_MIT_TOKEN", "")
     if env_token:
         return env_token
+    
+    # Legacy: CK3LENS_DEV_TOKEN for testing without extension
+    dev_token = os.environ.get("CK3LENS_DEV_TOKEN", "")
+    if dev_token:
+        return dev_token
     
     # Fallback: generate random (testing without extension)
     import secrets
     return secrets.token_hex(8)
-
-# Track used MIT tokens - single-use enforcement
-_used_mit_tokens: set[str] = set()
 
 
 def _get_session() -> Session:
@@ -5213,8 +5208,9 @@ def _ck3_get_mode_instructions_internal(mode: str, mit_token: str | None = None)
     
     # =========================================================================
     # MIT TOKEN VALIDATION: ALL modes require user-provided MIT token
-    # This prevents agent self-initialization - user must click the button
-    # Token is SINGLE-USE - consumed on successful mode switch
+    # This prevents agent self-initialization - user must click the button.
+    # Token is passed via env var (CK3LENS_MIT_TOKEN) — agent cannot read it.
+    # Re-initialization with same token is allowed (token lifetime = process).
     # =========================================================================
     if mit_token is None:
         return {
@@ -5222,13 +5218,7 @@ def _ck3_get_mode_instructions_internal(mode: str, mit_token: str | None = None)
             "requires_mit": True,
             "action": "Ask user to click 'Initialize Agent' in VS Code CK3 Lens sidebar. Token will be injected into chat.",
         }
-    if mit_token in _used_mit_tokens:
-        return {
-            "error": "MIT token already consumed (single-use)",
-            "requires_mit": True,
-            "action": "Ask user to click 'Initialize Agent' again for a fresh token.",
-        }
-    # Read CURRENT token from file (written fresh on each Initialize click)
+    # Read token from env var (set by extension at MCP server startup)
     current_valid_token = _read_current_mit_token()
     if mit_token != current_valid_token:
         return {
@@ -5236,8 +5226,6 @@ def _ck3_get_mode_instructions_internal(mode: str, mit_token: str | None = None)
             "requires_mit": True,
             "action": "Token incorrect. Ask user to click 'Initialize Agent' in CK3 Lens sidebar.",
         }
-    # Consume the token - single use
-    _used_mit_tokens.add(mit_token)
 
     
     # =========================================================================
