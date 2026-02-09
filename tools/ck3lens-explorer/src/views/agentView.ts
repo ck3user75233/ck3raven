@@ -54,14 +54,10 @@ export const MODE_DEFINITIONS: Record<string, {
 };
 
 /**
- * Generate initialization prompt with current MCP instance ID and MIT token.
+ * Generate initialization prompt with MIT token.
  * 
- * CRITICAL: The MCP server instance ID changes on window reload.
- * Tool names are prefixed with mcp_ck3_lens_{instanceId}_
- * Agents MUST use the current instance ID, not IDs from conversation history.
- * 
- * MIT (Mode Initialization Token) is required for any mode initialization.
- * Without it, the agent cannot call ck3_get_mode_instructions.
+ * MIT (Mode Initialization Token) is required for mode initialization.
+ * Instance ID is for debugging only - tool names are mcp_ck3_lens_ck3_* (no instance prefix).
  */
 export function generateInitPrompt(mode: LensMode, instanceId: string | undefined, mitToken: string | undefined): string {
     const modeDef = MODE_DEFINITIONS[mode];
@@ -69,21 +65,14 @@ export function generateInitPrompt(mode: LensMode, instanceId: string | undefine
         return '';
     }
     
-    // Compact prompt with essential info only
-    let prompt = '';
-    
-    if (instanceId) {
-        prompt += `**Instance:** ${instanceId} (tool prefix: mcp_ck3_lens_${instanceId}_)\n`;
-    }
-    
+    // Single-line prompt with embedded token - no redundancy
     if (mitToken) {
-        prompt += `**MIT:** ${mitToken}\n\n`;
-        prompt += `${modeDef.initPrompt.replace(')', `, mit_token="${mitToken}")`)}\n`;
-    } else {
-        prompt += `\n${modeDef.initPrompt}\n`;
+        const call = modeDef.initPrompt.replace(')', `, mit_token="${mitToken}")`);
+        const instanceSuffix = instanceId ? ` [${instanceId}]` : '';
+        return `${call}${instanceSuffix}\n`;
     }
     
-    return prompt;
+    return `${modeDef.initPrompt}\n`;
 }
 
 class AgentTreeItem extends vscode.TreeItem {

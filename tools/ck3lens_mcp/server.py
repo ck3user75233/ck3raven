@@ -2835,8 +2835,9 @@ def _ck3_playset_internal(
                 ORDER BY pm.position
             """, (playset_id,)).fetchall()
             
-            # Build mods array
+            # Build mods array - only include ENABLED mods
             mods_list = []
+            disabled_mods = []  # Track disabled mods for advisory
             steam_count = 0
             local_count = 0
             local_positions = []
@@ -2848,6 +2849,11 @@ def _ck3_playset_internal(
                 steam_id = mod_row["steamId"]
                 dir_path = mod_row["dirPath"]
                 source = mod_row["source"]
+                
+                # Skip disabled mods - they should not be in the playset
+                if not enabled:
+                    disabled_mods.append(display_name)
+                    continue
                 
                 # Determine path
                 is_local = source in ("local", None) or (dir_path and "mod" in str(dir_path).lower() and "workshop" not in str(dir_path).lower())
@@ -2877,7 +2883,6 @@ def _ck3_playset_internal(
                     "name": display_name,
                     "path": mod_path.replace("/", "\\"),
                     "load_order": position,
-                    "enabled": enabled,
                     "is_compatch": is_compatch,
                     "notes": "local mod" if is_local else "",
                 }
@@ -2941,19 +2946,24 @@ def _ck3_playset_internal(
             # Write the playset file
             output_path.write_text(json.dumps(playset_data, indent=2), encoding="utf-8")
             
-            enabled_count = sum(1 for m in mods_list if m.get("enabled", True))
-            
-            return {
+            result = {
                 "success": True,
                 "message": f"Imported playset '{playset_name_actual}'",
                 "playset_file": str(output_path),
                 "total_mods": len(mods_list),
-                "enabled_mods": enabled_count,
                 "steam_mods": steam_count,
                 "local_mods": local_count,
                 "local_positions": local_positions,
                 "hint": f"Switch with: ck3_playset(command='switch', playset_name='{playset_name_actual}')"
             }
+            
+            # Add advisory about disabled mods if any were skipped
+            if disabled_mods:
+                result["disabled_mods_omitted"] = len(disabled_mods)
+                result["disabled_mod_names"] = disabled_mods
+                result["advisory"] = f"{len(disabled_mods)} disabled mod(s) were not imported: {', '.join(disabled_mods[:5])}" + (f" (and {len(disabled_mods) - 5} more)" if len(disabled_mods) > 5 else "")
+            
+            return result
             
         finally:
             conn.close()
@@ -6100,7 +6110,7 @@ def ck3_paths_doctor(
 @mcp.tool()
 @mcp_safe_tool
 def ck3_qbuilder(
-    command: Literal["status", "build", "discover", "reset"] = "status",
+    command: Literal["status", "build", "discover", "reset", "stop"] = "status",
     max_tasks: Optional[int] = None,
     fresh: bool = False,
 ) -> Reply:
@@ -6117,6 +6127,7 @@ def ck3_qbuilder(
     command=build    -> Launch background build daemon (subprocess)
     command=discover -> Request daemon to enqueue discovery tasks (via IPC)
     command=reset    -> Request queue reset (via IPC to daemon)
+    command=stop     -> Stop running daemon gracefully (via IPC)
 
     Args:
         command: Operation to perform
@@ -6305,8 +6316,47 @@ def ck3_qbuilder(
             message="Reset requires daemon restart with --fresh flag.",
         )
     
+    elif command == "stop":
+        # Stop daemon gracefully via IPC
+        try:
+            if not daemon.is_available():
+                return rb.success(
+                    'MCP-SYS-S-001',
+                    data={
+                        "success": True,
+                        "was_running": False,
+                        "note": "Daemon was not running",
+                    },
+                    message="Daemon was not running.",
+                )
+            
+            result = daemon.shutdown(graceful=True)
+            return rb.success(
+                'MCP-SYS-S-001',
+                data={
+                    "success": True,
+                    "was_running": True,
+                    "acknowledged": result.get("acknowledged", False),
+                    "note": "Shutdown signal sent. Daemon will exit after completing current work.",
+                },
+                message="Daemon shutdown requested.",
+            )
+            
+        except DaemonNotAvailableError:
+            return rb.success(
+                'MCP-SYS-S-001',
+                data={
+                    "success": True,
+                    "was_running": False,
+                    "note": "Daemon was not running",
+                },
+                message="Daemon was not running.",
+            )
+        except Exception as e:
+            return rb.error('MCP-SYS-E-001', data={"success": False, "error": str(e)}, message=str(e))
+    
     else:
-        return rb.invalid('WA-SYS-I-001', data={"error": f"Unknown command: {command}", "valid_commands": ["status", "build", "discover", "reset"]}, message=f"Unknown command: {command}")
+        return rb.invalid('WA-SYS-I-001', data={"error": f"Unknown command: {command}", "valid_commands": ["status", "build", "discover", "reset", "stop"]}, message=f"Unknown command: {command}")
 
 
 # ============================================================================

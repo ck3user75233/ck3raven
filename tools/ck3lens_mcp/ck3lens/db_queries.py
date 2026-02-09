@@ -343,7 +343,7 @@ class DBQueries:
             query: Search term
             visible_cvids: FrozenSet of content_version_ids to search within, or None for all
             symbol_type: Optional filter (tradition, event, etc.)
-            file_pattern: SQL LIKE pattern for file paths (applies to references)
+            file_pattern: SQL LIKE pattern for file paths (applies to BOTH definitions and references)
             adjacency: "strict" | "auto" | "fuzzy"
             limit: Max results per pattern
             include_references: If True, also return mods that reference the symbol
@@ -364,6 +364,13 @@ class DBQueries:
         
         # Build content_version filter - via Golden Join to files
         cv_filter = self._cv_filter_sql(visible_cvids, "f.content_version_id")
+        
+        # Build file_pattern filter (applies to symbols/adjacencies, not just references)
+        file_pattern_filter = ""
+        file_pattern_param = []
+        if file_pattern:
+            file_pattern_filter = " AND f.relpath LIKE ?"
+            file_pattern_param = [file_pattern]
         
         # Determine which patterns to use
         if adjacency == "strict":
@@ -394,8 +401,9 @@ class DBQueries:
                 LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
                 WHERE LOWER(s.name) LIKE ?
                 {cv_filter}
+                {file_pattern_filter}
             """
-            params = [pattern]
+            params = [pattern] + file_pattern_param
             
             if symbol_type:
                 sql += " AND s.symbol_type = ?"
