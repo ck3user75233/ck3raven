@@ -27,7 +27,7 @@ from ck3lens.logging import info, bootstrap
 import signal
 import atexit
 import threading
-from ck3lens.policy.contract_v1 import Operation, validate_operations
+from ck3lens.policy.contract_v1 import Operation
 
 # =============================================================================
 # STARTUP TRIPWIRE - Verify running from correct Python environment
@@ -3756,7 +3756,7 @@ def _ck3_contract_internal(
     from ck3lens.policy.contract_v1 import (
         open_contract, close_contract, cancel_contract,
         get_active_contract, list_contracts, archive_legacy_contracts,
-        ContractV1, RootCategory, Operation, AgentMode, validate_operations,
+        ContractV1, RootCategory, Operation, AgentMode,
     )
     from ck3lens.agent_mode import get_agent_mode
     
@@ -3798,7 +3798,7 @@ def _ck3_contract_internal(
         # Convert agent mode string to enum
         mode_enum = AgentMode.CK3LENS if agent_mode == "ck3lens" else AgentMode.CK3RAVEN_DEV
         
-        # Validate operations against capability matrix
+        # Validate operations are valid enum values
         ops_list = operations or ["READ", "WRITE"]
         try:
             op_enums = [Operation(op) for op in ops_list]
@@ -3806,16 +3806,6 @@ def _ck3_contract_internal(
             return {
                 "error": f"Invalid operation: {e}",
                 "valid_operations": [o.value for o in Operation],
-            }
-        
-        # Check authorization via capability matrix (SOLE SOURCE OF TRUTH)
-        valid, denied = validate_operations(mode_enum, root_cat, ops_list)
-        if not valid:
-            return {
-                "error": "Operations not authorized by capability matrix",
-                "denied_operations": denied,
-                "root_category": root_category,
-                "mode": agent_mode,
             }
         
         try:

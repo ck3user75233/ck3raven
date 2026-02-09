@@ -65,52 +65,6 @@ class Operation(str, Enum):
     GIT_WRITE = "GIT_WRITE"
 
 
-def validate_operations(
-    mode: AgentMode | str,
-    root: RootCategory | str,
-    operations: list[Operation | str],
-) -> tuple[bool, list[str]]:
-    """
-    Validate operations for contract opening.
-    
-    This is a simplified check - actual enforcement happens in enforcement.py.
-    For contracts, we just verify the operations are valid enum values
-    and make sense for the mode/root combination.
-    """
-    from ck3lens.capability_matrix import get_capability
-    
-    # Normalize mode
-    if isinstance(mode, str):
-        mode = AgentMode(mode)
-    if isinstance(root, str):
-        root = RootCategory(root)
-    
-    # Get capability from matrix
-    cap = get_capability(mode.value, root, None)
-    
-    denied = []
-    for op in operations:
-        op_str = op.value if isinstance(op, Operation) else op
-        
-        # Map contract operations to capability checks
-        if op_str == "READ":
-            if not cap.read:
-                denied.append(op_str)
-        elif op_str in {"WRITE", "DELETE", "RENAME", "GIT_WRITE"}:
-            if not cap.write:
-                denied.append(op_str)
-        elif op_str == "EXECUTE":
-            # EXECUTE only in WIP
-            if root != RootCategory.ROOT_CK3RAVEN_DATA:
-                denied.append(op_str)
-            elif not cap.write:
-                denied.append(op_str)
-        elif op_str == "DB_WRITE":
-            # DB_WRITE never allowed via contracts (daemon only)
-            denied.append(op_str)
-    
-    return (len(denied) == 0, denied)
-
 
 # =============================================================================
 # SCHEMA VERSION
@@ -369,13 +323,6 @@ class ContractV1:
             (valid: bool, errors: list[str])
         """
         errors = []
-        
-        # Validate operations against capability matrix
-        valid, denied = validate_operations(self.mode, self.root_category, self.operations)
-        if not valid:
-            mode_val = self.mode.value if isinstance(self.mode, AgentMode) else self.mode
-            root_val = self.root_category.value if isinstance(self.root_category, RootCategory) else self.root_category
-            errors.append(f"Operations not authorized for {mode_val}/{root_val}: {denied}")
         
         # Validate targets have required fields
         for i, target in enumerate(self.targets):
