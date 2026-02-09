@@ -780,9 +780,15 @@ def _read_log_full(source: str, source_path: Path | None = None) -> dict:
 #
 # SYMBOL-LEVEL CONFLICTS:
 #   Same symbol name defined in multiple cvids
-#   SELECT name, symbol_type, GROUP_CONCAT(content_version_id)
-#   FROM symbols WHERE content_version_id IN (cvids from mods[])
-#   GROUP BY name, symbol_type HAVING COUNT(DISTINCT content_version_id) > 1
+#   NOTE: symbols table has ast_id, NOT content_version_id!
+#   Use GOLDEN JOIN: symbols → asts → files → content_versions
+#   SELECT s.name, s.symbol_type, GROUP_CONCAT(cv.content_version_id)
+#   FROM symbols s
+#   JOIN asts a ON s.ast_id = a.ast_id
+#   JOIN files f ON a.content_hash = f.content_hash
+#   JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+#   WHERE cv.content_version_id IN (cvids from mods[])
+#   GROUP BY s.name, s.symbol_type HAVING COUNT(DISTINCT cv.content_version_id) > 1
 #
 # No playset_id needed - just use session.mods[] cvids directly.
 # ============================================================================

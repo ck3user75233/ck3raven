@@ -1830,18 +1830,23 @@ def ck3_conflicts(
         cv_filter = ",".join(str(cv) for cv in cvids)
         
         # Count symbol conflicts by type
+        # GOLDEN JOIN: symbols → asts → files → content_versions
+        # (symbols has ast_id, NOT content_version_id)
         type_sql = f"""
             SELECT 
-                s.symbol_type,
-                COUNT(DISTINCT s.name) as conflict_count
+                sub.symbol_type,
+                COUNT(DISTINCT sub.name) as conflict_count
             FROM (
-                SELECT symbol_type, name
-                FROM symbols
-                WHERE content_version_id IN ({cv_filter})
-                GROUP BY symbol_type, name
-                HAVING COUNT(DISTINCT content_version_id) > 1
-            ) s
-            GROUP BY s.symbol_type
+                SELECT s.symbol_type, s.name
+                FROM symbols s
+                JOIN asts a ON s.ast_id = a.ast_id
+                JOIN files f ON a.content_hash = f.content_hash
+                JOIN content_versions cv ON f.content_version_id = cv.content_version_id
+                WHERE cv.content_version_id IN ({cv_filter})
+                GROUP BY s.symbol_type, s.name
+                HAVING COUNT(DISTINCT cv.content_version_id) > 1
+            ) sub
+            GROUP BY sub.symbol_type
         """
         type_rows = db.conn.execute(type_sql).fetchall()
         by_type = {row["symbol_type"]: row["conflict_count"] for row in type_rows}
