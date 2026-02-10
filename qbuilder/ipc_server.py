@@ -92,9 +92,14 @@ class RunActivity:
                 self._idle_since = time.strftime("%Y-%m-%dT%H:%M:%S")
     
     def set_state(self, state: str) -> None:
-        """Set daemon state (starting, processing, idle, shutdown)."""
+        """Set daemon state (starting, processing, idle, shutdown).
+        
+        If transitioning away from idle, clears idle_since.
+        """
         with self._lock:
             self._state = state
+            if state != "idle":
+                self._idle_since = None
     
     def record_discovery(self, mod_summary: str) -> None:
         """Record a mod discovered during scan. E.g. 'Dev Debuff (4 files)'."""
