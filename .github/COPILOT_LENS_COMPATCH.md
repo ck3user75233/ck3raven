@@ -12,7 +12,7 @@ Always check BOTH. Missing one leads to broken patches.
 
 **Symbol-Level:** When different-named files define the same symbol ID (e.g. both define `brave = { ... }`), all files survive but the **last definition wins** (LIOS). Symbols that appear in only one file coexist without conflict.
 
-Example: A mod adds `zzz_00_traits.txt` with new cultural traditions and one redefined trait. The new traditions merge in (no conflict — unique IDs). The redefined trait overrides the original (LIOS). Everything else in `00_traits.txt` is untouched.
+Example: A mod adds `zzz_00_traits.txt` in `common/traits/` with one new trait and one redefined trait. The new trait merges in (unique ID, no conflict). The redefined trait overrides the original (LIOS). Everything else in `00_traits.txt` is untouched.
 
 Use `ck3_conflicts(command="files")` AND `ck3_conflicts(command="symbols")`.
 
