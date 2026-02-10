@@ -1,102 +1,92 @@
-# CK3 Raven Dev Mode
+# CK3 Raven Dev Mode — Agent Instructions
 
-**Mode:** `ck3raven-dev` | **Purpose:** Infrastructure development for CK3 Lens toolkit
+**Mode:** `ck3raven-dev` | **Purpose:** Develop and maintain the ck3raven toolchain — a Python-based parser, resolver, SQLite database, MCP server, and VS Code extension that together power CK3 Lens for AI-assisted CK3 modding.
 
 ---
 
 ## Your Role
 
-You are an **autonomous development agent**. When given a task:
-1. Analyze → Plan → **WRITE THE CODE** → Validate → Commit
-
-Use `ck3_file(command="write/edit")` and `ck3_exec` to implement changes directly.
+Autonomous development agent. When given a task: Analyze → Plan → **Write code** → Validate → Commit.
 
 ---
 
-## Write Access
+## Write Access (Canonical Domains)
 
-| Location | Access |
-|----------|--------|
-| `src/ck3raven/**`, `tools/**`, `qbuilder/**`, `scripts/**`, `tests/**`, `docs/**` | ✅ Write |
-| `~/.ck3raven/wip/` | ✅ Write (no contract needed) |
-| **ANY mod files** | ❌ **ABSOLUTE PROHIBITION** |
+Mutations require a contract (`ck3_contract`), except writes to `~/.ck3raven/wip/`.
 
----
+| Domain | Access | Notes |
+|--------|--------|-------|
+| `ROOT_REPO` | Read/Write/Delete | ck3raven source — all directories |
+| `ROOT_CK3RAVEN_DATA` | Mixed | `wip/`, `config/`, `playsets/`, `logs/`, `journal/`, `cache/`, `artifacts/` are writable; `db/` and `daemon/` are read-only (owned by QBuilder daemon) |
+| `ROOT_GAME`, `ROOT_STEAM` | Read-only | Vanilla and workshop content for testing/reference |
+| `ROOT_USER_DOCS` | Read-only | User's mod folder — **no writes in dev mode** |
 
-## Hard Rules
-
-1. **No mod writes** - Cannot write to vanilla, workshop, or local mod files
-2. **Use `ck3_exec`** - Not `run_in_terminal`
-3. **Contracts required** - For writes outside WIP, open a contract first
+📖 Full matrix: `tools/ck3lens_mcp/ck3lens/capability_matrix.py`
 
 ---
 
-## Key Tools
+## Tools
 
 | Tool | Purpose |
 |------|---------|
-| `ck3_file(command="write/edit")` | Write/edit source files |
-| `ck3_exec` | Run shell commands |
-| `ck3_git` | Git operations |
-| `ck3_search` | Search database |
-| `ck3_qbuilder` | Build system control |
+| `ck3_file` | Read/write/edit source files |
+| `ck3_exec` | Run shell commands (policy-enforced) |
+| `ck3_git` | Git operations on ck3raven repo |
+| `ck3_search` | Search mod database (symbols, content, files) |
+| `ck3_db_query` | Direct database queries |
+| `ck3_qbuilder` | Build daemon control (status, build, discover, stop) |
+| `ck3_validate` | Syntax validation (CK3 script and Python) |
+| `ck3_vscode` | VS Code/Pylance diagnostics |
+| `ck3_contract` | Open/close work contracts for mutations |
+| `ck3_logs` | ck3raven component logs (MCP, extension, daemon) |
+| `ck3_parse_content` | Parse CK3 script → AST |
 
 ---
 
 ## Validation
 
-Code is **NOT complete** until:
-1. `get_errors` returns clean for modified files
-2. `git commit` succeeds (pre-commit hook validates)
+Code is **not complete** until:
+1. Pylance diagnostics clean (`ck3_vscode(command="diagnostics")` or VS Code's `get_errors`)
+2. `ck3_git(command="commit")` succeeds
 
 ---
 
-## Architecture Overview
+## Architecture
 
 ```
 src/ck3raven/
-├── parser/      # Lexer + Parser (100% regex-free)
-├── resolver/    # Conflict resolution (4 merge policies)
-├── db/          # SQLite storage, FTS5 search
-└── emulator/    # (Phase 2) Game state building
+├── parser/      # Lexer + parser (100% regex-free, error-recovering)
+├── resolver/    # Conflict resolution and merge policy engine
+├── db/          # SQLite schema, FTS5 search, symbol/ref storage
+├── analyzers/   # Error log parsing, log analysis
+├── core/        # Shared utilities
+├── logs/        # Log management
+├── emulator/    # (Future) Game state building
+└── tools/       # Internal tooling
 
-qbuilder/        # Build daemon (single-writer)
-tools/ck3lens_mcp/  # MCP server (this)
-tools/ck3lens-explorer/  # VS Code extension
+qbuilder/              # Build daemon (single-writer architecture)
+tools/ck3lens_mcp/     # MCP server (28+ tools exposed to Copilot)
+tools/ck3lens-explorer/ # VS Code extension (sidebar UI, MCP provider)
+tools/compliance/      # Contracts, tokens, semantic validator
 ```
 
-**Key entry points:**
+**When writing code that imports ck3raven internals:**
 ```python
 from ck3raven.parser import parse_file, parse_source
 from ck3raven.db.schema import get_connection
-from ck3raven.db.playsets import create_playset
+from ck3raven.db.search import search_symbols
 ```
 
 ---
 
-## Build System
+## Key Documents
 
-```bash
-# Check status
-ck3_qbuilder(command="status")
-
-# Start daemon
-ck3_qbuilder(command="build")
-
-# Fresh rebuild
-python -m qbuilder daemon --fresh
-```
-
----
-
-## CK3 Merge Policies
-
-| Policy | Behavior | Used By |
-|--------|----------|---------|
-| OVERRIDE | Last wins | ~95% of content |
-| CONTAINER_MERGE | Lists append | on_action only |
-| PER_KEY_OVERRIDE | Per-key last wins | localization |
-| FIOS | First wins | GUI types |
+| Document | Purpose |
+|----------|---------|
+| `docs/CANONICAL_ARCHITECTURE.md` | **5 rules every agent must follow** |
+| `docs/SINGLE_WRITER_ARCHITECTURE.md` | QBuilder daemon design |
+| `docs/05_ACCURATE_MERGE_OVERRIDE_RULES.md` | CK3 engine merge behavior reference |
+| `docs/06_CONTAINER_MERGE_OVERRIDE_TABLE.md` | Per-content-type merge policy |
 
 ---
 
