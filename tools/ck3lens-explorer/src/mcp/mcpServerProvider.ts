@@ -13,13 +13,12 @@
  * - Python server exits on stdin EOF
  * See docs/MCP_SERVER_ARCHITECTURE.md for full lifecycle documentation.
  * 
- * MIT TOKEN SECURITY (February 2026):
- * - Uses HMAC-based challenge-response: secret in env var, tokens are signed nonces
- * - Secret is generated once per activation, passed to MCP as CK3LENS_MIT_SECRET env var
- * - Each "Initialize Agent" click generates a fresh nonce, signs with HMAC-SHA256
- * - Agent can read the token from chat but cannot FORGE a new one without the secret
- * - Agent cannot read subprocess env vars (all tools gated behind mode init)
- * - Unlimited tokens per session (new nonce each click, same stable secret)
+ * SIGIL — Session Cryptographic Signing (February 2026):
+ * - Single HMAC-SHA256 secret generated per window activation
+ * - Passed to MCP subprocess as CK3LENS_SIGIL_SECRET env var
+ * - Used by ALL signing subsystems: MIT (mode init), HAT (protected files), contracts
+ * - Agent cannot read subprocess env vars, so cannot forge any signed artifact
+ * - New window = new secret = all prior signatures invalidated
  */
 
 import * as vscode from 'vscode';
@@ -129,17 +128,16 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
     private isShutdown: boolean = false;
     
     /**
-     * MIT secret — the "private key" for HMAC-based token verification.
-     * Stored in memory only. Passed to MCP server as CK3LENS_MIT_SECRET env var.
+     * Sigil secret — the unified HMAC key for all cryptographic signing.
+     * Stored in memory only. Passed to MCP server as CK3LENS_SIGIL_SECRET env var.
      * 
      * Security model:
      * - Secret is in extension memory + MCP subprocess env var (both inaccessible to agent)
-     * - getMitToken() signs a fresh nonce with HMAC(secret, nonce) → gives to user
-     * - MCP server verifies HMAC using secret from its env var
-     * - Agent can re-paste a token from chat but cannot forge a new one
+     * - Used by MIT (mode init tokens), HAT (protected file approvals), and contract signing
+     * - New window = new secret = all prior signatures invalidated
      * - NEVER written to disk
      */
-    private readonly mitSecret: string;
+    private readonly sigilSecret: string;
 
     constructor(context: vscode.ExtensionContext, logger: Logger) {
         this.logger = logger;
@@ -147,18 +145,21 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
         // CRITICAL: Generate fresh instance ID every activation (no caching!)
         this.instanceId = generateInstanceId();
         
-        // Generate MIT secret — the HMAC key used to sign/verify tokens.
-        // This never leaves memory (extension side) and the MCP process env var.
-        this.mitSecret = crypto.randomBytes(16).toString('hex');
+        // Generate Sigil secret — the HMAC key used by ALL signing subsystems
+        // (MIT, HAT, contracts). One secret per window, never touches disk.
+        this.sigilSecret = crypto.randomBytes(16).toString('hex');
         
-        // Clean up legacy token file if it exists (was a security hole)
+        // Clean up legacy token/secret files if they exist (security hole)
         const legacyTokenPath = path.join(os.homedir(), '.ck3raven', 'config', 'mit_token.txt');
-        try {
-            if (fs.existsSync(legacyTokenPath)) {
-                fs.unlinkSync(legacyTokenPath);
-                this.logger.info('Deleted legacy MIT token file (security fix)');
-            }
-        } catch { /* ignore */ }
+        const legacyHatKeyPath = path.join(os.homedir(), '.ck3raven', 'config', 'hat_secret.key');
+        for (const legacyPath of [legacyTokenPath, legacyHatKeyPath]) {
+            try {
+                if (fs.existsSync(legacyPath)) {
+                    fs.unlinkSync(legacyPath);
+                    this.logger.info(`Deleted legacy file: ${path.basename(legacyPath)}`);
+                }
+            } catch { /* ignore */ }
+        }
         
         this.logger.info(`MCP activate: instanceId=${this.instanceId}`);
         this.logger.debug(`ROOT_REPO: ${ROOT_REPO}`);
@@ -183,22 +184,11 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
     }
 
     /**
-     * Get a fresh MIT (Mode Initialization Token) for agent authorization.
-     * 
-     * Generates a random nonce and signs it with HMAC-SHA256 using the secret.
-     * Returns "nonce.mac" — the nonce is public, the mac proves knowledge of secret.
-     * 
-     * Each call produces a unique token (fresh nonce). The MCP server verifies
-     * by recomputing HMAC(secret, nonce) using the secret from its env var.
-     * Agent can re-paste this token but cannot forge a new one without the secret.
+     * Get the Sigil signing secret (hex string) for in-extension signing.
+     * Used by agentView to HMAC-sign HAT approval files.
      */
-    getMitToken(): string {
-        const nonce = crypto.randomBytes(8).toString('hex');
-        const mac = crypto.createHmac('sha256', this.mitSecret)
-            .update(nonce)
-            .digest('hex')
-            .substring(0, 16);  // truncate to 16 hex chars for brevity
-        return `${nonce}.${mac}`;
+    getSigilSecret(): string {
+        return this.sigilSecret;
     }
 
     /**
@@ -237,12 +227,12 @@ export class CK3LensMcpServerProvider implements vscode.Disposable {
             return [];
         }
 
-        // Build environment with instance ID and MIT secret for isolation
-        // MIT SECRET is the HMAC key — agent cannot read subprocess env vars.
-        // Tokens are nonce.HMAC(secret, nonce) — verifiable but not forgeable.
+        // Build environment with instance ID and Sigil secret for isolation
+        // SIGIL SECRET is the unified HMAC key — agent cannot read subprocess env vars.
+        // All signing subsystems (MIT, HAT, contracts) use this single secret.
         const env: Record<string, string | number | null> = {
             CK3LENS_INSTANCE_ID: this.instanceId,
-            CK3LENS_MIT_SECRET: this.mitSecret,
+            CK3LENS_SIGIL_SECRET: this.sigilSecret,
             PYTHONPATH: `${ROOT_REPO}${path.delimiter}${path.join(ROOT_REPO, 'src')}`,
         };
 

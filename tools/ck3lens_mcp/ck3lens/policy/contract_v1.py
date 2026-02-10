@@ -1,4 +1,4 @@
-﻿"""
+"""
 Contract v1 Schema â€” Hard Law Implementation
 
 This module implements the EXACT contract schema from CANONICAL CONTRACT SYSTEM.
@@ -37,6 +37,13 @@ from typing import Any, Literal, Optional
 
 # RootCategory comes from canonical paths module
 from ck3lens.paths import RootCategory
+
+# Protected files (HAT gate)
+try:
+    from tools.compliance.protected_files import check_edits_against_manifest
+    _HAS_PROTECTED_FILES = True
+except ImportError:
+    _HAS_PROTECTED_FILES = False
 
 
 # =============================================================================
@@ -96,6 +103,8 @@ _V1_OPTIONAL_FIELDS = frozenset({
     "baseline_playset_hash",   # Playset hash captured at contract open
     "audit_result_path",       # Path to audit result on close
     "base_commit",              # Git commit SHA at contract open (for scoped lint)
+    # Sigil — session-scoped cryptographic signing
+    "session_signature",       # HMAC signature via Sigil; missing/invalid = rejected
 })
 
 _V1_ALL_FIELDS = _V1_REQUIRED_FIELDS | _V1_OPTIONAL_FIELDS
@@ -289,6 +298,9 @@ class ContractV1:
     audit_result_path: Optional[str] = None       # Audit result on close
     base_commit: Optional[str] = None             # Git commit SHA at contract open
     
+    # Sigil — session-scoped cryptographic signature
+    session_signature: Optional[str] = None       # Set by save_contract, verified on every load
+    
     def __post_init__(self):
         # Normalize mode
         if isinstance(self.mode, str):
@@ -387,6 +399,8 @@ class ContractV1:
             "baseline_playset_hash": self.baseline_playset_hash,
             "audit_result_path": self.audit_result_path,
             "base_commit": self.base_commit,
+            # Sigil session signature
+            "session_signature": self.session_signature,
         }
     
     @classmethod
@@ -438,6 +452,8 @@ class ContractV1:
             baseline_playset_hash=data.get("baseline_playset_hash"),
             audit_result_path=data.get("audit_result_path"),
             base_commit=data.get("base_commit"),
+            # Sigil session signature
+            session_signature=data.get("session_signature"),
         )
 
 
@@ -466,8 +482,48 @@ def _get_legacy_archive_dir() -> Path:
     return path
 
 
+def _contract_signing_payload(contract_id: str, created_at: str) -> str:
+    """
+    Build the canonical payload string for Sigil signing.
+    
+    Uses contract_id + created_at — immutable fields set at creation.
+    Changing any field in the JSON won't help forge a valid signature
+    because the signature covers the identity, not the full content.
+    """
+    return f"contract:{contract_id}|{created_at}"
+
+
+def _verify_contract_signature(contract: ContractV1) -> bool:
+    """
+    Verify a contract's session signature via Sigil.
+    
+    Returns False if signature is missing, invalid, or Sigil is unavailable.
+    """
+    from tools.compliance.sigil import sigil_verify, sigil_available
+    
+    if not sigil_available():
+        # Can't verify without Sigil (standalone/test mode) — reject
+        return False
+    if not contract.session_signature:
+        return False
+    payload = _contract_signing_payload(contract.contract_id, contract.created_at)
+    return sigil_verify(payload, contract.session_signature)
+
+
 def save_contract(contract: ContractV1) -> Path:
-    """Save a v1 contract to disk."""
+    """
+    Sign and save a v1 contract to disk.
+    
+    Sigil signs the contract at write time. Every subsequent load
+    verifies the signature — unsigned or forged contracts are rejected.
+    """
+    from tools.compliance.sigil import sigil_sign, sigil_available
+    
+    # Sign with Sigil if available (always should be in production)
+    if sigil_available():
+        payload = _contract_signing_payload(contract.contract_id, contract.created_at)
+        contract.session_signature = sigil_sign(payload)
+    
     contracts_dir = _get_contracts_dir()
     path = contracts_dir / f"{contract.contract_id}.json"
     path.write_text(json.dumps(contract.to_dict(), indent=2))
@@ -475,7 +531,11 @@ def save_contract(contract: ContractV1) -> Path:
 
 
 def load_contract(contract_id: str) -> Optional[ContractV1]:
-    """Load a v1 contract by ID."""
+    """
+    Load a v1 contract by ID.
+    
+    Rejects contracts with missing or invalid session signatures.
+    """
     contracts_dir = _get_contracts_dir()
     path = contracts_dir / f"{contract_id}.json"
     
@@ -488,17 +548,25 @@ def load_contract(contract_id: str) -> Optional[ContractV1]:
             return None
     
     data = json.loads(path.read_text())
-    return ContractV1.from_dict(data)
+    contract = ContractV1.from_dict(data)
+    
+    # Reject unsigned or forged contracts
+    if not _verify_contract_signature(contract):
+        return None
+    
+    return contract
 
 
 def get_active_contract() -> Optional[ContractV1]:
-    """Get the currently active (open, non-expired) v1 contract."""
+    """Get the currently active (open, non-expired, signature-valid) v1 contract."""
     contracts_dir = _get_contracts_dir()
     
     for path in contracts_dir.glob("v1-*.json"):
         try:
             data = json.loads(path.read_text())
             contract = ContractV1.from_dict(data)
+            if not _verify_contract_signature(contract):
+                continue
             if contract.is_active():
                 return contract
         except Exception:
@@ -511,7 +579,11 @@ def list_contracts(
     status: Optional[str] = None,
     include_archived: bool = False,
 ) -> list[ContractV1]:
-    """List v1 contracts with optional filters."""
+    """
+    List v1 contracts with optional filters.
+    
+    Only returns contracts with valid session signatures (current session).
+    """
     contracts = []
     contracts_dir = _get_contracts_dir()
     
@@ -520,6 +592,8 @@ def list_contracts(
         try:
             data = json.loads(path.read_text())
             contract = ContractV1.from_dict(data)
+            if not _verify_contract_signature(contract):
+                continue
             if status is None or contract.status == status:
                 contracts.append(contract)
         except Exception:
@@ -532,6 +606,8 @@ def list_contracts(
             try:
                 data = json.loads(path.read_text())
                 contract = ContractV1.from_dict(data)
+                if not _verify_contract_signature(contract):
+                    continue
                 if status is None or contract.status == status:
                     contracts.append(contract)
             except Exception:
@@ -575,7 +651,7 @@ def open_contract(
         The opened contract
     
     Raises:
-        ValueError: If contract validation fails
+        ValueError: If contract validation fails or HAT approval missing
     """
     # Normalize targets to list[ContractTarget]
     normalized_targets: list[ContractTarget]
@@ -594,6 +670,39 @@ def open_contract(
     else:
         normalized_work = work_declaration
     
+    # =========================================================================
+    # HAT GATE: Check if edits touch protected files
+    # =========================================================================
+    # HAT is ephemeral — the extension writes a signed approval file,
+    # we consume (delete) it here. No hat_id flows through the agent.
+    if _HAS_PROTECTED_FILES and isinstance(normalized_work, WorkDeclaration):
+        edit_paths = [e.file for e in normalized_work.edits]
+        protected_hit = check_edits_against_manifest(edit_paths)
+        if protected_hit:
+            # Try to consume a HAT approval (written by extension)
+            try:
+                from tools.compliance.tokens import consume_hat_approval, write_hat_request
+            except ImportError:
+                raise ValueError(
+                    f"PROTECTED FILE GATE: Edits touch protected files: {protected_hit}. "
+                    f"HAT module not available."
+                )
+
+            valid, msg = consume_hat_approval(required_paths=protected_hit)
+            if not valid:
+                # Write request template for the extension to pick up
+                write_hat_request(
+                    intent=intent,
+                    protected_paths=protected_hit,
+                    root_category=str(root_category),
+                )
+                raise ValueError(
+                    f"PROTECTED FILE GATE: {msg}\n"
+                    f"Protected files: {protected_hit}\n"
+                    f"A HAT request has been written. Click the shield icon "
+                    f"in the CK3 Lens sidebar to approve, then retry."
+                )
+
     # Phase 1.5: Evidence capture deferred to contract CLOSE audit.
     # Contract OPEN must be O(1) - no DB queries, no symbol snapshots.
     baseline_snapshot_path: Optional[str] = None

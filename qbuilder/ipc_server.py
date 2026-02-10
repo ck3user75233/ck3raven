@@ -37,6 +37,94 @@ from typing import Any, Callable, Optional
 # Default port for daemon IPC
 DEFAULT_IPC_PORT = 19876  # High port, unlikely to conflict
 
+
+class RunActivity:
+    """
+    Thread-safe tracker for daemon run activity.
+    
+    Shared between the build worker (main thread, writes) and the IPC server
+    (handler thread, reads). All access is guarded by a lock.
+    
+    This solves the problem where `ck3_qbuilder(command="status")` returns
+    "idle, pending:0" with no evidence of what work was done. Now the status
+    response includes recent_activity showing items processed, timing, etc.
+    """
+    
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._run_id: str = ""
+        self._items_processed: int = 0
+        self._completed: int = 0
+        self._errors: int = 0
+        self._first_item_at: Optional[str] = None
+        self._last_item_at: Optional[str] = None
+        self._idle_since: Optional[str] = None
+        self._started_at: Optional[str] = None
+        self._state: str = "starting"  # starting, processing, idle, shutdown
+        self._mods_discovered: list[str] = []
+    
+    def set_run_id(self, run_id: str) -> None:
+        """Set the daemon run ID."""
+        with self._lock:
+            self._run_id = run_id
+            self._started_at = time.strftime("%Y-%m-%dT%H:%M:%S")
+    
+    def record_item(self, status: str = "completed") -> None:
+        """Record a processed item. Called by build worker after each item."""
+        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        with self._lock:
+            self._items_processed += 1
+            if status == "completed":
+                self._completed += 1
+            else:
+                self._errors += 1
+            if self._first_item_at is None:
+                self._first_item_at = now
+            self._last_item_at = now
+            self._state = "processing"
+            self._idle_since = None
+    
+    def set_idle(self) -> None:
+        """Mark the daemon as idle. Called when worker enters poll-wait."""
+        with self._lock:
+            if self._state != "idle":
+                self._state = "idle"
+                self._idle_since = time.strftime("%Y-%m-%dT%H:%M:%S")
+    
+    def set_state(self, state: str) -> None:
+        """Set daemon state (starting, processing, idle, shutdown)."""
+        with self._lock:
+            self._state = state
+    
+    def record_discovery(self, mod_summary: str) -> None:
+        """Record a mod discovered during scan. E.g. 'Dev Debuff (4 files)'."""
+        with self._lock:
+            self._mods_discovered.append(mod_summary)
+    
+    def get_snapshot(self) -> dict:
+        """Return a snapshot of current activity for IPC responses."""
+        with self._lock:
+            result: dict[str, Any] = {
+                "state": self._state,
+            }
+            if self._run_id:
+                result["run_id"] = self._run_id
+            if self._started_at:
+                result["started_at"] = self._started_at
+            if self._items_processed > 0:
+                result["items_processed"] = self._items_processed
+                result["completed"] = self._completed
+                result["errors_this_run"] = self._errors
+                if self._first_item_at:
+                    result["first_item_at"] = self._first_item_at
+                if self._last_item_at:
+                    result["last_item_at"] = self._last_item_at
+            if self._idle_since:
+                result["idle_since"] = self._idle_since
+            if self._mods_discovered:
+                result["mods_discovered"] = list(self._mods_discovered)
+            return result
+
 # Socket file for Unix domain sockets (alternative to TCP)
 DEFAULT_SOCKET_PATH = Path.home() / ".ck3raven" / "daemon.sock"
 
@@ -87,12 +175,14 @@ class DaemonIPCServer:
         host: str = "127.0.0.1",
         db_path: Optional[Path] = None,
         shutdown_callback: Optional[Callable[[], None]] = None,
+        run_activity: Optional[RunActivity] = None,
     ):
         self.conn = conn  # Main thread connection (not used in handlers)
         self.port = port
         self.host = host
         self.db_path = db_path  # Store for thread-local connections
         self.shutdown_callback = shutdown_callback  # Called on shutdown request
+        self.run_activity = run_activity  # Shared activity tracker (thread-safe)
         
         self._server_socket: Optional[socket.socket] = None
         self._running = False
@@ -278,11 +368,15 @@ class DaemonIPCServer:
         handler_conn = self._get_handler_conn()
         counts = get_queue_counts(handler_conn)
         
-        return {
+        # Get state from run_activity if available, else fallback
+        activity_snapshot = self.run_activity.get_snapshot() if self.run_activity else {}
+        state = activity_snapshot.get("state", "idle")
+        
+        result = {
             "daemon_pid": os.getpid(),
             "db_path": str(self.db_path) if self.db_path else 'unknown',
             "writer_lock": "held",
-            "state": "idle",  # TODO: track actual state
+            "state": state,
             "queue": {
                 "pending": counts.get('build', {}).get('pending', 0),
                 "leased": counts.get('build', {}).get('processing', 0),
@@ -292,6 +386,11 @@ class DaemonIPCServer:
                 "protocol": PROTOCOL_VERSION,
             },
         }
+        
+        if activity_snapshot:
+            result["recent_activity"] = activity_snapshot
+        
+        return result
     
     def _handle_get_status(self, request: IPCRequest) -> dict:
         """Handle status query."""
@@ -300,8 +399,11 @@ class DaemonIPCServer:
         handler_conn = self._get_handler_conn()
         counts = get_queue_counts(handler_conn)
         
-        return {
-            "state": "idle",  # TODO: track actual state
+        activity_snapshot = self.run_activity.get_snapshot() if self.run_activity else {}
+        state = activity_snapshot.get("state", "idle")
+        
+        result = {
+            "state": state,
             "active_job": None,
             "queue": {
                 "pending": counts.get('build', {}).get('pending', 0),
@@ -309,6 +411,11 @@ class DaemonIPCServer:
                 "failed": counts.get('build', {}).get('error', 0),
             },
         }
+        
+        if activity_snapshot:
+            result["recent_activity"] = activity_snapshot
+        
+        return result
     
     def _handle_enqueue_files(self, request: IPCRequest) -> dict:
         """Handle file enqueue request."""

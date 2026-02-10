@@ -128,7 +128,7 @@ UNIFIED POWER TOOLS (NEW):
 
 CLI WRAPPING LAYER (CLW):
   Safe commands (cat, git status)     → ALLOW automatically
-  Risky commands (rm *.py, git push)  → REQUIRE_TOKEN
+  Risky commands (rm *.py, git push)  → REQUIRE_CONTRACT
   Blocked commands (rm -rf /)         → DENY always
 
 USAGE:

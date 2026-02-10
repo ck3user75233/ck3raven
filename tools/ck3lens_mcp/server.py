@@ -201,55 +201,6 @@ _session_cv_ids_resolved: bool = False
 _cached_world_adapter = None
 _cached_world_mode: Optional[str] = None
 
-# MIT (Mode Initialization Token) - HMAC-based challenge-response
-# Extension generates a secret, passes it as CK3LENS_MIT_SECRET env var.
-# Tokens are "nonce.mac" where mac = HMAC-SHA256(secret, nonce)[:16].
-# Agent can re-paste a token from chat but cannot FORGE a new one.
-# Agent cannot read subprocess env vars (all tools gated behind init).
-
-def _verify_mit_token(mit_token: str) -> bool:
-    """
-    Verify an HMAC-signed MIT token.
-    
-    Token format: "nonce.mac" where mac = HMAC-SHA256(secret, nonce)[:16 hex chars].
-    The secret is in CK3LENS_MIT_SECRET env var (set by extension at launch).
-    
-    Returns True if the token's HMAC is valid.
-    """
-    import hmac
-    import hashlib
-    
-    # Get secret from env var
-    secret = os.environ.get("CK3LENS_MIT_SECRET", "")
-    
-    # Legacy: direct token comparison for CK3LENS_DEV_TOKEN (testing only)
-    if not secret:
-        dev_token = os.environ.get("CK3LENS_DEV_TOKEN", "")
-        if dev_token:
-            return mit_token == dev_token
-        # No secret and no dev token — can't verify anything
-        return False
-    
-    # Parse "nonce.mac" format
-    if "." not in mit_token:
-        return False
-    
-    parts = mit_token.split(".", 1)
-    if len(parts) != 2:
-        return False
-    
-    nonce, claimed_mac = parts
-    
-    # Compute expected HMAC
-    expected_mac = hmac.new(
-        secret.encode('utf-8'),
-        nonce.encode('utf-8'),
-        hashlib.sha256
-    ).hexdigest()[:16]
-    
-    # Constant-time comparison
-    return hmac.compare_digest(claimed_mac, expected_mac)
-
 
 def _get_session() -> Session:
     global _session, _session_cv_ids_resolved, _db
@@ -1188,8 +1139,8 @@ def ck3_db_delete(
         if policy_decision == "DENY":
             return rb.denied('EN-DB-D-001', data=result, message=result.get("error", "Policy denied"))
         
-        # REQUIRE_CONTRACT/REQUIRE_TOKEN → Invalid (missing prerequisite)
-        if policy_decision in ("REQUIRE_CONTRACT", "REQUIRE_TOKEN"):
+        # REQUIRE_CONTRACT → Invalid (missing prerequisite)
+        if policy_decision in ("REQUIRE_CONTRACT",):
             return rb.invalid('MCP-DB-I-001', data=result, message=result.get("error", "Missing prerequisite"))
         
         # System failure requires POSITIVE evidence
@@ -2047,8 +1998,8 @@ def ck3_file(
         if "denied" in err_lower or "not allowed" in err_lower or "permission" in err_lower:
             return rb.denied('EN-WRITE-D-001', data=result, message=err)
         
-        # REQUIRE_CONTRACT/REQUIRE_TOKEN → Invalid (missing prerequisite)
-        if policy_decision in ("REQUIRE_CONTRACT", "REQUIRE_TOKEN"):
+        # REQUIRE_CONTRACT → Invalid (missing prerequisite)
+        if policy_decision in ("REQUIRE_CONTRACT",):
             return rb.invalid('WA-RES-I-001', data=result, message=err)
         
         # Invalid reference / not found (caller's input cannot be resolved) -> WA layer
@@ -3061,8 +3012,8 @@ def ck3_git(
         if policy_decision == "DENY":
             return rb.denied('EN-EXEC-D-001', data=result, message=result.get("error", "Git command denied"))
         
-        # REQUIRE_CONTRACT/REQUIRE_TOKEN → Invalid (missing prerequisite)
-        if policy_decision in ("REQUIRE_CONTRACT", "REQUIRE_TOKEN"):
+        # REQUIRE_CONTRACT → Invalid (missing prerequisite)
+        if policy_decision in ("REQUIRE_CONTRACT",):
             return rb.invalid('WA-RES-I-001', data=result, message=result.get("error", "Missing prerequisite"))
         
         # System failure requires POSITIVE evidence
@@ -4131,7 +4082,7 @@ def _ck3_contract_internal(
 
 
 # ============================================================================
-# Command Execution with Policy Enforcement (CLW)
+# Command Execution with Enforcement
 # ============================================================================
 
 @mcp.tool()
@@ -4145,14 +4096,14 @@ def ck3_exec(
     timeout: int = 30,
 ) -> Reply:
     """
-    Execute a shell command with CLW policy enforcement.
+    Execute a shell command with enforcement policy.
     
     Mode-aware behavior:
     - ck3lens mode: Limited to CK3/mod-related commands within playset scope
     - ck3raven-dev mode: Broader access for infrastructure work (USE THIS instead of run_in_terminal)
     
     This is the ONLY safe way for agents to run shell commands.
-    All commands are evaluated against the policy engine:
+    All commands are evaluated against enforcement.py:
     
     - Safe commands (cat, git status, etc.) ? Allowed automatically
     - Risky commands (rm *.py, git push) ? Require approval token
@@ -4176,9 +4127,8 @@ def ck3_exec(
             "output": str,     # Command output (if executed)
             "exit_code": int,  # Exit code (if executed)
             "policy": {
-                "decision": "ALLOW" | "DENY" | "REQUIRE_TOKEN",
+                "decision": "ALLOW" | "DENY" | "REQUIRE_CONTRACT",
                 "reason": str,
-                "required_token_type": str | None,
                 "category": str,
             }
         }
@@ -4186,7 +4136,6 @@ def ck3_exec(
     Examples:
         ck3_exec("git status")  # Safe - allowed
         ck3_exec("cat file.txt")  # Safe - allowed
-        ck3_exec("rm test.py", token_id="tok-abc123")  # Risky - needs token
         ck3_exec("git push --force", dry_run=True)  # Check if would be allowed
     """
     trace_info = get_current_trace_info()
@@ -4202,8 +4151,8 @@ def ck3_exec(
         if decision == "DENY":
             return rb.denied('EN-EXEC-D-001', data=result, message=result.get("error", "Command denied"))
         
-        # REQUIRE_CONTRACT/REQUIRE_TOKEN → Invalid (missing prerequisite)
-        if decision in ("REQUIRE_CONTRACT", "REQUIRE_TOKEN"):
+        # REQUIRE_CONTRACT → Invalid (missing prerequisite)
+        if decision in ("REQUIRE_CONTRACT",):
             return rb.invalid('WA-RES-I-001', data=result, message=result.get("error", "Missing prerequisite"))
         
         # Path not found is a resolution failure -> WA layer
@@ -4305,16 +4254,6 @@ def _ck3_exec_internal(
             "hint": "Use ck3_contract(command='open', ...) to open a work contract first",
         }
     
-    if result.decision == Decision.REQUIRE_TOKEN:
-        return {
-            "allowed": False,
-            "executed": False,
-            "output": None,
-            "exit_code": None,
-            "policy": policy_info,
-            "error": "Token required",
-        }
-    
     # Allowed
     if dry_run:
         return {
@@ -4411,21 +4350,14 @@ def ck3_token(
     path: str | None = None,
 ) -> Reply:
     """
-    DEPRECATED: Token system replaced by confirmation-based workflow.
+    DEPRECATED: Legacy token system replaced by HAT (Human Authorization Token).
     
-    The legacy token system (GIT_PUSH, FS_DELETE, etc.) has been deprecated.
     Only canonical tokens remain in tools/compliance/tokens.py:
     - NST (New Symbol Token): For creating new symbol identities
     - LXE (Lint Exception Token): For lint rule exceptions
-    
-    For operations that previously required tokens:
-    - File deletion: Provide token_id='confirm' in the tool call
-    - Git push: Allowed with active contract (no token needed)
-    - Destructive commands: Provide token_id='confirm' to confirm
-    - Launcher repair: Provide token_id='confirm' to confirm
+    - HAT (Human Authorization Token): For protected file writes and mode init (see docs/PROTECTED_FILES_AND_HAT.md)
     
     This tool now returns a deprecation notice for all commands.
-    Phase 2 will implement proper approval flows where needed.
     """
     trace_info = get_current_trace_info()
     rb = ReplyBuilder(trace_info, tool='ck3_token')
@@ -4435,14 +4367,219 @@ def ck3_token(
         data={
             "deprecated": True,
             "guidance": {
-                "file_deletion": "Use ck3_file(command='delete', token_id='confirm', ...)",
+                "file_deletion": "File deletion requires active contract (same as write)",
                 "git_push": "Git push allowed with active contract",
-                "destructive_commands": "Use ck3_exec(..., token_id='confirm')",
-                "canonical_tokens": "NST and LXE tokens are in tools/compliance/tokens.py",
+                "protected_files": "See docs/PROTECTED_FILES_AND_HAT.md for HAT system",
+                "canonical_tokens": "NST, LXE, and HAT tokens are in tools/compliance/tokens.py",
             },
         },
-        message="Token system deprecated. Operations now use confirmation-based workflow.",
+        message="Token system deprecated. See HAT architecture for protected file authorization.",
     )
+
+
+
+# ============================================================================
+# Protected Files Management
+# ============================================================================
+
+@mcp.tool()
+@mcp_safe_tool
+def ck3_protect(
+    command: Literal["list", "verify", "add", "remove"] = "list",
+    path: str | None = None,
+    entry_type: Literal["file", "folder"] | None = None,
+    reason: str | None = None,
+) -> Reply:
+    '''
+    Manage protected files manifest.
+
+    Protected files require HAT (Human Authorization Token) approval to modify.
+    The manifest at policy/protected_files.json tracks which files are protected.
+
+    HAT approval is ephemeral: the extension writes a signed approval file,
+    which is consumed (verified + deleted) here. No hat_id passes through chat.
+    Click the shield icon in the CK3 Lens sidebar to approve pending requests.
+
+    Commands:
+
+    command=list   -> List all protected entries
+    command=verify -> Check SHA256 hashes of all protected files
+    command=add    -> Add file/folder to manifest (requires HAT approval)
+    command=remove -> Remove entry from manifest (requires HAT approval)
+
+    Args:
+        command: Operation to perform
+        path: Relative path for add/remove (e.g., ".github/copilot-instructions.md")
+        entry_type: "file" or "folder" (for add, default "file")
+        reason: Why this file is protected (for add)
+
+    Returns:
+        Protected files info or operation result
+
+    Examples:
+        ck3_protect(command="list")
+        ck3_protect(command="verify")
+        ck3_protect(command="add", path="docs/IMPORTANT.md", reason="Critical doc")
+        ck3_protect(command="remove", path="docs/OLD.md")
+    '''
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool='ck3_protect')
+
+    try:
+        from tools.compliance.protected_files import (
+            load_manifest, save_manifest, verify_all_hashes,
+            compute_file_hash, is_protected, ProtectedEntry,
+            _get_repo_root, MANIFEST_REL_PATH,
+        )
+    except ImportError as e:
+        return rb.error('MCP-SYS-E-001', message=f"Failed to import protected_files module: {e}")
+
+    if command == "list":
+        entries = load_manifest()
+        return rb.success(
+            'WA-READ-S-001',
+            data={
+                "entries": [e.to_dict() for e in entries],
+                "count": len(entries),
+                "manifest_path": MANIFEST_REL_PATH,
+                "hardcoded_protected": [MANIFEST_REL_PATH],
+            },
+            message=f"{len(entries)} protected entries.",
+        )
+
+    elif command == "verify":
+        mismatches = verify_all_hashes()
+        entries = load_manifest()
+        return rb.success(
+            'WA-VAL-S-001',
+            data={
+                "total_entries": len(entries),
+                "mismatches": [
+                    {
+                        "path": p,
+                        "expected": exp[:16] + "...",
+                        "actual": (act[:16] + "...") if act != "FILE_NOT_FOUND" else act,
+                    }
+                    for p, exp, act in mismatches
+                ],
+                "all_match": len(mismatches) == 0,
+            },
+            message="All hashes match." if not mismatches else f"{len(mismatches)} hash mismatch(es) found.",
+        )
+
+    elif command == "add":
+        if not path:
+            return rb.invalid('WA-RES-I-001', message="path required for add command")
+        if not reason:
+            return rb.invalid('WA-RES-I-001', message="reason required for add command")
+
+        # Consume ephemeral HAT approval (written by extension, verified + deleted here)
+        try:
+            from tools.compliance.tokens import consume_hat_approval, write_hat_request
+        except ImportError as e:
+            return rb.error('MCP-SYS-E-001', message=f"HAT module import failed: {e}")
+
+        valid, msg = consume_hat_approval(required_paths=[path])
+        if not valid:
+            write_hat_request(
+                intent=f"Add protected file: {path}",
+                protected_paths=[path],
+                root_category="ROOT_REPO",
+            )
+            return rb.invalid(
+                'WA-RES-I-001',
+                data={"requires_hat": True},
+                message=f"HAT approval required: {msg}. Click the shield icon in CK3 Lens sidebar to approve.",
+            )
+
+        # Check if already protected
+        if is_protected(path):
+            return rb.invalid('WA-RES-I-001', message=f"Path already protected: {path}")
+
+        # Compute hash for files
+        resolved_type = entry_type or "file"
+        sha256 = ""
+        if resolved_type == "file":
+            repo_root = _get_repo_root()
+            file_path = repo_root / path
+            if not file_path.exists():
+                return rb.invalid('WA-RES-I-001', message=f"File not found: {path}")
+            sha256 = compute_file_hash(file_path)
+
+        from datetime import datetime
+        entry = ProtectedEntry(
+            path=path.replace("\\", "/"),
+            entry_type=resolved_type,
+            sha256=sha256,
+            added_at=datetime.now().isoformat(),
+            reason=reason,
+        )
+
+        entries = load_manifest()
+        entries.append(entry)
+        save_manifest(entries)
+
+        return rb.success(
+            'EN-WRITE-S-001',
+            data={
+                "added": entry.to_dict(),
+                "total_entries": len(entries),
+            },
+            message=f"Protected: {path}",
+        )
+
+    elif command == "remove":
+        if not path:
+            return rb.invalid('WA-RES-I-001', message="path required for remove command")
+
+        # Cannot remove the manifest itself (hardcoded)
+        normalized = path.replace("\\", "/")
+        if normalized == MANIFEST_REL_PATH:
+            return rb.invalid(
+                'WA-RES-I-001',
+                message=f"Cannot remove manifest self-protection: {MANIFEST_REL_PATH} is hardcoded.",
+            )
+
+        # Consume ephemeral HAT approval
+        try:
+            from tools.compliance.tokens import consume_hat_approval, write_hat_request
+        except ImportError as e:
+            return rb.error('MCP-SYS-E-001', message=f"HAT module import failed: {e}")
+
+        valid, msg = consume_hat_approval(required_paths=[path])
+        if not valid:
+            write_hat_request(
+                intent=f"Remove protected file: {path}",
+                protected_paths=[path],
+                root_category="ROOT_REPO",
+            )
+            return rb.invalid(
+                'WA-RES-I-001',
+                data={"requires_hat": True},
+                message=f"HAT approval required: {msg}. Click the shield icon in CK3 Lens sidebar to approve.",
+            )
+
+        entries = load_manifest()
+        before_count = len(entries)
+        entries = [e for e in entries if e.path.replace("\\", "/") != normalized]
+        after_count = len(entries)
+
+        if before_count == after_count:
+            return rb.invalid('WA-RES-I-001', message=f"Path not found in manifest: {path}")
+
+        save_manifest(entries)
+
+        return rb.success(
+            'EN-WRITE-S-001',
+            data={
+                "removed": path,
+                "total_entries": len(entries),
+            },
+            message=f"Removed protection: {path}",
+        )
+
+    else:
+        return rb.invalid('WA-RES-I-001', message=f"Unknown command: {command}")
 
 
 # ============================================================================
@@ -5181,6 +5318,7 @@ def ck3_search_mods(
 def ck3_get_mode_instructions(
     mode: Literal["ck3lens", "ck3raven-dev"],
     mit_token: str | None = None,
+    hat_token: str | None = None,
 ) -> Reply:
     """
     Get the instruction content for a specific agent mode.
@@ -5198,7 +5336,8 @@ def ck3_get_mode_instructions(
         mode: The mode to initialize:
             - "ck3lens": CK3 modding with database search and mod editing
             - "ck3raven-dev": Full development mode for infrastructure
-        mit_token: Authorization token (if required - see error response for details)
+        mit_token: Deprecated — use hat_token instead.
+        hat_token: Signed authorization token from extension (required).
     
     Returns:
         Mode instructions, policy boundaries, session context, and database status
@@ -5206,11 +5345,12 @@ def ck3_get_mode_instructions(
     trace_info = get_current_trace_info()
     rb = ReplyBuilder(trace_info, tool='ck3_get_mode_instructions')
     
-    result = _ck3_get_mode_instructions_internal(mode, mit_token)
+    # Accept hat_token, fall back to mit_token for backward compat
+    token = hat_token or mit_token
+    result = _ck3_get_mode_instructions_internal(mode, token)
     
     if result.get("error"):
-        # MIT token errors should be reply_type I (invalid) - user action required
-        if result.get("requires_mit"):
+        if result.get("requires_hat"):
             return rb.invalid(
                 'MCP-CFG-I-001',
                 data=result,
@@ -5225,12 +5365,13 @@ def ck3_get_mode_instructions(
     )
 
 
-def _ck3_get_mode_instructions_internal(mode: str, mit_token: str | None = None) -> dict:
+def _ck3_get_mode_instructions_internal(mode: str, hat_token: str | None = None) -> dict:
     """Internal implementation returning dict."""
     from pathlib import Path
     from ck3lens.policy import AgentMode, initialize_workspace
     from ck3lens.paths import WIP_DIR
     from ck3lens.agent_mode import set_agent_mode, VALID_MODES
+    from tools.compliance.sigil import sigil_verify, sigil_available
     
     # Validate mode before proceeding
     if mode not in VALID_MODES:
@@ -5240,25 +5381,62 @@ def _ck3_get_mode_instructions_internal(mode: str, mit_token: str | None = None)
         }
     
     # =========================================================================
-    # MIT TOKEN VALIDATION: ALL modes require user-provided MIT token
-    # This prevents agent self-initialization - user must click the button.
-    # Token format: "nonce.mac" where mac = HMAC-SHA256(secret, nonce).
-    # Secret is in CK3LENS_MIT_SECRET env var — agent cannot read it.
-    # Agent can re-paste a valid token but cannot forge a new one.
+    # HUMAN-IN-THE-LOOP GATE: Inline HAT token from the prompt.
+    # The extension signs "mode|timestamp|nonce" with Sigil when the user
+    # clicks "Initialize Agent". Token format: "payload::signature".
+    # Agents cannot forge this because they can't access CK3LENS_SIGIL_SECRET.
+    # Fallback: CK3LENS_DEV_TOKEN for standalone testing without extension.
     # =========================================================================
-    if mit_token is None:
-        return {
-            "error": "Initialization requires MIT (Mode Initialization Token)",
-            "requires_mit": True,
-            "action": "Ask user to click 'Initialize Agent' in VS Code CK3 Lens sidebar. Token will be injected into chat.",
-        }
-    # Verify HMAC signature (constant-time comparison)
-    if not _verify_mit_token(mit_token):
-        return {
-            "error": "Invalid MIT token (HMAC verification failed)",
-            "requires_mit": True,
-            "action": "Token incorrect. Ask user to click 'Initialize Agent' in CK3 Lens sidebar.",
-        }
+    if hat_token and sigil_available():
+        parts = hat_token.split("::", 1)
+        if len(parts) != 2:
+            return {
+                "error": "Malformed HAT token",
+                "requires_hat": True,
+                "action": "Click 'Initialize Agent' in the CK3 Lens sidebar.",
+            }
+        payload, signature = parts
+        # Verify signature
+        if not sigil_verify(payload, signature):
+            return {
+                "error": "HAT token signature invalid — not signed by extension",
+                "requires_hat": True,
+                "action": "Click 'Initialize Agent' in the CK3 Lens sidebar.",
+            }
+        # Verify payload contains the requested mode
+        token_fields = payload.split("|")
+        if len(token_fields) != 3 or token_fields[0] != mode:
+            return {
+                "error": f"HAT token mode mismatch (token has '{token_fields[0] if token_fields else '?'}', requested '{mode}')",
+                "requires_hat": True,
+                "action": "Click 'Initialize Agent' again with the correct mode.",
+            }
+        # Verify timestamp (5-minute window)
+        try:
+            from datetime import datetime, timezone
+            token_time = datetime.fromisoformat(token_fields[1])
+            age = (datetime.now(timezone.utc) - token_time).total_seconds()
+            if age > 300:
+                return {
+                    "error": f"HAT token expired ({age:.0f}s old, max 300s)",
+                    "requires_hat": True,
+                    "action": "Click 'Initialize Agent' again.",
+                }
+        except (ValueError, IndexError):
+            return {
+                "error": "HAT token has invalid timestamp",
+                "requires_hat": True,
+                "action": "Click 'Initialize Agent' again.",
+            }
+    elif not hat_token:
+        # No token provided — check for dev fallback
+        dev_token = os.environ.get("CK3LENS_DEV_TOKEN", "")
+        if not dev_token:
+            return {
+                "error": "No HAT token provided. Mode initialization requires human authorization.",
+                "requires_hat": True,
+                "action": "Click 'Initialize Agent' in the CK3 Lens sidebar, then send the prompt.",
+            }
 
     
     # =========================================================================
@@ -6161,10 +6339,13 @@ def ck3_qbuilder(
             if daemon.is_available():
                 status = daemon.get_queue_status()
                 status["daemon_available"] = True
+                queue = status.get("queue", {})
+                activity = status.get("recent_activity", {})
+                activity_state = activity.get("state", "unknown") if activity else "unknown"
                 return rb.success(
                     'MCP-SYS-S-001',
                     data=status,
-                    message=f"Daemon running. Pending: {status.get('pending', 0)}, Processing: {status.get('processing', 0)}.",
+                    message=f"Daemon running ({activity_state}). Pending: {queue.get('pending', 0)}, Leased: {queue.get('leased', 0)}.",
                 )
             else:
                 return rb.invalid(

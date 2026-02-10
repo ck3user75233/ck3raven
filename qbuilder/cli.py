@@ -198,7 +198,7 @@ def cmd_daemon(args: argparse.Namespace) -> int:
             else:
                 print("[WARN] No active playset found - daemon will wait for IPC commands")
         
-        # Start IPC server
+        # Start IPC server with shared activity tracker
         port = get_ipc_port()
         
         # Shared shutdown event for coordinated shutdown
@@ -209,7 +209,12 @@ def cmd_daemon(args: argparse.Namespace) -> int:
             """Called by IPC server when shutdown command received."""
             shutdown_event.set()
         
-        ipc_server = DaemonIPCServer(conn, port=port, db_path=db_path, shutdown_callback=shutdown_callback)
+        # Create shared activity tracker for IPC status queries
+        from qbuilder.ipc_server import RunActivity
+        run_activity = RunActivity()
+        run_activity.set_run_id(run_id)
+        
+        ipc_server = DaemonIPCServer(conn, port=port, db_path=db_path, shutdown_callback=shutdown_callback, run_activity=run_activity)
         ipc_server.start()
         print(f"[OK] IPC server listening on port {port}")
         
@@ -257,6 +262,7 @@ def cmd_daemon(args: argparse.Namespace) -> int:
             continuous=True,
             poll_interval=args.poll_interval,
             shutdown_event=shutdown_event,
+            run_activity=run_activity,
         )
         
         elapsed = time.time() - start_time

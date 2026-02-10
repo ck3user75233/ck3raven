@@ -54,25 +54,36 @@ export const MODE_DEFINITIONS: Record<string, {
 };
 
 /**
- * Generate initialization prompt with MIT token.
- * 
- * MIT (Mode Initialization Token) is required for mode initialization.
- * Instance ID is for debugging only - tool names are mcp_ck3_lens_ck3_* (no instance prefix).
+ * Generate initialization prompt with inline HAT token.
+ *
+ * The user clicking "Initialize Agent" IS the human authorization.
+ * We sign a payload (mode + timestamp + nonce) with Sigil and embed
+ * the token in the prompt. The MCP server verifies it.
+ *
+ * Same pattern as the original MIT — just using Sigil for signing.
  */
-export function generateInitPrompt(mode: LensMode, instanceId: string | undefined, mitToken: string | undefined): string {
+export function generateInitPrompt(mode: LensMode, instanceId: string | undefined, sigilSecret: string | undefined): string {
     const modeDef = MODE_DEFINITIONS[mode];
     if (!modeDef) {
         return '';
     }
-    
-    // Single-line prompt with embedded token - no redundancy
-    if (mitToken) {
-        const call = modeDef.initPrompt.replace(')', `, mit_token="${mitToken}")`);
-        const instanceSuffix = instanceId ? ` [${instanceId}]` : '';
-        return `${call}${instanceSuffix}\n`;
+
+    let hatParam = '';
+    if (sigilSecret) {
+        const crypto = require('crypto');
+        const timestamp = new Date().toISOString();
+        const nonce = crypto.randomBytes(16).toString('hex');
+        // Canonical payload: mode|timestamp|nonce
+        const payload = `${mode}|${timestamp}|${nonce}`;
+        const signature: string = crypto.createHmac('sha256', Buffer.from(sigilSecret, 'hex'))
+            .update(payload)
+            .digest('hex');
+        // Token format: payload::signature (server splits on ::)
+        hatParam = `, hat_token="${payload}::${signature}"`;
     }
     
-    return `${modeDef.initPrompt}\n`;
+    const instanceSuffix = instanceId ? ` [${instanceId}]` : '';
+    return `${modeDef.initPrompt}${instanceSuffix}${hatParam}\n`;
 }
 
 class AgentTreeItem extends vscode.TreeItem {
@@ -176,7 +187,7 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
         private readonly context: vscode.ExtensionContext,
         private readonly logger: Logger,
         private readonly instanceId?: string,
-        private readonly getMitToken?: () => string
+        private readonly getSigilSecret?: () => string,
     ) {
         console.log('[CK3RAVEN] AgentViewProvider constructor ENTER');
         // Always start fresh - don't persist mode across sessions
@@ -980,6 +991,133 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
                 vscode.window.showInformationMessage('Checking paths configuration...');
             })
         );
+
+        // Mint HAT (Human Authorization Token)
+        this.disposables.push(
+            vscode.commands.registerCommand('ck3lens.agent.mintHat', async () => {
+                await this.mintHat();
+            })
+        );
+    }
+
+    /**
+     * Approve a HAT (Human Authorization Token) request.
+     *
+     * Ephemeral flow — no token passes through chat:
+     * 1. Agent writes hat_request.json (via contract gate or ck3_protect)
+     * 2. User clicks shield icon → this method runs
+     * 3. Extension reads request, shows approval dialog
+     * 4. User approves → extension HMAC-signs with in-memory secret
+     * 5. Extension writes hat_approval.json, deletes hat_request.json
+     * 6. MCP server consumes approval on next contract open attempt
+     *
+     * The secret never touches disk. The approval is consumed (deleted)
+     * on first read by the MCP server.
+     */
+    private async mintHat(): Promise<void> {
+        const crypto = require('crypto');
+        const os = require('os');
+        const pathMod = require('path');
+        const fs = require('fs');
+
+        const sigilSecret = this.getSigilSecret?.();
+        if (!sigilSecret) {
+            vscode.window.showErrorMessage('Sigil secret not available. MCP server may not be running.');
+            return;
+        }
+
+        const configDir = pathMod.join(os.homedir(), '.ck3raven', 'config');
+        const requestPath = pathMod.join(configDir, 'hat_request.json');
+        const approvalPath = pathMod.join(configDir, 'hat_approval.json');
+
+        // Read agent's request template
+        if (!fs.existsSync(requestPath)) {
+            vscode.window.showInformationMessage(
+                'No pending HAT request. The agent will create one when it needs approval for protected files.'
+            );
+            return;
+        }
+
+        let request: any;
+        try {
+            request = JSON.parse(fs.readFileSync(requestPath, 'utf-8'));
+        } catch (err: any) {
+            vscode.window.showErrorMessage(`Failed to read HAT request: ${err.message}`);
+            return;
+        }
+
+        const intent: string = request.intent || '(no intent specified)';
+        const protectedPaths: string[] = request.protected_paths || [];
+        const rootCategory: string = request.root_category || '';
+
+        // Build approval dialog message
+        const pathsDisplay = protectedPaths.length > 0
+            ? protectedPaths.map(p => `  \u2022 ${p}`).join('\n')
+            : '  (none specified)';
+
+        const confirm = await vscode.window.showWarningMessage(
+            [
+                'Approve HAT request?',
+                '',
+                `Intent: ${intent}`,
+                `Scope: ${rootCategory || 'N/A'}`,
+                `Protected files:`,
+                pathsDisplay,
+                '',
+                'This allows the agent to open ONE contract touching these files.',
+            ].join('\n'),
+            { modal: true },
+            'Approve'
+        );
+
+        if (confirm !== 'Approve') {
+            // Clean up rejected request
+            try { fs.unlinkSync(requestPath); } catch { /* ignore */ }
+            vscode.window.showInformationMessage('HAT request rejected.');
+            return;
+        }
+
+        // Generate approval — all signing in extension memory
+        const approvedAt = new Date().toISOString();
+        const nonce = crypto.randomBytes(16).toString('hex');
+
+        // Canonical JSON must match Python's json.dumps(sort_keys=True, separators=(",",":"))
+        // Keys in alphabetical order: approved_at, intent, nonce, protected_paths, root_category
+        const canonicalObj: Record<string, any> = {
+            approved_at: approvedAt,
+            intent: intent,
+            nonce: nonce,
+            protected_paths: protectedPaths,
+            root_category: rootCategory,
+        };
+        const canonicalJson = JSON.stringify(canonicalObj);
+
+        // HMAC-SHA256 with Sigil secret (in-memory only)
+        const signature: string = crypto.createHmac('sha256', Buffer.from(sigilSecret, 'hex'))
+            .update(canonicalJson)
+            .digest('hex');
+
+        // Write approval file (consumed by MCP on next contract open)
+        const approval = {
+            ...canonicalObj,
+            signature: signature,
+        };
+
+        try {
+            fs.mkdirSync(configDir, { recursive: true });
+            fs.writeFileSync(approvalPath, JSON.stringify(approval, null, 2));
+
+            // Delete consumed request
+            fs.unlinkSync(requestPath);
+        } catch (err: any) {
+            vscode.window.showErrorMessage(`Failed to write HAT approval: ${err.message}`);
+            return;
+        }
+
+        this.logger.info(`HAT approved: intent="${intent}", paths=${protectedPaths.length}`);
+        vscode.window.showInformationMessage(
+            `HAT approved. The agent can now retry its operation.\n\nIntent: ${intent}`
+        );
     }
 
     /**
@@ -1020,12 +1158,10 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
 
         this.logger.info(`Initialization requested for mode: ${mode}`);
 
-        // Get MIT token for authorization
-        const mitToken = this.getMitToken?.();
-
-        // Open chat with initialization prompt (includes current MCP instance ID and MIT token)
+        // Open chat with init prompt — includes signed inline HAT token
+        const sigilSecret = this.getSigilSecret?.();
         await vscode.commands.executeCommand('workbench.action.chat.open', {
-            query: generateInitPrompt(mode, this.instanceId, mitToken)
+            query: generateInitPrompt(mode, this.instanceId, sigilSecret)
         });
 
         vscode.window.showInformationMessage(
@@ -1048,14 +1184,12 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
 
         this.logger.info(`Sub-agent initialization requested for mode: ${mode}`);
 
-        // Get MIT token for authorization
-        const mitToken = this.getMitToken?.();
-
-        // Create new chat with initialization prompt (includes current MCP instance ID and MIT token)
+        // Open new chat with init prompt — includes signed inline HAT token
+        const sigilSecret = this.getSigilSecret?.();
         await vscode.commands.executeCommand('workbench.action.chat.newChat');
         await new Promise(resolve => setTimeout(resolve, 100));
         await vscode.commands.executeCommand('workbench.action.chat.open', {
-            query: generateInitPrompt(mode, this.instanceId, mitToken)
+            query: generateInitPrompt(mode, this.instanceId, sigilSecret)
         });
 
         vscode.window.showInformationMessage(

@@ -261,8 +261,6 @@ class Codes:
         "WRITE_AUTHORIZED", "Write authorized by policy")
     EN_WRITE_D_001 = ReplyCode("EN-WRITE-D-001", Layer.EN, Area.WRITE, ReplyType.D, 1,
         "WRITE_DENIED", "Write denied by policy")
-    EN_WRITE_D_002 = ReplyCode("EN-WRITE-D-002", Layer.EN, Area.WRITE, ReplyType.D, 2,
-        "WRITE_REQUIRES_TOKEN", "Write requires approval token")
     EN_WRITE_E_001 = ReplyCode("EN-WRITE-E-001", Layer.EN, Area.WRITE, ReplyType.E, 1,
         "WRITE_ENFORCEMENT_ERROR", "Unexpected error in write enforcement")
     

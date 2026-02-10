@@ -1,0 +1,26 @@
+{
+  "schema_version": "1",
+  "entries": [
+    {
+      "path": ".github/copilot-instructions.md",
+      "type": "file",
+      "sha256": "38a34da94bcfd9c091c17d50a1369532f50b42cbd777bd411f831864e5656fae",
+      "added_at": "2026-02-10T13:05:00",
+      "reason": "VS Code Copilot root instructions"
+    },
+    {
+      "path": ".github/COPILOT_LENS_COMPATCH.md",
+      "type": "file",
+      "sha256": "d249832ea3cbf1b2ee82150359c01bac7899922106cf7da0e5c3c881b32c7190",
+      "added_at": "2026-02-10T13:05:00",
+      "reason": "ck3lens agent instructions"
+    },
+    {
+      "path": ".github/COPILOT_RAVEN_DEV.md",
+      "type": "file",
+      "sha256": "88981c1a5024a961da3e83d632fa7411c6ef0e8782cdc402003fb270de9ed0ea",
+      "added_at": "2026-02-10T13:05:00",
+      "reason": "ck3raven-dev agent instructions"
+    }
+  ]
+}

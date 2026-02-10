@@ -9,7 +9,7 @@ CRITICAL: No permission checks may exist outside this module.
 Operations: READ, WRITE, DELETE
 - READ: can read from this location
 - WRITE: any mutation (write/rename/execute/git/db) with contract
-- DELETE: deletion with token confirmation
+- DELETE: deletion (requires contract)
 """
 
 from __future__ import annotations
@@ -29,7 +29,6 @@ class Decision(Enum):
     """Enforcement decision outcomes."""
     ALLOW = auto()          # Operation permitted
     DENY = auto()           # Operation forbidden
-    REQUIRE_TOKEN = auto()  # Needs confirmation token
     REQUIRE_CONTRACT = auto()  # Needs active contract
 
 
@@ -39,7 +38,7 @@ class OperationType(Enum):
     
     READ = can read
     WRITE = any mutation (requires contract except WIP)
-    DELETE = deletion (requires token)
+    DELETE = deletion (requires contract)
     """
     READ = auto()
     WRITE = auto()
@@ -52,7 +51,6 @@ class EnforcementResult:
     decision: Decision
     reason: str
     requires_contract: bool = False
-    requires_token: bool = False
     # For diagnostic failures (Reply I instead of D)
     is_diagnostic_failure: bool = False
     diagnostic_code: str | None = None

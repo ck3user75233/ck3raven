@@ -596,6 +596,7 @@ def run_build_worker(
     continuous: bool = True,  # DEFAULT: daemon mode - never exit on empty queue
     poll_interval: float = 5.0,
     shutdown_event: Optional[threading.Event] = None,
+    run_activity: Optional[object] = None,  # RunActivity from ipc_server (thread-safe)
 ) -> dict:
     """
     Run build worker as a continuous daemon.
@@ -651,6 +652,10 @@ def run_build_worker(
             if not item:
                 consecutive_idle_polls += 1
                 
+                # Signal idle state on first idle poll
+                if consecutive_idle_polls == 1 and run_activity:
+                    run_activity.set_idle()
+                
                 if not continuous:
                     # Non-continuous mode: exit immediately when queue empty
                     exit_reason = "queue empty (non-continuous mode)"
@@ -671,6 +676,8 @@ def run_build_worker(
             
             # Reset idle counter when we get work
             consecutive_idle_polls = 0
+            if run_activity:
+                run_activity.set_state("building")
             
             relpath = item['relpath']
             envelope = item['envelope']
@@ -696,6 +703,10 @@ def run_build_worker(
                 _safe_print(f"  Error: {err_msg}")
                 if logger:
                     logger.item_error(file_id, relpath, err_msg, result.get('step'))
+            
+            # Update RunActivity tracker (thread-safe, visible via IPC)
+            if run_activity:
+                run_activity.record_item(result['status'])
             
             # Periodic progress logging (every 100 items)
             if items_processed % 100 == 0:

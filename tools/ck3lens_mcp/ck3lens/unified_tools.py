@@ -967,14 +967,6 @@ def ck3_file_impl(
                     "contract_example": "ck3_contract(command='open', intent='bugfix', root_category='ROOT_REPO', work_declaration={...})",
                 }
             
-            if result.decision == Decision.REQUIRE_TOKEN:
-                return {
-                    "success": False,
-                    "error": result.reason,
-                    "policy_decision": "REQUIRE_TOKEN",
-                    "hint": "Deletion requires confirmation token",
-                }
-            
             # Decision is ALLOW - continue to implementation
     
     # ==========================================================================
@@ -1602,20 +1594,11 @@ def _file_delete_raw(path, token_id, trace, world=None):
     Delete file at raw filesystem path.
     
     MODE: ck3raven-dev only (enforced by caller).
-    Requires confirmation via token_id (any value = confirmed).
+    Requires active contract (enforced by caller).
     """
     from pathlib import Path as P
     
     file_path = P(path).resolve()
-    
-    # Confirmation required for file deletion
-    if not token_id:
-        return {
-            "success": False, 
-            "error": "File deletion requires confirmation. Provide token_id='confirm' to proceed.",
-        }
-    
-    # token_id provided = user confirmed (any value accepted)
     
     if not file_path.exists():
         return {"success": False, "error": f"File not found: {path}"}
@@ -2544,14 +2527,6 @@ def ck3_git_impl(
                 "policy_decision": "REQUIRE_CONTRACT",
                 "guidance": "Use ck3_contract(command='open', ...) to open a work contract",
                 "contract_example": "ck3_contract(command='open', intent='bugfix', root_category='ROOT_REPO', work_declaration={...})",
-            }
-        
-        if result.decision == Decision.REQUIRE_TOKEN:
-            return {
-                "success": False,
-                "error": result.reason,
-                "policy_decision": "REQUIRE_TOKEN",
-                "hint": "This git operation requires confirmation",
             }
         
         # Decision is ALLOW - continue to implementation

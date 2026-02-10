@@ -24,8 +24,6 @@ Authority: CANONICAL CONTRACT SYSTEM Phase 1.5C
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import os
 import uuid
@@ -45,6 +43,7 @@ class TokenType(str, Enum):
     NST = "NST"  # New Symbol Token - declares intentionally new identifiers
     LXE = "LXE"  # Lint Exception Token - grants temporary lint rule exceptions
     MIT = "MIT"  # Mode Initialization Token - authorizes agent mode switch (single-use)
+    HAT = "HAT"  # Human Authorization Token - authorizes protected file operations
 
 
 class TokenStatus(str, Enum):
@@ -60,6 +59,7 @@ TOKEN_TTLS = {
     TokenType.NST: 24,  # 24 hours
     TokenType.LXE: 8,   # 8 hours (work session)
     TokenType.MIT: 0,   # Single-use, no TTL (consumed immediately on use)
+    TokenType.HAT: 0,   # Single-use, no TTL (consumed immediately on use)
 }
 
 
@@ -164,37 +164,21 @@ class Token:
 
 
 # =============================================================================
-# SIGNING
+# SIGNING — delegates to Sigil
 # =============================================================================
 
-def _get_signing_key() -> bytes:
-    """
-    Get the signing key for token signatures.
-    
-    In production, this should be a proper secret.
-    For now, we use a deterministic key from environment or default.
-    """
-    key = os.environ.get("CK3RAVEN_TOKEN_KEY", "ck3raven-phase-1.5-token-signing-key")
-    return key.encode("utf-8")
-
-
 def sign_token(token: Token) -> str:
-    """Generate HMAC-SHA256 signature for a token."""
-    canonical = token.canonical_json()
-    signature = hmac.new(
-        _get_signing_key(),
-        canonical.encode("utf-8"),
-        hashlib.sha256
-    ).hexdigest()
-    return signature
+    """Sign a token's canonical JSON via Sigil."""
+    from tools.compliance.sigil import sigil_sign
+    return sigil_sign(token.canonical_json())
 
 
 def verify_token_signature(token: Token) -> bool:
-    """Verify token signature is valid."""
+    """Verify token signature via Sigil."""
     if not token.signature:
         return False
-    expected = sign_token(token)
-    return hmac.compare_digest(token.signature, expected)
+    from tools.compliance.sigil import sigil_verify
+    return sigil_verify(token.canonical_json(), token.signature)
 
 
 # =============================================================================
@@ -659,6 +643,150 @@ def approve_token(token_id: str) -> tuple[bool, str]:
 
 
 # =============================================================================
+# HAT — Human Authorization Token (Ephemeral)
+# =============================================================================
+# HAT is a side-channel between the VS Code extension and the MCP server.
+# The agent NEVER handles a HAT token directly. Flow:
+#
+#   1. MCP detects protected file → writes hat_request.json → returns error
+#   2. Extension reads request → shows to user → user approves
+#   3. Extension signs with Sigil secret → writes hat_approval.json
+#   4. Agent retries → MCP reads approval → verifies via Sigil → deletes file → allows
+#
+# Security model:
+# - Sigil secret lives in extension memory + MCP env var CK3LENS_SIGIL_SECRET
+# - Agent cannot access subprocess env vars through any tool
+# - Approval is deleted immediately on consumption (ephemeral)
+# - Sigil signature prevents forgery even if agent writes to the approval path
+#
+# Authority: docs/PROTECTED_FILES_AND_HAT.md
+# =============================================================================
+
+# Paths for the request/approval handshake
+HAT_CONFIG_DIR = Path.home() / ".ck3raven" / "config"
+HAT_REQUEST_PATH = HAT_CONFIG_DIR / "hat_request.json"
+HAT_APPROVAL_PATH = HAT_CONFIG_DIR / "hat_approval.json"
+
+
+def write_hat_request(
+    intent: str,
+    protected_paths: list[str],
+    root_category: str = "",
+) -> Path:
+    """
+    Write a HAT request template for the extension to approve.
+
+    Called by the MCP server when a contract touches protected files.
+    The extension picks this up when the user clicks the shield button.
+
+    Args:
+        intent: What the agent wants to do
+        protected_paths: Which protected files are affected
+        root_category: Contract root category
+
+    Returns:
+        Path to the written request file
+    """
+    HAT_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    request = {
+        "intent": intent,
+        "protected_paths": protected_paths,
+        "root_category": root_category,
+        "requested_at": datetime.now(timezone.utc).isoformat(),
+    }
+    HAT_REQUEST_PATH.write_text(json.dumps(request, indent=2), encoding="utf-8")
+    return HAT_REQUEST_PATH
+
+
+def consume_hat_approval(
+    required_paths: list[str] | None = None,
+) -> tuple[bool, str]:
+    """
+    Read, verify, and consume (delete) a HAT approval.
+
+    Called by the MCP server at contract-open time or by ck3_protect.
+    The approval file was written by the VS Code extension after user
+    clicked approve. This function:
+      1. Reads hat_approval.json
+      2. Verifies signature via Sigil (session-scoped HMAC)
+      3. Checks timestamp is recent (within 5 minutes)
+      4. Checks approved paths cover required paths (if specified)
+      5. Deletes the file (single-use)
+
+    Args:
+        required_paths: Paths the operation needs authorized (optional).
+                       If provided, approval's protected_paths must cover them.
+
+    Returns:
+        (valid: bool, message: str)
+    """
+    from tools.compliance.sigil import sigil_verify, sigil_available
+
+    if not HAT_APPROVAL_PATH.exists():
+        return False, (
+            "No HAT approval found. "
+            "Click the shield icon in the CK3 Lens sidebar to approve the pending request."
+        )
+
+    try:
+        data = json.loads(HAT_APPROVAL_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        HAT_APPROVAL_PATH.unlink(missing_ok=True)
+        return False, f"Failed to read HAT approval: {e}"
+
+    # Extract fields
+    signature = data.get("signature", "")
+    approved_at = data.get("approved_at", "")
+    protected_paths = data.get("protected_paths", [])
+    nonce = data.get("nonce", "")
+
+    if not signature or not approved_at or not nonce:
+        HAT_APPROVAL_PATH.unlink(missing_ok=True)
+        return False, "HAT approval is malformed (missing signature, timestamp, or nonce)"
+
+    # Verify via Sigil
+    if not sigil_available():
+        HAT_APPROVAL_PATH.unlink(missing_ok=True)
+        return False, "Sigil not available — MCP server not started by extension?"
+
+    # Canonical JSON for verification (must match extension's signing order)
+    canonical = json.dumps({
+        "approved_at": approved_at,
+        "intent": data.get("intent", ""),
+        "nonce": nonce,
+        "protected_paths": protected_paths,
+        "root_category": data.get("root_category", ""),
+    }, sort_keys=True, separators=(",", ":"))
+
+    if not sigil_verify(canonical, signature):
+        HAT_APPROVAL_PATH.unlink(missing_ok=True)
+        return False, "HAT signature invalid — approval was not signed by the extension"
+
+    # Check timestamp (5-minute window)
+    try:
+        approved_time = datetime.fromisoformat(approved_at)
+        age = datetime.now(timezone.utc) - approved_time
+        if age.total_seconds() > 300:
+            HAT_APPROVAL_PATH.unlink(missing_ok=True)
+            return False, f"HAT approval expired ({age.total_seconds():.0f}s old, max 300s)"
+    except (ValueError, TypeError):
+        HAT_APPROVAL_PATH.unlink(missing_ok=True)
+        return False, "HAT approval has invalid timestamp"
+
+    # Check path coverage (if required)
+    if required_paths:
+        approved_set = set(p.replace("\\", "/") for p in protected_paths)
+        missing = [p for p in required_paths if p.replace("\\", "/") not in approved_set]
+        if missing:
+            HAT_APPROVAL_PATH.unlink(missing_ok=True)
+            return False, f"HAT approval does not cover these paths: {missing}"
+
+    # All checks passed — consume by deleting
+    HAT_APPROVAL_PATH.unlink(missing_ok=True)
+    return True, f"HAT approval consumed (intent: {data.get('intent', 'N/A')})"
+
+
+# =============================================================================
 # CLI INTERFACE
 # =============================================================================
 
@@ -700,7 +828,7 @@ def main():
     list_parser.add_argument("--approved", action="store_true", help="List approved only")
     
     args = parser.parse_args()
-    
+
     if args.command == "propose-nst":
         token = propose_nst(
             contract_id=args.contract_id,

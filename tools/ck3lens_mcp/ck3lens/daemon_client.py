@@ -66,6 +66,7 @@ class DaemonStatus:
     queue_pending: int
     queue_leased: int
     queue_failed: int
+    recent_activity: Optional[dict] = None  # RunActivity snapshot from daemon
     
     @property
     def is_idle(self) -> bool:
@@ -196,6 +197,7 @@ class DaemonClient:
             queue_pending=queue.get("pending", 0),
             queue_leased=queue.get("leased", 0),
             queue_failed=queue.get("failed", 0),
+            recent_activity=result.get("recent_activity"),
         )
     
     def get_status(self) -> dict:
@@ -323,10 +325,12 @@ class DaemonClient:
         Get queue status for UI display.
         
         Returns a dict suitable for status bar display.
+        Includes recent_activity snapshot from RunActivity tracker
+        when daemon is connected.
         """
         try:
             status = self.health()
-            return {
+            result = {
                 "connected": True,
                 "daemon_state": status.state,
                 "queue": {
@@ -335,6 +339,9 @@ class DaemonClient:
                     "failed": status.queue_failed,
                 },
             }
+            if status.recent_activity:
+                result["recent_activity"] = status.recent_activity
+            return result
         except DaemonNotAvailableError:
             return {
                 "connected": False,

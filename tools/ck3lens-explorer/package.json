@@ -429,6 +429,11 @@
         "icon": "$(key)"
       },
       {
+        "command": "ck3lens.agent.mintHat",
+        "title": "Mint HAT (Human Authorization Token)",
+        "icon": "$(shield)"
+      },
+      {
         "command": "ck3raven.chat.tagSession",
         "title": "CK3 Raven: Tag Chat Session",
         "icon": "$(tag)"
@@ -493,6 +498,11 @@
         },
         {
           "command": "ck3lens.agent.clearAll",
+          "when": "view == ck3lens.agentView",
+          "group": "navigation"
+        },
+        {
+          "command": "ck3lens.agent.mintHat",
           "when": "view == ck3lens.agentView",
           "group": "navigation"
         },
