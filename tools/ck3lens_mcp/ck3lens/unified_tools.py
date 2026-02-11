@@ -863,7 +863,7 @@ def ck3_file_impl(
     """
     from pathlib import Path as P
     from ck3lens.agent_mode import get_agent_mode
-    from ck3lens.policy.enforcement import OperationType, Decision, enforce
+    from ck3lens.policy.enforcement import OperationType, enforce
     from ck3lens.policy.contract_v1 import get_active_contract
     from ck3lens.world_adapter import normalize_path_input
     
@@ -942,32 +942,32 @@ def ck3_file_impl(
                 has_contract=has_contract,
             )
             
-            # Handle enforcement decision with contextual hints
-            if result.decision == Decision.DENY:
+            # Handle enforcement result via Reply System
+            if result.reply_type == "D":
+                if result.code == "EN-OPEN-D-001":
+                    return {
+                        "success": False,
+                        "code": "EN-OPEN-D-001",
+                        "reply_type": "D",
+                        "guidance": "Use ck3_contract(command='open', ...) to open a work contract",
+                        "contract_example": "ck3_contract(command='open', intent='bugfix', root_category='ROOT_REPO', work_declaration={...})",
+                    }
+                # Other denial
                 from ck3lens.hints import get_hint_engine
                 hint_engine = get_hint_engine()
                 hints = hint_engine.for_write_denial(
-                    denial_reason=result.reason,
+                    denial_reason=result.data.get("detail", "Write denied"),
                     target_path=str(resolution.absolute_path),
                     mode=mode or "ck3lens"
                 )
                 return {
                     "success": False,
-                    "error": result.reason,
-                    "policy_decision": "DENY",
-                    **hints  # Include writable paths and escalation guidance
+                    "code": result.code,
+                    "reply_type": "D",
+                    **hints
                 }
             
-            if result.decision == Decision.REQUIRE_CONTRACT:
-                return {
-                    "success": False,
-                    "error": result.reason,
-                    "policy_decision": "REQUIRE_CONTRACT",
-                    "guidance": "Use ck3_contract(command='open', ...) to open a work contract",
-                    "contract_example": "ck3_contract(command='open', intent='bugfix', root_category='ROOT_REPO', work_declaration={...})",
-                }
-            
-            # Decision is ALLOW - continue to implementation
+            # reply_type == "S" — continue to implementation
     
     # ==========================================================================
     # ROUTE TO IMPLEMENTATION
@@ -2449,7 +2449,7 @@ def ck3_git_impl(
     """
     from ck3lens import git_ops
     from ck3lens.agent_mode import get_agent_mode
-    from ck3lens.policy.enforcement import OperationType, Decision, enforce
+    from ck3lens.policy.enforcement import OperationType, enforce
     from ck3lens.policy.contract_v1 import get_active_contract
     from pathlib import Path as P
     
@@ -2504,32 +2504,32 @@ def ck3_git_impl(
             has_contract=has_contract,
         )
         
-        # Handle enforcement decision with contextual hints
-        if result.decision == Decision.DENY:
+        # Handle enforcement result via Reply System
+        if result.reply_type == "D":
+            if result.code == "EN-OPEN-D-001":
+                return {
+                    "success": False,
+                    "code": "EN-OPEN-D-001",
+                    "reply_type": "D",
+                    "guidance": "Use ck3_contract(command='open', ...) to open a work contract",
+                    "contract_example": "ck3_contract(command='open', intent='bugfix', root_category='ROOT_REPO', work_declaration={...})",
+                }
+            # Other denial
             from ck3lens.hints import get_hint_engine
             hint_engine = get_hint_engine()
             hints = hint_engine.for_write_denial(
-                denial_reason=result.reason,
+                denial_reason=result.data.get("detail", "Write denied"),
                 target_path=target_path,
                 mode=mode or "ck3lens"
             )
             return {
                 "success": False,
-                "error": result.reason,
-                "policy_decision": "DENY",
+                "code": result.code,
+                "reply_type": "D",
                 **hints
             }
         
-        if result.decision == Decision.REQUIRE_CONTRACT:
-            return {
-                "success": False,
-                "error": result.reason,
-                "policy_decision": "REQUIRE_CONTRACT",
-                "guidance": "Use ck3_contract(command='open', ...) to open a work contract",
-                "contract_example": "ck3_contract(command='open', intent='bugfix', root_category='ROOT_REPO', work_declaration={...})",
-            }
-        
-        # Decision is ALLOW - continue to implementation
+        # reply_type == "S" — continue to implementation
     
     # ==========================================================================
     # ROUTE TO IMPLEMENTATION

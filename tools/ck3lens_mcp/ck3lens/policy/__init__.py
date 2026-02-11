@@ -37,8 +37,6 @@ from .types import (
     WipWorkspaceInfo,
     # Git command classification
     GIT_COMMANDS_SAFE,
-    GIT_COMMANDS_RISKY,
-    GIT_COMMANDS_NEEDS_APPROVAL,
 )
 from .loader import load_policy, get_policy
 
@@ -60,7 +58,6 @@ from .wip_workspace import (
 from .enforcement import (
     # Operation types
     OperationType,
-    Decision,
     # Result type
     EnforcementResult,
     # Main enforcement function
@@ -105,11 +102,8 @@ __all__ = [
     "validate_script_declarations",
     # Git command classification
     "GIT_COMMANDS_SAFE",
-    "GIT_COMMANDS_RISKY",
-    "GIT_COMMANDS_NEEDS_APPROVAL",
     # Centralized Enforcement (Clean API)
     "OperationType",
-    "Decision",
     "EnforcementResult",
     "enforce",
     # Structured Audit Logging

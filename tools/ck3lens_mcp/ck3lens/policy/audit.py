@@ -52,7 +52,7 @@ class EnforcementEventV1(TypedDict, total=False):
     tool_name: str              # MCP tool that triggered enforcement
     
     # Decision
-    decision: str               # Decision.name (ALLOW, DENY, etc.)
+    decision: str               # Reply type ("S", "D", "E") from enforcement
     reason: str                 # Human-readable reason
     
     # Auth context (optional)

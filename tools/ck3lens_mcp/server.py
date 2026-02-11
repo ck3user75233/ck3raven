@@ -1139,9 +1139,9 @@ def ck3_db_delete(
         if policy_decision == "DENY":
             return rb.denied('EN-DB-D-001', data=result, message=result.get("error", "Policy denied"))
         
-        # REQUIRE_CONTRACT → Invalid (missing prerequisite)
-        if policy_decision in ("REQUIRE_CONTRACT",):
-            return rb.invalid('MCP-DB-I-001', data=result, message=result.get("error", "Missing prerequisite"))
+        # Contract required → Denied (EN layer governance refusal)
+        if result.get("reply_type") == "D" and result.get("code") == "EN-OPEN-D-001":
+            return rb.denied('EN-OPEN-D-001', data=result, message=result.get("error", "Contract required"))
         
         # System failure requires POSITIVE evidence
         if "failed to" in err_msg or "timeout" in err_msg or "connection" in err_msg or "exception" in err_msg:
@@ -1998,9 +1998,9 @@ def ck3_file(
         if "denied" in err_lower or "not allowed" in err_lower or "permission" in err_lower:
             return rb.denied('EN-WRITE-D-001', data=result, message=err)
         
-        # REQUIRE_CONTRACT → Invalid (missing prerequisite)
-        if policy_decision in ("REQUIRE_CONTRACT",):
-            return rb.invalid('WA-RES-I-001', data=result, message=err)
+        # Contract required → Denied (EN layer governance refusal)
+        if result.get("reply_type") == "D" and result.get("code") == "EN-OPEN-D-001":
+            return rb.denied('EN-OPEN-D-001', data=result, message=err)
         
         # Invalid reference / not found (caller's input cannot be resolved) -> WA layer
         if visibility == "NOT_FOUND" or "not found" in err_lower or "unknown" in err_lower:
@@ -3012,9 +3012,9 @@ def ck3_git(
         if policy_decision == "DENY":
             return rb.denied('EN-EXEC-D-001', data=result, message=result.get("error", "Git command denied"))
         
-        # REQUIRE_CONTRACT → Invalid (missing prerequisite)
-        if policy_decision in ("REQUIRE_CONTRACT",):
-            return rb.invalid('WA-RES-I-001', data=result, message=result.get("error", "Missing prerequisite"))
+        # Contract required → Denied (EN layer governance refusal)
+        if result.get("reply_type") == "D" and result.get("code") == "EN-OPEN-D-001":
+            return rb.denied('EN-OPEN-D-001', data=result, message=result.get("error", "Contract required"))
         
         # System failure requires POSITIVE evidence
         if "failed to" in err_msg or "timeout" in err_msg or "connection" in err_msg or "exception" in err_msg:
@@ -3643,9 +3643,9 @@ def ck3_contract(
     Args:
         command: Action to perform
         intent: Description of work to be done (for open)
-        root_category: Geographic scope (ONE of: ROOT_REPO, ROOT_USER_DOCS, ROOT_WIP,
-            ROOT_STEAM, ROOT_GAME, ROOT_UTILITIES, ROOT_LAUNCHER)
-        operations: List of operations (READ, WRITE, DELETE, etc.)
+        root_category: Geographic scope (ONE of: ROOT_REPO, ROOT_USER_DOCS,
+            ROOT_STEAM, ROOT_GAME, ROOT_CK3RAVEN_DATA, ROOT_VSCODE, ROOT_EXTERNAL)
+        operations: List of operations (READ, WRITE, DELETE)
         targets: List of target dicts with target_type, path, description
         work_declaration: REQUIRED for mutating operations. JSON schema:
             {
@@ -4106,17 +4106,14 @@ def ck3_exec(
     All commands are evaluated against enforcement.py:
     
     - Safe commands (cat, git status, etc.) ? Allowed automatically
-    - Risky commands (rm *.py, git push) ? Require approval token
+    - Mutating commands (rm *.py, git push) ? Require active contract
     - Blocked commands (rm -rf /) ? Always denied
-    
-    If a command requires a token, use ck3_token to request one first,
-    then pass the token_id here.
     
     Args:
         command: Shell command to execute
         working_dir: Working directory (defaults to ck3raven root)
         target_paths: Files/dirs being affected (helps scope validation)
-        token_id: Approval token ID (required for risky commands)
+        token_id: Approval token ID (reserved for future use)
         dry_run: If True, only check policy without executing
         timeout: Max seconds to wait for command (default 30, max 300)
     
@@ -4127,7 +4124,7 @@ def ck3_exec(
             "output": str,     # Command output (if executed)
             "exit_code": int,  # Exit code (if executed)
             "policy": {
-                "decision": "ALLOW" | "DENY" | "REQUIRE_CONTRACT",
+                "decision": "ALLOW" | "DENY",
                 "reason": str,
                 "category": str,
             }
@@ -4144,19 +4141,17 @@ def ck3_exec(
     result = _ck3_exec_internal(command, working_dir, target_paths, token_id, dry_run, timeout)
     
     if result.get("error") and not result.get("allowed"):
-        decision = result.get("policy", {}).get("decision", "")
         err_msg = str(result.get("error", "")).lower()
+        reply_type = result.get("reply_type", "")
+        code = result.get("code", "")
+        policy_decision = result.get("policy", {}).get("decision", "")
         
-        # DENY only → Denied (actual policy refusal)
-        if decision == "DENY":
-            return rb.denied('EN-EXEC-D-001', data=result, message=result.get("error", "Command denied"))
-        
-        # REQUIRE_CONTRACT → Invalid (missing prerequisite)
-        if decision in ("REQUIRE_CONTRACT",):
-            return rb.invalid('WA-RES-I-001', data=result, message=result.get("error", "Missing prerequisite"))
+        # Reply-System-driven: check reply_type and code from enforcement
+        if reply_type == "D":
+            return rb.denied(code or 'EN-EXEC-D-001', data=result, message=result.get("error", "Command denied"))
         
         # Path not found is a resolution failure -> WA layer
-        if decision == "PATH_NOT_FOUND":
+        if policy_decision == "PATH_NOT_FOUND":
             return rb.invalid('WA-RES-I-001', data=result, message=result.get("error", "Path not found"))
         
         # System failure requires POSITIVE evidence
@@ -4187,7 +4182,7 @@ def _ck3_exec_internal(
     timeout: int,
 ) -> dict:
     """Internal implementation returning dict."""
-    from ck3lens.policy.enforcement import enforce, OperationType, Decision
+    from ck3lens.policy.enforcement import enforce, OperationType
     from ck3lens.policy.contract_v1 import get_active_contract
     import subprocess
     
@@ -4228,30 +4223,27 @@ def _ck3_exec_internal(
     # Shell execution is a WRITE operation
     result = enforce(mode, OperationType.WRITE, resolution, has_contract)
     
-    policy_info = {
-        "decision": result.decision.name,
-        "reason": result.reason,
-    }
-    
-    if result.decision == Decision.DENY:
+    # Handle enforcement result via Reply System
+    if result.reply_type == "D":
+        if result.code == "EN-OPEN-D-001":
+            return {
+                "allowed": False,
+                "executed": False,
+                "output": None,
+                "exit_code": None,
+                "code": "EN-OPEN-D-001",
+                "reply_type": "D",
+                "error": "Contract required for shell execution",
+                "guidance": "Use ck3_contract(command='open', ...) to open a work contract first",
+            }
         return {
             "allowed": False,
             "executed": False,
             "output": None,
             "exit_code": None,
-            "policy": policy_info,
-            "error": result.reason,
-        }
-    
-    if result.decision == Decision.REQUIRE_CONTRACT:
-        return {
-            "allowed": False,
-            "executed": False,
-            "output": None,
-            "exit_code": None,
-            "policy": policy_info,
-            "error": "Contract required for shell execution",
-            "hint": "Use ck3_contract(command='open', ...) to open a work contract first",
+            "code": result.code,
+            "reply_type": "D",
+            "error": result.data.get("detail", "Command denied"),
         }
     
     # Allowed

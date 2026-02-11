@@ -28,6 +28,7 @@ class Capability:
     write: bool = False
     delete: bool = False
     subfolders_writable: bool = False  # Write/delete granted to nested paths only
+    contract_required: bool = True  # Writes/deletes require active contract
 
 
 # Type alias for matrix key
@@ -64,7 +65,7 @@ CAPABILITY_MATRIX: dict[MatrixKey, Capability] = {
         read=True, write=True, delete=True
     ),
     ("ck3lens", RootCategory.ROOT_CK3RAVEN_DATA, "wip"): Capability(
-        read=True, write=True, delete=True
+        read=True, write=True, delete=True, contract_required=False
     ),
     ("ck3lens", RootCategory.ROOT_CK3RAVEN_DATA, "logs"): Capability(
         read=True, write=True
@@ -124,7 +125,7 @@ CAPABILITY_MATRIX: dict[MatrixKey, Capability] = {
         read=True, write=True, delete=True
     ),
     ("ck3raven-dev", RootCategory.ROOT_CK3RAVEN_DATA, "wip"): Capability(
-        read=True, write=True, delete=True
+        read=True, write=True, delete=True, contract_required=False
     ),
     ("ck3raven-dev", RootCategory.ROOT_CK3RAVEN_DATA, "logs"): Capability(
         read=True, write=True, delete=True

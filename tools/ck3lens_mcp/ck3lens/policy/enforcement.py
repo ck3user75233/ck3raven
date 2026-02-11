@@ -6,54 +6,55 @@ All "can I do X?" questions go through enforce().
 
 CRITICAL: No permission checks may exist outside this module.
 
-Operations: READ, WRITE, DELETE
-- READ: can read from this location
-- WRITE: any mutation (write/rename/execute/git/db) with contract
-- DELETE: deletion (requires contract)
+Returns Reply-System-compatible results (Canonical Reply System §4):
+  EN layer may emit: S, D, E (never I).
+  Consumers branch on reply_type and code, never on message text.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from ..world_adapter import ResolutionResult
 
-# =============================================================================
-# DECISION TYPES
-# =============================================================================
 
-class Decision(Enum):
-    """Enforcement decision outcomes."""
-    ALLOW = auto()          # Operation permitted
-    DENY = auto()           # Operation forbidden
-    REQUIRE_CONTRACT = auto()  # Needs active contract
-
+# =============================================================================
+# OPERATION TYPES
+# =============================================================================
 
 class OperationType(Enum):
     """
     Canonical operation types for capability matrix lookup.
-    
+
     READ = can read
-    WRITE = any mutation (requires contract except WIP)
-    DELETE = deletion (requires contract)
+    WRITE = any mutation (may require contract per matrix)
+    DELETE = deletion (may require contract per matrix)
     """
     READ = auto()
     WRITE = auto()
     DELETE = auto()
 
 
-@dataclass
+# =============================================================================
+# ENFORCEMENT RESULT (Reply-compatible)
+# =============================================================================
+
+@dataclass(frozen=True)
 class EnforcementResult:
-    """Result of an enforcement check."""
-    decision: Decision
-    reason: str
-    requires_contract: bool = False
-    # For diagnostic failures (Reply I instead of D)
-    is_diagnostic_failure: bool = False
-    diagnostic_code: str | None = None
+    """
+    Reply-System-compatible enforcement result.
+
+    EN layer may emit: S, D, E (never I per Canonical Reply System §4).
+    Consumers branch on reply_type and code, not on message text.
+
+    Codes are registered in reply_codes.py (Codes class).
+    """
+    reply_type: Literal["S", "D", "E"]
+    code: str
+    data: dict[str, Any] = field(default_factory=dict)
 
 
 # =============================================================================
@@ -63,12 +64,12 @@ class EnforcementResult:
 def _get_subdirectory_aware_roots() -> set:
     """
     Return set of (mode, root) pairs that have subdirectory-specific entries.
-    
+
     These roots require subdirectory to be set for proper capability lookup.
     If subdirectory is None for these roots during write/delete, it's a bug.
     """
     from ..capability_matrix import CAPABILITY_MATRIX
-    
+
     subdir_roots = set()
     for (mode, root, subdir) in CAPABILITY_MATRIX.keys():
         if subdir is not None:
@@ -88,155 +89,130 @@ def enforce(
 ) -> EnforcementResult:
     """
     Single enforcement entry point.
-    
+
     This is THE canonical enforcement function (Canonical Architecture Rule 1).
     All permission decisions flow through here.
-    
-    Args:
-        mode: Agent mode ("ck3lens" or "ck3raven-dev")
-        operation: READ, WRITE, or DELETE
-        resolved: ResolutionResult from WorldAdapter.resolve()
-        has_contract: Whether an active contract exists
-        
+
     Returns:
-        EnforcementResult with decision and reason
-        
-    LOUD FAILURE POLICY:
-        If resolution is missing subdirectory for a root that requires it,
-        this returns DENY with is_diagnostic_failure=True and a clear error code.
-        This MUST be surfaced as Reply(I), not silently denied.
+        EnforcementResult with reply_type ("S", "D", "E") and code.
+        Consumers use code to determine specific denial reason
+        (e.g., EN-OPEN-D-001 = contract required).
     """
     from ..paths import RootCategory
     from ..capability_matrix import get_capability
-    
+
+    # ==========================================================================
+    # GUARD: Unresolved root_category is always DENY
+    # ==========================================================================
+    if resolved.root_category is None:
+        return EnforcementResult(
+            reply_type="D",
+            code="EN-GATE-D-001",
+            data={"path": str(resolved.absolute_path), "detail": "unresolved root category"},
+        )
+
+    # Local binding — Pylance now knows root is RootCategory, not Optional
+    root = resolved.root_category
+
     # ==========================================================================
     # INVARIANT 1: ROOT_EXTERNAL is always DENY
     # ==========================================================================
-    if resolved.root_category == RootCategory.ROOT_EXTERNAL:
+    if root == RootCategory.ROOT_EXTERNAL:
         return EnforcementResult(
-            decision=Decision.DENY,
-            reason=f"Path '{resolved.absolute_path}' is outside all known roots",
+            reply_type="D",
+            code="EN-GATE-D-001",
+            data={"path": str(resolved.absolute_path), "detail": "outside all known roots"},
         )
-    
+
     # ==========================================================================
     # INVARIANT 2: Database paths are never writable by tools
     # ==========================================================================
-    if resolved.root_category == RootCategory.ROOT_CK3RAVEN_DATA:
+    if root == RootCategory.ROOT_CK3RAVEN_DATA:
         if resolved.subdirectory in {"db", "daemon"}:
             if operation in {OperationType.WRITE, OperationType.DELETE}:
                 return EnforcementResult(
-                    decision=Decision.DENY,
-                    reason="Database and daemon files are owned by QBuilder daemon",
+                    reply_type="D",
+                    code="EN-WRITE-D-001",
+                    data={"detail": "database and daemon files are owned by QBuilder daemon"},
                 )
-    
+
     # ==========================================================================
     # LOUD FAILURE: Missing subdirectory for subdirectory-aware roots
     # ==========================================================================
-    # This catches the bug where WorldAdapter.resolve() doesn't set subdirectory
-    # for roots that have subdirectory-specific capability entries.
     if operation in {OperationType.WRITE, OperationType.DELETE}:
         subdir_aware = _get_subdirectory_aware_roots()
-        if (mode, resolved.root_category) in subdir_aware and resolved.subdirectory is None:
+        if (mode, root) in subdir_aware and resolved.subdirectory is None:
             return EnforcementResult(
-                decision=Decision.DENY,
-                reason=(
-                    f"Resolution missing subdirectory for {resolved.root_category.name}. "
-                    f"WorldAdapter.resolve() must set subdirectory field for this root. "
-                    f"Path: {resolved.absolute_path}"
-                ),
-                is_diagnostic_failure=True,
-                diagnostic_code="EN-SUBDIR-I-001",
+                reply_type="D",
+                code="EN-GATE-D-001",
+                data={
+                    "path": str(resolved.absolute_path),
+                    "detail": f"resolution missing subdirectory for {root.name}",
+                    "diagnostic": True,
+                },
             )
-    
+
     # ==========================================================================
     # STEP 1: Look up capability from matrix
     # ==========================================================================
-    # NOTE: .mod file protection is handled by subfolders_writable in capability_matrix.
-    # Files directly in mod/ (like *.mod) are protected because subfolders_writable
-    # only allows writes to paths with 3+ components (e.g., mod/MyMod/file.txt).
-    cap = get_capability(mode, resolved.root_category, resolved.subdirectory, resolved.relative_path)
-    
+    cap = get_capability(mode, root, resolved.subdirectory, resolved.relative_path)
+
     if cap is None:
         return EnforcementResult(
-            decision=Decision.DENY,
-            reason=f"No capability for ({mode}, {resolved.root_category.name}, {resolved.subdirectory})",
+            reply_type="D",
+            code="EN-GATE-D-001",
+            data={"detail": f"no capability for ({mode}, {root.name}, {resolved.subdirectory})"},
         )
-    
+
     # ==========================================================================
     # STEP 2: Check operation against capability
     # ==========================================================================
-    
+
     # READ
     if operation == OperationType.READ:
         if cap.read:
-            return EnforcementResult(
-                decision=Decision.ALLOW,
-                reason="Read allowed",
-            )
+            return EnforcementResult(reply_type="S", code="EN-READ-S-001")
         return EnforcementResult(
-            decision=Decision.DENY,
-            reason=f"Read not permitted for ({mode}, {resolved.root_category.name})",
+            reply_type="D",
+            code="EN-READ-D-001",
+            data={"detail": f"read not permitted for ({mode}, {root.name})"},
         )
-    
-    # WRITE (any mutation)
+
+    # WRITE
     if operation == OperationType.WRITE:
         if not cap.write:
             return EnforcementResult(
-                decision=Decision.DENY,
-                reason=f"Write not permitted for ({mode}, {resolved.root_category.name})",
+                reply_type="D",
+                code="EN-WRITE-D-001",
+                data={"detail": f"write not permitted for ({mode}, {root.name})"},
             )
-        
-        # WIP workspace: no contract required
-        # WIP is ROOT_CK3RAVEN_DATA with subdirectory "wip"
-        if resolved.root_category == RootCategory.ROOT_CK3RAVEN_DATA and resolved.subdirectory == "wip":
+        if cap.contract_required and not has_contract:
             return EnforcementResult(
-                decision=Decision.ALLOW,
-                reason="Write to WIP allowed (no contract required)",
+                reply_type="D",
+                code="EN-OPEN-D-001",
+                data={"root": root.name},
             )
-        
-        # All other writes require contract
-        if not has_contract:
-            return EnforcementResult(
-                decision=Decision.REQUIRE_CONTRACT,
-                reason=f"Write to {resolved.root_category.name} requires contract",
-                requires_contract=True,
-            )
-        
-        return EnforcementResult(
-            decision=Decision.ALLOW,
-            reason="Write allowed with contract",
-        )
-    
+        return EnforcementResult(reply_type="S", code="EN-WRITE-S-001")
+
     # DELETE
     if operation == OperationType.DELETE:
         if not cap.delete:
             return EnforcementResult(
-                decision=Decision.DENY,
-                reason=f"Delete not permitted for ({mode}, {resolved.root_category.name})",
+                reply_type="D",
+                code="EN-WRITE-D-001",
+                data={"detail": f"delete not permitted for ({mode}, {root.name})"},
             )
-        
-        # WIP workspace: no contract required (same as write)
-        if resolved.root_category == RootCategory.ROOT_CK3RAVEN_DATA and resolved.subdirectory == "wip":
+        if cap.contract_required and not has_contract:
             return EnforcementResult(
-                decision=Decision.ALLOW,
-                reason="Delete in WIP allowed (no contract required)",
+                reply_type="D",
+                code="EN-OPEN-D-001",
+                data={"root": root.name},
             )
-        
-        # All other deletes require contract (same as write)
-        if not has_contract:
-            return EnforcementResult(
-                decision=Decision.REQUIRE_CONTRACT,
-                reason=f"Delete from {resolved.root_category.name} requires contract",
-                requires_contract=True,
-            )
-        
-        return EnforcementResult(
-            decision=Decision.ALLOW,
-            reason="Delete allowed with contract",
-        )
-    
-    # Unknown
+        return EnforcementResult(reply_type="S", code="EN-WRITE-S-001")
+
+    # Unknown operation
     return EnforcementResult(
-        decision=Decision.DENY,
-        reason=f"Unknown operation: {operation}",
+        reply_type="D",
+        code="EN-GATE-D-001",
+        data={"detail": f"unknown operation: {operation}"},
     )

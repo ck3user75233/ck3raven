@@ -256,6 +256,12 @@ class Codes:
     EN_GATE_E_001 = ReplyCode("EN-GATE-E-001", Layer.EN, Area.GATE, ReplyType.E, 1,
         "GATE_ERROR", "Error during precondition check")
     
+    # Read enforcement
+    EN_READ_S_001 = ReplyCode("EN-READ-S-001", Layer.EN, Area.READ, ReplyType.S, 1,
+        "READ_AUTHORIZED", "Read authorized by policy")
+    EN_READ_D_001 = ReplyCode("EN-READ-D-001", Layer.EN, Area.READ, ReplyType.D, 1,
+        "READ_DENIED", "Read denied by policy")
+    
     # Write denials
     EN_WRITE_S_001 = ReplyCode("EN-WRITE-S-001", Layer.EN, Area.WRITE, ReplyType.S, 1,
         "WRITE_AUTHORIZED", "Write authorized by policy")

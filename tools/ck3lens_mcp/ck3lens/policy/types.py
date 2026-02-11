@@ -37,24 +37,6 @@ GIT_COMMANDS_SAFE = frozenset({
     "stash list", "stash show",  # Stash inspection
 })
 
-# Risky git commands (require contract - local modifications)
-GIT_COMMANDS_RISKY = frozenset({
-    "stash", "stash push", "stash pop", "stash drop",  # Stash modifications
-    "checkout", "switch",  # Branch switching
-    "merge",  # Merging
-    "branch",  # Creating/deleting branches (without -a/-v/-l flags)
-})
-
-# Git commands requiring user approval (via ck3_git tool enforcement)
-# These go through _enforce_git_push() which implements SAFE PUSH auto-grant
-GIT_COMMANDS_NEEDS_APPROVAL = frozenset({
-    "push",           # Requires contract + valid branch + staged files in scope
-    "push --force",   # Requires user approval (never auto-granted)
-    "rebase",         # Requires user approval
-    "reset --hard",   # Requires user approval
-    "commit --amend", # Requires user approval
-})
-
 
 # =============================================================================
 # WIP WORKSPACE INFO
