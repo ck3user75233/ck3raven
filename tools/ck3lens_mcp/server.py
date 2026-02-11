@@ -1131,17 +1131,12 @@ def ck3_db_delete(
     result = _ck3_db_delete_internal(target, scope, ids, content_version_ids, confirm)
     
     # Convert to Reply
-    if result.get("error"):
-        policy_decision = result.get("policy_decision", "")
+    if result.get("error") or result.get("reply_type") == "D":
+        # Enforcement denial — inner result has reply_type + code + denials
+        if result.get("reply_type") == "D" and result.get("code"):
+            return rb.denied(result["code"], data=result, message=result.get("error", "Policy denied"))
+        
         err_msg = str(result.get("error", "")).lower()
-        
-        # DENY only → Denied (actual policy refusal)
-        if policy_decision == "DENY":
-            return rb.denied('EN-DB-D-001', data=result, message=result.get("error", "Policy denied"))
-        
-        # Contract required → Denied (EN layer governance refusal)
-        if result.get("reply_type") == "D" and result.get("code") == "EN-WRITE-D-002":
-            return rb.denied('EN-WRITE-D-002', data=result, message=result.get("error", "Contract required"))
         
         # System failure requires POSITIVE evidence
         if "failed to" in err_msg or "timeout" in err_msg or "connection" in err_msg or "exception" in err_msg:
@@ -1984,25 +1979,21 @@ def ck3_file(
     if isinstance(result, Reply):
         return result
     
-    if result.get("error"):
-        err = result.get("error", "File operation failed")
+    if result.get("error") or result.get("reply_type") == "D":
+        # Enforcement denial — inner result has reply_type + code + denials
+        if result.get("reply_type") == "D" and result.get("code"):
+            return rb.denied(result["code"], data=result, message=result.get("error", "Write denied"))
+        
+        err = str(result.get("error", "File operation failed"))
         err_lower = err.lower()
         policy_decision = result.get("policy_decision", "")
         visibility = result.get("visibility", "")
         
-        # DENY only → Denied (actual policy refusal)
+        # Pre-enforcement mode denial (mode not initialized)
         if policy_decision == "DENY":
             return rb.denied('EN-WRITE-D-001', data=result, message=err)
         
-        # Text signals of governance denial (EN string cues)
-        if "denied" in err_lower or "not allowed" in err_lower or "permission" in err_lower:
-            return rb.denied('EN-WRITE-D-001', data=result, message=err)
-        
-        # Contract required → Denied (EN layer governance refusal)
-        if result.get("reply_type") == "D" and result.get("code") == "EN-WRITE-D-002":
-            return rb.denied('EN-WRITE-D-002', data=result, message=err)
-        
-        # Invalid reference / not found (caller's input cannot be resolved) -> WA layer
+        # Invalid reference / not found
         if visibility == "NOT_FOUND" or "not found" in err_lower or "unknown" in err_lower:
             return rb.invalid('WA-RES-I-001', data=result, message=err)
         
@@ -3004,17 +2995,12 @@ def ck3_git(
         world=world,  # Pass world for enforce()
     )
     
-    if result.get("error"):
+    if result.get("error") or result.get("reply_type") == "D":
+        # Enforcement denial — inner result has reply_type + code + denials
+        if result.get("reply_type") == "D" and result.get("code"):
+            return rb.denied(result["code"], data=result, message=result.get("error", "Git command denied"))
+        
         err_msg = str(result.get("error", "")).lower()
-        policy_decision = result.get("policy_decision", "")
-        
-        # DENY only → Denied (actual policy refusal)
-        if policy_decision == "DENY":
-            return rb.denied('EN-EXEC-D-001', data=result, message=result.get("error", "Git command denied"))
-        
-        # Contract required → Denied (EN layer governance refusal)
-        if result.get("reply_type") == "D" and result.get("code") == "EN-WRITE-D-002":
-            return rb.denied('EN-WRITE-D-002', data=result, message=result.get("error", "Contract required"))
         
         # System failure requires POSITIVE evidence
         if "failed to" in err_msg or "timeout" in err_msg or "connection" in err_msg or "exception" in err_msg:
@@ -4223,28 +4209,20 @@ def _ck3_exec_internal(
     # Shell execution is a WRITE operation
     result = enforce(mode, OperationType.WRITE, resolution, has_contract)
     
-    # Handle enforcement result via Reply System
+    # Enforcement denial → pass through denials list as rationale
     if result.reply_type == "D":
-        if result.code == "EN-WRITE-D-002":
-            return {
-                "allowed": False,
-                "executed": False,
-                "output": None,
-                "exit_code": None,
-                "code": "EN-WRITE-D-002",
-                "reply_type": "D",
-                "error": "Contract required for shell execution",
-                "guidance": "Use ck3_contract(command='open', ...) to open a work contract first",
-            }
         return {
             "allowed": False,
             "executed": False,
             "output": None,
             "exit_code": None,
-            "code": result.code,
             "reply_type": "D",
-            "error": result.data.get("detail", "Command denied"),
+            "code": result.code,
+            **result.data,
         }
+    
+    # Enforcement passed — build policy info for response
+    policy_info = {"decision": "ALLOW", "reason": f"Write allowed ({result.code})"}
     
     # Allowed
     if dry_run:

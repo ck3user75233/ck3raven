@@ -942,29 +942,13 @@ def ck3_file_impl(
                 has_contract=has_contract,
             )
             
-            # Handle enforcement result via Reply System
+            # Enforcement denial → pass through denials list as rationale
             if result.reply_type == "D":
-                if result.code == "EN-WRITE-D-002":
-                    return {
-                        "success": False,
-                        "code": "EN-WRITE-D-002",
-                        "reply_type": "D",
-                        "guidance": "Use ck3_contract(command='open', ...) to open a work contract",
-                        "contract_example": "ck3_contract(command='open', intent='bugfix', root_category='ROOT_REPO', work_declaration={...})",
-                    }
-                # Other denial
-                from ck3lens.hints import get_hint_engine
-                hint_engine = get_hint_engine()
-                hints = hint_engine.for_write_denial(
-                    denial_reason=result.data.get("detail", "Write denied"),
-                    target_path=str(resolution.absolute_path),
-                    mode=mode or "ck3lens"
-                )
                 return {
                     "success": False,
-                    "code": result.code,
                     "reply_type": "D",
-                    **hints
+                    "code": result.code,
+                    **result.data,
                 }
             
             # reply_type == "S" — continue to implementation
@@ -2504,29 +2488,13 @@ def ck3_git_impl(
             has_contract=has_contract,
         )
         
-        # Handle enforcement result via Reply System
+        # Enforcement denial → pass through denials list as rationale
         if result.reply_type == "D":
-            if result.code == "EN-WRITE-D-002":
-                return {
-                    "success": False,
-                    "code": "EN-WRITE-D-002",
-                    "reply_type": "D",
-                    "guidance": "Use ck3_contract(command='open', ...) to open a work contract",
-                    "contract_example": "ck3_contract(command='open', intent='bugfix', root_category='ROOT_REPO', work_declaration={...})",
-                }
-            # Other denial
-            from ck3lens.hints import get_hint_engine
-            hint_engine = get_hint_engine()
-            hints = hint_engine.for_write_denial(
-                denial_reason=result.data.get("detail", "Write denied"),
-                target_path=target_path,
-                mode=mode or "ck3lens"
-            )
             return {
                 "success": False,
-                "code": result.code,
                 "reply_type": "D",
-                **hints
+                "code": result.code,
+                **result.data,
             }
         
         # reply_type == "S" — continue to implementation

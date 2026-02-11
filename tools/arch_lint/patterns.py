@@ -117,6 +117,14 @@ BANNED_VISIBILITY_CACHING = frozenset({
     "_derive_search_cvids",
 })
 
+BANNED_DECISION_LEAKS = frozenset({
+    # Decision types that must not leak outside enforcement.py
+    # REQUIRE_CONTRACT is not a decision type agents or tools may reference.
+    # The need for a contract is communicated as info in a D (Deny) reply.
+    # See: CANONICAL_CONTRACT_LAW.md §8, §13
+    "require_contract",
+})
+
 # Combined set for quick lookup
 BANNED_DIRECT_TERMS = (
     BANNED_PERMISSION_ORACLES |
@@ -124,7 +132,8 @@ BANNED_DIRECT_TERMS = (
     BANNED_LENS_CONCEPTS |
     BANNED_LEGACY_MARKERS |
     BANNED_PATH_ORACLES |
-    BANNED_VISIBILITY_CACHING
+    BANNED_VISIBILITY_CACHING |
+    BANNED_DECISION_LEAKS
 )
 
 # Contextually banned - only allowed in specific contexts
@@ -161,6 +170,9 @@ COMPOSITE_RULES: list[tuple[str, str, str, str]] = [
     ("ERROR", "BANNED_ORACLE", "can%edit", "Oracle: can_edit pattern"),
     ("ERROR", "BANNED_ORACLE", "can%delete", "Oracle: can_delete pattern"),
     ("ERROR", "BANNED_ORACLE", "may%write", "Oracle: may_write pattern"),
+    
+    # Decision leak patterns (v2.36)
+    ("ERROR", "BANNED_DECISION_LEAK", "require%contract", "Decision leak: REQUIRE_CONTRACT is not a reply type. Use D (Deny) with info."),
     
     # === WARN: Suspicious patterns ===
     ("WARN", "SUSPECT_COMPOSITE", "active%local%mods", "Likely drift: active local mods"),
