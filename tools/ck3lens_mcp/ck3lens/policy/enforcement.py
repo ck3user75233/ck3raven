@@ -6,7 +6,8 @@ Canonical Architecture Rule 1: only this module may deny operations.
 Walks the capability matrix:
   1. Guard: root must be resolved
   2. Lookup: cap = get_capability(...)
-  3. Gate: operation in cap.operations, all cap.conditions pass → allowed
+  3. Gate: operation in cap.operations AND all conditions pass → ALLOW
+     Otherwise → DENY with every failure listed
 """
 
 from __future__ import annotations
@@ -31,15 +32,16 @@ class EnforcementResult:
     data: dict[str, Any] = field(default_factory=dict)
 
 
-def _gate(cap: "Capability", operation: OperationType, **context: Any) -> str | None:
+def _gate(cap: "Capability", operation: OperationType, **context: Any) -> list[str]:
     """
-    Evaluate capability against operation and conditions.
+    Evaluate capability against operation and all conditions.
 
-    Returns None if allowed, or the first applicable denial code.
+    Returns empty list if allowed, or every applicable denial code.
     """
+    denials = [c.denial for c in cap.conditions if not c.check(**context)]
     if operation not in cap.operations:
-        return "EN-WRITE-D-001"
-    return next((c.denial for c in cap.conditions if not c.check(**context)), None)
+        denials.insert(0, "EN-WRITE-D-001")
+    return denials
 
 
 def enforce(
@@ -55,9 +57,13 @@ def enforce(
         return EnforcementResult("D", "EN-GATE-D-001", {"detail": "unresolved root category"})
 
     cap = get_capability(mode, resolved.root_category, resolved.subdirectory, resolved.relative_path)
-    denial = _gate(cap, operation, has_contract=has_contract)
+    denials = _gate(cap, operation, has_contract=has_contract)
 
-    if denial:
-        return EnforcementResult("D", denial, {"operation": operation.name, "root": resolved.root_category.name})
+    if denials:
+        return EnforcementResult("D", denials[0], {
+            "denials": denials,
+            "operation": operation.name,
+            "root": resolved.root_category.name,
+        })
 
     return EnforcementResult("S", "EN-WRITE-S-001")
