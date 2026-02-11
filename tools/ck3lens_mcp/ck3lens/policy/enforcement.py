@@ -6,6 +6,11 @@ All "can I do X?" questions go through enforce().
 
 CRITICAL: No permission checks may exist outside this module.
 
+SCOPE:
+  Enforcement gates WRITE and DELETE operations only.
+  READ visibility is WorldAdapter's domain (WA-RES-I-003).
+  Enforcement is not called for reads.
+
 Returns Reply-System-compatible results (Canonical Reply System §4):
   EN layer may emit: S, D, E (never I).
   Consumers branch on reply_type and code, never on message text.
@@ -26,13 +31,7 @@ if TYPE_CHECKING:
 # =============================================================================
 
 class OperationType(Enum):
-    """
-    Canonical operation types for capability matrix lookup.
-
-    READ = can read
-    WRITE = any mutation (may require contract per matrix)
-    DELETE = deletion (may require contract per matrix)
-    """
+    """Canonical operation types for capability matrix lookup."""
     READ = auto()
     WRITE = auto()
     DELETE = auto()
@@ -58,26 +57,6 @@ class EnforcementResult:
 
 
 # =============================================================================
-# HELPER: Detect subdirectory-aware roots
-# =============================================================================
-
-def _get_subdirectory_aware_roots() -> set:
-    """
-    Return set of (mode, root) pairs that have subdirectory-specific entries.
-
-    These roots require subdirectory to be set for proper capability lookup.
-    If subdirectory is None for these roots during write/delete, it's a bug.
-    """
-    from ..capability_matrix import CAPABILITY_MATRIX
-
-    subdir_roots = set()
-    for (mode, root, subdir) in CAPABILITY_MATRIX.keys():
-        if subdir is not None:
-            subdir_roots.add((mode, root))
-    return subdir_roots
-
-
-# =============================================================================
 # MAIN ENFORCEMENT FUNCTION
 # =============================================================================
 
@@ -90,15 +69,21 @@ def enforce(
     """
     Single enforcement entry point.
 
-    This is THE canonical enforcement function (Canonical Architecture Rule 1).
-    All permission decisions flow through here.
+    Gates WRITE and DELETE operations against the capability matrix.
+    READ is not enforcement's domain (WorldAdapter handles visibility).
+
+    Flow:
+      1. Resolve root_category — deny if None
+      2. Look up Capability from matrix via get_capability()
+      3. Check cap.write (for WRITE) or cap.delete (for DELETE)
+      4. Check cap.contract_required — matrix-driven, not hardcoded
+      5. Return S or D
 
     Returns:
         EnforcementResult with reply_type ("S", "D", "E") and code.
         Consumers use code to determine specific denial reason
         (e.g., EN-OPEN-D-001 = contract required).
     """
-    from ..paths import RootCategory
     from ..capability_matrix import get_capability
 
     # ==========================================================================
@@ -108,111 +93,54 @@ def enforce(
         return EnforcementResult(
             reply_type="D",
             code="EN-GATE-D-001",
-            data={"path": str(resolved.absolute_path), "detail": "unresolved root category"},
+            data={"detail": "unresolved root category"},
         )
 
-    # Local binding — Pylance now knows root is RootCategory, not Optional
+    # Local binding — Pylance knows root is RootCategory, not Optional
     root = resolved.root_category
 
     # ==========================================================================
-    # INVARIANT 1: ROOT_EXTERNAL is always DENY
-    # ==========================================================================
-    if root == RootCategory.ROOT_EXTERNAL:
-        return EnforcementResult(
-            reply_type="D",
-            code="EN-GATE-D-001",
-            data={"path": str(resolved.absolute_path), "detail": "outside all known roots"},
-        )
-
-    # ==========================================================================
-    # INVARIANT 2: Database paths are never writable by tools
-    # ==========================================================================
-    if root == RootCategory.ROOT_CK3RAVEN_DATA:
-        if resolved.subdirectory in {"db", "daemon"}:
-            if operation in {OperationType.WRITE, OperationType.DELETE}:
-                return EnforcementResult(
-                    reply_type="D",
-                    code="EN-WRITE-D-001",
-                    data={"detail": "database and daemon files are owned by QBuilder daemon"},
-                )
-
-    # ==========================================================================
-    # LOUD FAILURE: Missing subdirectory for subdirectory-aware roots
-    # ==========================================================================
-    if operation in {OperationType.WRITE, OperationType.DELETE}:
-        subdir_aware = _get_subdirectory_aware_roots()
-        if (mode, root) in subdir_aware and resolved.subdirectory is None:
-            return EnforcementResult(
-                reply_type="D",
-                code="EN-GATE-D-001",
-                data={
-                    "path": str(resolved.absolute_path),
-                    "detail": f"resolution missing subdirectory for {root.name}",
-                    "diagnostic": True,
-                },
-            )
-
-    # ==========================================================================
-    # STEP 1: Look up capability from matrix
+    # Look up capability from matrix (always returns Capability, never None)
     # ==========================================================================
     cap = get_capability(mode, root, resolved.subdirectory, resolved.relative_path)
 
-    if cap is None:
+    # ==========================================================================
+    # Gate: operation allowed by matrix?
+    #
+    # cap.write = matrix says writes are possible for this (mode, root, subdir)
+    # cap.delete = matrix says deletes are possible for this (mode, root, subdir)
+    # These are separate flags because some entries allow write but not delete.
+    # ==========================================================================
+    if operation == OperationType.WRITE and not cap.write:
         return EnforcementResult(
             reply_type="D",
-            code="EN-GATE-D-001",
-            data={"detail": f"no capability for ({mode}, {root.name}, {resolved.subdirectory})"},
+            code="EN-WRITE-D-001",
+            data={"detail": f"write not permitted for ({mode}, {root.name})"},
+        )
+
+    if operation == OperationType.DELETE and not cap.delete:
+        return EnforcementResult(
+            reply_type="D",
+            code="EN-WRITE-D-001",
+            data={"detail": f"delete not permitted for ({mode}, {root.name})"},
         )
 
     # ==========================================================================
-    # STEP 2: Check operation against capability
+    # Gate: contract required? (matrix-driven via cap.contract_required)
+    #
+    # cap.contract_required comes from get_capability() — the matrix entry.
+    # WIP entries have contract_required=False; most others have True.
+    # EN-OPEN-D-001 = "CONTRACT_REQUIRED" — OPEN area is contract lifecycle.
     # ==========================================================================
-
-    # READ
-    if operation == OperationType.READ:
-        if cap.read:
-            return EnforcementResult(reply_type="S", code="EN-READ-S-001")
-        return EnforcementResult(
-            reply_type="D",
-            code="EN-READ-D-001",
-            data={"detail": f"read not permitted for ({mode}, {root.name})"},
-        )
-
-    # WRITE
-    if operation == OperationType.WRITE:
-        if not cap.write:
-            return EnforcementResult(
-                reply_type="D",
-                code="EN-WRITE-D-001",
-                data={"detail": f"write not permitted for ({mode}, {root.name})"},
-            )
+    if operation in {OperationType.WRITE, OperationType.DELETE}:
         if cap.contract_required and not has_contract:
             return EnforcementResult(
                 reply_type="D",
                 code="EN-OPEN-D-001",
                 data={"root": root.name},
             )
-        return EnforcementResult(reply_type="S", code="EN-WRITE-S-001")
 
-    # DELETE
-    if operation == OperationType.DELETE:
-        if not cap.delete:
-            return EnforcementResult(
-                reply_type="D",
-                code="EN-WRITE-D-001",
-                data={"detail": f"delete not permitted for ({mode}, {root.name})"},
-            )
-        if cap.contract_required and not has_contract:
-            return EnforcementResult(
-                reply_type="D",
-                code="EN-OPEN-D-001",
-                data={"root": root.name},
-            )
-        return EnforcementResult(reply_type="S", code="EN-WRITE-S-001")
-
-    # Unknown operation
-    return EnforcementResult(
-        reply_type="D",
-        code="EN-GATE-D-001",
-        data={"detail": f"unknown operation: {operation}"},
-    )
+    # ==========================================================================
+    # Authorized
+    # ==========================================================================
+    return EnforcementResult(reply_type="S", code="EN-WRITE-S-001")
