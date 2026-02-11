@@ -11,8 +11,8 @@ Matrix key: (mode, root, subdirectory)
 
 Enforcement walks the matrix:
   cap = get_capability(mode, root, subdir, relpath)
-  cap.allows(operation) → bool
-  cap.contract_required → bool
+  denial = cap.gate(operation, has_contract=...)
+  denial is None → allowed, str → denial code
 """
 
 from __future__ import annotations
@@ -28,22 +28,42 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class Capability:
-    """Capability flags for a (mode, root, subdir) combination."""
+    """
+    Capability for a (mode, root, subdir) combination.
+
+    Encodes both the operation permission and its conditions (contract y/n).
+    gate() is the single entry point — returns the denial code or None.
+    """
 
     read: bool = False
     write: bool = False
     delete: bool = False
     subfolders_writable: bool = False  # Write/delete granted to nested paths only
-    contract_required: bool = True  # Writes/deletes require active contract
+    contract_required: bool = True  # Condition: active contract needed for writes/deletes
 
-    def allows(self, operation: OperationType) -> bool:
-        """Check if this capability permits the given operation."""
+    def gate(self, operation: "OperationType", *, has_contract: bool = False) -> str | None:
+        """
+        Check if operation is permitted given current conditions.
+
+        Returns None if allowed, or the denial code string:
+          - EN-WRITE-D-001: operation not permitted (capability denial)
+          - EN-WRITE-D-002: operation requires contract (condition not met)
+        """
         from ck3lens.policy.enforcement import OperationType
-        return {
+
+        permitted = {
             OperationType.READ: self.read,
             OperationType.WRITE: self.write,
             OperationType.DELETE: self.delete,
         }.get(operation, False)
+
+        if not permitted:
+            return "EN-WRITE-D-001"
+
+        if self.contract_required and not has_contract:
+            return "EN-WRITE-D-002"
+
+        return None
 
 
 # Type alias for matrix key

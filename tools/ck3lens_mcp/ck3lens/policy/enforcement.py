@@ -9,7 +9,6 @@ CRITICAL: No permission checks may exist outside this module.
 SCOPE:
   Enforcement gates WRITE and DELETE operations only.
   READ visibility is WorldAdapter's domain (WA-RES-I-003).
-  Enforcement is not called for reads.
 
 Returns Reply-System-compatible results (Canonical Reply System §4):
   EN layer may emit: S, D, E (never I).
@@ -69,12 +68,10 @@ def enforce(
     """
     Single enforcement entry point.
 
-    Walks the capability matrix and returns S or D:
+    Walks the capability matrix via cap.gate():
       1. Guard: root_category must be resolved
       2. cap = get_capability(mode, root, subdir, relpath)
-      3. cap.allows(operation) → EN-WRITE-D-001 if not
-      4. cap.contract_required → EN-WRITE-D-002 if no contract
-      5. EN-WRITE-S-001
+      3. cap.gate(operation, has_contract=...) → denial code or None
 
     Returns:
         EnforcementResult with reply_type and code.
@@ -90,24 +87,14 @@ def enforce(
         )
 
     root = resolved.root_category
-
-    # Walk the matrix
     cap = get_capability(mode, root, resolved.subdirectory, resolved.relative_path)
+    denial = cap.gate(operation, has_contract=has_contract)
 
-    # Operation allowed?
-    if not cap.allows(operation):
+    if denial:
         return EnforcementResult(
             reply_type="D",
-            code="EN-WRITE-D-001",
-            data={"detail": f"{operation.name} not permitted for ({mode}, {root.name})"},
-        )
-
-    # Contract required?
-    if cap.contract_required and not has_contract:
-        return EnforcementResult(
-            reply_type="D",
-            code="EN-WRITE-D-002",
-            data={"root": root.name},
+            code=denial,
+            data={"operation": operation.name, "root": root.name},
         )
 
     return EnforcementResult(reply_type="S", code="EN-WRITE-S-001")
