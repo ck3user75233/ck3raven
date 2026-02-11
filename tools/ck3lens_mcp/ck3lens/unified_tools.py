@@ -944,10 +944,10 @@ def ck3_file_impl(
             
             # Handle enforcement result via Reply System
             if result.reply_type == "D":
-                if result.code == "EN-OPEN-D-001":
+                if result.code == "EN-WRITE-D-002":
                     return {
                         "success": False,
-                        "code": "EN-OPEN-D-001",
+                        "code": "EN-WRITE-D-002",
                         "reply_type": "D",
                         "guidance": "Use ck3_contract(command='open', ...) to open a work contract",
                         "contract_example": "ck3_contract(command='open', intent='bugfix', root_category='ROOT_REPO', work_declaration={...})",
@@ -2506,10 +2506,10 @@ def ck3_git_impl(
         
         # Handle enforcement result via Reply System
         if result.reply_type == "D":
-            if result.code == "EN-OPEN-D-001":
+            if result.code == "EN-WRITE-D-002":
                 return {
                     "success": False,
-                    "code": "EN-OPEN-D-001",
+                    "code": "EN-WRITE-D-002",
                     "reply_type": "D",
                     "guidance": "Use ck3_contract(command='open', ...) to open a work contract",
                     "contract_example": "ck3_contract(command='open', intent='bugfix', root_category='ROOT_REPO', work_declaration={...})",

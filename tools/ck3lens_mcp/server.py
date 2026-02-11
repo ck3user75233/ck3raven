@@ -1140,8 +1140,8 @@ def ck3_db_delete(
             return rb.denied('EN-DB-D-001', data=result, message=result.get("error", "Policy denied"))
         
         # Contract required → Denied (EN layer governance refusal)
-        if result.get("reply_type") == "D" and result.get("code") == "EN-OPEN-D-001":
-            return rb.denied('EN-OPEN-D-001', data=result, message=result.get("error", "Contract required"))
+        if result.get("reply_type") == "D" and result.get("code") == "EN-WRITE-D-002":
+            return rb.denied('EN-WRITE-D-002', data=result, message=result.get("error", "Contract required"))
         
         # System failure requires POSITIVE evidence
         if "failed to" in err_msg or "timeout" in err_msg or "connection" in err_msg or "exception" in err_msg:
@@ -1999,8 +1999,8 @@ def ck3_file(
             return rb.denied('EN-WRITE-D-001', data=result, message=err)
         
         # Contract required → Denied (EN layer governance refusal)
-        if result.get("reply_type") == "D" and result.get("code") == "EN-OPEN-D-001":
-            return rb.denied('EN-OPEN-D-001', data=result, message=err)
+        if result.get("reply_type") == "D" and result.get("code") == "EN-WRITE-D-002":
+            return rb.denied('EN-WRITE-D-002', data=result, message=err)
         
         # Invalid reference / not found (caller's input cannot be resolved) -> WA layer
         if visibility == "NOT_FOUND" or "not found" in err_lower or "unknown" in err_lower:
@@ -3013,8 +3013,8 @@ def ck3_git(
             return rb.denied('EN-EXEC-D-001', data=result, message=result.get("error", "Git command denied"))
         
         # Contract required → Denied (EN layer governance refusal)
-        if result.get("reply_type") == "D" and result.get("code") == "EN-OPEN-D-001":
-            return rb.denied('EN-OPEN-D-001', data=result, message=result.get("error", "Contract required"))
+        if result.get("reply_type") == "D" and result.get("code") == "EN-WRITE-D-002":
+            return rb.denied('EN-WRITE-D-002', data=result, message=result.get("error", "Contract required"))
         
         # System failure requires POSITIVE evidence
         if "failed to" in err_msg or "timeout" in err_msg or "connection" in err_msg or "exception" in err_msg:
@@ -4225,13 +4225,13 @@ def _ck3_exec_internal(
     
     # Handle enforcement result via Reply System
     if result.reply_type == "D":
-        if result.code == "EN-OPEN-D-001":
+        if result.code == "EN-WRITE-D-002":
             return {
                 "allowed": False,
                 "executed": False,
                 "output": None,
                 "exit_code": None,
-                "code": "EN-OPEN-D-001",
+                "code": "EN-WRITE-D-002",
                 "reply_type": "D",
                 "error": "Contract required for shell execution",
                 "guidance": "Use ck3_contract(command='open', ...) to open a work contract first",

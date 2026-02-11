@@ -69,26 +69,19 @@ def enforce(
     """
     Single enforcement entry point.
 
-    Gates WRITE and DELETE operations against the capability matrix.
-    READ is not enforcement's domain (WorldAdapter handles visibility).
-
-    Flow:
-      1. Resolve root_category — deny if None
-      2. Look up Capability from matrix via get_capability()
-      3. Check cap.write (for WRITE) or cap.delete (for DELETE)
-      4. Check cap.contract_required — matrix-driven, not hardcoded
-      5. Return S or D
+    Walks the capability matrix and returns S or D:
+      1. Guard: root_category must be resolved
+      2. cap = get_capability(mode, root, subdir, relpath)
+      3. cap.allows(operation) → EN-WRITE-D-001 if not
+      4. cap.contract_required → EN-WRITE-D-002 if no contract
+      5. EN-WRITE-S-001
 
     Returns:
-        EnforcementResult with reply_type ("S", "D", "E") and code.
-        Consumers use code to determine specific denial reason
-        (e.g., EN-OPEN-D-001 = contract required).
+        EnforcementResult with reply_type and code.
     """
     from ..capability_matrix import get_capability
 
-    # ==========================================================================
-    # GUARD: Unresolved root_category is always DENY
-    # ==========================================================================
+    # Guard: unresolved root_category
     if resolved.root_category is None:
         return EnforcementResult(
             reply_type="D",
@@ -96,51 +89,25 @@ def enforce(
             data={"detail": "unresolved root category"},
         )
 
-    # Local binding — Pylance knows root is RootCategory, not Optional
     root = resolved.root_category
 
-    # ==========================================================================
-    # Look up capability from matrix (always returns Capability, never None)
-    # ==========================================================================
+    # Walk the matrix
     cap = get_capability(mode, root, resolved.subdirectory, resolved.relative_path)
 
-    # ==========================================================================
-    # Gate: operation allowed by matrix?
-    #
-    # cap.write = matrix says writes are possible for this (mode, root, subdir)
-    # cap.delete = matrix says deletes are possible for this (mode, root, subdir)
-    # These are separate flags because some entries allow write but not delete.
-    # ==========================================================================
-    if operation == OperationType.WRITE and not cap.write:
+    # Operation allowed?
+    if not cap.allows(operation):
         return EnforcementResult(
             reply_type="D",
             code="EN-WRITE-D-001",
-            data={"detail": f"write not permitted for ({mode}, {root.name})"},
+            data={"detail": f"{operation.name} not permitted for ({mode}, {root.name})"},
         )
 
-    if operation == OperationType.DELETE and not cap.delete:
+    # Contract required?
+    if cap.contract_required and not has_contract:
         return EnforcementResult(
             reply_type="D",
-            code="EN-WRITE-D-001",
-            data={"detail": f"delete not permitted for ({mode}, {root.name})"},
+            code="EN-WRITE-D-002",
+            data={"root": root.name},
         )
 
-    # ==========================================================================
-    # Gate: contract required? (matrix-driven via cap.contract_required)
-    #
-    # cap.contract_required comes from get_capability() — the matrix entry.
-    # WIP entries have contract_required=False; most others have True.
-    # EN-OPEN-D-001 = "CONTRACT_REQUIRED" — OPEN area is contract lifecycle.
-    # ==========================================================================
-    if operation in {OperationType.WRITE, OperationType.DELETE}:
-        if cap.contract_required and not has_contract:
-            return EnforcementResult(
-                reply_type="D",
-                code="EN-OPEN-D-001",
-                data={"root": root.name},
-            )
-
-    # ==========================================================================
-    # Authorized
-    # ==========================================================================
     return EnforcementResult(reply_type="S", code="EN-WRITE-S-001")

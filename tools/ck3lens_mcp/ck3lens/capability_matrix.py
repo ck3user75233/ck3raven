@@ -9,15 +9,21 @@ Matrix key: (mode, root, subdirectory)
 - For ROOT_USER_DOCS, mod/ uses subfolders_writable (contents of mod subfolders are writable)
 - For all other roots, subdirectory is None
 
-Global invariants OVERRIDE the matrix (enforced in enforcement.py):
-1. Contract required for write/delete
-2. db/ and daemon/ subdirs are NEVER writable
-3. ROOT_EXTERNAL is always denied
+Enforcement walks the matrix:
+  cap = get_capability(mode, root, subdir, relpath)
+  cap.allows(operation) → bool
+  cap.contract_required → bool
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from ck3lens.paths import RootCategory
+
+if TYPE_CHECKING:
+    from ck3lens.policy.enforcement import OperationType
 
 
 @dataclass(frozen=True)
@@ -29,6 +35,15 @@ class Capability:
     delete: bool = False
     subfolders_writable: bool = False  # Write/delete granted to nested paths only
     contract_required: bool = True  # Writes/deletes require active contract
+
+    def allows(self, operation: OperationType) -> bool:
+        """Check if this capability permits the given operation."""
+        from ck3lens.policy.enforcement import OperationType
+        return {
+            OperationType.READ: self.read,
+            OperationType.WRITE: self.write,
+            OperationType.DELETE: self.delete,
+        }.get(operation, False)
 
 
 # Type alias for matrix key

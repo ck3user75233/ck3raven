@@ -261,6 +261,8 @@ class Codes:
         "WRITE_AUTHORIZED", "Write authorized by policy")
     EN_WRITE_D_001 = ReplyCode("EN-WRITE-D-001", Layer.EN, Area.WRITE, ReplyType.D, 1,
         "WRITE_DENIED", "Write denied by policy")
+    EN_WRITE_D_002 = ReplyCode("EN-WRITE-D-002", Layer.EN, Area.WRITE, ReplyType.D, 2,
+        "CONTRACT_REQUIRED", "Active contract required for this write/delete")
     EN_WRITE_E_001 = ReplyCode("EN-WRITE-E-001", Layer.EN, Area.WRITE, ReplyType.E, 1,
         "WRITE_ENFORCEMENT_ERROR", "Unexpected error in write enforcement")
     
@@ -281,8 +283,6 @@ class Codes:
     # Contract/scope enforcement
     EN_OPEN_S_001 = ReplyCode("EN-OPEN-S-001", Layer.EN, Area.OPEN, ReplyType.S, 1,
         "CONTRACT_SCOPE_OK", "Operation within contract scope")
-    EN_OPEN_D_001 = ReplyCode("EN-OPEN-D-001", Layer.EN, Area.OPEN, ReplyType.D, 1,
-        "CONTRACT_REQUIRED", "Active contract required for this operation")
     EN_OPEN_D_002 = ReplyCode("EN-OPEN-D-002", Layer.EN, Area.OPEN, ReplyType.D, 2,
         "OUTSIDE_CONTRACT_SCOPE", "Operation outside contract scope")
     EN_OPEN_E_001 = ReplyCode("EN-OPEN-E-001", Layer.EN, Area.OPEN, ReplyType.E, 1,
@@ -488,7 +488,7 @@ LEGACY_TO_CANONICAL: dict[str, str] = {
     "CONTRACT-OP-S-003": "CT-VAL-S-001",
     "CONTRACT-OP-S-004": "CT-CLOSE-S-002",
     "CONTRACT-OP-I-001": "CT-CLOSE-I-001",  # "no active contract" as info, not governance
-    "CONTRACT-OP-D-001": "EN-OPEN-D-001",   # CRITICAL: governance denial -> EN
+    "CONTRACT-OP-D-001": "EN-WRITE-D-002",   # CRITICAL: governance denial -> EN
     "CONTRACT-OP-E-001": "MCP-SYS-E-001",
     
     # SEARCH-OP-*
