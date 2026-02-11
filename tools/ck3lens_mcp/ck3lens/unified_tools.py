@@ -11,7 +11,7 @@ Consolidated tools:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from .db.golden_join import GOLDEN_JOIN
 # Canonical path constants - use these instead of computing paths from __file__
@@ -838,6 +838,7 @@ def ck3_file_impl(
     world=None,  # WorldAdapter for unified path resolution
     # Reply system (Phase C migration)
     trace_info: TraceInfo | None = None,
+    rb: Any | None = None,  # ReplyBuilder from server.py — used by enforce()
 ) -> Reply | dict:
     """
     Unified file operations tool.
@@ -936,20 +937,16 @@ def ck3_file_impl(
             
             # Enforce policy using clean API - pass resolution directly (canonical pattern)
             result = enforce(
+                rb,
                 mode=mode,
                 operation=op_type,
                 resolved=resolution,  # ResolutionResult from normalize_path_input
                 has_contract=has_contract,
             )
             
-            # Enforcement denial → pass through denials list as rationale
-            if result.reply_type == "D":
-                return {
-                    "success": False,
-                    "reply_type": "D",
-                    "code": result.code,
-                    **result.data,
-                }
+            # Enforcement denial → Reply passes through directly
+            if result.is_denied:
+                return result
             
             # reply_type == "S" — continue to implementation
     
@@ -2413,7 +2410,8 @@ def ck3_git_impl(
     session=None,
     trace=None,
     world=None,  # WorldAdapter for canonical path resolution
-) -> dict:
+    rb: Any | None = None,  # ReplyBuilder from server.py — used by enforce()
+) -> Reply | dict:
     """
     Unified git operations.
     
@@ -2482,20 +2480,16 @@ def ck3_git_impl(
         
         # Enforce policy using clean API - all git ops are WRITE
         result = enforce(
+            rb,
             mode=mode,
             operation=OperationType.WRITE,
             resolved=resolution,  # Pass ResolutionResult directly
             has_contract=has_contract,
         )
         
-        # Enforcement denial → pass through denials list as rationale
-        if result.reply_type == "D":
-            return {
-                "success": False,
-                "reply_type": "D",
-                "code": result.code,
-                **result.data,
-            }
+        # Enforcement denial → Reply passes through directly
+        if result.is_denied:
+            return result
         
         # reply_type == "S" — continue to implementation
     

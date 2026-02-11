@@ -1973,6 +1973,7 @@ def ck3_file(
         db=db,
         trace=trace,
         world=world,
+        rb=rb,
     )
     
     # If impl returned a Reply directly, pass it through
@@ -1980,10 +1981,6 @@ def ck3_file(
         return result
     
     if result.get("error") or result.get("reply_type") == "D":
-        # Enforcement denial — inner result has reply_type + code + denials
-        if result.get("reply_type") == "D" and result.get("code"):
-            return rb.denied(result["code"], data=result, message=result.get("error", "Write denied"))
-        
         err = str(result.get("error", "File operation failed"))
         err_lower = err.lower()
         policy_decision = result.get("policy_decision", "")
@@ -2993,13 +2990,14 @@ def ck3_git(
         session=session,
         trace=trace,
         world=world,  # Pass world for enforce()
+        rb=rb,
     )
     
-    if result.get("error") or result.get("reply_type") == "D":
-        # Enforcement denial — inner result has reply_type + code + denials
-        if result.get("reply_type") == "D" and result.get("code"):
-            return rb.denied(result["code"], data=result, message=result.get("error", "Git command denied"))
-        
+    # Enforcement denial returns Reply directly — pass through
+    if isinstance(result, Reply):
+        return result
+    
+    if result.get("error"):
         err_msg = str(result.get("error", "")).lower()
         
         # System failure requires POSITIVE evidence
@@ -4124,17 +4122,15 @@ def ck3_exec(
     trace_info = get_current_trace_info()
     rb = ReplyBuilder(trace_info, tool='ck3_exec')
     
-    result = _ck3_exec_internal(command, working_dir, target_paths, token_id, dry_run, timeout)
+    result = _ck3_exec_internal(command, working_dir, target_paths, token_id, dry_run, timeout, rb=rb)
+    
+    # Enforcement denial returns Reply directly — pass through
+    if isinstance(result, Reply):
+        return result
     
     if result.get("error") and not result.get("allowed"):
         err_msg = str(result.get("error", "")).lower()
-        reply_type = result.get("reply_type", "")
-        code = result.get("code", "")
         policy_decision = result.get("policy", {}).get("decision", "")
-        
-        # Reply-System-driven: check reply_type and code from enforcement
-        if reply_type == "D":
-            return rb.denied(code or 'EN-EXEC-D-001', data=result, message=result.get("error", "Command denied"))
         
         # Path not found is a resolution failure -> WA layer
         if policy_decision == "PATH_NOT_FOUND":
@@ -4166,8 +4162,9 @@ def _ck3_exec_internal(
     token_id: str | None,
     dry_run: bool,
     timeout: int,
-) -> dict:
-    """Internal implementation returning dict."""
+    rb=None,  # ReplyBuilder from tool handler — used by enforce()
+) -> Reply | dict:
+    """Internal implementation returning dict (or Reply for enforcement denials)."""
     from ck3lens.policy.enforcement import enforce, OperationType
     from ck3lens.policy.contract_v1 import get_active_contract
     import subprocess
@@ -4206,20 +4203,12 @@ def _ck3_exec_internal(
             "error": f"Could not resolve path: {working_dir or target_paths}",
         }
     
-    # Shell execution is a WRITE operation
-    result = enforce(mode, OperationType.WRITE, resolution, has_contract)
+    # Shell execution is a WRITE operation — enforcement returns Reply
+    result = enforce(rb, mode, OperationType.WRITE, resolution, has_contract)
     
-    # Enforcement denial → pass through denials list as rationale
-    if result.reply_type == "D":
-        return {
-            "allowed": False,
-            "executed": False,
-            "output": None,
-            "exit_code": None,
-            "reply_type": "D",
-            "code": result.code,
-            **result.data,
-        }
+    # Enforcement denial → Reply passes through directly
+    if result.is_denied:
+        return result
     
     # Enforcement passed — build policy info for response
     policy_info = {"decision": "ALLOW", "reason": f"Write allowed ({result.code})"}

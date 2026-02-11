@@ -58,8 +58,6 @@ from .wip_workspace import (
 from .enforcement import (
     # Operation types
     OperationType,
-    # Result type
-    EnforcementResult,
     # Main enforcement function
     enforce,
 )
@@ -104,7 +102,6 @@ __all__ = [
     "GIT_COMMANDS_SAFE",
     # Centralized Enforcement (Clean API)
     "OperationType",
-    "EnforcementResult",
     "enforce",
     # Structured Audit Logging
     "EventCategory",
