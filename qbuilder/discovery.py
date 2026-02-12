@@ -216,6 +216,7 @@ def _ensure_cvid(conn: sqlite3.Connection, name: str, source_path: str,
         """, (name, source_path, workshop_id))
         conn.commit()
         mp_id = cursor.lastrowid
+        assert mp_id is not None  # INSERT always sets lastrowid
     
     # Get or create content_version
     row = conn.execute(
@@ -231,7 +232,9 @@ def _ensure_cvid(conn: sqlite3.Connection, name: str, source_path: str,
         VALUES ('mod', ?, ?)
     """, (mp_id, content_root_hash))
     conn.commit()
-    return cursor.lastrowid
+    cvid = cursor.lastrowid
+    assert cvid is not None  # INSERT always sets lastrowid
+    return cvid
 
 
 def _enqueue_discovery(conn: sqlite3.Connection, cvid: int, now: float) -> None:
