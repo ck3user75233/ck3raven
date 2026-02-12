@@ -28,6 +28,9 @@ Check categories:
   NO_GHOST_REPLY   — warn on 'reply' in definitions, error on rogue builders
   NO_FAKE_METHODS  — rb.info(), rb.warn(), rb.fail() must not exist
   SINGLE_REGISTRY  — only reply_codes.py; no reply_registry imports
+  RB_CONSTRUCTOR   — ReplyBuilder first arg must be TraceInfo, not dict literal
+  RB_SCHEMA        — rb.*() calls must include required 'data' positional arg
+  REPLY_ATTR       — no non-existent Reply attributes (e.g., .code_type)
 
   ── Logging System ────────────────────────────────────────────────
   TRACE_CATEGORY   — trace.log() using canonical categories
@@ -92,6 +95,28 @@ SKIP_PATTERNS = [
 
 CODE_PATTERN = re.compile(r"^([A-Z]+)-([A-Z]+)-([SIDE])-(\d{3})$")
 CODE_IN_SOURCE = re.compile(r"""['"]([A-Z]+-[A-Z]+-[SIDE]-\d{3})['"]""")
+
+# ── Reply call-site compliance ──────────────────────────────────────────────
+
+# RB_CONSTRUCTOR: dict literal passed as first arg (must be TraceInfo)
+_RB_CONSTRUCTOR_DICT = re.compile(r'ReplyBuilder\(\s*\{')
+
+# RB_SCHEMA: rb.method('CODE', message=...) — data arg skipped
+_RB_SKIP_DATA = re.compile(
+    r"rb\.(success|invalid|denied|error)\(\s*"
+    r"['\"][^'\"]+['\"]\s*,"       # code string, comma
+    r"\s*(message|layer)\s*=",     # immediately followed by non-data keyword
+)
+
+# RB_SCHEMA: rb.method('CODE') — no data at all
+_RB_NO_DATA_ARG = re.compile(
+    r"rb\.(success|invalid|denied|error)\(\s*"
+    r"['\"][^'\"]+['\"]\s*,?\s*\)",  # code string, optional trailing comma, close paren
+)
+
+# REPLY_ATTR: known-wrong attribute names on Reply objects
+_WRONG_REPLY_ATTR = re.compile(r'\.(code_type)\b')
+WRONG_ATTR_FIXES = {"code_type": "reply_type"}
 
 VALID_LAYERS = {"WA", "EN", "CT", "MCP"}
 LAYER_ALLOWED_TYPES = {
@@ -758,6 +783,91 @@ def check_area_heuristic(tools: list[ToolInfo]) -> list[Violation]:
 
 
 # ============================================================================
+# Check: RB_CONSTRUCTOR — ReplyBuilder first arg must be TraceInfo
+# ============================================================================
+
+def check_rb_constructor(root: Path, files: list[Path]) -> list[Violation]:
+    """ReplyBuilder first arg must be TraceInfo, not dict literal."""
+    violations = []
+    for pyfile in files:
+        if _should_skip(pyfile, root):
+            continue
+        relpath = str(pyfile.relative_to(root)).replace("\\", "/")
+        # Skip safety.py — it defines ReplyBuilder and has docstring examples
+        if relpath.endswith("safety.py"):
+            continue
+        for i, line in enumerate(pyfile.read_text(encoding="utf-8").splitlines(), 1):
+            if line.strip().startswith("#"):
+                continue
+            if _RB_CONSTRUCTOR_DICT.search(line):
+                violations.append(Violation(
+                    relpath, i, "RB_CONSTRUCTOR",
+                    "ReplyBuilder({...}) — first arg must be TraceInfo, not dict",
+                ))
+    return violations
+
+
+# ============================================================================
+# Check: RB_SCHEMA — rb.*() must include required 'data' positional arg
+# ============================================================================
+
+def check_rb_data_required(root: Path, files: list[Path]) -> list[Violation]:
+    """rb.success/invalid/denied/error must have data as 2nd positional arg."""
+    violations = []
+    for pyfile in files:
+        if _should_skip(pyfile, root):
+            continue
+        relpath = str(pyfile.relative_to(root)).replace("\\", "/")
+        # Skip safety.py — it defines the methods
+        if relpath.endswith("safety.py"):
+            continue
+        source = pyfile.read_text(encoding="utf-8")
+
+        # Pattern 1: rb.method('CODE', message=...) — data skipped or mispositioned
+        for m in _RB_SKIP_DATA.finditer(source):
+            line_num = source[:m.start()].count("\n") + 1
+            violations.append(Violation(
+                relpath, line_num, "RB_SCHEMA",
+                f"rb.{m.group(1)}(code, {m.group(2)}=...) — 'data' must be 2nd arg "
+                f"(before {m.group(2)}=)",
+            ))
+
+        # Pattern 2: rb.method('CODE') — no data at all
+        for m in _RB_NO_DATA_ARG.finditer(source):
+            line_num = source[:m.start()].count("\n") + 1
+            violations.append(Violation(
+                relpath, line_num, "RB_SCHEMA",
+                f"rb.{m.group(1)}(code) — missing required 'data' arg",
+            ))
+    return violations
+
+
+# ============================================================================
+# Check: REPLY_ATTR — no non-existent Reply attribute names
+# ============================================================================
+
+def check_reply_wrong_attr(root: Path, files: list[Path]) -> list[Violation]:
+    """Flag known-wrong Reply attribute names like .code_type."""
+    violations = []
+    for pyfile in files:
+        if _should_skip(pyfile, root):
+            continue
+        relpath = str(pyfile.relative_to(root)).replace("\\", "/")
+        for i, line in enumerate(pyfile.read_text(encoding="utf-8").splitlines(), 1):
+            if line.strip().startswith("#"):
+                continue
+            m = _WRONG_REPLY_ATTR.search(line)
+            if m:
+                wrong = m.group(1)
+                fix = WRONG_ATTR_FIXES.get(wrong, "???")
+                violations.append(Violation(
+                    relpath, i, "REPLY_ATTR",
+                    f".{wrong} is not a Reply attribute — use .{fix}",
+                ))
+    return violations
+
+
+# ============================================================================
 # Helpers
 # ============================================================================
 
@@ -889,6 +999,15 @@ def tasl(root: Path | None = None, explicit_files: list[str] | None = None) -> l
 
     # 15. AREA heuristic
     violations.extend(check_area_heuristic(tools))
+
+    # 16. ReplyBuilder constructor arg validation
+    violations.extend(check_rb_constructor(root, files))
+
+    # 17. rb.*() data param required
+    violations.extend(check_rb_data_required(root, files))
+
+    # 18. Wrong Reply attribute names
+    violations.extend(check_reply_wrong_attr(root, files))
 
     return violations
 

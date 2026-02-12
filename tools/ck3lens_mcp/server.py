@@ -4437,7 +4437,7 @@ def ck3_protect(
         )
 
     else:
-        return rb.invalid('MCP-SYS-I-002', message=f"Unknown command: {command}")
+        return rb.invalid('MCP-SYS-I-002', data={}, message=f"Unknown command: {command}")
 
 
 # ============================================================================
@@ -4976,8 +4976,8 @@ def ck3_report_validation_issue(
     if ROOT_REPO is None:
         return rb.error(
             "GEN-E-001",
-            message="ROOT_REPO not configured - cannot write validation issues. Run in ck3raven-dev mode.",
             data={},
+            message="ROOT_REPO not configured - cannot write validation issues. Run in ck3raven-dev mode.",
         )
     issues_file = ROOT_REPO / "ck3lens_validation_issues.jsonl"
     with issues_file.open("a", encoding="utf-8") as f:
