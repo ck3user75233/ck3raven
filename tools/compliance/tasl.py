@@ -494,8 +494,26 @@ def check_all_returns_via_rb(tools: list[ToolInfo]) -> list[Violation]:
     """Every return in a tool function must go through rb.*()."""
     violations = []
     for t in tools:
-        for i, line in enumerate(t.body.splitlines(), t.def_line):
+        body_lines = t.body.splitlines()
+        # Detect if tool has Reply passthrough pattern (isinstance check)
+        has_reply_passthrough = "isinstance(result, Reply)" in t.body
+        # Track nested function depth to skip inner function returns
+        in_nested_def = False
+        nested_indent = 0
+        for i, line in enumerate(body_lines, t.def_line):
             stripped = line.strip()
+            # Track nested function definitions
+            if re.match(r"\s+def\s+\w+\(", line):
+                in_nested_def = True
+                nested_indent = len(line) - len(line.lstrip())
+                continue
+            # Exit nested function when indentation returns to or above nested def level
+            if in_nested_def and stripped and (len(line) - len(line.lstrip())) <= nested_indent:
+                if not re.match(r"\s+def\s+\w+\(", line):
+                    in_nested_def = False
+            # Skip returns inside nested functions
+            if in_nested_def:
+                continue
             if not stripped.startswith("return"):
                 continue
             # Skip docstring lines or comments
@@ -503,6 +521,9 @@ def check_all_returns_via_rb(tools: list[ToolInfo]) -> list[Violation]:
                 continue
             # OK: return rb.*()
             if _RETURN_RB.search(line):
+                continue
+            # OK: Reply passthrough — return result (guarded by isinstance check)
+            if has_reply_passthrough and re.match(r"return\s+result\s*$", stripped):
                 continue
             # Bare dict
             if _RETURN_BARE_DICT.search(line):

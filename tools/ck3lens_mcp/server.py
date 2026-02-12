@@ -896,7 +896,6 @@ def ck3_close_db() -> Reply:
     """
     global _db, _playset_id, _session
     
-    trace = _get_trace()
     trace_info = get_current_trace_info()
     rb = ReplyBuilder(trace_info, tool="ck3_close_db")
     
@@ -928,7 +927,6 @@ def ck3_close_db() -> Reply:
             message="Database connection closed and DISABLED. Use ck3_db(command='enable') to reconnect. File lock released.",
         )
     except Exception as e:
-        trace.log("ck3lens.close_db", {}, {"success": False, "error": str(e)})
         return rb.error(
             "MCP-SYS-E-001",
             data={"error": str(e)},
@@ -966,13 +964,11 @@ def ck3_db(
     """
     global _db
     
-    trace = _get_trace()
     trace_info = get_current_trace_info()
     rb = ReplyBuilder(trace_info, tool="ck3_db")
     
     if command == "status":
         result = db_api.status()
-        trace.log("ck3lens.db.status", {}, result)
         return rb.success("WA-DB-S-001", data=result, message="Database status retrieved.")
         
     elif command == "disable":
@@ -993,12 +989,10 @@ def ck3_db(
         import gc
         gc.collect()
         
-        trace.log("ck3lens.db.disable", {}, result)
         return rb.success("WA-DB-S-001", data=result, message="Database disabled.")
         
     elif command == "enable":
         result = db_api.enable()
-        trace.log("ck3lens.db.enable", {}, result)
         return rb.success("WA-DB-S-001", data=result, message="Database enabled.")
     
     else:
@@ -2916,7 +2910,7 @@ def ck3_git(
             return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Git command failed"))
         
         # Default: Invalid (agent mistake / bad input)
-        return rb.invalid('WA-RES-I-001', data=result, message=result.get("error", "Git command failed"))
+        return rb.invalid('WA-GIT-I-001', data=result, message=result.get("error", "Git command failed"))
     
     return rb.success('WA-GIT-S-001', data=result, message=f"Git {command} complete.")
 
@@ -3601,7 +3595,7 @@ def ck3_contract(
     
     if command == "status":
         if result.get("has_active_contract"):
-            return rb.success('CT-VAL-S-001', data=result, message=f"Active contract: {result.get('contract_id')}")
+            return rb.success('MCP-SYS-S-001', data=result, message=f"Active contract: {result.get('contract_id')}")
         # "No active contract" is informational, not governance denial
         return rb.invalid('CT-CLOSE-I-001', data=result, message="No active contract.")
     
@@ -3614,7 +3608,7 @@ def ck3_contract(
     if command == "cancel":
         return rb.success('CT-CLOSE-S-002', data=result, message="Contract cancelled.")
     
-    return rb.success('CT-VAL-S-001', data=result, message=f"Contract {command} complete.")
+    return rb.success('MCP-SYS-S-001', data=result, message=f"Contract {command} complete.")
 
 
 def _ck3_contract_internal(
@@ -4045,14 +4039,14 @@ def ck3_exec(
         
         # Path not found is a resolution failure -> WA layer
         if policy_decision == "PATH_NOT_FOUND":
-            return rb.invalid('WA-RES-I-001', data=result, message=result.get("error", "Path not found"))
+            return rb.invalid('MCP-SYS-I-001', data=result, message=result.get("error", "Path not found"))
         
         # System failure requires POSITIVE evidence
         if "failed to" in err_msg or "timeout" in err_msg or "connection" in err_msg or "exception" in err_msg:
             return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Command failed"))
         
         # Default: Invalid (agent mistake / bad input)
-        return rb.invalid('WA-RES-I-001', data=result, message=result.get("error", "Command failed"))
+        return rb.invalid('MCP-SYS-I-001', data=result, message=result.get("error", "Command failed"))
     
     if result.get("executed"):
         exit_code = result.get("exit_code", 0)
@@ -4307,7 +4301,7 @@ def ck3_protect(
     if command == "list":
         entries = load_manifest()
         return rb.success(
-            'WA-READ-S-001',
+            'MCP-SYS-S-001',
             data={
                 "entries": [e.to_dict() for e in entries],
                 "count": len(entries),
@@ -4339,9 +4333,9 @@ def ck3_protect(
 
     elif command == "add":
         if not path:
-            return rb.invalid('WA-RES-I-001', message="path required for add command")
+            return rb.invalid('MCP-SYS-I-001', message="path required for add command")
         if not reason:
-            return rb.invalid('WA-RES-I-001', message="reason required for add command")
+            return rb.invalid('MCP-SYS-I-001', message="reason required for add command")
 
         # Consume ephemeral HAT approval (written by extension, verified + deleted here)
         try:
@@ -4357,14 +4351,14 @@ def ck3_protect(
                 root_category="ROOT_REPO",
             )
             return rb.invalid(
-                'WA-RES-I-001',
+                'MCP-SYS-I-001',
                 data={"requires_hat": True},
                 message=f"HAT approval required: {msg}. Click the shield icon in CK3 Lens sidebar to approve.",
             )
 
         # Check if already protected
         if is_protected(path):
-            return rb.invalid('WA-RES-I-001', message=f"Path already protected: {path}")
+            return rb.invalid('MCP-SYS-I-001', message=f"Path already protected: {path}")
 
         # Compute hash for files
         resolved_type = entry_type or "file"
@@ -4373,7 +4367,7 @@ def ck3_protect(
             repo_root = _get_repo_root()
             file_path = repo_root / path
             if not file_path.exists():
-                return rb.invalid('WA-RES-I-001', message=f"File not found: {path}")
+                return rb.invalid('MCP-SYS-I-001', message=f"File not found: {path}")
             sha256 = compute_file_hash(file_path)
 
         from datetime import datetime
@@ -4400,13 +4394,13 @@ def ck3_protect(
 
     elif command == "remove":
         if not path:
-            return rb.invalid('WA-RES-I-001', message="path required for remove command")
+            return rb.invalid('MCP-SYS-I-001', message="path required for remove command")
 
         # Cannot remove the manifest itself (hardcoded)
         normalized = path.replace("\\", "/")
         if normalized == MANIFEST_REL_PATH:
             return rb.invalid(
-                'WA-RES-I-001',
+                'MCP-SYS-I-001',
                 message=f"Cannot remove manifest self-protection: {MANIFEST_REL_PATH} is hardcoded.",
             )
 
@@ -4424,7 +4418,7 @@ def ck3_protect(
                 root_category="ROOT_REPO",
             )
             return rb.invalid(
-                'WA-RES-I-001',
+                'MCP-SYS-I-001',
                 data={"requires_hat": True},
                 message=f"HAT approval required: {msg}. Click the shield icon in CK3 Lens sidebar to approve.",
             )
@@ -4435,7 +4429,7 @@ def ck3_protect(
         after_count = len(entries)
 
         if before_count == after_count:
-            return rb.invalid('WA-RES-I-001', message=f"Path not found in manifest: {path}")
+            return rb.invalid('MCP-SYS-I-001', message=f"Path not found in manifest: {path}")
 
         save_manifest(entries)
 
@@ -4449,7 +4443,7 @@ def ck3_protect(
         )
 
     else:
-        return rb.invalid('WA-RES-I-001', message=f"Unknown command: {command}")
+        return rb.invalid('MCP-SYS-I-002', message=f"Unknown command: {command}")
 
 
 # ============================================================================
@@ -6001,7 +5995,7 @@ def ck3_journal(
     rb = ReplyBuilder(trace_info, tool='ck3_journal')
     
     if result.get("success", False):
-        return rb.success('WA-READ-S-001', data=result, message=result.get("message", "OK"))
+        return rb.success('WA-LOG-S-001', data=result, message=result.get("message", "OK"))
     else:
         # Differentiate error types - Error requires POSITIVE evidence
         err_msg = str(result.get("error", "")).lower()
