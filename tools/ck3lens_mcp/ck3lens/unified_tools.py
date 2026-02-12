@@ -1056,15 +1056,14 @@ def _file_write(mod_name, rel_path, content, validate_syntax, session, trace, *,
                           {"success": False, "reason": "syntax_error"})
             
             first_error = parse_result["errors"][0] if parse_result["errors"] else {"line": 1, "message": "Unknown error"}
-            return rb.error(
-                "PARSE-AST-E-001",
+            return rb.invalid(
+                "WA-PARSE-I-001",
                 {
                     "error": "Syntax validation failed",
                     "parse_errors": parse_result["errors"],
                     "canonical_path": f"{mod_name}:{rel_path}",
                     "line": first_error.get("line", 1),
                 },
-                layer="PARSE",
             )
     
     # Inline write operation
@@ -1127,15 +1126,14 @@ def _file_write_raw(path, content, validate_syntax, token_id, trace, world=None,
         parse_result = parse_content(content, path)
         if not parse_result["success"]:
             first_error = parse_result["errors"][0] if parse_result["errors"] else {"line": 1, "message": "Unknown error"}
-            return rb.error(
-                "PARSE-AST-E-001",
+            return rb.invalid(
+                "WA-PARSE-I-001",
                 {
                     "error": "Syntax validation failed",
                     "parse_errors": parse_result["errors"],
                     "canonical_path": str(file_path),
                     "line": first_error.get("line", 1),
                 },
-                layer="PARSE",
             )
     
     # Write the file

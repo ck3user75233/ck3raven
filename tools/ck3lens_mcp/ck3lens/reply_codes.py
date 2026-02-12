@@ -415,6 +415,18 @@ def get_code(code: str) -> ReplyCode | None:
     return _ALL_CODES.get(code)
 
 
+def get_message(code: str, **params) -> str:
+    """Get a human-readable message for a registered code.
+
+    Uses the ReplyCode.description field from the canonical registry.
+    Falls back to 'Unknown code: <code>' if the code is not registered.
+    """
+    rc = _ALL_CODES.get(code)
+    if rc is None:
+        return f"Unknown code: {code}"
+    return rc.description
+
+
 def validate_registry() -> list[str]:
     """
     Validate the entire registry at startup.

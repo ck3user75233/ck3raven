@@ -1,37 +1,44 @@
 """
 TASL — Tool Architecture Standards Linter
 
-Every MCP tool in ck3raven must tick a set of architecture boxes.
+The single, combined linter for the Reply System and Logging System.
+There is no separate reply linter. There is no separate logging linter.
+This is it.
+
+Every MCP tool in ck3raven must meet these standards.
 TASL checks them statically, fast, no imports required.
 
-Subsumes the former reply_linter.py (merged Feb 12 2026).
+NO WHITELISTING. Every violation is reported unconditionally.
+The linter does not hide, suppress, or accept anything less than
+correct code. Humans decide priority; the linter reports everything.
 
-Current standards (v1):
+Check categories:
+
   ── Reply System ──────────────────────────────────────────────────
-  SAFE_WRAPPER   — @mcp_safe_tool decorator present
-  REPLY_TYPE     — -> Reply return annotation
-  PREAMBLE       — trace_info + ReplyBuilder initialization
-  REPLY_CODES    — code strings match LAYER-AREA-TYPE-NNN format
-  LAYER_OWNERSHIP— layer can emit declared reply type
-  NO_PARALLEL    — forbidden parallel types (EnforcementResult, etc.)
-  DICT_RETURN    — impl functions returning dict instead of Reply
-  ORPHAN_CODES   — codes used in source but missing from registries
+  SAFE_WRAPPER     — @mcp_safe_tool decorator present
+  REPLY_TYPE       — -> Reply return annotation
+  PREAMBLE         — trace_info + ReplyBuilder init + correct tool= name
+  REPLY_CODES      — code strings match LAYER-AREA-TYPE-NNN format
+  LAYER_OWNERSHIP  — layer can emit declared reply type
+  NO_PARALLEL      — forbidden parallel types (EnforcementResult, etc.)
+  DICT_RETURN      — any function returning dict/Dict instead of Reply
+  ORPHAN_CODES     — codes in source but not in canonical registry
+  CODES_VIA_RB     — reply codes must go through rb.success/invalid/denied/error
+  ALL_RETURNS_VIA_RB — every return in tool functions via rb.*()
+  NO_GHOST_REPLY   — warn on 'reply' in definitions, error on rogue builders
+  NO_FAKE_METHODS  — rb.info(), rb.warn(), rb.fail() must not exist
+  SINGLE_REGISTRY  — only reply_codes.py; no reply_registry imports
 
   ── Logging System ────────────────────────────────────────────────
-  TRACE_CATEGORY — trace.log() using canonical log categories
-
-Future candidates (not yet enforced):
-  LOG_CANONICAL  — use canonical logger (info/warn/error) not trace.log()
-  REDUNDANT_TRACE— trace.log() calls that duplicate mcp_safe_tool decorator
-  RETURN_PATHS   — every branch returns via rb.success/invalid/denied/error
-  NO_BARE_DICT   — no dict() construction in return position
-  ENFORCEMENT_ONLY_DENY — only EN layer code appears in rb.denied() calls
-  TEST_COVERAGE  — every tool has a corresponding test
-  DOCSTRING      — all tools have MCP-facing docstring
+  TRACE_CATEGORY   — trace.log() using canonical categories
+  CANONICAL_LOGGER — must use ck3lens.logging, not stdlib/print/raw writes
+  REDUNDANT_TRACE  — trace.log() that duplicates decorator output
+  AREA_HEURISTIC   — tool name → expected AREA mapping
 
 Run:
     python -m tools.compliance.tasl
     python tools/compliance/tasl.py
+    python tools/compliance/tasl.py --files path/to/file1.py path/to/file2.py
 
 Exit codes:
     0 = all standards met
@@ -40,6 +47,7 @@ Exit codes:
 
 from __future__ import annotations
 
+import argparse
 import re
 import sys
 from collections import defaultdict
@@ -51,7 +59,18 @@ from typing import NamedTuple
 # Configuration
 # ============================================================================
 
-# Scan these directories for tool source
+# Default scan: MCP toolchain end-to-end
+DEFAULT_SCAN_FILES = [
+    "tools/ck3lens_mcp/server.py",
+    "tools/ck3lens_mcp/safety.py",
+    "tools/ck3lens_mcp/ck3lens/unified_tools.py",
+    "tools/ck3lens_mcp/ck3lens/reply_codes.py",
+    "tools/ck3lens_mcp/ck3lens/logging.py",
+    "tools/ck3lens_mcp/ck3lens/enforcement.py",
+    "tools/ck3lens_mcp/ck3lens/world_adapter.py",
+]
+
+# Additional dirs to scan when no --files given
 SCAN_DIRS = [
     "tools/ck3lens_mcp",
     "src/ck3raven/core",
@@ -81,7 +100,6 @@ LAYER_ALLOWED_TYPES = {
     "CT":  {"S", "I", "E"},
     "MCP": {"S", "E", "I"},
 }
-FORBIDDEN_AREAS = {"OPEN", "CLOSE"}
 
 # ── Parallel type ban ───────────────────────────────────────────────────────
 
@@ -105,6 +123,45 @@ CANONICAL_CATEGORIES = {
     "mcp.repair",
 }
 
+# ── Canonical reply class/helper names (for NO_GHOST_REPLY) ─────────────────
+
+CANONICAL_REPLY_NAMES = {
+    "Reply", "ReplyBuilder", "ReplyCode", "ReplyType",
+    "reply_type", "reply_codes", "LEGACY_TO_CANONICAL",
+    "_ALL_CODES", "validate_code_format", "get_code", "get_message",
+    "validate_registry",
+}
+
+# ── Tool name → expected AREAs mapping (for AREA_HEURISTIC) ────────────────
+
+TOOL_AREA_MAP = {
+    "ck3_file": {"READ", "WRITE", "RES", "PARSE"},
+    "ck3_folder": {"READ", "RES"},
+    "ck3_playset": {"VIS"},
+    "ck3_git": {"GIT"},
+    "ck3_exec": {"EXEC"},
+    "ck3_search": {"RES", "READ"},
+    "ck3_search_mods": {"RES", "READ"},
+    "ck3_logs": {"LOG", "READ"},
+    "ck3_journal": {"LOG"},
+    "ck3_conflicts": {"READ", "RES"},
+    "ck3_validate": {"VAL", "PARSE"},
+    "ck3_parse_content": {"PARSE"},
+    "ck3_repair": {"SYS"},
+    "ck3_contract": {"OPEN", "CLOSE"},
+    "ck3_db": {"DB"},
+    "ck3_db_query": {"DB"},
+    "ck3_db_delete": {"DB"},
+    "ck3_close_db": {"DB"},
+    "ck3_vscode": {"IO", "SYS"},
+    "ck3_qbuilder": {"SYS"},
+    "ck3_protect": {"WRITE", "GATE"},
+    "ck3_token": {"CFG", "SYS"},
+}
+
+# AREAs that are always allowed (infrastructure / catch-all)
+UNIVERSAL_AREAS = {"SYS", "DB", "GATE", "CFG"}
+
 
 # ============================================================================
 # Types
@@ -126,8 +183,34 @@ class ToolInfo(NamedTuple):
     has_reply_annotation: bool
     has_trace_info: bool
     has_reply_builder: bool
-    rb_tool_name: str | None     # tool='...' value in ReplyBuilder()
-    body_preview: str            # first ~800 chars of body
+    rb_tool_name: str | None
+    body: str                   # Full body of the function
+
+
+# ============================================================================
+# File Collection
+# ============================================================================
+
+def collect_files(root: Path, explicit_files: list[str] | None = None) -> list[Path]:
+    """Collect Python files to scan."""
+    if explicit_files:
+        files = []
+        for f in explicit_files:
+            p = root / f if not Path(f).is_absolute() else Path(f)
+            if p.exists() and p.suffix == ".py":
+                files.append(p)
+        return files
+
+    # Default: scan all .py files in SCAN_DIRS
+    files = []
+    for scan_dir in SCAN_DIRS:
+        dirpath = root / scan_dir
+        if not dirpath.exists():
+            continue
+        for pyfile in dirpath.rglob("*.py"):
+            if not _should_skip(pyfile, root):
+                files.append(pyfile)
+    return files
 
 
 # ============================================================================
@@ -135,8 +218,8 @@ class ToolInfo(NamedTuple):
 # ============================================================================
 
 _TOOL_PATTERN = re.compile(
-    r"@mcp_safe_tool\s*\n"           # decorator line
-    r"def\s+(\w+)\s*\(",             # function name
+    r"@mcp_safe_tool\s*\n"
+    r"def\s+(\w+)\s*\(",
     re.MULTILINE,
 )
 
@@ -159,26 +242,22 @@ def discover_tools(root: Path) -> list[ToolInfo]:
         dec_offset = source[:m.start()].count("\n") + 1
         def_offset = source[:m.end()].count("\n") + 1
 
-        # Grab body (from def line to next top-level def or decorator, max 100 lines)
-        body_start_idx = def_offset  # 1-indexed line of def
+        # Grab full body (from def line to next top-level def or decorator)
+        body_start_idx = def_offset
         body_lines: list[str] = []
-        for i in range(body_start_idx, min(body_start_idx + 100, len(lines))):
+        for i in range(body_start_idx, len(lines)):
             ln = lines[i]
-            # Stop at next top-level definition (non-indented def/class/@)
             if body_lines and ln and not ln[0].isspace() and not ln.startswith("#"):
                 break
             body_lines.append(ln)
         body = "\n".join(body_lines)
-        body_preview = body[:800]
 
-        # Check -> Reply annotation on the def line (may span a few lines)
         def_region = source[m.start():m.start() + 500]
         has_reply = bool(re.search(r"->\s*Reply\s*:", def_region))
+        has_trace = "get_current_trace_info()" in body
+        has_rb = "ReplyBuilder(" in body
 
-        has_trace = "get_current_trace_info()" in body_preview
-        has_rb = "ReplyBuilder(" in body_preview
-
-        rb_name_match = _RB_TOOL_NAME.search(body_preview)
+        rb_name_match = _RB_TOOL_NAME.search(body)
         rb_tool_name = rb_name_match.group(1) if rb_name_match else None
 
         tools.append(ToolInfo(
@@ -190,18 +269,17 @@ def discover_tools(root: Path) -> list[ToolInfo]:
             has_trace_info=has_trace,
             has_reply_builder=has_rb,
             rb_tool_name=rb_tool_name,
-            body_preview=body_preview,
+            body=body,
         ))
 
     return tools
 
 
 # ============================================================================
-# Standard Checks
+# Check: SAFE_WRAPPER + REPLY_TYPE + PREAMBLE
 # ============================================================================
 
 def check_safe_wrapper_and_preamble(tools: list[ToolInfo]) -> list[Violation]:
-    """SAFE_WRAPPER + REPLY_TYPE + PREAMBLE: every tool must have the trifecta."""
     violations = []
     for t in tools:
         if not t.has_reply_annotation:
@@ -219,7 +297,6 @@ def check_safe_wrapper_and_preamble(tools: list[ToolInfo]) -> list[Violation]:
                 t.file, t.def_line, "PREAMBLE",
                 f"Tool '{t.name}' missing rb = ReplyBuilder(...)",
             ))
-        # ReplyBuilder tool= should match function name
         if t.has_reply_builder and t.rb_tool_name and t.rb_tool_name != t.name:
             violations.append(Violation(
                 t.file, t.def_line, "PREAMBLE",
@@ -229,101 +306,86 @@ def check_safe_wrapper_and_preamble(tools: list[ToolInfo]) -> list[Violation]:
     return violations
 
 
-def check_reply_codes_in_source(root: Path) -> list[Violation]:
-    """REPLY_CODES + LAYER_OWNERSHIP: validate all code strings in source."""
+# ============================================================================
+# Check: REPLY_CODES + LAYER_OWNERSHIP (in source)
+# ============================================================================
+
+def check_reply_codes_in_source(root: Path, files: list[Path]) -> list[Violation]:
     violations = []
-    for scan_dir in SCAN_DIRS:
-        dirpath = root / scan_dir
-        if not dirpath.exists():
+    for pyfile in files:
+        if _should_skip(pyfile, root):
             continue
-        for pyfile in dirpath.rglob("*.py"):
-            if _should_skip(pyfile, root):
+        source = pyfile.read_text(encoding="utf-8")
+        relpath = str(pyfile.relative_to(root)).replace("\\", "/")
+        for i, line in enumerate(source.splitlines(), 1):
+            if line.strip().startswith("#"):
                 continue
-            source = pyfile.read_text(encoding="utf-8")
-            relpath = str(pyfile.relative_to(root))
-            for i, line in enumerate(source.splitlines(), 1):
-                if line.strip().startswith("#"):
-                    continue
-                for cm in CODE_IN_SOURCE.finditer(line):
-                    code = cm.group(1)
-                    violations.extend(_validate_code(code, relpath, i))
+            # Skip lines inside LEGACY_TO_CANONICAL dict
+            if "LEGACY_TO_CANONICAL" in source and _in_legacy_table(source, i):
+                continue
+            for cm in CODE_IN_SOURCE.finditer(line):
+                code = cm.group(1)
+                violations.extend(_validate_code(code, relpath, i))
     return violations
 
 
-def check_registry_codes(root: Path) -> list[Violation]:
-    """REPLY_CODES: validate codes in both registry files."""
-    violations = []
+# ============================================================================
+# Check: REPLY_CODES + LAYER_OWNERSHIP (in registry)
+# ============================================================================
 
-    # ck3lens registry
+def check_registry_codes(root: Path) -> list[Violation]:
+    violations = []
     rp = root / "tools" / "ck3lens_mcp" / "ck3lens" / "reply_codes.py"
     if rp.exists():
         lines = rp.read_text(encoding="utf-8").splitlines()
-        relpath = str(rp.relative_to(root))
+        relpath = str(rp.relative_to(root)).replace("\\", "/")
         for i, line in enumerate(lines, 1):
             m = re.search(r'ReplyCode\("([^"]+)"', line)
             if m:
                 violations.extend(_validate_code(m.group(1), relpath, i))
-
-    # core registry
-    rp = root / "src" / "ck3raven" / "core" / "reply_registry.py"
-    if rp.exists():
-        lines = rp.read_text(encoding="utf-8").splitlines()
-        relpath = str(rp.relative_to(root))
-        for i, line in enumerate(lines, 1):
-            m = re.search(r'code="([^"]+)"', line)
-            if m:
-                violations.extend(_validate_code(m.group(1), relpath, i))
-
     return violations
 
 
-def check_no_parallel_types(root: Path) -> list[Violation]:
-    """NO_PARALLEL: forbidden parallel result types must not exist."""
+# ============================================================================
+# Check: NO_PARALLEL
+# ============================================================================
+
+def check_no_parallel_types(root: Path, files: list[Path]) -> list[Violation]:
     violations = []
-    for scan_dir in SCAN_DIRS:
-        dirpath = root / scan_dir
-        if not dirpath.exists():
+    for pyfile in files:
+        if _should_skip(pyfile, root):
             continue
-        for pyfile in dirpath.rglob("*.py"):
-            if _should_skip(pyfile, root):
-                continue
-            relpath = str(pyfile.relative_to(root))
-            for i, line in enumerate(
-                pyfile.read_text(encoding="utf-8").splitlines(), 1
-            ):
-                for forbidden in FORBIDDEN_TYPES:
-                    if re.search(rf"\bclass\s+{forbidden}\b", line):
-                        violations.append(Violation(
-                            relpath, i, "NO_PARALLEL",
-                            f"Forbidden parallel type: class {forbidden} (use Reply)",
-                        ))
-                    elif re.search(rf"\b{forbidden}\b", line) and "import" in line:
-                        violations.append(Violation(
-                            relpath, i, "NO_PARALLEL",
-                            f"Import of forbidden parallel type: {forbidden}",
-                        ))
+        relpath = str(pyfile.relative_to(root)).replace("\\", "/")
+        for i, line in enumerate(pyfile.read_text(encoding="utf-8").splitlines(), 1):
+            for forbidden in FORBIDDEN_TYPES:
+                if re.search(rf"\bclass\s+{forbidden}\b", line):
+                    violations.append(Violation(
+                        relpath, i, "NO_PARALLEL",
+                        f"Forbidden parallel type: class {forbidden} (use Reply)",
+                    ))
+                elif re.search(rf"\b{forbidden}\b", line) and "import" in line:
+                    violations.append(Violation(
+                        relpath, i, "NO_PARALLEL",
+                        f"Import of forbidden parallel type: {forbidden}",
+                    ))
     return violations
 
 
-def check_dict_return_signatures(root: Path) -> list[Violation]:
-    """DICT_RETURN: flag impl functions with -> dict or -> Reply | dict."""
+# ============================================================================
+# Check: DICT_RETURN — any function returning dict instead of Reply
+# ============================================================================
+
+def check_dict_return(root: Path, files: list[Path]) -> list[Violation]:
     violations = []
     pattern = re.compile(
         r"def\s+(\w+)\s*\([^)]*\)\s*->\s*"
-        r"(dict(?:\[.*?\])?|Reply\s*\|\s*dict|dict\s*\|\s*Reply)"
+        r"(dict(?:\[.*?\])?|Dict(?:\[.*?\])?|Reply\s*\|\s*dict|dict\s*\|\s*Reply)"
     )
-    # Only check impl files, not the decorator/safety layer
-    impl_files = [
-        root / "tools" / "ck3lens_mcp" / "unified_tools.py",
-        root / "tools" / "ck3lens_mcp" / "server.py",
-    ]
-    for filepath in impl_files:
-        if not filepath.exists():
+    for pyfile in files:
+        if _should_skip(pyfile, root):
             continue
-        relpath = str(filepath.relative_to(root))
-        for i, line in enumerate(
-            filepath.read_text(encoding="utf-8").splitlines(), 1
-        ):
+        relpath = str(pyfile.relative_to(root)).replace("\\", "/")
+        for i, line in enumerate(pyfile.read_text(encoding="utf-8").splitlines(), 1):
             m = pattern.search(line)
             if m:
                 violations.append(Violation(
@@ -333,56 +395,334 @@ def check_dict_return_signatures(root: Path) -> list[Violation]:
     return violations
 
 
-def check_trace_categories(root: Path) -> list[Violation]:
-    """TRACE_CATEGORY: flag trace.log() calls with non-canonical categories."""
+# ============================================================================
+# Check: TRACE_CATEGORY
+# ============================================================================
+
+def check_trace_categories(root: Path, files: list[Path]) -> list[Violation]:
     violations = []
     pattern = re.compile(r'trace\.log\(\s*"([^"]+)"')
-    server = root / "tools" / "ck3lens_mcp" / "server.py"
-    if not server.exists():
+    for pyfile in files:
+        if _should_skip(pyfile, root):
+            continue
+        relpath = str(pyfile.relative_to(root)).replace("\\", "/")
+        for i, line in enumerate(pyfile.read_text(encoding="utf-8").splitlines(), 1):
+            m = pattern.search(line)
+            if m:
+                cat = m.group(1)
+                if cat not in CANONICAL_CATEGORIES:
+                    violations.append(Violation(
+                        relpath, i, "TRACE_CATEGORY",
+                        f"Non-canonical trace category: '{cat}'",
+                    ))
+    return violations
+
+
+# ============================================================================
+# Check: ORPHAN_CODES — codes used but not in canonical registry
+# ============================================================================
+
+def check_orphan_codes(root: Path, files: list[Path]) -> list[Violation]:
+    violations = []
+    registered = _collect_registered_codes(root)
+    if not registered:
         return violations
-    relpath = str(server.relative_to(root))
-    for i, line in enumerate(server.read_text(encoding="utf-8").splitlines(), 1):
-        m = pattern.search(line)
-        if m:
-            cat = m.group(1)
-            if cat not in CANONICAL_CATEGORIES:
+
+    for pyfile in files:
+        if _should_skip(pyfile, root):
+            continue
+        relpath = str(pyfile.relative_to(root)).replace("\\", "/")
+        # Skip the registry file itself
+        if relpath.endswith("reply_codes.py"):
+            continue
+        source = pyfile.read_text(encoding="utf-8")
+        for i, line in enumerate(source.splitlines(), 1):
+            if line.strip().startswith("#"):
+                continue
+            for cm in CODE_IN_SOURCE.finditer(line):
+                code = cm.group(1)
+                if code not in registered:
+                    violations.append(Violation(
+                        relpath, i, "ORPHAN_CODES",
+                        f"Code {code!r} used but not in canonical registry (reply_codes.py)",
+                    ))
+    return violations
+
+
+# ============================================================================
+# Check: CODES_VIA_RB — codes must go through rb.success/invalid/denied/error
+# ============================================================================
+
+_RB_CALL = re.compile(r"rb\.(success|invalid|denied|error)\(\s*['\"]([A-Z]+-[A-Z]+-[SIDE]-\d{3})['\"]")
+_REPLY_DIRECT = re.compile(r"Reply\.(success|invalid|denied|error)\(\s*['\"]([A-Z]+-[A-Z]+-[SIDE]-\d{3})['\"]")
+
+
+def check_codes_via_rb(tools: list[ToolInfo]) -> list[Violation]:
+    """Codes in tool functions must go through rb.*(), not Reply.*() directly."""
+    violations = []
+    for t in tools:
+        # Find Reply.success/invalid/denied/error direct calls
+        for i, line in enumerate(t.body.splitlines(), t.def_line):
+            if _REPLY_DIRECT.search(line):
                 violations.append(Violation(
-                    relpath, i, "TRACE_CATEGORY",
-                    f"Non-canonical trace category: '{cat}' "
-                    f"(suggest: {_suggest_canonical(cat)})",
+                    t.file, i, "CODES_VIA_RB",
+                    f"Tool '{t.name}': Direct Reply.*() call — use rb.*() instead",
                 ))
     return violations
 
 
-def check_orphan_codes(root: Path) -> list[Violation]:
-    """ORPHAN_CODES: codes used in source but not registered in either registry."""
-    violations = []
-    registered = _collect_registered_codes(root)
-    if not registered:
-        return violations  # Can't check orphans without registries
+# ============================================================================
+# Check: ALL_RETURNS_VIA_RB — every return in tool funcs via rb.*()
+# ============================================================================
 
-    # Collect all codes used in source
-    for scan_dir in SCAN_DIRS:
-        dirpath = root / scan_dir
-        if not dirpath.exists():
+_RETURN_RB = re.compile(r"return\s+rb\.(success|invalid|denied|error)\(")
+_RETURN_ANY = re.compile(r"^\s+return\s+")
+_RETURN_BARE_DICT = re.compile(r"return\s+\{")
+_RETURN_NONE = re.compile(r"return\s*$")
+
+
+def check_all_returns_via_rb(tools: list[ToolInfo]) -> list[Violation]:
+    """Every return in a tool function must go through rb.*()."""
+    violations = []
+    for t in tools:
+        for i, line in enumerate(t.body.splitlines(), t.def_line):
+            stripped = line.strip()
+            if not stripped.startswith("return"):
+                continue
+            # Skip docstring lines or comments
+            if stripped.startswith("#") or stripped.startswith('"""') or stripped.startswith("'''"):
+                continue
+            # OK: return rb.*()
+            if _RETURN_RB.search(line):
+                continue
+            # Bare dict
+            if _RETURN_BARE_DICT.search(line):
+                violations.append(Violation(
+                    t.file, i, "ALL_RETURNS_VIA_RB",
+                    f"Tool '{t.name}': return {{...}} — must use rb.*() to return Reply",
+                ))
+            # return None
+            elif _RETURN_NONE.match(stripped):
+                violations.append(Violation(
+                    t.file, i, "ALL_RETURNS_VIA_RB",
+                    f"Tool '{t.name}': bare return — must use rb.*() to return Reply",
+                ))
+            # return <variable> (not rb.*)
+            elif _RETURN_ANY.match(line) and not _RETURN_RB.search(line):
+                # Could be 'return rb.success(...)' split across lines — check
+                if "rb." not in stripped:
+                    violations.append(Violation(
+                        t.file, i, "ALL_RETURNS_VIA_RB",
+                        f"Tool '{t.name}': return not via rb.*() — '{stripped[:60]}'",
+                    ))
+    return violations
+
+
+# ============================================================================
+# Check: NO_GHOST_REPLY — warn on 'reply' in definitions, error on rogue builders
+# ============================================================================
+
+_CLASS_DEF = re.compile(r"^\s*class\s+(\w*[Rr]eply\w*)")
+_FUNC_DEF = re.compile(r"^\s*def\s+(\w*[Rr]eply\w*)")
+_VAR_DEF = re.compile(r"^\s*(\w*[Rr]eply\w*)\s*=")
+_BUILDER_PATTERN = re.compile(r"[Rr]eply.*[Bb]uilder|[Bb]uilder.*[Rr]eply", re.IGNORECASE)
+
+
+def check_no_ghost_reply(root: Path, files: list[Path]) -> list[Violation]:
+    violations = []
+    for pyfile in files:
+        if _should_skip(pyfile, root):
             continue
-        for pyfile in dirpath.rglob("*.py"):
-            if _should_skip(pyfile, root):
+        relpath = str(pyfile.relative_to(root)).replace("\\", "/")
+        for i, line in enumerate(pyfile.read_text(encoding="utf-8").splitlines(), 1):
+            if line.strip().startswith("#"):
                 continue
-            # Skip the registry files themselves — they define, not use
-            relpath = str(pyfile.relative_to(root)).replace("\\", "/")
-            if relpath.endswith("reply_codes.py") or relpath.endswith("reply_registry.py"):
-                continue
-            source = pyfile.read_text(encoding="utf-8")
-            for i, line in enumerate(source.splitlines(), 1):
-                if line.strip().startswith("#"):
-                    continue
-                for cm in CODE_IN_SOURCE.finditer(line):
-                    code = cm.group(1)
-                    if code not in registered:
+            # Check class definitions
+            m = _CLASS_DEF.search(line)
+            if m:
+                name = m.group(1)
+                if name not in CANONICAL_REPLY_NAMES:
+                    if _BUILDER_PATTERN.search(name):
                         violations.append(Violation(
-                            relpath, i, "ORPHAN_CODES",
-                            f"Code {code!r} used in source but not in either registry",
+                            relpath, i, "NO_GHOST_REPLY",
+                            f"ERROR: Rogue reply builder class '{name}' — "
+                            f"only canonical ReplyBuilder is allowed",
+                        ))
+                    else:
+                        violations.append(Violation(
+                            relpath, i, "NO_GHOST_REPLY",
+                            f"WARN: Class '{name}' contains 'reply' — "
+                            f"verify this is not reimplementing Reply infrastructure",
+                        ))
+            # Check function definitions
+            m = _FUNC_DEF.search(line)
+            if m:
+                name = m.group(1)
+                if name not in CANONICAL_REPLY_NAMES:
+                    if _BUILDER_PATTERN.search(name):
+                        violations.append(Violation(
+                            relpath, i, "NO_GHOST_REPLY",
+                            f"ERROR: Rogue reply builder function '{name}'",
+                        ))
+                    else:
+                        violations.append(Violation(
+                            relpath, i, "NO_GHOST_REPLY",
+                            f"WARN: Function '{name}' contains 'reply'",
+                        ))
+    return violations
+
+
+# ============================================================================
+# Check: NO_FAKE_METHODS — rb.info(), rb.warn(), rb.fail() must not exist
+# ============================================================================
+
+_FAKE_RB = re.compile(r"\brb\.(info|warn|fail)\(")
+
+
+def check_no_fake_methods(root: Path, files: list[Path]) -> list[Violation]:
+    violations = []
+    for pyfile in files:
+        if _should_skip(pyfile, root):
+            continue
+        relpath = str(pyfile.relative_to(root)).replace("\\", "/")
+        for i, line in enumerate(pyfile.read_text(encoding="utf-8").splitlines(), 1):
+            m = _FAKE_RB.search(line)
+            if m:
+                violations.append(Violation(
+                    relpath, i, "NO_FAKE_METHODS",
+                    f"rb.{m.group(1)}() does not exist — "
+                    f"use rb.success/invalid/denied/error only",
+                ))
+    return violations
+
+
+# ============================================================================
+# Check: SINGLE_REGISTRY — only reply_codes.py; no reply_registry imports
+# ============================================================================
+
+_REGISTRY_IMPORT = re.compile(r"reply_registry")
+
+
+def check_single_registry(root: Path, files: list[Path]) -> list[Violation]:
+    violations = []
+
+    # Check that reply_registry.py doesn't exist
+    legacy = root / "src" / "ck3raven" / "core" / "reply_registry.py"
+    if legacy.exists():
+        violations.append(Violation(
+            str(legacy.relative_to(root)).replace("\\", "/"), 1, "SINGLE_REGISTRY",
+            "Legacy reply_registry.py still exists — must be deleted",
+        ))
+
+    # Check no files import from it
+    for pyfile in files:
+        if _should_skip(pyfile, root):
+            continue
+        relpath = str(pyfile.relative_to(root)).replace("\\", "/")
+        for i, line in enumerate(pyfile.read_text(encoding="utf-8").splitlines(), 1):
+            if line.strip().startswith("#"):
+                continue
+            if _REGISTRY_IMPORT.search(line):
+                violations.append(Violation(
+                    relpath, i, "SINGLE_REGISTRY",
+                    f"Reference to legacy reply_registry — use reply_codes only",
+                ))
+    return violations
+
+
+# ============================================================================
+# Check: CANONICAL_LOGGER — must use ck3lens.logging, not stdlib/print
+# ============================================================================
+
+_STDLIB_LOGGING = re.compile(r"^\s*import\s+logging\b|^\s*from\s+logging\s+import")
+_PRINT_CALL = re.compile(r"\bprint\s*\(")
+# Acceptable print usages: in __main__ block, exception handler stderr fallback
+_IN_MAIN = re.compile(r"^if\s+__name__\s*==")
+
+
+def check_canonical_logger(root: Path, files: list[Path]) -> list[Violation]:
+    violations = []
+    for pyfile in files:
+        if _should_skip(pyfile, root):
+            continue
+        relpath = str(pyfile.relative_to(root)).replace("\\", "/")
+        # Skip logging.py itself (it IS the canonical logger)
+        if relpath.endswith("logging.py"):
+            continue
+        source = pyfile.read_text(encoding="utf-8")
+        in_main_block = False
+        for i, line in enumerate(source.splitlines(), 1):
+            if _IN_MAIN.match(line):
+                in_main_block = True
+            # stdlib logging import
+            if _STDLIB_LOGGING.match(line):
+                violations.append(Violation(
+                    relpath, i, "CANONICAL_LOGGER",
+                    "Import of stdlib logging — use ck3lens.logging instead",
+                ))
+            # print() calls (except in __main__ blocks and safety.py exception handler)
+            if _PRINT_CALL.search(line) and not in_main_block:
+                if "stderr" not in line and "sys.stderr" not in line:
+                    violations.append(Violation(
+                        relpath, i, "CANONICAL_LOGGER",
+                        f"print() call — use canonical logger (ck3lens.logging) instead",
+                    ))
+    return violations
+
+
+# ============================================================================
+# Check: REDUNDANT_TRACE — trace.log() that duplicates decorator output
+# ============================================================================
+
+_TRACE_LOG = re.compile(r'trace\.log\(\s*"([^"]+)"')
+
+
+def check_redundant_trace(tools: list[ToolInfo]) -> list[Violation]:
+    """Flag trace.log() calls in tool functions that duplicate decorator logging."""
+    violations = []
+    for t in tools:
+        lines = t.body.splitlines()
+        for idx, line in enumerate(lines):
+            m = _TRACE_LOG.search(line)
+            if not m:
+                continue
+            cat = m.group(1)
+            # If trace.log is right before a return rb.*(), it's likely redundant
+            if idx + 1 < len(lines):
+                next_line = lines[idx + 1].strip()
+                if next_line.startswith("return rb."):
+                    violations.append(Violation(
+                        t.file, t.def_line + idx, "REDUNDANT_TRACE",
+                        f"Tool '{t.name}': trace.log('{cat}') immediately before "
+                        f"return rb.*() — decorator already logs tool_end",
+                    ))
+    return violations
+
+
+# ============================================================================
+# Check: AREA_HEURISTIC — tool name → expected AREA mapping
+# ============================================================================
+
+def check_area_heuristic(tools: list[ToolInfo]) -> list[Violation]:
+    """Flag codes using unexpected AREAs for their tool."""
+    violations = []
+    for t in tools:
+        expected_areas = TOOL_AREA_MAP.get(t.name)
+        if expected_areas is None:
+            continue  # No mapping = no check
+        allowed = expected_areas | UNIVERSAL_AREAS
+
+        for i, line in enumerate(t.body.splitlines(), t.def_line):
+            for cm in _RB_CALL.finditer(line):
+                code = cm.group(2)
+                m = CODE_PATTERN.match(code)
+                if m:
+                    area = m.group(2)
+                    if area not in allowed:
+                        violations.append(Violation(
+                            t.file, i, "AREA_HEURISTIC",
+                            f"Tool '{t.name}': code {code} uses AREA '{area}' — "
+                            f"expected one of {sorted(allowed)}",
                         ))
     return violations
 
@@ -392,21 +732,12 @@ def check_orphan_codes(root: Path) -> list[Violation]:
 # ============================================================================
 
 def _collect_registered_codes(root: Path) -> set[str]:
-    """Collect all codes from both registries."""
+    """Collect all codes from the canonical registry (reply_codes.py only)."""
     codes: set[str] = set()
-
-    # ck3lens registry
     rp = root / "tools" / "ck3lens_mcp" / "ck3lens" / "reply_codes.py"
     if rp.exists():
         for m in re.finditer(r'ReplyCode\("([^"]+)"', rp.read_text(encoding="utf-8")):
             codes.add(m.group(1))
-
-    # core registry
-    rp = root / "src" / "ck3raven" / "core" / "reply_registry.py"
-    if rp.exists():
-        for m in re.finditer(r'code="([^"]+)"', rp.read_text(encoding="utf-8")):
-            codes.add(m.group(1))
-
     return codes
 
 
@@ -421,7 +752,7 @@ def _validate_code(code: str, filepath: str, line: int) -> list[Violation]:
         ))
         return violations
 
-    layer, area, rtype, _num = m.groups()
+    layer, _area, rtype, _num = m.groups()
 
     if layer not in VALID_LAYERS:
         violations.append(Violation(
@@ -436,32 +767,26 @@ def _validate_code(code: str, filepath: str, line: int) -> list[Violation]:
             f"{layer} cannot emit {rtype} (allowed: {allowed}) — {code}",
         ))
 
-    if area in FORBIDDEN_AREAS:
-        violations.append(Violation(
-            filepath, line, "REPLY_CODES",
-            f"AREA {area!r} is forbidden (use GATE) — {code}",
-        ))
-
     return violations
 
 
-def _suggest_canonical(category: str) -> str:
-    """Suggest a canonical category for a non-canonical one."""
-    cat_lower = category.lower()
-    if "contract" in cat_lower:
-        for c in ("contract.open", "contract.close", "contract.cancel",
-                   "contract.flush", "contract.archive"):
-            if c.split(".")[-1] in cat_lower:
-                return c
-        return "contract.*"
-    if "mode" in cat_lower:
-        return "session.mode"
-    if "repair" in cat_lower:
-        return "mcp.repair"
-    if any(kw in cat_lower for kw in ("db", "delete", "grep", "search", "parse",
-                                       "file_search", "report", "close_db")):
-        return "mcp.tool (redundant — decorator already logs)"
-    return "mcp.tool (likely redundant — decorator logs this)"
+def _in_legacy_table(source: str, line_num: int) -> bool:
+    """Check if a line is inside the LEGACY_TO_CANONICAL dict."""
+    lines = source.splitlines()
+    # Walk backwards from line to find if we're inside LEGACY_TO_CANONICAL = {
+    in_dict = False
+    brace_depth = 0
+    for i in range(line_num - 1, max(0, line_num - 80), -1):
+        ln = lines[i] if i < len(lines) else ""
+        if "LEGACY_TO_CANONICAL" in ln and "{" in ln:
+            return True
+        if "}" in ln:
+            brace_depth += 1
+        if "{" in ln:
+            brace_depth -= 1
+            if brace_depth < 0:
+                return False
+    return False
 
 
 def _should_skip(filepath: Path, root: Path) -> bool:
@@ -473,45 +798,84 @@ def _should_skip(filepath: Path, root: Path) -> bool:
 # Main Entry Point
 # ============================================================================
 
-def tasl(root: Path | None = None) -> list[Violation]:
+def tasl(root: Path | None = None, explicit_files: list[str] | None = None) -> list[Violation]:
     """
     Run all Tool Architecture Standards checks.
+
+    Args:
+        root: Repository root path.
+        explicit_files: If provided, scan only these files (relative to root).
 
     Returns list of violations. Empty list = all standards met.
     """
     if root is None:
         root = Path(__file__).resolve().parent.parent.parent
 
+    files = collect_files(root, explicit_files)
     violations: list[Violation] = []
 
     # 1. Discover tools and check per-tool standards
     tools = discover_tools(root)
     violations.extend(check_safe_wrapper_and_preamble(tools))
 
-    # 2. Reply code format + layer ownership (registries)
+    # 2. Reply code format + layer ownership (registry itself)
     violations.extend(check_registry_codes(root))
 
-    # 3. Reply code format + layer ownership (source usage)
-    violations.extend(check_reply_codes_in_source(root))
+    # 3. Reply code format + layer ownership (in source)
+    violations.extend(check_reply_codes_in_source(root, files))
 
     # 4. No parallel result types
-    violations.extend(check_no_parallel_types(root))
+    violations.extend(check_no_parallel_types(root, files))
 
-    # 5. Dict-returning impl functions (migration frontier)
-    violations.extend(check_dict_return_signatures(root))
+    # 5. Dict-returning functions
+    violations.extend(check_dict_return(root, files))
 
     # 6. Trace category compliance
-    violations.extend(check_trace_categories(root))
+    violations.extend(check_trace_categories(root, files))
 
-    # 7. Orphan codes (used in source but not registered)
-    violations.extend(check_orphan_codes(root))
+    # 7. Orphan codes
+    violations.extend(check_orphan_codes(root, files))
+
+    # 8. Codes must go through rb.*()
+    violations.extend(check_codes_via_rb(tools))
+
+    # 9. Every return in tool functions via rb.*()
+    violations.extend(check_all_returns_via_rb(tools))
+
+    # 10. No ghost Reply/Builder reimplementations
+    violations.extend(check_no_ghost_reply(root, files))
+
+    # 11. No fake rb methods
+    violations.extend(check_no_fake_methods(root, files))
+
+    # 12. Single registry enforcement
+    violations.extend(check_single_registry(root, files))
+
+    # 13. Canonical logger (no stdlib logging, no print)
+    violations.extend(check_canonical_logger(root, files))
+
+    # 14. Redundant trace.log() calls
+    violations.extend(check_redundant_trace(tools))
+
+    # 15. AREA heuristic
+    violations.extend(check_area_heuristic(tools))
 
     return violations
 
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="TASL — Tool Architecture Standards Linter",
+    )
+    parser.add_argument(
+        "--files", nargs="*",
+        help="Specific files to scan (relative to repo root). "
+             "If omitted, scans the full MCP toolchain.",
+    )
+    args = parser.parse_args()
+
     root = Path(__file__).resolve().parent.parent.parent
-    violations = tasl(root)
+    violations = tasl(root, explicit_files=args.files)
 
     # ── Summary ─────────────────────────────────────────────────────────
     tools = discover_tools(root)

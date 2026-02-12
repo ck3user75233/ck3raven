@@ -479,7 +479,7 @@ class ReplyBuilder:
     ) -> Reply:
         """Create a Success reply. meta.layer is derived from code prefix."""
         code_layer = self._validate_and_get_layer(code, "S")
-        from ck3raven.core.reply_registry import get_message
+        from ck3lens.reply_codes import get_message
         return Reply.success(
             code=code,
             message=message or get_message(code, **data),
@@ -503,7 +503,7 @@ class ReplyBuilder:
         meta.layer is derived from code prefix.
         """
         code_layer = self._validate_and_get_layer(code, "I")
-        from ck3raven.core.reply_registry import get_message
+        from ck3lens.reply_codes import get_message
         return Reply.invalid(
             code=code,
             message=message or get_message(code, **data),
@@ -527,7 +527,7 @@ class ReplyBuilder:
         meta.layer is derived from code prefix.
         """
         code_layer = self._validate_and_get_layer(code, "D")
-        from ck3raven.core.reply_registry import get_message
+        from ck3lens.reply_codes import get_message
         return Reply.denied(
             code=code,
             message=message or get_message(code, **data),
@@ -545,7 +545,7 @@ class ReplyBuilder:
     ) -> Reply:
         """Create an Error reply. meta.layer is derived from code prefix."""
         code_layer = self._validate_and_get_layer(code, "E")
-        from ck3raven.core.reply_registry import get_message
+        from ck3lens.reply_codes import get_message
         return Reply.error(
             code=code,
             message=message or get_message(code, **data),
