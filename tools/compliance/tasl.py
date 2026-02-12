@@ -4,7 +4,10 @@ TASL — Tool Architecture Standards Linter
 Every MCP tool in ck3raven must tick a set of architecture boxes.
 TASL checks them statically, fast, no imports required.
 
+Subsumes the former reply_linter.py (merged Feb 12 2026).
+
 Current standards (v1):
+  ── Reply System ──────────────────────────────────────────────────
   SAFE_WRAPPER   — @mcp_safe_tool decorator present
   REPLY_TYPE     — -> Reply return annotation
   PREAMBLE       — trace_info + ReplyBuilder initialization
@@ -12,11 +15,14 @@ Current standards (v1):
   LAYER_OWNERSHIP— layer can emit declared reply type
   NO_PARALLEL    — forbidden parallel types (EnforcementResult, etc.)
   DICT_RETURN    — impl functions returning dict instead of Reply
+  ORPHAN_CODES   — codes used in source but missing from registries
+
+  ── Logging System ────────────────────────────────────────────────
   TRACE_CATEGORY — trace.log() using canonical log categories
 
 Future candidates (not yet enforced):
-  IMPL_REPLY     — impl functions return Reply (not dict)
   LOG_CANONICAL  — use canonical logger (info/warn/error) not trace.log()
+  REDUNDANT_TRACE— trace.log() calls that duplicate mcp_safe_tool decorator
   RETURN_PATHS   — every branch returns via rb.success/invalid/denied/error
   NO_BARE_DICT   — no dict() construction in return position
   ENFORCEMENT_ONLY_DENY — only EN layer code appears in rb.denied() calls
@@ -61,7 +67,6 @@ SKIP_PATTERNS = [
     ".wip/",
     "node_modules/",
     "tasl.py",       # Don't lint ourselves
-    "reply_linter.py",
 ]
 
 # ── Reply code rules ────────────────────────────────────────────────────────
@@ -349,9 +354,61 @@ def check_trace_categories(root: Path) -> list[Violation]:
     return violations
 
 
+def check_orphan_codes(root: Path) -> list[Violation]:
+    """ORPHAN_CODES: codes used in source but not registered in either registry."""
+    violations = []
+    registered = _collect_registered_codes(root)
+    if not registered:
+        return violations  # Can't check orphans without registries
+
+    # Collect all codes used in source
+    for scan_dir in SCAN_DIRS:
+        dirpath = root / scan_dir
+        if not dirpath.exists():
+            continue
+        for pyfile in dirpath.rglob("*.py"):
+            if _should_skip(pyfile, root):
+                continue
+            # Skip the registry files themselves — they define, not use
+            relpath = str(pyfile.relative_to(root)).replace("\\", "/")
+            if relpath.endswith("reply_codes.py") or relpath.endswith("reply_registry.py"):
+                continue
+            source = pyfile.read_text(encoding="utf-8")
+            for i, line in enumerate(source.splitlines(), 1):
+                if line.strip().startswith("#"):
+                    continue
+                for cm in CODE_IN_SOURCE.finditer(line):
+                    code = cm.group(1)
+                    if code not in registered:
+                        violations.append(Violation(
+                            relpath, i, "ORPHAN_CODES",
+                            f"Code {code!r} used in source but not in either registry",
+                        ))
+    return violations
+
+
 # ============================================================================
 # Helpers
 # ============================================================================
+
+def _collect_registered_codes(root: Path) -> set[str]:
+    """Collect all codes from both registries."""
+    codes: set[str] = set()
+
+    # ck3lens registry
+    rp = root / "tools" / "ck3lens_mcp" / "ck3lens" / "reply_codes.py"
+    if rp.exists():
+        for m in re.finditer(r'ReplyCode\("([^"]+)"', rp.read_text(encoding="utf-8")):
+            codes.add(m.group(1))
+
+    # core registry
+    rp = root / "src" / "ck3raven" / "core" / "reply_registry.py"
+    if rp.exists():
+        for m in re.finditer(r'code="([^"]+)"', rp.read_text(encoding="utf-8")):
+            codes.add(m.group(1))
+
+    return codes
+
 
 def _validate_code(code: str, filepath: str, line: int) -> list[Violation]:
     """Validate a single reply code string."""
@@ -445,6 +502,9 @@ def tasl(root: Path | None = None) -> list[Violation]:
 
     # 6. Trace category compliance
     violations.extend(check_trace_categories(root))
+
+    # 7. Orphan codes (used in source but not registered)
+    violations.extend(check_orphan_codes(root))
 
     return violations
 

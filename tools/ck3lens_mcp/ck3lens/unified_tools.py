@@ -18,71 +18,12 @@ from .db.golden_join import GOLDEN_JOIN
 from .paths import ROOT_REPO
 
 # Canonical Reply System (Phase C migration)
-from ck3raven.core.reply import Reply, TraceInfo, MetaInfo
+from ck3raven.core.reply import Reply
 
 
 # ============================================================================
 # Helpers
 # ============================================================================
-
-def _create_reply_builder(trace_info: TraceInfo, tool: str, layer: str = "MCP", contract_id: str | None = None):
-    """Create a ReplyBuilder for use in helper functions."""
-    from ck3raven.core.reply_registry import get_message
-    
-    class _ReplyBuilder:
-        """Minimal ReplyBuilder for internal use in unified_tools.py"""
-        def __init__(self):
-            self.trace_info = trace_info
-            self.tool = tool
-            self.layer = layer
-            self.contract_id = contract_id
-        
-        def _meta(self, layer_override: str | None = None) -> MetaInfo:
-            return MetaInfo(
-                layer=layer_override or self.layer,  # type: ignore
-                tool=self.tool,
-                contract_id=self.contract_id,
-            )
-        
-        def success(self, code: str, data: dict, message: str | None = None, layer: str | None = None) -> Reply:
-            return Reply.success(
-                code=code,
-                message=message or get_message(code, **data),
-                data=data,
-                trace=self.trace_info,
-
-                meta=self._meta(layer),
-            )
-        
-        def invalid(self, code: str, data: dict, message: str | None = None, layer: str | None = None) -> Reply:
-            return Reply.invalid(
-                code=code,
-                message=message or get_message(code, **data),
-                data=data,
-                trace=self.trace_info,
-                meta=self._meta(layer),
-            )
-        
-        def denied(self, code: str, data: dict, message: str | None = None, layer: str | None = None) -> Reply:
-            return Reply.denied(
-                code=code,
-                message=message or get_message(code, **data),
-                data=data,
-                trace=self.trace_info,
-                meta=self._meta(layer),
-            )
-        
-        def error(self, code: str, data: dict, message: str | None = None, layer: str | None = None) -> Reply:
-            return Reply.error(
-                code=code,
-                message=message or get_message(code, **data),
-                data=data,
-                trace=self.trace_info,
-                meta=self._meta(layer),
-            )
-    
-    return _ReplyBuilder()
-
 
 def _compute_mod_prefix(mod_name: str) -> str:
     """
@@ -836,9 +777,8 @@ def ck3_file_impl(
     trace=None,
     visibility=None,  # VisibilityScope for DB queries
     world=None,  # WorldAdapter for unified path resolution
-    # Reply system (Phase C migration)
-    trace_info: TraceInfo | None = None,
-    rb: Any | None = None,  # ReplyBuilder from server.py — used by enforce()
+    # Reply system
+    rb: Any | None = None,  # ReplyBuilder from server.py — used by enforce() and sub-functions
 ) -> Reply | dict:
     """
     Unified file operations tool.
@@ -887,20 +827,11 @@ def ck3_file_impl(
         resolution = normalize_path_input(world, path=path, mod_name=mod_name, rel_path=rel_path)
         
         if not resolution.found:
-            # Reply conformance (Instruction 3): use Reply system, not raw dict
-            rb = _create_reply_builder(trace_info, "ck3_file", layer="WA") if trace_info else None
-            if rb:
-                return rb.invalid("WA-RES-I-001", {
-                    "error": resolution.error_message or "Path not in world scope",
-                    "input_path": path or f"{mod_name or ''}:{rel_path or ''}",
-                    "mode": world.mode,
-                })
-            return {
-                "success": False,
+            return rb.invalid("WA-RES-I-001", {
                 "error": resolution.error_message or "Path not in world scope",
-                "visibility": "NOT_FOUND",
-                "guidance": "This path is outside your current lens/scope",
-            }
+                "input_path": path or f"{mod_name or ''}:{rel_path or ''}",
+                "mode": world.mode,
+            })
     
     # ==========================================================================
     # STEP 2: CENTRALIZED ENFORCEMENT GATE (AFTER resolution)
@@ -912,19 +843,10 @@ def ck3_file_impl(
         # CRITICAL FIX: No mode = no capabilities - deny all writes immediately
         # This closes the fail-open loophole where 'and mode' would skip enforcement
         if not mode:
-            rb = _create_reply_builder(trace_info, "ck3_file", layer="WA") if trace_info else None
-            if rb:
-                return rb.invalid("WA-MODE-I-001", {
-                    "error": "Agent mode not initialized - all writes denied",
-                    "policy_decision": "DENY",
-                    "guidance": "Call ck3_get_mode_instructions(mode='ck3lens' or 'ck3raven-dev') to initialize",
-                })
-            return {
-                "success": False,
+            return rb.invalid("WA-CFG-I-001", {
                 "error": "Agent mode not initialized - all writes denied",
-                "policy_decision": "DENY",
                 "guidance": "Call ck3_get_mode_instructions(mode='ck3lens' or 'ck3raven-dev') to initialize",
-            }
+            })
         
         # Now proceed with enforcement if we have resolved path
         if resolution and resolution.absolute_path:
@@ -960,7 +882,7 @@ def ck3_file_impl(
     elif command == "read":
         # No hidden fallback (Instruction 4): use resolution.absolute_path or fail
         if resolution and resolution.absolute_path:
-            return _file_read_raw(str(resolution.absolute_path), start_line, end_line, trace, world, trace_info=trace_info)
+            return _file_read_raw(str(resolution.absolute_path), start_line, end_line, trace, world, rb=rb)
         else:
             return {"error": "Either 'path' or 'mod_name'+'rel_path' required for read"}
     
@@ -970,7 +892,7 @@ def ck3_file_impl(
         
         # Unified write path: always use absolute_path from resolution
         if resolution and resolution.absolute_path:
-            return _file_write_raw(str(resolution.absolute_path), content, validate_syntax, token_id, trace, world, trace_info=trace_info)
+            return _file_write_raw(str(resolution.absolute_path), content, validate_syntax, token_id, trace, world, rb=rb)
         else:
             return {"error": "Path resolution failed - no absolute_path available"}
     
@@ -1031,6 +953,7 @@ def ck3_file_impl(
             session=session,
             trace=trace,
             mode=mode,
+            rb=rb,
         )
     
     return {"error": f"Unknown command: {command}"}
@@ -1056,70 +979,41 @@ def _file_get(path, include_ast, max_bytes, db, trace, visibility):
     return {"error": f"File not found: {path}"}
 
 
-def _file_read_raw(path, start_line, end_line, trace, world=None, *, trace_info: TraceInfo | None = None) -> Reply | dict:
+def _file_read_raw(path, start_line, end_line, trace, world=None, *, rb=None) -> Reply | dict:
     """
     Read file from filesystem with WorldAdapter visibility enforcement.
     
-    Returns Reply if trace_info provided, otherwise legacy dict for backward compat during migration.
+    Returns Reply via rb.
     """
     from pathlib import Path as P
-    from ck3raven.core.reply_registry import get_message
-    
+
     file_path = P(path)
-    
-    # Create reply builder if we have trace_info
-    rb = None
-    if trace_info:
-        rb = _create_reply_builder(trace_info, "ck3_file", layer="WA")
-    
+
     # WorldAdapter visibility - THE canonical way
-    # world parameter is REQUIRED - no fallback to banned playset_scope
     if world is None:
-        err = "WorldAdapter not provided - cannot resolve path visibility"
-        if rb:
-            return rb.error("WA-RES-E-001", {"error": err, "input_path": str(path)})
-        return {
-            "success": False,
-            "error": err,
-            "hint": "Caller must pass world parameter from _get_world()",
-        }
+        return rb.error("WA-RES-E-001", {"error": "WorldAdapter not provided", "input_path": str(path)})
     
     resolution = world.resolve(str(file_path))
     if not resolution.found:
-        if rb:
-            return rb.invalid("WA-RES-I-001", {"input_path": str(path), "mode": world.mode})
-        return {
-            "success": False,
-            "error": f"Path not found: {path}",
-            "mode": world.mode,
-        }
+        return rb.invalid("WA-RES-I-001", {"input_path": str(path), "mode": world.mode})
     
-    # Use resolved absolute path (always set when resolution.found is True)
     if resolution.absolute_path is None:
-        err = f"Resolution returned no path for: {path}"
-        if rb:
-            return rb.error("WA-RES-E-001", {"error": err, "input_path": str(path)})
-        return {"success": False, "error": err}
+        return rb.error("WA-RES-E-001", {"error": f"Resolution returned no path for: {path}", "input_path": str(path)})
     file_path = resolution.absolute_path
     
     if trace:
         trace.log("ck3lens.file.read", {"path": str(file_path)}, {})
     
     if not file_path.exists():
-        if rb:
-            return rb.invalid("WA-RES-I-001", {"input_path": str(path)})
-        return {"success": False, "error": f"File not found: {path}"}
+        return rb.invalid("WA-RES-I-001", {"input_path": str(path)})
     
     if not file_path.is_file():
-        if rb:
-            return rb.error("WA-RES-E-002", {"input_path": str(path)})
-        return {"success": False, "error": f"Not a file: {path}"}
+        return rb.error("WA-RES-E-002", {"input_path": str(path)})
     
     try:
         content = file_path.read_text(encoding='utf-8', errors='replace')
         lines = content.splitlines(keepends=True)
         
-        # Apply line range
         start_idx = max(0, start_line - 1)
         end_idx = end_line if end_line else len(lines)
         selected = lines[start_idx:end_idx]
@@ -1132,36 +1026,26 @@ def _file_read_raw(path, start_line, end_line, trace, world=None, *, trace_info:
             "end_line": end_idx,
             "canonical_path": str(file_path),
         }
-        
-        if rb:
-            return rb.success("WA-RES-S-001", data)
-        return {"success": True, **data}
+        return rb.success("WA-READ-S-001", data)
     except Exception as e:
-        if rb:
-            return rb.error("WA-RES-E-001", {"error": str(e), "input_path": str(path)})
-        return {"success": False, "error": str(e)}
+        return rb.error("WA-RES-E-001", {"error": str(e), "input_path": str(path)})
 
 
 # _file_read_live DELETED by path addressing refactor (proposal V3).
 # All read operations now go through _file_read_raw with pre-resolved absolute path.
 
 
-def _file_write(mod_name, rel_path, content, validate_syntax, session, trace, *, trace_info: TraceInfo | None = None) -> Reply | dict:
+def _file_write(mod_name, rel_path, content, validate_syntax, session, trace, *, rb=None) -> Reply | dict:
     """
     Write file to mod.
     
     NOTE: Enforcement already happened in ck3_file dispatcher.
     This function only does the actual write + syntax validation.
     
-    Returns Reply if trace_info provided, otherwise legacy dict for backward compat during migration.
+    Returns Reply via rb.
     """
     from ck3lens.workspace import validate_relpath
     from ck3lens.validate import parse_content
-    
-    # Create reply builder if we have trace_info
-    rb = None
-    if trace_info:
-        rb = _create_reply_builder(trace_info, "ck3_file", layer="EN")
     
     # Optional syntax validation
     if validate_syntax and rel_path.endswith(".txt"):
@@ -1171,34 +1055,26 @@ def _file_write(mod_name, rel_path, content, validate_syntax, session, trace, *,
                 trace.log("ck3lens.file.write", {"mod_name": mod_name, "rel_path": rel_path},
                           {"success": False, "reason": "syntax_error"})
             
-            data = {
-                "error": "Syntax validation failed",
-                "parse_errors": parse_result["errors"],
-                "canonical_path": f"{mod_name}:{rel_path}",
-            }
-            if rb:
-                # Use PARSE-AST-E-001 for syntax errors (layer override to PARSE)
-                first_error = parse_result["errors"][0] if parse_result["errors"] else {"line": 1, "message": "Unknown error"}
-                return rb.error(
-                    "PARSE-AST-E-001",
-                    {**data, "line": first_error.get("line", 1), "error": first_error.get("message", "Syntax error")},
-                    layer="PARSE",
-                )
-            return {"success": False, **data}
+            first_error = parse_result["errors"][0] if parse_result["errors"] else {"line": 1, "message": "Unknown error"}
+            return rb.error(
+                "PARSE-AST-E-001",
+                {
+                    "error": "Syntax validation failed",
+                    "parse_errors": parse_result["errors"],
+                    "canonical_path": f"{mod_name}:{rel_path}",
+                    "line": first_error.get("line", 1),
+                },
+                layer="PARSE",
+            )
     
     # Inline write operation
     mod = session.get_mod(mod_name)
     if not mod:
-        err = f"Unknown mod_id: {mod_name}"
-        if rb:
-            return rb.invalid("WA-RES-I-001", {"input_path": f"{mod_name}:{rel_path}", "error": err})
-        return {"success": False, "error": err}
+        return rb.invalid("WA-RES-I-001", {"input_path": f"{mod_name}:{rel_path}", "error": f"Unknown mod_id: {mod_name}"})
     
     valid, err = validate_relpath(rel_path)
     if not valid:
-        if rb:
-            return rb.error("WA-RES-E-002", {"input_path": rel_path, "error": err})
-        return {"success": False, "error": err}
+        return rb.error("WA-RES-E-002", {"input_path": rel_path, "error": err})
     
     file_path = mod.path / rel_path
     try:
@@ -1221,27 +1097,23 @@ def _file_write(mod_name, rel_path, content, validate_syntax, session, trace, *,
             trace.log("ck3lens.file.write", {"mod_name": mod_name, "rel_path": rel_path},
                       {"success": True})
         
-        if rb:
-            return rb.success("EN-WRITE-S-001", data)
-        return {"success": True, **data}
+        return rb.success("EN-WRITE-S-001", data)
         
     except Exception as e:
         if trace:
             trace.log("ck3lens.file.write", {"mod_name": mod_name, "rel_path": rel_path},
                       {"success": False, "error": str(e)})
-        if rb:
-            return rb.error("WA-RES-E-001", {"error": str(e), "input_path": f"{mod_name}:{rel_path}"})
-        return {"success": False, "error": str(e)}
+        return rb.error("WA-RES-E-001", {"error": str(e), "input_path": f"{mod_name}:{rel_path}"})
 
 
-def _file_write_raw(path, content, validate_syntax, token_id, trace, world=None, *, trace_info: TraceInfo | None = None) -> Reply | dict:
+def _file_write_raw(path, content, validate_syntax, token_id, trace, world=None, *, rb=None) -> Reply | dict:
     """
     Write file to raw filesystem path.
     
     NOTE: Enforcement already happened in ck3_file dispatcher.
     This function only does the actual write + syntax validation.
     
-    Returns Reply if trace_info provided, otherwise legacy dict for backward compat during migration.
+    Returns Reply via rb.
     """
     from pathlib import Path as P
     from ck3lens.validate import parse_content
@@ -1250,28 +1122,21 @@ def _file_write_raw(path, content, validate_syntax, token_id, trace, world=None,
     file_path = P(path).resolve()
     mode = get_agent_mode()
     
-    # Create reply builder if we have trace_info
-    rb = None
-    if trace_info:
-        rb = _create_reply_builder(trace_info, "ck3_file", layer="EN")
-    
     # Validate syntax if requested
     if validate_syntax and path.endswith(".txt"):
         parse_result = parse_content(content, path)
         if not parse_result["success"]:
-            data = {
-                "error": "Syntax validation failed",
-                "parse_errors": parse_result["errors"],
-                "canonical_path": str(file_path),
-            }
-            if rb:
-                first_error = parse_result["errors"][0] if parse_result["errors"] else {"line": 1, "message": "Unknown error"}
-                return rb.error(
-                    "PARSE-AST-E-001",
-                    {**data, "line": first_error.get("line", 1), "error": first_error.get("message", "Syntax error")},
-                    layer="PARSE",
-                )
-            return {"success": False, **data}
+            first_error = parse_result["errors"][0] if parse_result["errors"] else {"line": 1, "message": "Unknown error"}
+            return rb.error(
+                "PARSE-AST-E-001",
+                {
+                    "error": "Syntax validation failed",
+                    "parse_errors": parse_result["errors"],
+                    "canonical_path": str(file_path),
+                    "line": first_error.get("line", 1),
+                },
+                layer="PARSE",
+            )
     
     # Write the file
     try:
@@ -1299,14 +1164,10 @@ def _file_write_raw(path, content, validate_syntax, token_id, trace, world=None,
             "canonical_path": str(file_path),
         }
         
-        if rb:
-            return rb.success("EN-WRITE-S-001", data)
-        return {"success": True, **data}
+        return rb.success("EN-WRITE-S-001", data)
         
     except Exception as e:
-        if rb:
-            return rb.error("WA-RES-E-001", {"error": str(e), "input_path": str(path)})
-        return {"success": False, "error": str(e)}
+        return rb.error("WA-RES-E-001", {"error": str(e), "input_path": str(path)})
 
 
 def _file_edit_raw(path, old_content, new_content, validate_syntax, token_id, trace, world=None):
@@ -1659,7 +1520,7 @@ def _file_list_raw(path, pattern, trace, world=None):
     return {"path": path, "pattern": glob_pattern, "files": sorted(files, key=lambda x: x.get("relpath", ""))}
 
 
-def _file_create_patch(mod_name, source_mod, source_path, patch_mode, initial_content, validate_syntax, session, trace, mode):
+def _file_create_patch(mod_name, source_mod, source_path, patch_mode, initial_content, validate_syntax, session, trace, mode, rb=None):
     """
     Create an override patch file in a mod.
     
@@ -1684,48 +1545,44 @@ def _file_create_patch(mod_name, source_mod, source_path, patch_mode, initial_co
     
     # Mode check: ck3lens only
     if mode == "ck3raven-dev":
-        return {
-            "success": False,
+        return rb.invalid("WA-CFG-I-001", {
             "error": "create_patch command is only available in ck3lens mode",
             "guidance": "This tool creates override patches in CK3 mods, which is not relevant to ck3raven development",
-        }
+        })
     
     # Validate required parameters
     if not mod_name:
-        return {"success": False, "error": "mod_name required for create_patch (destination mod)"}
+        return rb.invalid("WA-RES-I-001", {"error": "mod_name required for create_patch (destination mod)"})
     if not source_path:
-        return {"success": False, "error": "source_path required for create_patch (the file being overridden)"}
+        return rb.invalid("WA-RES-I-001", {"error": "source_path required for create_patch (the file being overridden)"})
     if not patch_mode:
-        return {"success": False, "error": "patch_mode required: 'partial_patch' or 'full_replace'"}
+        return rb.invalid("WA-RES-I-001", {"error": "patch_mode required: 'partial_patch' or 'full_replace'"})
     if patch_mode not in ("partial_patch", "full_replace"):
-        return {"success": False, "error": f"Invalid patch_mode: {patch_mode}. Use 'partial_patch' or 'full_replace'"}
+        return rb.invalid("WA-RES-I-001", {"error": f"Invalid patch_mode: {patch_mode}. Use 'partial_patch' or 'full_replace'"})
     
     # Parse and validate source path
     source = P(source_path)
     if source.is_absolute() or ".." in source.parts:
-        return {"success": False, "error": "source_path must be relative without '..'"}
+        return rb.invalid("WA-RES-I-001", {"error": "source_path must be relative without '..'", "input_path": source_path})
     
     # If source_mod provided and no initial_content, read from source mod
     if source_mod and initial_content is None:
         source_mod_entry = session.get_mod(source_mod)
         if not source_mod_entry:
-            return {
-                "success": False, 
+            return rb.invalid("WA-RES-I-001", {
                 "error": f"Source mod not found in active playset: {source_mod}",
-                "hint": "Use the mod's display name as shown in the playset"
-            }
+                "hint": "Use the mod's display name as shown in the playset",
+            })
         
         source_file_path = source_mod_entry.path / source_path
         if not source_file_path.exists():
-            return {
-                "success": False,
+            return rb.invalid("WA-RES-I-001", {
                 "error": f"Source file not found: {source_path} in {source_mod}",
-                "searched_path": str(source_file_path)
-            }
+                "searched_path": str(source_file_path),
+            })
         
         try:
             initial_content = source_file_path.read_text(encoding='utf-8-sig')
-            # Add header comment
             header = f"""# Override patch for: {source_mod}/{source_path}
 # Created: {datetime.now().strftime("%Y-%m-%d %H:%M")}
 # Patch mode: {patch_mode}
@@ -1737,7 +1594,7 @@ def _file_create_patch(mod_name, source_mod, source_path, patch_mode, initial_co
 """
             initial_content = header + initial_content
         except Exception as e:
-            return {"success": False, "error": f"Failed to read source file: {e}"}
+            return rb.error("WA-RES-E-001", {"error": f"Failed to read source file: {e}", "input_path": str(source_file_path)})
     
     # If no source_mod and no content, generate template
     elif initial_content is None:
@@ -1753,29 +1610,25 @@ def _file_create_patch(mod_name, source_mod, source_path, patch_mode, initial_co
     
     # Compute output filename based on patch mode
     if patch_mode == "partial_patch":
-        # Prefix with zzz_[prefix]_ to load LAST (wins for OVERRIDE types)
-        # Use first letter of each word for short prefix: "Mini Super Compatch" -> "msc"
         mod_prefix = _compute_mod_prefix(mod_name)
         new_name = f"zzz_{mod_prefix}_{source.name}"
     else:  # full_replace
-        # Same name (will override due to load order)
         new_name = source.name
     
     # Build target relative path (same directory structure)
     target_rel_path = str(source.parent / new_name)
     
-    # Delegate to existing _file_write (handles folder creation, syntax validation)
-    write_result = _file_write(mod_name, target_rel_path, initial_content, validate_syntax, session, trace)
+    # Delegate to _file_write (handles folder creation, syntax validation)
+    write_result = _file_write(mod_name, target_rel_path, initial_content, validate_syntax, session, trace, rb=rb)
     
-    if write_result.get("success"):
-        # Enhance result with patch-specific info
-        write_result["patch_info"] = {
+    if write_result.is_success:
+        # Reply is frozen — return new success with patch info merged into data
+        patch_data = {**write_result.data, "patch_info": {
             "source_mod": source_mod,
             "source_path": source_path,
             "patch_mode": patch_mode,
             "created_path": target_rel_path,
-        }
-        write_result["message"] = f"Created {patch_mode} patch: {target_rel_path}"
+        }, "message": f"Created {patch_mode} patch: {target_rel_path}"}
         
         if trace:
             trace.log("ck3lens.file.create_patch", {
@@ -1784,6 +1637,8 @@ def _file_create_patch(mod_name, source_mod, source_path, patch_mode, initial_co
                 "source_path": source_path,
                 "patch_mode": patch_mode,
             }, {"success": True, "created_path": target_rel_path})
+        
+        return rb.success("EN-WRITE-S-001", patch_data)
     
     return write_result
 
