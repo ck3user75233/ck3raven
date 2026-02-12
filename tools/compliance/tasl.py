@@ -31,6 +31,7 @@ Check categories:
   RB_CONSTRUCTOR   — ReplyBuilder first arg must be TraceInfo, not dict literal
   RB_SCHEMA        — rb.*() calls must include required 'data' positional arg
   REPLY_ATTR       — no non-existent Reply attributes (e.g., .code_type)
+  IMPL_REPLY       — _impl/_internal functions must return Reply, not dicts
 
   ── Logging System ────────────────────────────────────────────────
   TRACE_CATEGORY   — trace.log() using canonical categories
@@ -200,16 +201,17 @@ class Violation(NamedTuple):
 
 
 class ToolInfo(NamedTuple):
-    """Parsed info about a single @mcp_safe_tool function."""
+    """Parsed info about a single @mcp_safe_tool function or _impl/_internal helper."""
     name: str
     file: str
-    decorator_line: int
+    decorator_line: int      # 0 for impl functions (no decorator)
     def_line: int
     has_reply_annotation: bool
     has_trace_info: bool
     has_reply_builder: bool
     rb_tool_name: str | None
     body: str                   # Full body of the function
+    is_impl: bool = False       # True for _impl/_internal helpers
 
 
 # ============================================================================
@@ -307,6 +309,131 @@ def discover_tools(root: Path) -> list[ToolInfo]:
         ))
 
     return tools
+
+
+# ============================================================================
+# Impl/Internal Function Discovery
+# ============================================================================
+
+# Pattern: def ck3_*_impl( or def _ck3_*_internal(
+_IMPL_PATTERN = re.compile(
+    r"^def\s+(ck3_\w+_impl|_ck3_\w+_internal)\s*\(",
+    re.MULTILINE,
+)
+
+
+def discover_impl_functions(root: Path, files: list[Path]) -> list[ToolInfo]:
+    """Find all ck3_*_impl and _ck3_*_internal functions in scanned files.
+
+    These are the helper functions that do the actual work for MCP tools.
+    Per Canonical Reply System 2.0 §1, they are in scope for Reply compliance.
+    """
+    impls: list[ToolInfo] = []
+
+    for pyfile in files:
+        if _should_skip(pyfile, root):
+            continue
+        relpath = str(pyfile.relative_to(root)).replace("\\", "/")
+        source = pyfile.read_text(encoding="utf-8")
+        lines = source.splitlines()
+
+        for m in _IMPL_PATTERN.finditer(source):
+            func_name = m.group(1)
+            def_offset = source[:m.end()].count("\n") + 1
+
+            # Grab full body (same logic as discover_tools)
+            body_start_idx = def_offset
+            body_lines: list[str] = []
+            past_signature = False
+            for i in range(body_start_idx, len(lines)):
+                ln = lines[i]
+                if not past_signature:
+                    body_lines.append(ln)
+                    if re.search(r'^\s*\).*:\s*$', ln) or re.search(r'\)\s*->\s*\w+.*:\s*$', ln):
+                        past_signature = True
+                    continue
+                if ln and not ln[0].isspace() and not ln.startswith("#"):
+                    break
+                body_lines.append(ln)
+            body = "\n".join(body_lines)
+
+            has_reply = bool(re.search(r"->\s*Reply\s*:", body))
+            has_dict = bool(re.search(r"->\s*(dict|Dict)", body))
+            has_rb = "ReplyBuilder(" in body or "rb." in body
+
+            impls.append(ToolInfo(
+                name=func_name,
+                file=relpath,
+                decorator_line=0,
+                def_line=def_offset,
+                has_reply_annotation=has_reply,
+                has_trace_info=False,
+                has_reply_builder=has_rb,
+                rb_tool_name=None,
+                body=body,
+                is_impl=True,
+            ))
+
+    return impls
+
+
+# ============================================================================
+# Check: IMPL_REPLY — impl/internal functions must return Reply, not dicts
+# ============================================================================
+
+_RETURN_BARE_DICT_IMPL = re.compile(r"return\s+\{")
+_RETURN_RB_IMPL = re.compile(r"return\s+rb\.(success|invalid|denied|error)\(")
+_RETURN_REPLY_VAR = re.compile(r"return\s+(result|reply|response)\b")
+
+
+def check_impl_reply(impls: list[ToolInfo]) -> list[Violation]:
+    """Impl/internal functions must comply with Reply System.
+
+    Checks:
+    - Must have -> Reply annotation (not -> dict or missing)
+    - Must not return bare dicts
+    - Returns should go through rb.*() or return a Reply variable
+    """
+    violations = []
+    for impl in impls:
+        # Check 1: Must have -> Reply annotation
+        if not impl.has_reply_annotation:
+            has_dict_annotation = bool(re.search(r"->\s*(dict|Dict)", impl.body))
+            if has_dict_annotation:
+                violations.append(Violation(
+                    impl.file, impl.def_line, "IMPL_REPLY",
+                    f"'{impl.name}' returns dict — must return Reply "
+                    f"(Canonical Reply System 2.0 §12)",
+                ))
+            else:
+                violations.append(Violation(
+                    impl.file, impl.def_line, "IMPL_REPLY",
+                    f"'{impl.name}' missing -> Reply annotation "
+                    f"(Canonical Reply System 2.0 §1)",
+                ))
+
+        # Check 2: Bare dict returns
+        body_lines = impl.body.splitlines()
+        for i, line in enumerate(body_lines, impl.def_line):
+            stripped = line.strip()
+            if not stripped.startswith("return"):
+                continue
+            if stripped.startswith("#"):
+                continue
+            # OK: return rb.*()
+            if _RETURN_RB_IMPL.search(line):
+                continue
+            # OK: return result/reply/response variable
+            if _RETURN_REPLY_VAR.search(stripped):
+                continue
+            # Bare dict
+            if _RETURN_BARE_DICT_IMPL.search(line):
+                violations.append(Violation(
+                    impl.file, i, "IMPL_REPLY",
+                    f"'{impl.name}': return {{...}} — must return Reply",
+                ))
+
+    return violations
 
 
 # ============================================================================
@@ -1009,6 +1136,10 @@ def tasl(root: Path | None = None, explicit_files: list[str] | None = None) -> l
     # 18. Wrong Reply attribute names
     violations.extend(check_reply_wrong_attr(root, files))
 
+    # 19. Impl/internal function Reply compliance
+    impls = discover_impl_functions(root, files)
+    violations.extend(check_impl_reply(impls))
+
     return violations
 
 
@@ -1028,9 +1159,11 @@ def main():
 
     # ── Summary ─────────────────────────────────────────────────────────
     tools = discover_tools(root)
+    files_for_summary = collect_files(root, explicit_files=args.files)
+    impls = discover_impl_functions(root, files_for_summary)
 
     if not violations:
-        print(f"TASL: CLEAN — {len(tools)} tools, all standards met")
+        print(f"TASL: CLEAN — {len(tools)} tools, {len(impls)} impl functions, all standards met")
         sys.exit(0)
 
     # Group by rule
@@ -1038,7 +1171,7 @@ def main():
     for v in violations:
         by_rule[v.rule].append(v)
 
-    print(f"TASL: {len(violations)} violation(s) across {len(tools)} tools\n")
+    print(f"TASL: {len(violations)} violation(s) across {len(tools)} tools + {len(impls)} impl functions\n")
 
     # Show per-rule breakdown
     for rule in sorted(by_rule):
