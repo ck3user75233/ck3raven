@@ -16,7 +16,6 @@ from __future__ import annotations
 import sys
 import os
 import json
-import importlib
 import sqlite3
 from pathlib import Path
 from datetime import datetime
@@ -141,48 +140,6 @@ from ck3lens.trace import ToolTrace
 # Canonical path constants - use these instead of computing paths from __file__
 from ck3lens.paths import ROOT_REPO, ROOT_CK3RAVEN_DATA, PLAYSET_DIR
 
-
-# =============================================================================
-# Policy Health Check - Validate imports at module load time
-# =============================================================================
-_policy_status = {"healthy": False, "error": None, "validated_at": None}
-
-def _check_policy_health() -> dict:
-    """
-    Validate that policy module is properly importable.
-    
-    Returns dict with status info.
-    """
-    import time
-    from ck3lens import policy
-    
-    try:
-        # Reload at health check time only (startup) to verify imports work.
-        # The actual validate_policy calls must NOT reload - they must be pure.
-        importlib.reload(policy)
-        
-        # Verify required functions exist
-        required = ['validate_for_mode', 'validate_policy', 'load_policy']
-        missing = [f for f in required if not hasattr(policy, f)]
-        
-        if missing:
-            _policy_status["healthy"] = False
-            _policy_status["error"] = f"Missing exports: {missing}"
-        else:
-            _policy_status["healthy"] = True
-            _policy_status["error"] = None
-            
-        _policy_status["validated_at"] = time.time()
-        
-    except Exception as e:
-        _policy_status["healthy"] = False
-        _policy_status["error"] = str(e)
-        _policy_status["validated_at"] = time.time()
-    
-    return _policy_status
-
-# Run health check at startup
-_check_policy_health()
 
 # =============================================================================
 
@@ -965,8 +922,6 @@ def ck3_close_db() -> Reply:
         import gc
         gc.collect()
         
-        trace.log("ck3lens.close_db", {}, {"success": True})
-        
         return rb.success(
             "WA-DB-S-001",
             data={"closed": True},
@@ -1143,7 +1098,7 @@ def ck3_db_delete(
             return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "System error"))
         
         # Default: Invalid (agent mistake / bad input)
-        return rb.invalid('MCP-DB-I-001', data=result, message=result.get("error", "Invalid input"))
+        return rb.invalid('WA-DB-I-001', data=result, message=result.get("error", "Invalid input"))
     
     # DB delete is system-owned/ungoverned -> MCP layer owns success
     if result.get("success"):
@@ -1455,50 +1410,6 @@ def _ck3_db_delete_internal(
         
     trace.log("ck3lens.db_delete", {"target": target, "scope": scope}, result)
     return result
-
-
-@mcp.tool()
-@mcp_safe_tool
-def ck3_get_policy_status() -> Reply:
-    """
-    Check if policy enforcement is working.
-    
-    ⚠️ CRITICAL: If this returns healthy=False, the agent MUST stop work
-    and fix the policy system before continuing.
-    
-    Returns:
-        {
-            "healthy": bool,          # True if policy validation works
-            "error": str or null,     # Error message if broken
-            "validated_at": float,    # Timestamp of last check
-            "message": str            # Human-readable status
-        }
-    """
-    trace_info = get_current_trace_info()
-    rb = ReplyBuilder(trace_info, tool='ck3_get_policy_status')
-    
-    # Run fresh health check
-    health = _check_policy_health()
-    
-    data = {
-        "healthy": health["healthy"],
-        "error": health["error"],
-        "validated_at": health["validated_at"],
-    }
-    
-    if health["healthy"]:
-        return rb.success(
-            'EN-GATE-S-001',
-            data=data,
-            message="✅ Policy enforcement is ACTIVE",
-        )
-    else:
-        data["action_required"] = "Agent must stop work. Fix policy module or restart MCP server."
-        return rb.error(
-            'MCP-SYS-E-001',
-            data=data,
-            message=f"🚨 POLICY ENFORCEMENT IS DOWN: {health['error']}",
-        )
 
 
 # ============================================================================
@@ -3007,7 +2918,7 @@ def ck3_git(
         # Default: Invalid (agent mistake / bad input)
         return rb.invalid('WA-RES-I-001', data=result, message=result.get("error", "Git command failed"))
     
-    return rb.success('WA-EXEC-S-001', data=result, message=f"Git {command} complete.")
+    return rb.success('WA-GIT-S-001', data=result, message=f"Git {command} complete.")
 
 
 # ============================================================================
@@ -3692,16 +3603,16 @@ def ck3_contract(
         if result.get("has_active_contract"):
             return rb.success('CT-VAL-S-001', data=result, message=f"Active contract: {result.get('contract_id')}")
         # "No active contract" is informational, not governance denial
-        return rb.invalid('CT-GATE-I-001', data=result, message="No active contract.")
+        return rb.invalid('CT-CLOSE-I-001', data=result, message="No active contract.")
     
     if command == "open":
-        return rb.success('CT-GATE-S-001', data=result, message=f"Contract opened: {result.get('contract_id')}")
+        return rb.success('CT-OPEN-S-001', data=result, message=f"Contract opened: {result.get('contract_id')}")
     
     if command == "close":
-        return rb.success('CT-GATE-S-002', data=result, message="Contract closed.")
+        return rb.success('CT-CLOSE-S-001', data=result, message="Contract closed.")
     
     if command == "cancel":
-        return rb.success('CT-GATE-S-003', data=result, message="Contract cancelled.")
+        return rb.success('CT-CLOSE-S-002', data=result, message="Contract cancelled.")
     
     return rb.success('CT-VAL-S-001', data=result, message=f"Contract {command} complete.")
 
@@ -5170,7 +5081,7 @@ def ck3_get_agent_briefing() -> Reply:
     }
     
     return rb.success(
-        'WA-CFG-S-001',
+        'MCP-SYS-S-001',
         data=result,
         message=f"Agent briefing loaded for playset: {session.playset_name}",
     )
@@ -5311,14 +5222,14 @@ def ck3_get_mode_instructions(
     if result.get("error"):
         if result.get("requires_hat"):
             return rb.invalid(
-                'MCP-CFG-I-001',
+                'MCP-SYS-I-001',
                 data=result,
                 message=result.get("error")
             )
         return rb.error('MCP-SYS-E-001', data=result, message=result.get("error"))
     
     return rb.success(
-        'WA-CFG-S-001',
+        'MCP-SYS-S-001',
         data=result,
         message=f"Initialized mode: {mode}. Database: {'connected' if result.get('session', {}).get('db_path') else 'not available'}.",
     )
@@ -5453,8 +5364,13 @@ def _ck3_get_mode_instructions_internal(mode: str, hat_token: str | None = None)
         except Exception as e:
             wip_info = {"error": f"WIP init failed: {e}"}
         
-        # Build policy context for the mode
-        policy_context = _get_mode_policy_context(mode)
+        # Policy context: refer agent to canonical docs
+        # (capability_matrix.py is the truth table, mode instructions have summaries)
+        policy_context = {
+            "mode": mode,
+            "reference": "See docs/CANONICAL_ARCHITECTURE.md and tools/ck3lens_mcp/ck3lens/capability_matrix.py",
+            "note": "Enforcement decides allow/deny at execution time based on the capability matrix.",
+        }
         
         # =====================================================================
         # STEP 5: Log initialization to trace
@@ -5500,75 +5416,6 @@ def _ck3_get_mode_instructions_internal(mode: str, hat_token: str | None = None)
             "error": str(e),
             "session": session_info,  # Still return session info on error
         }
-
-
-def _get_mode_policy_context(mode: str) -> dict:
-    """
-    Build policy context for a mode showing boundaries and capabilities.
-    
-    Uses RootCategory (from paths.py) - the canonical path classification.
-    """
-    from ck3lens.paths import RootCategory
-    
-    if mode == "ck3lens":
-        return {
-            "mode": "ck3lens",
-            "description": "CK3 modding: Database search + mod file editing",
-            "scope_domains": {
-                "read_allowed": [
-                    "Indexed playset content (database)",
-                    "mods[] in active playset",
-                    RootCategory.ROOT_GAME.value,
-                    RootCategory.ROOT_CK3RAVEN_DATA.value,
-                ],
-                "write_allowed": [
-                    "mods[] under local_mods_folder (enforcement decides at execution)",
-                    "WIP workspace (~/.ck3raven/wip/)",
-                ],
-                "always_denied": [
-                    "write to mods[] NOT under local_mods_folder",
-                    "write to ROOT_GAME (vanilla)",
-                    "write to ROOT_REPO (source code)",
-                ],
-            },
-            "hard_rules": [
-                "Python files only allowed in WIP workspace",
-                "Delete requires contract with DELETE operation",
-            ],
-        }
-    elif mode == "ck3raven-dev":
-        return {
-            "mode": "ck3raven-dev",
-            "description": "Development mode: CK3 Lens infrastructure development",
-            "scope_domains": {
-                "read_allowed": [
-                    RootCategory.ROOT_REPO.value,
-                    RootCategory.ROOT_CK3RAVEN_DATA.value,
-                    RootCategory.ROOT_GAME.value,
-                    RootCategory.ROOT_STEAM.value,
-                ],
-                "write_allowed": [
-                    RootCategory.ROOT_REPO.value,
-                    "WIP workspace (~/.ck3raven/wip/)",
-                ],
-                "always_denied": [
-                    "write to ROOT_GAME (vanilla files)",
-                    "write to ROOT_STEAM (workshop mods)",
-                    "write to ROOT_USER_DOCS/mod (local mods in dev mode)",
-                ],
-            },
-            "hard_rules": [
-                "ABSOLUTE PROHIBITION: Cannot write to ANY mod files",
-                "Git push/force push allowed with contract",
-                "DB files owned by QBuilder daemon - read only",
-            ],
-            "wip_workspace": {
-                "location": "~/.ck3raven/wip/",
-                "note": "Analysis and staging area",
-            },
-        }
-    else:
-        return {"error": f"Unknown mode: {mode}"}
 
 
 def _get_mode_session_note(mode: str) -> str:
@@ -5669,7 +5516,7 @@ def ck3_get_detected_mode() -> Reply:
         last_activity = events[0].get("ts") if events else None
     
     return rb.success(
-        'WA-CFG-S-001',
+        'MCP-SYS-S-001',
         data={
             "detected_mode": detected_mode,
             "confidence": confidence,
@@ -5731,7 +5578,7 @@ def ck3_get_workspace_config() -> Reply:
     }
     
     return rb.success(
-        'WA-CFG-S-001',
+        'MCP-SYS-S-001',
         data=result,
         message="Workspace configuration loaded.",
     )
@@ -6228,7 +6075,7 @@ def ck3_paths_doctor(
         # Always Reply(S) - the report.ok field indicates health
         status = "HEALTHY" if report.ok else "UNHEALTHY"
         return rb.success(
-            'WA-CFG-S-001',
+            'MCP-SYS-S-001',
             data=report_dict,
             message=f"Paths Doctor: {status} ({report.summary['ERROR']} errors, {report.summary['WARN']} warnings, {report.summary['OK']} ok)",
         )

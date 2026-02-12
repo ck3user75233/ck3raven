@@ -1008,7 +1008,7 @@ def _file_read_raw(path, start_line, end_line, trace, world=None, *, rb=None) ->
         return rb.invalid("WA-RES-I-001", {"input_path": str(path)})
     
     if not file_path.is_file():
-        return rb.error("WA-RES-E-002", {"input_path": str(path)})
+        return rb.invalid("WA-RES-I-001", {"input_path": str(path), "error": "Path is a directory, not a file"})
     
     try:
         content = file_path.read_text(encoding='utf-8', errors='replace')
@@ -1073,7 +1073,7 @@ def _file_write(mod_name, rel_path, content, validate_syntax, session, trace, *,
     
     valid, err = validate_relpath(rel_path)
     if not valid:
-        return rb.error("WA-RES-E-002", {"input_path": rel_path, "error": err})
+        return rb.invalid("WA-WRITE-I-001", {"input_path": rel_path, "error": err})
     
     file_path = mod.path / rel_path
     try:

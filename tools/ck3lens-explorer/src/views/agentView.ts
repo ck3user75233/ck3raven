@@ -22,7 +22,6 @@ export interface AgentInstance {
 export interface AgentState {
     pathsDoctor: { status: PathsStatus; errorCount: number; warnCount: number; configPath?: string };
     mcpServer: { status: ConnectionStatus; serverName?: string };
-    policyEnforcement: { status: ConnectionStatus; message?: string };
     agents: AgentInstance[];
     session: { id: string; startedAt: string };
 }
@@ -311,14 +310,6 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
                     serverName: `ck3lens (${ck3Tools.length} tools)` 
                 };
                 
-                // Check for policy tools
-                const hasPolicyTool = ck3Tools.some(t => 
-                    t.name.includes('policy') || t.name.includes('validate')
-                );
-                this.state.policyEnforcement = hasPolicyTool 
-                    ? { status: 'connected', message: 'active' }
-                    : { status: 'disconnected', message: 'no policy tools found' };
-                
                 this.logger.debug(`MCP check: ${ck3Tools.length} tools, fresh=${toolsAreFresh}`);
             }
         } catch (error) {
@@ -330,8 +321,7 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
         // This prevents listener leak from accumulating VS Code internal listeners
         const currentSignature = JSON.stringify({
             pathsDoctor: this.state.pathsDoctor,
-            mcpServer: this.state.mcpServer,
-            policyEnforcement: this.state.policyEnforcement
+            mcpServer: this.state.mcpServer
         });
         
         if (currentSignature !== this._lastStateSignature) {
@@ -437,7 +427,6 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
     private async markMcpDisconnected(reason: string): Promise<void> {
         this.state.mcpServer = { status: 'disconnected', serverName: reason };
         this.logger.info(`MCP disconnected: ${reason}`);
-        this.state.policyEnforcement = { status: 'disconnected', message: 'MCP offline - policies not enforced!' };
     }
 
     private loadState(): AgentState {
@@ -467,7 +456,6 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
         return {
             pathsDoctor: stored?.pathsDoctor || { status: 'unchecked', errorCount: 0, warnCount: 0 },
             mcpServer: stored?.mcpServer || { status: 'disconnected' },
-            policyEnforcement: stored?.policyEnforcement || { status: 'disconnected' },
             agents: agents,  // Use restored or default agents
             session: { id: this.generateId(), startedAt: new Date().toISOString() }
         };
@@ -485,7 +473,6 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
         return {
             pathsDoctor: { status: 'unchecked', errorCount: 0, warnCount: 0 },
             mcpServer: { status: 'disconnected' },
-            policyEnforcement: { status: 'disconnected' },
             agents: [{
                 id: this.generateId(),
                 mode: 'none' as LensMode,
@@ -746,35 +733,6 @@ export class AgentViewProvider implements vscode.TreeDataProvider<AgentTreeItem>
             mcpItem.description = this.state.mcpServer.serverName;
         }
         items.push(mcpItem);
-
-        // Policy Enforcement status - ALWAYS show warning when inactive
-        const policyLabel = this.state.policyEnforcement.status === 'connected'
-            ? 'Policy Rules: active'
-            : 'Policy Rules: ⚠️ INACTIVE';
-        const policyItem = new AgentTreeItem(
-            policyLabel,
-            'policy-enforcement'
-        );
-        policyItem.iconPath = new vscode.ThemeIcon(
-            this.state.policyEnforcement.status === 'connected' ? 'shield' : 'warning',
-            this.state.policyEnforcement.status === 'connected'
-                ? new vscode.ThemeColor('testing.iconPassed')
-                : new vscode.ThemeColor('problemsWarningIcon.foreground')
-        );
-        // Always show description/warning for policy status
-        if (this.state.policyEnforcement.status === 'disconnected') {
-            policyItem.description = this.state.policyEnforcement.message || 'policies not enforced!';
-            policyItem.tooltip = new vscode.MarkdownString(
-                `⚠️ **Policy Enforcement Inactive**\n\n` +
-                `Reason: ${this.state.policyEnforcement.message || 'Unknown'}\n\n` +
-                `Agent actions are NOT being validated against policy rules. ` +
-                `This means the agent may perform actions that violate CK3 modding policies.\n\n` +
-                `**To fix:** Ensure the MCP server is running and connected.`
-            );
-        } else if (this.state.policyEnforcement.message) {
-            policyItem.description = this.state.policyEnforcement.message;
-        }
-        items.push(policyItem);
 
         // Instance ID display with copy action (FEAT-001)
         if (this.instanceId) {

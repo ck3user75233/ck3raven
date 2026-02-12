@@ -245,15 +245,24 @@ def discover_tools(root: Path) -> list[ToolInfo]:
         # Grab full body (from def line to next top-level def or decorator)
         body_start_idx = def_offset
         body_lines: list[str] = []
+        past_signature = False  # Track whether we've passed the function signature
         for i in range(body_start_idx, len(lines)):
             ln = lines[i]
-            if body_lines and ln and not ln[0].isspace() and not ln.startswith("#"):
+            # First, skip past the function signature (parameters + closing ")")
+            if not past_signature:
+                body_lines.append(ln)
+                # Signature ends when we hit a line containing "):' or ") ->"
+                if re.search(r'^\s*\).*:\s*$', ln) or re.search(r'\)\s*->\s*\w+.*:\s*$', ln):
+                    past_signature = True
+                continue
+            # After signature, break on next top-level construct
+            if ln and not ln[0].isspace() and not ln.startswith("#"):
                 break
             body_lines.append(ln)
         body = "\n".join(body_lines)
 
-        def_region = source[m.start():m.start() + 500]
-        has_reply = bool(re.search(r"->\s*Reply\s*:", def_region))
+        # Check for -> Reply in the full body (includes signature lines)
+        has_reply = bool(re.search(r"->\s*Reply\s*:", body))
         has_trace = "get_current_trace_info()" in body
         has_rb = "ReplyBuilder(" in body
 
