@@ -22,7 +22,7 @@ from datetime import datetime
 from typing import Optional, Literal
 from click import command
 from ck3lens.log_rotation import rotate_logs
-from ck3lens.logging import info, bootstrap
+from ck3lens.logging import info, warn, bootstrap
 import signal
 import atexit
 import threading
@@ -172,10 +172,7 @@ def _get_session() -> Session:
         stats = _session.resolve_cvids(_db)
         _session_cv_ids_resolved = True
         if stats.get("mods_missing"):
-            import logging
-            logging.getLogger(__name__).warning(
-                f"Mods not indexed: {stats['mods_missing']}"
-            )
+            warn("mcp.init", f"Mods not indexed: {stats['mods_missing']}")
     
     return _session
 
@@ -216,10 +213,7 @@ def _get_db() -> DBQueries:
             _session_cv_ids_resolved = True
             # Log resolution stats for debugging
             if stats.get("mods_missing"):
-                import logging
-                logging.getLogger(__name__).warning(
-                    f"Mods not indexed: {stats['mods_missing']}"
-                )
+                warn("mcp.init", f"Mods not indexed: {stats['mods_missing']}")
     return _db
 
 
@@ -428,9 +422,8 @@ def _load_playset_from_json(playset_file: Path) -> Optional[dict]:
         # FAIL CLOSED: Validate schema before proceeding
         is_valid, schema_errors = _validate_playset_schema(data, str(playset_file))
         if not is_valid:
-            print(f"[SCHEMA VALIDATION FAILED] {playset_file}")
-            for err in schema_errors:
-                print(f"  - {err}")
+            warn("mcp.init", f"Playset schema validation failed: {playset_file}",
+                 errors=schema_errors)
             # Return error dict instead of None to signal validation failure
             return {
                 "error": "PLAYSET_SCHEMA_INVALID",
@@ -444,7 +437,7 @@ def _load_playset_from_json(playset_file: Path) -> Optional[dict]:
             from .ck3lens.path_migration import migrate_playset_paths
             migrated_data, was_modified, migration_msg = migrate_playset_paths(data)
             if was_modified:
-                print(f"[PATH MIGRATION] {migration_msg}")
+                info("mcp.init", f"Path migration: {migration_msg}")
                 data = migrated_data
                 # Optionally save the migrated playset
                 # (disabled for now - just migrate in memory)
@@ -495,7 +488,7 @@ def _load_playset_from_json(playset_file: Path) -> Optional[dict]:
             "mod_list": data.get("mods", []),  # Full mod list for reference
         }
     except Exception as e:
-        print(f"Warning: Failed to load playset from {playset_file}: {e}")
+        warn("mcp.init", f"Failed to load playset: {playset_file}", error=str(e))
         return None
 
 
@@ -750,7 +743,9 @@ def _init_session_internal(
     mod_count = len(_session.mods) if hasattr(_session, "mods") else 0
 
     # Check database health
-    db_status = _check_db_health(_db.conn)
+    _internal_rb = ReplyBuilder({}, tool='_init_session')
+    db_health_reply = _check_db_health(_db.conn, rb=_internal_rb)
+    db_status = db_health_reply.data
 
     # Return minimal session info - WorldAdapter handles visibility,
     result = {
@@ -768,7 +763,7 @@ def _init_session_internal(
     return result
 
 
-def _check_db_health(conn) -> dict:
+def _check_db_health(conn, *, rb=None) -> Reply:
     """Check database build status and completeness.
     
     Works with qbuilder tables (build_queue, build_runs).
@@ -847,7 +842,7 @@ def _check_db_health(conn) -> dict:
             needs_rebuild = False
             rebuild_reason = None
         
-        return {
+        return rb.success("MCP-SYS-S-001", data={
             "is_complete": is_complete,
             "phase": phase,
             "last_updated": last_updated,
@@ -862,14 +857,14 @@ def _check_db_health(conn) -> dict:
                 "completed": queue_completed,
                 "error": queue_error,
             },
-        }
+        })
     except Exception as e:
-        return {
+        return rb.error("MCP-SYS-E-001", data={
             "is_complete": False,
             "error": str(e),
             "needs_rebuild": True,
             "rebuild_reason": f"Error checking database: {e}"
-        }
+        })
 
 
 # NOTE: ck3_get_db_status() DELETED - January 2026
@@ -1245,7 +1240,7 @@ def _ck3_db_delete_internal(
                     "refs_deleted": refs_count,        # Cascaded via asts
                     "asts_deleted": asts_count,        # Cascaded from files
                 }
-                trace.log("ck3lens.db_delete", {"target": target, "scope": scope}, result)
+                trace.log("mcp.tool", {"target": target, "scope": scope}, result)
             return result
             
         elif target == "content_versions":
@@ -1301,7 +1296,7 @@ def _ck3_db_delete_internal(
                     result["success"] = True
                     result["rows_deleted"] = 0
                     
-                trace.log("ck3lens.db_delete", {"target": target, "scope": scope}, result)
+                trace.log("mcp.tool", {"target": target, "scope": scope}, result)
                 return result
                 
         elif target == "lookups":
@@ -1317,7 +1312,7 @@ def _ck3_db_delete_internal(
                         counts[table] = 0
                 result["rows_would_delete"] = sum(counts.values())
                 result["details"] = counts
-                trace.log("ck3lens.db_delete", {"target": target, "scope": scope}, result)
+                trace.log("mcp.tool", {"target": target, "scope": scope}, result)
                 return result
             else:
                 total = 0
@@ -1333,7 +1328,7 @@ def _ck3_db_delete_internal(
                 result["success"] = True
                 result["rows_deleted"] = total
                 result["details"] = counts
-                trace.log("ck3lens.db_delete", {"target": target, "scope": scope}, result)
+                trace.log("mcp.tool", {"target": target, "scope": scope}, result)
                 return result
                 
         elif target == "playsets":
@@ -1344,7 +1339,7 @@ def _ck3_db_delete_internal(
                 playset_mods = cur.fetchone()[0]
                 result["rows_would_delete"] = playsets + playset_mods
                 result["details"] = {"playsets": playsets, "playset_mods": playset_mods}
-                trace.log("ck3lens.db_delete", {"target": target, "scope": scope}, result)
+                trace.log("mcp.tool", {"target": target, "scope": scope}, result)
                 return result
             else:
                 cur.execute("DELETE FROM playset_mods")
@@ -1355,7 +1350,7 @@ def _ck3_db_delete_internal(
                 result["success"] = True
                 result["rows_deleted"] = p_deleted + pm_deleted
                 result["details"] = {"playsets": p_deleted, "playset_mods": pm_deleted}
-                trace.log("ck3lens.db_delete", {"target": target, "scope": scope}, result)
+                trace.log("mcp.tool", {"target": target, "scope": scope}, result)
                 return result
                 
         elif target == "build_tracking":
@@ -1366,7 +1361,7 @@ def _ck3_db_delete_internal(
                 steps = cur.fetchone()[0]
                 result["rows_would_delete"] = runs + steps
                 result["details"] = {"builder_runs": runs, "builder_steps": steps}
-                trace.log("ck3lens.db_delete", {"target": target, "scope": scope}, result)
+                trace.log("mcp.tool", {"target": target, "scope": scope}, result)
                 return result
             else:
                 cur.execute("DELETE FROM build_lock")
@@ -1378,7 +1373,7 @@ def _ck3_db_delete_internal(
                 result["success"] = True
                 result["rows_deleted"] = runs + steps
                 result["details"] = {"builder_runs": runs, "builder_steps": steps}
-                trace.log("ck3lens.db_delete", {"target": target, "scope": scope}, result)
+                trace.log("mcp.tool", {"target": target, "scope": scope}, result)
                 return result
         else:
             result["error"] = f"Unknown target: {target}"
@@ -1390,7 +1385,7 @@ def _ck3_db_delete_internal(
             count = cur.fetchone()[0]
             result["rows_would_delete"] = count
             result["preview"] = True
-            trace.log("ck3lens.db_delete", {"target": target, "scope": scope, "preview": True}, result)
+            trace.log("mcp.tool", {"target": target, "scope": scope, "preview": True}, result)
             return result
         
         # Actual delete
@@ -1402,7 +1397,7 @@ def _ck3_db_delete_internal(
     except Exception as e:
         result["error"] = str(e)
         
-    trace.log("ck3lens.db_delete", {"target": target, "scope": scope}, result)
+    trace.log("mcp.tool", {"target": target, "scope": scope}, result)
     return result
 
 
@@ -1491,7 +1486,7 @@ def ck3_logs(
     trace_info = get_current_trace_info()
     rb = ReplyBuilder(trace_info, tool='ck3_logs')
     
-    result = ck3_logs_impl(
+    reply = ck3_logs_impl(
         source=source,
         command=command,
         priority=priority,
@@ -1506,20 +1501,14 @@ def ck3_logs(
         limit=limit,
         source_path=source_path,
         export_to=export_to,
+        rb=rb,
     )
-    
-    if "error" in result:
-        return rb.error(
-            'MCP-SYS-E-001',
-            data=result,
-            message=result["error"],
-        )
-    
-    return rb.success(
-        'WA-LOG-S-001',
-        data=result,
-        message=f"Logs query completed: source={source}, command={command}",
-    )
+    # Forward Reply (already built with our rb)
+    if reply.code_type == "I":
+        return rb.invalid(reply.code, data=reply.data, message=reply.message)
+    if reply.code_type != "S":
+        return rb.error(reply.code, data=reply.data, message=reply.message)
+    return rb.success(reply.code, data=reply.data, message=reply.message)
 
 
 # ============================================================================
@@ -3198,9 +3187,10 @@ def _ck3_repair_internal(
         
         if target == "launcher" or target == "all":
             if launcher_db:
-                status["launcher_details"] = _diagnose_launcher_db(launcher_db)
+                _repair_rb = ReplyBuilder({}, tool='_repair_internal')
+                status["launcher_details"] = _diagnose_launcher_db(launcher_db, rb=_repair_rb).data
         
-        trace.log("ck3lens.repair", {"command": "query", "target": target}, {"success": True})
+        trace.log("mcp.repair", {"command": "query", "target": target}, {"success": True})
         return status
     
     elif command == "diagnose_launcher":
@@ -3208,9 +3198,11 @@ def _ck3_repair_internal(
         if not launcher_db:
             return {"error": "CK3 launcher database not found", "checked_paths": [str(p) for p in launcher_db_candidates]}
         
-        diagnosis = _diagnose_launcher_db(launcher_db)
+        _repair_rb = ReplyBuilder({}, tool='_repair_internal')
+        diagnosis_reply = _diagnose_launcher_db(launcher_db, rb=_repair_rb)
+        diagnosis = diagnosis_reply.data
         
-        trace.log("ck3lens.repair", {"command": "diagnose_launcher"}, {"issues_found": diagnosis.get("issues_count", 0)})
+        trace.log("mcp.repair", {"command": "diagnose_launcher"}, {"issues_found": diagnosis.get("issues_count", 0)})
         return diagnosis
     
     elif command == "backup_launcher":
@@ -3227,7 +3219,7 @@ def _ck3_repair_internal(
         
         shutil.copy2(launcher_db, backup_path)
         
-        trace.log("ck3lens.repair", {"command": "backup_launcher"}, {"backup_path": str(backup_path)})
+        trace.log("mcp.repair", {"command": "backup_launcher"}, {"backup_path": str(backup_path)})
         return {
             "success": True,
             "backup_path": str(backup_path),
@@ -3294,7 +3286,7 @@ def _ck3_repair_internal(
                     except Exception:
                         pass
         
-        trace.log("ck3lens.repair", {"command": "delete_cache", "dry_run": False}, deleted)
+        trace.log("mcp.repair", {"command": "delete_cache", "dry_run": False}, deleted)
         return {
             "success": True,
             "deleted": deleted,
@@ -3387,7 +3379,7 @@ def _ck3_repair_internal(
             # Reload the playset
             _load_playset_from_json(playset_file)
             
-            trace.log("ck3lens.repair", {"command": "migrate_paths", "dry_run": False}, {
+            trace.log("mcp.repair", {"command": "migrate_paths", "dry_run": False}, {
                 "old_user": old_user,
                 "new_user": new_user,
                 "file": str(playset_file),
@@ -3409,7 +3401,7 @@ def _ck3_repair_internal(
     return {"error": f"Unknown command: {command}"}
 
 
-def _diagnose_launcher_db(launcher_db: Path) -> dict:
+def _diagnose_launcher_db(launcher_db: Path, *, rb=None) -> Reply:
     """
     Analyze CK3 launcher database for issues.
     
@@ -3475,10 +3467,10 @@ def _diagnose_launcher_db(launcher_db: Path) -> dict:
         result["issues_count"] = len(result["issues"])
         conn.close()
         
-        return result
+        return rb.success("MCP-SYS-S-001", data=result)
         
     except Exception as e:
-        return {"error": f"Failed to analyze launcher database: {e}"}
+        return rb.error("MCP-SYS-E-001", data={"error": f"Failed to analyze launcher database: {e}"})
 
 
 # ============================================================================
@@ -3699,7 +3691,7 @@ def _ck3_contract_internal(
             )
             
             # Trace log (minimal, no large payloads)
-            trace.log("ck3lens.contract.open", {
+            trace.log("contract.open", {
                 "intent": intent[:100] if intent else "",
                 "root_category": root_category,
             }, {"contract_id": contract.contract_id})
@@ -3832,7 +3824,7 @@ def _ck3_contract_internal(
         try:
             contract = close_contract(target_id, closure_commit)
             
-            trace.log("ck3lens.contract.close", {
+            trace.log("contract.close", {
                 "contract_id": target_id,
             }, {"closure_commit": closure_commit})
             
@@ -3857,7 +3849,7 @@ def _ck3_contract_internal(
         try:
             contract = cancel_contract(target_id, cancel_reason or "")
             
-            trace.log("ck3lens.contract.cancel", {
+            trace.log("contract.cancel", {
                 "contract_id": target_id,
                 "reason": cancel_reason,
             }, {})
@@ -3947,7 +3939,7 @@ def _ck3_contract_internal(
                 shutil.move(str(f), str(archive_dir / f.name))
                 archived += 1
         
-        trace.log("ck3lens.contract.flush", {}, {"archived": archived})
+        trace.log("contract.flush", {}, {"archived": archived})
         
         return {
             "success": True,
@@ -3959,7 +3951,7 @@ def _ck3_contract_internal(
         # Move all pre-v1 contracts to legacy folder
         archived = archive_legacy_contracts()
         
-        trace.log("ck3lens.contract.archive_legacy", {}, {"archived": archived})
+        trace.log("contract.archive", {}, {"archived": archived})
         
         return {
             "success": True,
@@ -4654,7 +4646,7 @@ def ck3_grep_raw(
     search_path = resolution.absolute_path
     
     # Log the attempt
-    trace.log("ck3lens.grep_raw", {
+    trace.log("mcp.tool", {
         "path": str(search_path),
         "query": query,
         "is_regex": is_regex,
@@ -4710,7 +4702,7 @@ def ck3_grep_raw(
             "truncated": len(matches) >= 50,
         }
         
-        trace.log("ck3lens.grep_raw.result", {
+        trace.log("mcp.tool", {
             "path": str(search_path),
             "query": query,
         }, {"match_count": len(matches)})
@@ -4788,7 +4780,7 @@ def ck3_file_search(
     search_base = resolution.absolute_path
     
     # Log the attempt
-    trace.log("ck3lens.file_search", {
+    trace.log("mcp.tool", {
         "pattern": pattern,
         "base_path": str(search_base),
     }, {})
@@ -4812,7 +4804,7 @@ def ck3_file_search(
             "base_path": str(search_base),
         }
         
-        trace.log("ck3lens.file_search.result", {
+        trace.log("mcp.tool", {
             "pattern": pattern,
         }, {"count": len(files)})
         
@@ -4878,7 +4870,7 @@ def ck3_parse_content(
             message=f"Parser system failure: {e}",
         )
     
-    trace.log("ck3lens.parse_content", {
+    trace.log("mcp.tool", {
         "filename": filename,
         "content_length": len(content)
     }, {"success": result["success"], "error_count": len(result["errors"])})
@@ -4989,7 +4981,7 @@ def ck3_report_validation_issue(
     with issues_file.open("a", encoding="utf-8") as f:
         f.write(json.dumps(issue, ensure_ascii=False) + "\n")
 
-    trace.log("ck3lens.report_validation_issue", {
+    trace.log("mcp.tool", {
         "issue_type": issue_type,
         "snippet_length": len(code_snippet)
     }, {"issue_id": issue_id})
@@ -5211,26 +5203,17 @@ def ck3_get_mode_instructions(
     
     # Accept hat_token, fall back to mit_token for backward compat
     token = hat_token or mit_token
-    result = _ck3_get_mode_instructions_internal(mode, token)
-    
-    if result.get("error"):
-        if result.get("requires_hat"):
-            return rb.invalid(
-                'MCP-SYS-I-001',
-                data=result,
-                message=result.get("error")
-            )
-        return rb.error('MCP-SYS-E-001', data=result, message=result.get("error"))
-    
-    return rb.success(
-        'MCP-SYS-S-001',
-        data=result,
-        message=f"Initialized mode: {mode}. Database: {'connected' if result.get('session', {}).get('db_path') else 'not available'}.",
-    )
+    reply = _ck3_get_mode_instructions_internal(mode, token, rb=rb)
+    # Forward Reply (already built with our rb)
+    if reply.code_type == "I":
+        return rb.invalid(reply.code, data=reply.data, message=reply.message)
+    if reply.code_type != "S":
+        return rb.error(reply.code, data=reply.data, message=reply.message)
+    return rb.success(reply.code, data=reply.data, message=reply.message)
 
 
-def _ck3_get_mode_instructions_internal(mode: str, hat_token: str | None = None) -> dict:
-    """Internal implementation returning dict."""
+def _ck3_get_mode_instructions_internal(mode: str, hat_token: str | None = None, *, rb=None) -> Reply:
+    """Internal implementation returning Reply."""
     from pathlib import Path
     from ck3lens.policy import AgentMode, initialize_workspace
     from ck3lens.paths import WIP_DIR
@@ -5239,10 +5222,10 @@ def _ck3_get_mode_instructions_internal(mode: str, hat_token: str | None = None)
     
     # Validate mode before proceeding
     if mode not in VALID_MODES:
-        return {
+        return rb.invalid("MCP-SYS-I-001", data={
             "error": f"Invalid mode: {mode}",
             "valid_modes": list(VALID_MODES),
-        }
+        })
     
     # =========================================================================
     # HUMAN-IN-THE-LOOP GATE: Inline HAT token from the prompt.
@@ -5254,53 +5237,53 @@ def _ck3_get_mode_instructions_internal(mode: str, hat_token: str | None = None)
     if hat_token and sigil_available():
         parts = hat_token.split("::", 1)
         if len(parts) != 2:
-            return {
+            return rb.invalid("MCP-SYS-I-001", data={
                 "error": "Malformed HAT token",
                 "requires_hat": True,
                 "action": "Click 'Initialize Agent' in the CK3 Lens sidebar.",
-            }
+            })
         payload, signature = parts
         # Verify signature
         if not sigil_verify(payload, signature):
-            return {
+            return rb.invalid("MCP-SYS-I-001", data={
                 "error": "HAT token signature invalid — not signed by extension",
                 "requires_hat": True,
                 "action": "Click 'Initialize Agent' in the CK3 Lens sidebar.",
-            }
+            })
         # Verify payload contains the requested mode
         token_fields = payload.split("|")
         if len(token_fields) != 3 or token_fields[0] != mode:
-            return {
+            return rb.invalid("MCP-SYS-I-001", data={
                 "error": f"HAT token mode mismatch (token has '{token_fields[0] if token_fields else '?'}', requested '{mode}')",
                 "requires_hat": True,
                 "action": "Click 'Initialize Agent' again with the correct mode.",
-            }
+            })
         # Verify timestamp (5-minute window)
         try:
             from datetime import datetime, timezone
             token_time = datetime.fromisoformat(token_fields[1])
             age = (datetime.now(timezone.utc) - token_time).total_seconds()
             if age > 300:
-                return {
+                return rb.invalid("MCP-SYS-I-001", data={
                     "error": f"HAT token expired ({age:.0f}s old, max 300s)",
                     "requires_hat": True,
                     "action": "Click 'Initialize Agent' again.",
-                }
+                })
         except (ValueError, IndexError):
-            return {
+            return rb.invalid("MCP-SYS-I-001", data={
                 "error": "HAT token has invalid timestamp",
                 "requires_hat": True,
                 "action": "Click 'Initialize Agent' again.",
-            }
+            })
     elif not hat_token:
         # No token provided — check for dev fallback
         dev_token = os.environ.get("CK3LENS_DEV_TOKEN", "")
         if not dev_token:
-            return {
+            return rb.invalid("MCP-SYS-I-001", data={
                 "error": "No HAT token provided. Mode initialization requires human authorization.",
                 "requires_hat": True,
                 "action": "Click 'Initialize Agent' in the CK3 Lens sidebar, then send the prompt.",
-            }
+            })
 
     
     # =========================================================================
@@ -5327,19 +5310,19 @@ def _ck3_get_mode_instructions_internal(mode: str, hat_token: str | None = None)
     }
     
     if ROOT_REPO is None:
-        return {
+        return rb.error("MCP-SYS-E-001", data={
             "error": "ROOT_REPO not configured - mode instructions unavailable",
             "session": session_info,
-        }
+        })
     
     instructions_path = ROOT_REPO / ".github" / mode_files[mode]
     
     if not instructions_path.exists():
-        return {
+        return rb.error("MCP-SYS-E-001", data={
             "error": f"Instructions file not found: {mode_files[mode]}",
             "expected_path": str(instructions_path),
-            "session": session_info,  # Still return session info
-        }
+            "session": session_info,
+        })
     
     try:
         content = instructions_path.read_text(encoding="utf-8")
@@ -5370,7 +5353,7 @@ def _ck3_get_mode_instructions_internal(mode: str, hat_token: str | None = None)
         # STEP 5: Log initialization to trace
         # =====================================================================
         trace = _get_trace()
-        trace.log("ck3lens.mode_initialized", {"mode": mode}, {
+        trace.log("session.mode", {"mode": mode}, {
             "mode": mode,
             "source_file": str(instructions_path),
             "wip_workspace": str(WIP_DIR),
@@ -5382,7 +5365,7 @@ def _ck3_get_mode_instructions_internal(mode: str, hat_token: str | None = None)
         # Build complete response
         # =====================================================================
 
-        result = {
+        return rb.success("MCP-SYS-S-001", data={
             "mode": mode,
             "instructions": content,
             "source_file": str(instructions_path),
@@ -5397,19 +5380,14 @@ def _ck3_get_mode_instructions_internal(mode: str, hat_token: str | None = None)
                 "playset_name": session_info.get("playset_name"),
                 "db_status": session_info.get("db_status", {}),
             },
-        }
-        
-        # Add warning if database needs attention
-        if session_info.get("warning"):
-            result["db_warning"] = session_info["warning"]
-        
-        return result
+            **({"db_warning": session_info["warning"]} if session_info.get("warning") else {}),
+        })
         
     except Exception as e:
-        return {
+        return rb.error("MCP-SYS-E-001", data={
             "error": str(e),
-            "session": session_info,  # Still return session info on error
-        }
+            "session": session_info,
+        })
 
 
 def _get_mode_session_note(mode: str) -> str:
@@ -5473,7 +5451,7 @@ def ck3_get_detected_mode() -> Reply:
         ts = event.get("ts", 0)
         
         # Direct mode initialization is the strongest signal
-        if tool == "ck3lens.mode_initialized":
+        if tool == "session.mode":
             mode = event.get("result", {}).get("mode") or event.get("args", {}).get("mode")
             if mode:
                 detected_mode = mode
@@ -5766,7 +5744,7 @@ def ck3_db_query(
                     }
                     for name, schema in _DB_QUERY_SCHEMA.items()
                 },
-                "stats": _get_table_stats(),
+                "stats": _get_table_stats(rb=rb).data,
             },
             message="Database schema and statistics.",
         )
@@ -5914,7 +5892,7 @@ def ck3_db_query(
         return rb.error('MCP-SYS-E-001', data={"error": str(e), "query": query if 'query' in dir() else None}, message=str(e))
 
 
-def _get_table_stats() -> dict:
+def _get_table_stats(*, rb=None) -> Reply:
     """Get row counts for all queryable tables."""
     db = _get_db()
     stats = {}
@@ -5924,7 +5902,7 @@ def _get_table_stats() -> dict:
             stats[name] = count
         except:
             stats[name] = "error"
-    return stats
+    return rb.success("MCP-SYS-S-001", data=stats)
 
 
 # ============================================================================
@@ -6344,7 +6322,6 @@ def ck3_qbuilder(
 # Main Entry Point
 # ============================================================================
 
-import logging
 import signal
 import atexit
 
@@ -6352,9 +6329,6 @@ import atexit
 from ck3lens.logging import info as log_info, error as log_error, bootstrap as log_bootstrap, set_instance_id
 from ck3lens.log_rotation import rotate_logs
 
-# Configure Python's standard logging for FastMCP internals
-_mcp_logger = logging.getLogger("ck3lens_mcp")
-_mcp_logger.setLevel(logging.INFO)
 _pid = os.getpid()
 
 
@@ -6363,10 +6337,7 @@ def _log_exit():
     global _instance_id, _pid
     # Dual output: structured log file + stderr for VS Code capture
     log_info("mcp.dispose", "MCP server exit (atexit)", instance_id=_instance_id, pid=_pid)
-    print(
-        f"MCP server exit: instanceId={_instance_id} pid={_pid}",
-        file=sys.stderr
-    )
+    print(f"MCP server exit: instanceId={_instance_id} pid={_pid}", file=sys.stderr)
 
 
 def _setup_signal_handlers() -> None:
@@ -6375,11 +6346,7 @@ def _setup_signal_handlers() -> None:
         global _instance_id, _pid
         log_info("mcp.dispose", f"Signal {signum} received, shutting down", 
                  instance_id=_instance_id, pid=_pid, signal=signum)
-        print(
-            f"MCP server: signal {signum} received, shutting down "
-            f"instanceId={_instance_id} pid={_pid}",
-            file=sys.stderr
-        )
+        print(f"MCP server: signal {signum} received, shutting down instanceId={_instance_id} pid={_pid}", file=sys.stderr)
         sys.exit(0)
     
     # Handle common termination signals

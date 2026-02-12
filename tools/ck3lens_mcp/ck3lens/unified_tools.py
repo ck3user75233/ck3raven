@@ -79,7 +79,9 @@ def ck3_logs_impl(
     source_path: str | None = None,
     # FR-2: Export results to WIP
     export_to: str | None = None,
-) -> dict:
+    # Reply builder
+    *, rb=None,
+) -> Reply:
     """
     Unified logging tool implementation.
     
@@ -111,34 +113,34 @@ def ck3_logs_impl(
     if source_path:
         resolved_source_path = _resolve_log_source_path(source_path)
         if resolved_source_path is None:
-            return {"error": f"Cannot resolve source_path: {source_path}"}
+            return rb.invalid("MCP-SYS-I-001", data={"error": f"Cannot resolve source_path: {source_path}"})
     
     # Route based on source and command
     if command == "raw":
-        result = _read_log_full(source, resolved_source_path)
+        result = _read_log_full(source, resolved_source_path, rb=rb)
     elif command == "read":
-        result = _read_log_raw(source, lines, from_end, query, resolved_source_path)
+        result = _read_log_raw(source, lines, from_end, query, resolved_source_path, rb=rb)
     elif source == "error":
         result = _error_log_handler(command, priority, category, mod_filter, 
                                    mod_filter_exact, exclude_cascade_children, query, limit,
-                                   resolved_source_path)
+                                   resolved_source_path, rb=rb)
     elif source == "game":
-        result = _game_log_handler(command, category, query, limit, resolved_source_path)
+        result = _game_log_handler(command, category, query, limit, resolved_source_path, rb=rb)
     elif source == "debug":
-        result = _debug_log_handler(command, resolved_source_path)
+        result = _debug_log_handler(command, resolved_source_path, rb=rb)
     elif source == "crash":
-        result = _crash_handler(command, crash_id, limit)
+        result = _crash_handler(command, crash_id, limit, rb=rb)
     else:
-        return {"error": f"Unknown source: {source}"}
+        return rb.invalid("MCP-SYS-I-001", data={"error": f"Unknown source: {source}"})
     
-    # FR-2: Export results if requested
-    if export_to and "error" not in result:
-        export_result = _export_logs_result(result, source, command, export_to)
-        if "error" in export_result:
-            result["export_error"] = export_result["error"]
+    # FR-2: Export results if requested (only on success)
+    if export_to and result.code_type == "S":
+        export_reply = _export_logs_result(result.data, source, command, export_to, rb=rb)
+        if export_reply.code_type == "S":
+            result.data["export_path"] = export_reply.data["export_path"]
+            result.data["export_success"] = True
         else:
-            result["export_path"] = export_result["export_path"]
-            result["export_success"] = True
+            result.data["export_error"] = export_reply.data.get("error", "Export failed")
     
     return result
 
@@ -180,7 +182,8 @@ def _export_logs_result(
     source: str,
     command: str,
     export_to: str,
-) -> dict:
+    *, rb=None,
+) -> Reply:
     """
     Export logs result to markdown file in WIP.
     
@@ -191,7 +194,7 @@ def _export_logs_result(
         export_to: WIP path for output (supports {timestamp} substitution)
     
     Returns:
-        Dict with export_path on success, error on failure
+        Reply with export_path on success, error on failure
     """
     from datetime import datetime
     
@@ -218,9 +221,9 @@ def _export_logs_result(
     
     try:
         export_path.write_text(md_content, encoding='utf-8')
-        return {"export_path": str(export_path)}
+        return rb.success("WA-LOG-S-001", data={"export_path": str(export_path)})
     except Exception as e:
-        return {"error": f"Failed to write export: {e}"}
+        return rb.error("MCP-SYS-E-001", data={"error": f"Failed to write export: {e}"})
 
 
 def _result_to_markdown(result: dict, source: str, command: str) -> str:
@@ -303,7 +306,8 @@ def _error_log_handler(
     query: str | None,
     limit: int,
     source_path: Path | None = None,
-) -> dict:
+    *, rb=None,
+) -> Reply:
     """Handle error.log commands."""
     from ck3raven.analyzers.error_parser import CK3ErrorParser, ERROR_CATEGORIES
     
@@ -314,17 +318,17 @@ def _error_log_handler(
         parser.detect_cascading_errors()
     except FileNotFoundError:
         if source_path:
-            return {
+            return rb.invalid("MCP-SYS-I-001", data={
                 "error": f"Log file not found: {source_path}",
                 "hint": "Check the source_path parameter",
-            }
-        return {
+            })
+        return rb.invalid("MCP-SYS-I-001", data={
             "error": "error.log not found",
             "hint": "Make sure CK3 has been run at least once",
-        }
+        })
     
     if command == "summary":
-        return parser.get_summary()
+        return rb.success("WA-LOG-S-001", data=parser.get_summary())
     
     elif command == "list":
         errors = parser.get_errors(
@@ -344,33 +348,33 @@ def _error_log_handler(
                 "fix_hint": cat.fix_hint if cat else None,
             })
         
-        return {
+        return rb.success("WA-LOG-S-001", data={
             "count": len(results),
             "total_in_log": parser.stats['total_errors'],
             "errors": results,
-        }
+        })
     
     elif command == "search":
         if not query:
-            return {"error": "query parameter required for search command"}
+            return rb.invalid("MCP-SYS-I-001", data={"error": "query parameter required for search command"})
         
         errors = parser.search_errors(query, limit=limit)
-        return {
+        return rb.success("WA-LOG-S-001", data={
             "query": query,
             "count": len(errors),
             "errors": [e.to_dict() for e in errors],
-        }
+        })
     
     elif command == "cascades":
         cascades = [c.to_dict() for c in parser.cascade_patterns]
-        return {
+        return rb.success("WA-LOG-S-001", data={
             "cascade_count": len(cascades),
             "total_errors": parser.stats['total_errors'],
             "cascades": cascades,
             "recommendation": "Fix root errors first - they can eliminate many child errors",
-        }
+        })
     
-    return {"error": f"Unknown command for error source: {command}"}
+    return rb.invalid("MCP-SYS-I-001", data={"error": f"Unknown command for error source: {command}"})
 
 
 def _game_log_handler(
@@ -379,7 +383,8 @@ def _game_log_handler(
     query: str | None,
     limit: int,
     source_path: Path | None = None,
-) -> dict:
+    *, rb=None,
+) -> Reply:
     """Handle game.log commands."""
     from ck3raven.analyzers.log_parser import CK3LogParser, LogType, GAME_LOG_CATEGORIES
     
@@ -389,11 +394,11 @@ def _game_log_handler(
         parser.parse_game_log(log_path=source_path)
     except FileNotFoundError:
         if source_path:
-            return {"error": f"Log file not found: {source_path}"}
-        return {"error": "game.log not found"}
+            return rb.invalid("MCP-SYS-I-001", data={"error": f"Log file not found: {source_path}"})
+        return rb.invalid("MCP-SYS-I-001", data={"error": "game.log not found"})
     
     if command == "summary":
-        return parser.get_game_log_summary()
+        return rb.success("WA-LOG-S-001", data=parser.get_game_log_summary())
     
     elif command == "list":
         entries = parser.entries[LogType.GAME]
@@ -401,23 +406,23 @@ def _game_log_handler(
         if category:
             entries = [e for e in entries if e.category == category]
         
-        return {
+        return rb.success("WA-LOG-S-001", data={
             "total_parsed": len(parser.entries[LogType.GAME]),
             "filtered_count": len(entries[:limit]),
             "summary": parser.get_game_log_summary(),
             "errors": [e.to_dict() for e in entries[:limit]],
-        }
+        })
     
     elif command == "search":
         if not query:
-            return {"error": "query parameter required for search command"}
+            return rb.invalid("MCP-SYS-I-001", data={"error": "query parameter required for search command"})
         
         entries = parser.search_entries(query, log_type=LogType.GAME, limit=limit)
-        return {
+        return rb.success("WA-LOG-S-001", data={
             "query": query,
             "count": len(entries),
             "errors": [e.to_dict() for e in entries],
-        }
+        })
     
     elif command == "categories":
         stats = parser.stats.get(LogType.GAME, {})
@@ -433,15 +438,15 @@ def _game_log_handler(
                 "description": category_info.get(cat, "Other/uncategorized errors"),
             })
         
-        return {
+        return rb.success("WA-LOG-S-001", data={
             "total_errors": stats.get('total', 0),
             "categories": categories,
-        }
+        })
     
-    return {"error": f"Unknown command for game source: {command}"}
+    return rb.invalid("MCP-SYS-I-001", data={"error": f"Unknown command for game source: {command}"})
 
 
-def _debug_log_handler(command: str, source_path: Path | None = None) -> dict:
+def _debug_log_handler(command: str, source_path: Path | None = None, *, rb=None) -> Reply:
     """Handle debug.log commands."""
     from ck3raven.analyzers.log_parser import CK3LogParser
     
@@ -451,16 +456,16 @@ def _debug_log_handler(command: str, source_path: Path | None = None) -> dict:
         parser.parse_debug_log(extract_system_info=True, log_path=source_path)
     except FileNotFoundError:
         if source_path:
-            return {"error": f"Log file not found: {source_path}"}
-        return {"error": "debug.log not found"}
+            return rb.invalid("MCP-SYS-I-001", data={"error": f"Log file not found: {source_path}"})
+        return rb.invalid("MCP-SYS-I-001", data={"error": "debug.log not found"})
     
     if command == "summary":
-        return parser.get_debug_info_summary()
+        return rb.success("WA-LOG-S-001", data=parser.get_debug_info_summary())
     
-    return {"error": f"Unknown command for debug source: {command}"}
+    return rb.invalid("MCP-SYS-I-001", data={"error": f"Unknown command for debug source: {command}"})
 
 
-def _crash_handler(command: str, crash_id: str | None, limit: int) -> dict:
+def _crash_handler(command: str, crash_id: str | None, limit: int, *, rb=None) -> Reply:
     """Handle crash report commands."""
     
     if command == "summary":
@@ -469,19 +474,19 @@ def _crash_handler(command: str, crash_id: str | None, limit: int) -> dict:
         crashes = get_recent_crashes(limit=limit)
         
         if not crashes:
-            return {
+            return rb.success("WA-LOG-S-001", data={
                 "count": 0,
                 "message": "No crash reports found",
-            }
+            })
         
-        return {
+        return rb.success("WA-LOG-S-001", data={
             "count": len(crashes),
             "crashes": [c.to_dict() for c in crashes],
-        }
+        })
     
     elif command == "detail":
         if not crash_id:
-            return {"error": "crash_id parameter required for detail command"}
+            return rb.invalid("MCP-SYS-I-001", data={"error": "crash_id parameter required for detail command"})
         
         from ck3raven.analyzers.crash_parser import parse_crash_folder
         
@@ -493,19 +498,19 @@ def _crash_handler(command: str, crash_id: str | None, limit: int) -> dict:
         crash_path = crashes_dir / crash_id
         
         if not crash_path.exists():
-            return {
+            return rb.invalid("MCP-SYS-I-001", data={
                 "error": f"Crash folder not found: {crash_id}",
                 "hint": "Use source=crash, command=summary to see available crashes",
-            }
+            })
         
         report = parse_crash_folder(crash_path)
         
         if not report:
-            return {"error": "Failed to parse crash folder"}
+            return rb.error("MCP-SYS-E-001", data={"error": "Failed to parse crash folder"})
         
-        return report.to_dict()
+        return rb.success("WA-LOG-S-001", data=report.to_dict())
     
-    return {"error": f"Unknown command for crash source: {command}"}
+    return rb.invalid("MCP-SYS-I-001", data={"error": f"Unknown command for crash source: {command}"})
 
 
 def _read_log_raw(
@@ -514,7 +519,8 @@ def _read_log_raw(
     from_end: bool,
     search: str | None,
     source_path: Path | None = None,
-) -> dict:
+    *, rb=None,
+) -> Reply:
     """Read raw log content.
     
     MEMORY-SAFE: 
@@ -544,18 +550,18 @@ def _read_log_raw(
         }
         
         if source not in log_files:
-            return {
+            return rb.invalid("MCP-SYS-I-001", data={
                 "error": f"Unknown log source: {source}",
                 "available": list(log_files.keys()),
-            }
+            })
         
         log_path = logs_dir / log_files[source]
     
     if not log_path.exists():
-        return {
+        return rb.invalid("MCP-SYS-I-001", data={
             "error": f"Log file not found: {log_path}",
             "hint": "Check the path or make sure CK3 has been run",
-        }
+        })
     
     try:
         file_size = log_path.stat().st_size
@@ -563,7 +569,7 @@ def _read_log_raw(
         # If search is requested on a large file, refuse
         if search and file_size > MAX_SIZE_FOR_SEARCH:
             size_mb = file_size / 1024 / 1024
-            return {
+            return rb.invalid("MCP-SYS-I-001", data={
                 "error": f"File too large ({size_mb:.1f}MB) for search. Search requires loading entire file.",
                 "file_path": str(log_path),
                 "file_size": file_size,
@@ -573,7 +579,7 @@ def _read_log_raw(
                     "  • ck3_logs(command='list', mod_filter='...') - filter by mod\n"
                     "  • ck3_logs(command='read', lines=100) - get last N lines without search"
                 ),
-            }
+            })
         
         # Cap lines
         max_lines = min(lines, MAX_LINES)
@@ -607,7 +613,7 @@ def _read_log_raw(
         else:
             selected = content_lines[:max_lines]
         
-        return {
+        return rb.success("WA-LOG-S-001", data={
             "log_source": source,
             "file_path": str(log_path),
             "file_size_bytes": file_size,
@@ -618,24 +624,16 @@ def _read_log_raw(
             "from_end": from_end,
             "search": search,
             "content": "\n".join(selected),
-        }
+        })
     except Exception as e:
-        return {"error": str(e)}
+        return rb.error("MCP-SYS-E-001", data={"error": str(e)})
 
 
-def _read_log_full(source: str, source_path: Path | None = None) -> dict:
+def _read_log_full(source: str, source_path: Path | None = None, *, rb=None) -> Reply:
     """Return raw log file content for backup/archival.
     
     MEMORY-SAFE: Refuses files larger than 100KB to prevent OOM.
     For large files, suggests copying to WIP workspace first.
-    
-    Returns:
-        Dict with:
-        - log_source: The log type
-        - file_path: Absolute path to the log file
-        - file_size: Size in bytes
-        - content: File content
-        - line_count: Total number of lines
     """
     MAX_SIZE_BYTES = 100 * 1024  # 100KB limit for safety
     
@@ -658,18 +656,18 @@ def _read_log_full(source: str, source_path: Path | None = None) -> dict:
         }
         
         if source not in log_files:
-            return {
+            return rb.invalid("MCP-SYS-I-001", data={
                 "error": f"Unknown log source: {source}",
                 "available": list(log_files.keys()),
-            }
+            })
         
         log_path = logs_dir / log_files[source]
     
     if not log_path.exists():
-        return {
+        return rb.invalid("MCP-SYS-I-001", data={
             "error": f"Log file not found: {log_path}",
             "hint": "Check the path or make sure CK3 has been run",
-        }
+        })
     
     try:
         file_size = log_path.stat().st_size
@@ -677,7 +675,7 @@ def _read_log_full(source: str, source_path: Path | None = None) -> dict:
         # Refuse large files to prevent OOM
         if file_size > MAX_SIZE_BYTES:
             size_mb = file_size / 1024 / 1024
-            return {
+            return rb.invalid("MCP-SYS-I-001", data={
                 "error": f"File too large ({size_mb:.1f}MB). command='raw' is limited to 100KB.",
                 "file_path": str(log_path),
                 "file_size": file_size,
@@ -688,20 +686,20 @@ def _read_log_full(source: str, source_path: Path | None = None) -> dict:
                     "  • ck3_logs(command='list', limit=50) - get filtered errors\n"
                     "  • ck3_logs(command='search', query='...') - search for specific text"
                 ),
-            }
+            })
         
         content = log_path.read_text(encoding='utf-8', errors='replace')
         line_count = content.count('\n') + (1 if content and not content.endswith('\n') else 0)
         
-        return {
+        return rb.success("WA-LOG-S-001", data={
             "log_source": source,
             "file_path": str(log_path),
             "file_size": file_size,
             "line_count": line_count,
             "content": content,
-        }
+        })
     except Exception as e:
-        return {"error": str(e)}
+        return rb.error("MCP-SYS-E-001", data={"error": str(e)})
 
 
 # ============================================================================
@@ -970,7 +968,7 @@ def _file_get(path, include_ast, max_bytes, db, trace, visibility):
     result = db.get_file(relpath=path, include_ast=include_ast, visibility=visibility)
     
     if trace:
-        trace.log("ck3lens.file.get", {"path": path, "include_ast": include_ast}, 
+        trace.log("mcp.tool", {"path": path, "include_ast": include_ast}, 
                   {"found": result is not None})
     
     if result:
@@ -979,7 +977,7 @@ def _file_get(path, include_ast, max_bytes, db, trace, visibility):
     return {"error": f"File not found: {path}"}
 
 
-def _file_read_raw(path, start_line, end_line, trace, world=None, *, rb=None) -> Reply | dict:
+def _file_read_raw(path, start_line, end_line, trace, world=None, *, rb=None) -> Reply:
     """
     Read file from filesystem with WorldAdapter visibility enforcement.
     
@@ -1002,7 +1000,7 @@ def _file_read_raw(path, start_line, end_line, trace, world=None, *, rb=None) ->
     file_path = resolution.absolute_path
     
     if trace:
-        trace.log("ck3lens.file.read", {"path": str(file_path)}, {})
+        trace.log("mcp.tool", {"path": str(file_path)}, {})
     
     if not file_path.exists():
         return rb.invalid("WA-RES-I-001", {"input_path": str(path)})
@@ -1035,7 +1033,7 @@ def _file_read_raw(path, start_line, end_line, trace, world=None, *, rb=None) ->
 # All read operations now go through _file_read_raw with pre-resolved absolute path.
 
 
-def _file_write(mod_name, rel_path, content, validate_syntax, session, trace, *, rb=None) -> Reply | dict:
+def _file_write(mod_name, rel_path, content, validate_syntax, session, trace, *, rb=None) -> Reply:
     """
     Write file to mod.
     
@@ -1052,7 +1050,7 @@ def _file_write(mod_name, rel_path, content, validate_syntax, session, trace, *,
         parse_result = parse_content(content, rel_path)
         if not parse_result["success"]:
             if trace:
-                trace.log("ck3lens.file.write", {"mod_name": mod_name, "rel_path": rel_path},
+                trace.log("mcp.tool", {"mod_name": mod_name, "rel_path": rel_path},
                           {"success": False, "reason": "syntax_error"})
             
             first_error = parse_result["errors"][0] if parse_result["errors"] else {"line": 1, "message": "Unknown error"}
@@ -1093,19 +1091,19 @@ def _file_write(mod_name, rel_path, content, validate_syntax, session, trace, *,
         data["db_refresh"] = db_refresh
         
         if trace:
-            trace.log("ck3lens.file.write", {"mod_name": mod_name, "rel_path": rel_path},
+            trace.log("mcp.tool", {"mod_name": mod_name, "rel_path": rel_path},
                       {"success": True})
         
         return rb.success("EN-WRITE-S-001", data)
         
     except Exception as e:
         if trace:
-            trace.log("ck3lens.file.write", {"mod_name": mod_name, "rel_path": rel_path},
+            trace.log("mcp.tool", {"mod_name": mod_name, "rel_path": rel_path},
                       {"success": False, "error": str(e)})
         return rb.error("WA-RES-E-001", {"error": str(e), "input_path": f"{mod_name}:{rel_path}"})
 
 
-def _file_write_raw(path, content, validate_syntax, token_id, trace, world=None, *, rb=None) -> Reply | dict:
+def _file_write_raw(path, content, validate_syntax, token_id, trace, world=None, *, rb=None) -> Reply:
     """
     Write file to raw filesystem path.
     
@@ -1153,7 +1151,7 @@ def _file_write_raw(path, content, validate_syntax, token_id, trace, world=None,
                     record_core_source_change(contract.contract_id)
         
         if trace:
-            trace.log("ck3lens.file.write_raw", {"path": str(file_path), "mode": mode},
+            trace.log("mcp.tool", {"path": str(file_path), "mode": mode},
                       {"success": True})
         
         data = {
@@ -1227,7 +1225,7 @@ def _file_edit_raw(path, old_content, new_content, validate_syntax, token_id, tr
                     record_core_source_change(contract.contract_id)
         
         if trace:
-            trace.log("ck3lens.file.edit_raw", {"path": str(file_path), "mode": mode},
+            trace.log("mcp.tool", {"path": str(file_path), "mode": mode},
                       {"success": True})
         
         return {
@@ -1299,7 +1297,7 @@ def _file_edit(mod_name, rel_path, old_content, new_content, validate_syntax, se
             result["db_refresh"] = db_refresh
     
     if trace:
-        trace.log("ck3lens.file.edit", {"mod_name": mod_name, "rel_path": rel_path},
+        trace.log("mcp.tool", {"mod_name": mod_name, "rel_path": rel_path},
                   {"success": result.get("success", False)})
     
     return result
@@ -1338,7 +1336,7 @@ def _file_delete(mod_name, rel_path, session, trace):
         result["db_refresh"] = db_refresh
     
     if trace:
-        trace.log("ck3lens.file.delete", {"mod_name": mod_name, "rel_path": rel_path},
+        trace.log("mcp.tool", {"mod_name": mod_name, "rel_path": rel_path},
                   {"success": result.get("success", False)})
     
     return result
@@ -1392,7 +1390,7 @@ def _file_rename(mod_name, old_path, new_path, session, trace):
             pass
     
     if trace:
-        trace.log("ck3lens.file.rename", {"mod_name": mod_name, "old_path": old_path, "new_path": new_path},
+        trace.log("mcp.tool", {"mod_name": mod_name, "old_path": old_path, "new_path": new_path},
                   {"success": result.get("success", False)})
     
     return result
@@ -1419,7 +1417,7 @@ def _file_refresh(absolute_path, mod_name, rel_path, trace):
             result = {"success": False, "error": str(e)}
     
     if trace:
-        trace.log("ck3lens.file.refresh", {"mod_name": mod_name, "rel_path": rel_path},
+        trace.log("mcp.tool", {"mod_name": mod_name, "rel_path": rel_path},
                   {"success": result.get("success", False)})
     
     return result
@@ -1446,7 +1444,7 @@ def _file_delete_raw(path, token_id, trace, world=None):
     try:
         file_path.unlink()
         if trace:
-            trace.log("ck3lens.file.delete_raw", {"path": str(file_path)}, {"success": True})
+            trace.log("mcp.tool", {"path": str(file_path)}, {"success": True})
         return {"success": True, "path": str(file_path)}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -1473,7 +1471,7 @@ def _file_rename_raw(old_path, new_path, token_id, trace, world=None):
         new_file.parent.mkdir(parents=True, exist_ok=True)
         old_file.rename(new_file)
         if trace:
-            trace.log("ck3lens.file.rename_raw", {"old_path": str(old_file), "new_path": str(new_file)}, {"success": True})
+            trace.log("mcp.tool", {"old_path": str(old_file), "new_path": str(new_file)}, {"success": True})
         return {"success": True, "old_path": str(old_file), "new_path": str(new_file)}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -1513,7 +1511,7 @@ def _file_list_raw(path, pattern, trace, world=None):
                 pass
     
     if trace:
-        trace.log("ck3lens.file.list_raw", {"path": path, "pattern": pattern}, {"files_count": len(files)})
+        trace.log("mcp.tool", {"path": path, "pattern": pattern}, {"files_count": len(files)})
     
     return {"path": path, "pattern": glob_pattern, "files": sorted(files, key=lambda x: x.get("relpath", ""))}
 
@@ -1629,7 +1627,7 @@ def _file_create_patch(mod_name, source_mod, source_path, patch_mode, initial_co
         }, "message": f"Created {patch_mode} patch: {target_rel_path}"}
         
         if trace:
-            trace.log("ck3lens.file.create_patch", {
+            trace.log("mcp.tool", {
                 "mod_name": mod_name,
                 "source_mod": source_mod,
                 "source_path": source_path,
@@ -1873,7 +1871,7 @@ def _folder_list_raw(path, trace, world=None):
         dir_path = resolution.absolute_path
     
     if trace:
-        trace.log("ck3lens.folder.list", {"path": str(dir_path)}, {})
+        trace.log("mcp.tool", {"path": str(dir_path)}, {})
     
     if not dir_path.exists():
         return {"success": False, "error": f"Directory not found: {path}"}
@@ -1959,7 +1957,7 @@ def _folder_contents(path, content_version_id, folder_pattern, text_search,
                 })
         
         if trace:
-            trace.log("ck3lens.folder.contents", {"path": path, "cvids_count": len(cvids)}, {"entries": len(entries)})
+            trace.log("mcp.tool", {"path": path, "cvids_count": len(cvids)}, {"entries": len(entries)})
         
         return {
             "path": path,
@@ -1994,7 +1992,7 @@ def _folder_top_level(db, cvids, trace):
                for row in rows if row['folder']]
     
     if trace:
-        trace.log("ck3lens.folder.top_level", {"cvids_count": len(cvids)}, {"folders": len(folders)})
+        trace.log("mcp.tool", {"cvids_count": len(cvids)}, {"folders": len(folders)})
     
     return {"folders": folders}
 
@@ -2015,7 +2013,7 @@ def _folder_mod_folders(content_version_id, db, trace):
                for row in rows if row['folder']]
     
     if trace:
-        trace.log("ck3lens.folder.mod_folders", {"cv_id": content_version_id}, {"folders": len(folders)})
+        trace.log("mcp.tool", {"cv_id": content_version_id}, {"folders": len(folders)})
     
     return {"folders": folders}
 
@@ -2358,7 +2356,7 @@ def ck3_git_impl(
         
         result = _git_ops_for_path(command, ROOT_REPO, file_path, files, all_files, message, limit)
         if trace:
-            trace.log(f"ck3lens.git.{command}", {"target": "ck3raven"},
+            trace.log("mcp.tool", {"target": "ck3raven"},
                       {"success": result.get("success", "error" not in result)})
         return result
 
@@ -2411,7 +2409,7 @@ def ck3_git_impl(
         return {"error": f"Unknown command: {command}"}
     
     if trace:
-        trace.log(f"ck3lens.git.{command}", {"mod": mod_name}, 
+        trace.log("mcp.tool", {"mod": mod_name}, 
                   {"success": result.get("success", "error" not in result)})
     
     return result
@@ -2486,7 +2484,7 @@ def _validate_syntax(content, filename, trace):
     result = parse_content(content, filename)
     
     if trace:
-        trace.log("ck3lens.validate.syntax", {"filename": filename},
+        trace.log("mcp.tool", {"filename": filename},
                   {"valid": result.get("success", False)})
     
     return {
@@ -2540,12 +2538,12 @@ def _validate_python(content, file_path, trace):
         ast.parse(source, filename)
         
         if trace:
-            trace.log("ck3lens.validate.python", {"filename": filename}, {"valid": True})
+            trace.log("mcp.tool", {"filename": filename}, {"valid": True})
         
         return {"valid": True}
     except SyntaxError as e:
         if trace:
-            trace.log("ck3lens.validate.python", {"filename": filename}, {"valid": False})
+            trace.log("mcp.tool", {"filename": filename}, {"valid": False})
         
         return {
             "valid": False,
@@ -2581,7 +2579,7 @@ def _validate_references(symbol_name, symbol_type, db, trace):
     """, params).fetchall()
     
     if trace:
-        trace.log("ck3lens.validate.references", {"symbol": symbol_name},
+        trace.log("mcp.tool", {"symbol": symbol_name},
                   {"found": len(rows) > 0})
     
     if not rows:
@@ -2609,7 +2607,7 @@ def _validate_bundle(artifact_bundle, trace):
         result = validate_artifact_bundle(bundle)
         
         if trace:
-            trace.log("ck3lens.validate.bundle", {}, {"valid": result.ok})
+            trace.log("mcp.tool", {}, {"valid": result.ok})
         
         return result.model_dump()
     except Exception as e:
@@ -2699,7 +2697,7 @@ def ck3_vscode_impl(
             if command == "ping":
                 result = client.ping()
                 if trace:
-                    trace.log("ck3lens.vscode.ping", {}, {"ok": True})
+                    trace.log("mcp.tool", {}, {"ok": True})
                 return result
             
             elif command == "diagnostics":
@@ -2707,7 +2705,7 @@ def ck3_vscode_impl(
                     return {"error": "path required for diagnostics command"}
                 result = client.get_diagnostics(path)
                 if trace:
-                    trace.log("ck3lens.vscode.diagnostics", {"path": path},
+                    trace.log("mcp.tool", {"path": path},
                               {"count": len(result.get("diagnostics", []))})
                 return result
             
@@ -2718,7 +2716,7 @@ def ck3_vscode_impl(
                     limit=limit
                 )
                 if trace:
-                    trace.log("ck3lens.vscode.all_diagnostics",
+                    trace.log("mcp.tool",
                               {"severity": severity, "source": source},
                               {"files": result.get("fileCount", 0)})
                 return result
@@ -2726,7 +2724,7 @@ def ck3_vscode_impl(
             elif command == "errors_summary":
                 result = client.get_workspace_errors()
                 if trace:
-                    trace.log("ck3lens.vscode.errors_summary", {},
+                    trace.log("mcp.tool", {},
                               {"errors": result.get("summary", {}).get("errors", 0)})
                 return result
             
@@ -2735,21 +2733,21 @@ def ck3_vscode_impl(
                     return {"error": "path required for validate_file command"}
                 result = client.validate_file(path)
                 if trace:
-                    trace.log("ck3lens.vscode.validate_file", {"path": path},
+                    trace.log("mcp.tool", {"path": path},
                               {"count": len(result.get("diagnostics", []))})
                 return result
             
             elif command == "open_files":
                 result = client.get_open_files()
                 if trace:
-                    trace.log("ck3lens.vscode.open_files", {},
+                    trace.log("mcp.tool", {},
                               {"count": result.get("count", 0)})
                 return result
             
             elif command == "active_file":
                 result = client.get_active_file()
                 if trace:
-                    trace.log("ck3lens.vscode.active_file", {},
+                    trace.log("mcp.tool", {},
                               {"active": result.get("active", False)})
                 return result
             
