@@ -743,7 +743,7 @@ def _init_session_internal(
     mod_count = len(_session.mods) if hasattr(_session, "mods") else 0
 
     # Check database health
-    _internal_rb = ReplyBuilder({}, tool='_init_session')
+    _internal_rb = ReplyBuilder(TraceInfo(trace_id="internal", session_id="internal"), tool='_init_session')
     db_health_reply = _check_db_health(_db.conn, rb=_internal_rb)
     db_status = db_health_reply.data
 
@@ -763,7 +763,7 @@ def _init_session_internal(
     return result
 
 
-def _check_db_health(conn, *, rb=None) -> Reply:
+def _check_db_health(conn, *, rb: ReplyBuilder) -> Reply:
     """Check database build status and completeness.
     
     Works with qbuilder tables (build_queue, build_runs).
@@ -1504,9 +1504,9 @@ def ck3_logs(
         rb=rb,
     )
     # Forward Reply (already built with our rb)
-    if reply.code_type == "I":
+    if reply.reply_type == "I":
         return rb.invalid(reply.code, data=reply.data, message=reply.message)
-    if reply.code_type != "S":
+    if reply.reply_type != "S":
         return rb.error(reply.code, data=reply.data, message=reply.message)
     return rb.success(reply.code, data=reply.data, message=reply.message)
 
@@ -2089,6 +2089,7 @@ def _ck3_playset_internal(
     """Internal implementation returning dict."""
     global _session, _session_cv_ids_resolved
     
+    from pathlib import Path
     trace = _get_trace()
     
     # FILE-BASED IMPLEMENTATION (database is DEPRECATED)
@@ -3187,7 +3188,7 @@ def _ck3_repair_internal(
         
         if target == "launcher" or target == "all":
             if launcher_db:
-                _repair_rb = ReplyBuilder({}, tool='_repair_internal')
+                _repair_rb = ReplyBuilder(TraceInfo(trace_id="internal", session_id="internal"), tool='_repair_internal')
                 status["launcher_details"] = _diagnose_launcher_db(launcher_db, rb=_repair_rb).data
         
         trace.log("mcp.repair", {"command": "query", "target": target}, {"success": True})
@@ -3198,7 +3199,7 @@ def _ck3_repair_internal(
         if not launcher_db:
             return {"error": "CK3 launcher database not found", "checked_paths": [str(p) for p in launcher_db_candidates]}
         
-        _repair_rb = ReplyBuilder({}, tool='_repair_internal')
+        _repair_rb = ReplyBuilder(TraceInfo(trace_id="internal", session_id="internal"), tool='_repair_internal')
         diagnosis_reply = _diagnose_launcher_db(launcher_db, rb=_repair_rb)
         diagnosis = diagnosis_reply.data
         
@@ -3401,7 +3402,7 @@ def _ck3_repair_internal(
     return {"error": f"Unknown command: {command}"}
 
 
-def _diagnose_launcher_db(launcher_db: Path, *, rb=None) -> Reply:
+def _diagnose_launcher_db(launcher_db: Path, *, rb: ReplyBuilder) -> Reply:
     """
     Analyze CK3 launcher database for issues.
     
@@ -4288,7 +4289,7 @@ def ck3_protect(
             _get_repo_root, MANIFEST_REL_PATH,
         )
     except ImportError as e:
-        return rb.error('MCP-SYS-E-001', message=f"Failed to import protected_files module: {e}")
+        return rb.error('MCP-SYS-E-001', data={}, message=f"Failed to import protected_files module: {e}")
 
     if command == "list":
         entries = load_manifest()
@@ -4325,15 +4326,15 @@ def ck3_protect(
 
     elif command == "add":
         if not path:
-            return rb.invalid('MCP-SYS-I-001', message="path required for add command")
+            return rb.invalid('MCP-SYS-I-001', data={}, message="path required for add command")
         if not reason:
-            return rb.invalid('MCP-SYS-I-001', message="reason required for add command")
+            return rb.invalid('MCP-SYS-I-001', data={}, message="reason required for add command")
 
         # Consume ephemeral HAT approval (written by extension, verified + deleted here)
         try:
             from tools.compliance.tokens import consume_hat_approval, write_hat_request
         except ImportError as e:
-            return rb.error('MCP-SYS-E-001', message=f"HAT module import failed: {e}")
+            return rb.error('MCP-SYS-E-001', data={}, message=f"HAT module import failed: {e}")
 
         valid, msg = consume_hat_approval(required_paths=[path])
         if not valid:
@@ -4350,7 +4351,7 @@ def ck3_protect(
 
         # Check if already protected
         if is_protected(path):
-            return rb.invalid('MCP-SYS-I-001', message=f"Path already protected: {path}")
+            return rb.invalid('MCP-SYS-I-001', data={}, message=f"Path already protected: {path}")
 
         # Compute hash for files
         resolved_type = entry_type or "file"
@@ -4359,7 +4360,7 @@ def ck3_protect(
             repo_root = _get_repo_root()
             file_path = repo_root / path
             if not file_path.exists():
-                return rb.invalid('MCP-SYS-I-001', message=f"File not found: {path}")
+                return rb.invalid('MCP-SYS-I-001', data={}, message=f"File not found: {path}")
             sha256 = compute_file_hash(file_path)
 
         from datetime import datetime
@@ -4386,13 +4387,14 @@ def ck3_protect(
 
     elif command == "remove":
         if not path:
-            return rb.invalid('MCP-SYS-I-001', message="path required for remove command")
+            return rb.invalid('MCP-SYS-I-001', data={}, message="path required for remove command")
 
         # Cannot remove the manifest itself (hardcoded)
         normalized = path.replace("\\", "/")
         if normalized == MANIFEST_REL_PATH:
             return rb.invalid(
                 'MCP-SYS-I-001',
+                data={},
                 message=f"Cannot remove manifest self-protection: {MANIFEST_REL_PATH} is hardcoded.",
             )
 
@@ -4400,7 +4402,7 @@ def ck3_protect(
         try:
             from tools.compliance.tokens import consume_hat_approval, write_hat_request
         except ImportError as e:
-            return rb.error('MCP-SYS-E-001', message=f"HAT module import failed: {e}")
+            return rb.error('MCP-SYS-E-001', data={}, message=f"HAT module import failed: {e}")
 
         valid, msg = consume_hat_approval(required_paths=[path])
         if not valid:
@@ -4421,7 +4423,7 @@ def ck3_protect(
         after_count = len(entries)
 
         if before_count == after_count:
-            return rb.invalid('MCP-SYS-I-001', message=f"Path not found in manifest: {path}")
+            return rb.invalid('MCP-SYS-I-001', data={}, message=f"Path not found in manifest: {path}")
 
         save_manifest(entries)
 
@@ -5205,14 +5207,14 @@ def ck3_get_mode_instructions(
     token = hat_token or mit_token
     reply = _ck3_get_mode_instructions_internal(mode, token, rb=rb)
     # Forward Reply (already built with our rb)
-    if reply.code_type == "I":
+    if reply.reply_type == "I":
         return rb.invalid(reply.code, data=reply.data, message=reply.message)
-    if reply.code_type != "S":
+    if reply.reply_type != "S":
         return rb.error(reply.code, data=reply.data, message=reply.message)
     return rb.success(reply.code, data=reply.data, message=reply.message)
 
 
-def _ck3_get_mode_instructions_internal(mode: str, hat_token: str | None = None, *, rb=None) -> Reply:
+def _ck3_get_mode_instructions_internal(mode: str, hat_token: str | None = None, *, rb: ReplyBuilder) -> Reply:
     """Internal implementation returning Reply."""
     from pathlib import Path
     from ck3lens.policy import AgentMode, initialize_workspace
@@ -5892,7 +5894,7 @@ def ck3_db_query(
         return rb.error('MCP-SYS-E-001', data={"error": str(e), "query": query if 'query' in dir() else None}, message=str(e))
 
 
-def _get_table_stats(*, rb=None) -> Reply:
+def _get_table_stats(*, rb: ReplyBuilder) -> Reply:
     """Get row counts for all queryable tables."""
     db = _get_db()
     stats = {}

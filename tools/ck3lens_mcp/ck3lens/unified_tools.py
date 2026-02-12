@@ -134,9 +134,9 @@ def ck3_logs_impl(
         return rb.invalid("MCP-SYS-I-001", data={"error": f"Unknown source: {source}"})
     
     # FR-2: Export results if requested (only on success)
-    if export_to and result.code_type == "S":
+    if export_to and result.reply_type == "S":
         export_reply = _export_logs_result(result.data, source, command, export_to, rb=rb)
-        if export_reply.code_type == "S":
+        if export_reply.reply_type == "S":
             result.data["export_path"] = export_reply.data["export_path"]
             result.data["export_success"] = True
         else:
