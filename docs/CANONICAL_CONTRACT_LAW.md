@@ -364,7 +364,84 @@ Only Phase 2 behavior may assume deterministic closure.
 
 ---
 
-## 13. Forbidden Concepts
+## 13. Contract Continuity
+
+Contracts are ephemeral (session-scoped, TTL-limited). Work frequently spans multiple contracts due to session interruptions, expiry, or scope changes. This section defines the canonical mechanisms for maintaining audit continuity across contract boundaries.
+
+### 13.1 Baseline SHA
+
+When a contract is opened, the system records `git rev-parse HEAD` as `baseline_sha` on the contract. This establishes the point-in-time state of the repository at contract creation.
+
+At close time, `git diff <baseline_sha>..HEAD` enumerates all changes made under the contract. This diff is the canonical input to the close audit gate (Phase 2, §12).
+
+- `baseline_sha` is immutable after contract creation
+- `baseline_sha` is inherited on renewal (§13.2)
+
+### 13.2 Contract Renewal
+
+When a contract expires with uncommitted work in the working tree, the agent may **renew** rather than open a new contract.
+
+Renewal inherits from the expired contract:
+
+- `root_category`
+- `operations`
+- `targets`
+- `work_declaration`
+- `baseline_sha` (from the original contract, not current HEAD)
+
+Renewal produces a **new contract** (new `contract_id`, new Sigil signature, new TTL). It is not a mutation of the expired contract — the expired contract remains closed/expired.
+
+The purpose of renewal is to eliminate agent error in re-declaring scope for ongoing work. Scope is inherited, not re-guessed.
+
+### 13.3 Carry-Over Detection
+
+When opening a **new** contract (not a renewal), if `git status` reveals uncommitted changes in the working tree, the open gate detects them as **carry-over files**.
+
+Carry-over files are grouped by origin contract:
+
+- Files whose paths match declared `targets` of a recently expired contract are attributed to that contract
+- Files not attributable to any expired contract are placed in an "unattributed" cluster
+
+The open gate response includes a **suggested contract template** with carry-over files pre-populated as targets. The `edit_kind` for each file is inferred from git status (M → modify, A → add, D → delete, untracked → add).
+
+### 13.4 Carry-Over Escalation
+
+Carry-over files that persist across multiple contract opens without being committed or stashed are escalated:
+
+| Contract Opens With Same Carry-Over | Severity | Behavior |
+|--------------------------------------|----------|----------|
+| 1st occurrence | Informational | Template suggested, agent may proceed with different scope |
+| 2nd occurrence | Warning | Template suggested, logged as persistent carry-over |
+| 3rd occurrence | Required | Carry-over files **must** be included as targets or explicitly stashed |
+
+Escalation state is tracked per-file, not per-contract. A file's escalation counter resets when it is committed or stashed.
+
+### 13.5 Carry-Over Stash (HAT-Gated)
+
+An agent may explicitly dismiss a carry-over cluster via:
+
+```
+ck3_contract(command="stash_carry_over", contract_id="<expired_contract_id>")
+```
+
+Stashing requires **HAT approval** (same shield-icon flow as protected file approval). This ensures that dismissing uncommitted work is an auditable human decision, not a silent agent action.
+
+Stashed files:
+
+- Are reverted or set aside (implementation-defined: git stash, git checkout, etc.)
+- Are logged as stashed with the HAT approval reference
+- Reset their escalation counter
+
+### 13.6 Rules
+
+- Renewal preserves audit continuity. The close audit gate evaluates all changes from `baseline_sha` through final HEAD, spanning the original and renewed contracts.
+- Carry-over detection is an open gate (CT layer). It produces I (informational/warning) or S (no carry-over), never D.
+- Stashing is a human-authorized action. Agents cannot stash carry-over without HAT.
+- Contract reuse across sessions remains **forbidden** (§5.3). Renewal creates a new contract within the same session, or in a new session if the original expired.
+
+---
+
+## 14. Forbidden Concepts
 
 The following are explicitly **forbidden**:
 
@@ -385,7 +462,7 @@ The following are explicitly **forbidden**:
 
 ---
 
-## 14. Canonical Priority Rule
+## 15. Canonical Priority Rule
 
 In case of conflict, authority is resolved in the following order:
 
