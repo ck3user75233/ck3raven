@@ -346,7 +346,7 @@ def _check_computed_roots() -> list[DoctorFinding]:
 
 def _check_data_structure() -> list[DoctorFinding]:
     """Check expected subdirectories under ROOT_CK3RAVEN_DATA."""
-    from .paths import WIP_DIR, PLAYSET_DIR, LOGS_DIR, CONFIG_DIR, DB_PATH
+    from .paths import WIP_DIR, PLAYSET_DIR, LOGS_DIR, CONFIG_DIR, ROOT_CK3RAVEN_DATA
     
     findings = []
     
@@ -384,30 +384,31 @@ def _check_data_structure() -> list[DoctorFinding]:
                 remediation=None
             ))
     
-    # Check DB_PATH (special - file not dir)
-    if DB_PATH.exists():
-        if DB_PATH.is_dir():
+    # Check database file (special - file not dir)
+    db_path = ROOT_CK3RAVEN_DATA / "ck3raven.db"
+    if db_path.exists():
+        if db_path.is_dir():
             findings.append(DoctorFinding(
                 id="PD-DATA-DB-ISDIR",
                 severity="ERROR",
-                subject="DB_PATH",
-                message=f"DB_PATH is a directory, should be a file: {DB_PATH}",
+                subject="ROOT_CK3RAVEN_DATA/ck3raven.db",
+                message=f"Database path is a directory, should be a file: {db_path}",
                 remediation="Remove the directory and run the builder daemon"
             ))
         else:
             findings.append(DoctorFinding(
                 id="PD-DATA-DB-OK",
                 severity="OK",
-                subject="DB_PATH",
-                message=f"DB_PATH: {DB_PATH}",
+                subject="ROOT_CK3RAVEN_DATA/ck3raven.db",
+                message=f"Database: {db_path}",
                 remediation=None
             ))
     else:
         findings.append(DoctorFinding(
             id="PD-DATA-DB-MISSING",
             severity="WARN",
-            subject="DB_PATH",
-            message=f"Database file does not exist: {DB_PATH}",
+            subject="ROOT_CK3RAVEN_DATA/ck3raven.db",
+            message=f"Database file does not exist: {db_path}",
             remediation="Run 'python -m qbuilder.cli daemon' to create database"
         ))
     
@@ -415,41 +416,43 @@ def _check_data_structure() -> list[DoctorFinding]:
 
 
 def _check_local_mods() -> list[DoctorFinding]:
-    """Check LOCAL_MODS_FOLDER validity."""
-    from .paths import LOCAL_MODS_FOLDER
+    """Check ROOT_USER_DOCS/mod validity."""
+    from .paths import ROOT_USER_DOCS
     
-    if LOCAL_MODS_FOLDER is None:
+    local_mods = ROOT_USER_DOCS / "mod" if ROOT_USER_DOCS else None
+    
+    if local_mods is None:
         return [DoctorFinding(
             id="PD-LOCALMODS-NOTCONFIGURED",
             severity="WARN",
-            subject="LOCAL_MODS_FOLDER",
-            message="Local mods folder not configured",
-            remediation="Set local_mods_folder in workspace.toml or configure ROOT_USER_DOCS"
+            subject="ROOT_USER_DOCS/mod",
+            message="Local mods folder not configured (ROOT_USER_DOCS is None)",
+            remediation="Configure ROOT_USER_DOCS in workspace.toml"
         )]
     
-    if not LOCAL_MODS_FOLDER.exists():
+    if not local_mods.exists():
         return [DoctorFinding(
             id="PD-LOCALMODS-NOTFOUND",
             severity="WARN",
-            subject="LOCAL_MODS_FOLDER",
-            message=f"Local mods folder does not exist: {LOCAL_MODS_FOLDER}",
+            subject="ROOT_USER_DOCS/mod",
+            message=f"Local mods folder does not exist: {local_mods}",
             remediation="Create the directory or check configuration"
         )]
     
-    if not LOCAL_MODS_FOLDER.is_dir():
+    if not local_mods.is_dir():
         return [DoctorFinding(
             id="PD-LOCALMODS-NOTDIR",
             severity="ERROR",
-            subject="LOCAL_MODS_FOLDER",
-            message=f"Local mods path is not a directory: {LOCAL_MODS_FOLDER}",
-            remediation="local_mods_folder must point to a directory"
+            subject="ROOT_USER_DOCS/mod",
+            message=f"Local mods path is not a directory: {local_mods}",
+            remediation="ROOT_USER_DOCS/mod must point to a directory"
         )]
     
     return [DoctorFinding(
         id="PD-LOCALMODS-OK",
         severity="OK",
-        subject="LOCAL_MODS_FOLDER",
-        message=f"LOCAL_MODS_FOLDER: {LOCAL_MODS_FOLDER}",
+        subject="ROOT_USER_DOCS/mod",
+        message=f"ROOT_USER_DOCS/mod: {local_mods}",
         remediation=None
     )]
 
@@ -506,7 +509,7 @@ def _check_config_health() -> list[DoctorFinding]:
 
 def _check_resolution() -> list[DoctorFinding]:
     """Cross-check resolution against expected classifications."""
-    from .paths import RootCategory, WIP_DIR, ROOT_REPO, LOCAL_MODS_FOLDER
+    from .paths import RootCategory, WIP_DIR, ROOT_REPO, ROOT_USER_DOCS
     
     findings = []
     
@@ -535,10 +538,11 @@ def _check_resolution() -> list[DoctorFinding]:
                 (str(repo_test_file), RootCategory.ROOT_REPO, "Repo path")
             )
     
-    # Only test local mods if configured and exists
-    if LOCAL_MODS_FOLDER and LOCAL_MODS_FOLDER.exists():
+    # Only test local mods if ROOT_USER_DOCS is configured and mod/ exists
+    local_mods = ROOT_USER_DOCS / "mod" if ROOT_USER_DOCS else None
+    if local_mods and local_mods.exists():
         test_cases.append(
-            (str(LOCAL_MODS_FOLDER / "TestMod" / "descriptor.mod"), RootCategory.ROOT_USER_DOCS, "Local mod path")
+            (str(local_mods / "TestMod" / "descriptor.mod"), RootCategory.ROOT_USER_DOCS, "Local mod path")
         )
     
     errors_found = False
@@ -550,7 +554,7 @@ def _check_resolution() -> list[DoctorFinding]:
                     id="PD-RESOLUTION-MISMATCH",
                     severity="WARN",  # WARN by default per spec
                     subject="resolution",
-                    message=f"{desc} resolved to {result.root_category.name}, expected {expected_root.name}",
+                    message=f"{desc} resolved to {result.root_category.name if result.root_category else 'None'}, expected {expected_root.name}",
                     remediation="Check resolution order in WorldAdapter - possible root overlap"
                 ))
                 errors_found = True

@@ -138,7 +138,7 @@ from ck3lens.validate import parse_content, validate_artifact_bundle
 from ck3lens.contracts import ArtifactBundle
 from ck3lens.trace import ToolTrace
 # Canonical path constants - use these instead of computing paths from __file__
-from ck3lens.paths import ROOT_REPO, ROOT_CK3RAVEN_DATA, PLAYSET_DIR
+from ck3lens.paths import ROOT_REPO, ROOT_CK3RAVEN_DATA, ROOT_GAME, PLAYSET_DIR
 
 
 # =============================================================================
@@ -263,7 +263,7 @@ def _get_world():
     
     from ck3lens.agent_mode import get_agent_mode
     from ck3lens.world_adapter import WorldAdapter
-    from ck3lens.paths import ROOT_REPO, ROOT_CK3RAVEN_DATA, ROOT_GAME
+    from ck3lens.paths import ROOT_REPO, ROOT_CK3RAVEN_DATA
     
     mode = get_agent_mode()
     
@@ -285,7 +285,6 @@ def _get_world():
             mode="ck3lens",
             db=None,  # DB not needed for path resolution
             mods=session.mods or [],
-            local_mods_folder=session.local_mods_folder,
         )
     elif mode == "ck3raven-dev":
         adapter = WorldAdapter.create(
@@ -461,7 +460,7 @@ def _load_playset_from_json(playset_file: Path) -> Optional[dict]:
         
         # Get vanilla info
         vanilla_config = data.get("vanilla", {})
-        vanilla_root = vanilla_config.get("path", "C:/Program Files (x86)/Steam/steamapps/common/Crusader Kings III/game")
+        vanilla_root = vanilla_config.get("path", str(ROOT_GAME) if ROOT_GAME else "")
         
         # Get local_mods_folder path (editability is DERIVED from path containment)
         local_mods_folder_raw = data.get("local_mods_folder", "")
@@ -2056,13 +2055,11 @@ def ck3_playset(
         name, description, vanilla_version_id, mod_ids, launcher_playset_name, limit
     )
     
+    if result.get("invalid"):
+        return rb.invalid('WA-VIS-I-001', data=result, message=result["invalid"])
+    
     if result.get("error"):
-        err_msg = str(result.get("error", "")).lower()
-        # System failure requires POSITIVE evidence
-        if "failed to" in err_msg or "timeout" in err_msg or "connection" in err_msg or "exception" in err_msg:
-            return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Playset operation failed"))
-        # Default: Invalid (agent mistake / bad input)
-        return rb.invalid('WA-VIS-I-001', data=result, message=result.get("error", "Playset operation failed"))
+        return rb.error('MCP-SYS-E-001', data=result, message=result["error"])
     
     if command == "switch":
         return rb.success('WA-VIS-S-001', data=result, message=f"Switched to playset: {result.get('playset_name')}")
@@ -2139,7 +2136,7 @@ def _ck3_playset_internal(
         # Switch to a different playset by updating manifest
         # Automatically checks build status and starts builder if mods need processing
         if not playset_name:
-            return {"success": False, "error": "playset_name required for switch"}
+            return {"success": False, "invalid": "playset_name required for switch"}
         
         # Find the playset file
         target_file = None
@@ -2165,7 +2162,7 @@ def _ck3_playset_internal(
                 pass
         
         if not target_file:
-            return {"success": False, "error": f"Playset '{playset_name}' not found"}
+            return {"success": False, "invalid": f"Playset '{playset_name}' not found"}
         
         # Update manifest
         manifest = {
@@ -2441,26 +2438,26 @@ def _ck3_playset_internal(
     elif command == "add_mod":
         # Add a mod to the active playset's local_mods array
         if not mod_name:
-            return {"success": False, "error": "mod_name required for add_mod"}
+            return {"success": False, "invalid": "mod_name required for add_mod"}
         
         # Get the active playset file
         session = _get_session()
         if not session.playset_name:
-            return {"success": False, "error": "No active playset. Switch to one first."}
+            return {"success": False, "invalid": "No active playset. Switch to one first."}
         
         # Find the active playset file
         if not PLAYSET_MANIFEST_FILE.exists():
-            return {"success": False, "error": "No playset manifest found"}
+            return {"success": False, "invalid": "No playset manifest found"}
         
         try:
             manifest = json.loads(PLAYSET_MANIFEST_FILE.read_text(encoding="utf-8-sig"))
             active_file = manifest.get("active")
             if not active_file:
-                return {"success": False, "error": "No active playset in manifest"}
+                return {"success": False, "invalid": "No active playset in manifest"}
             
             playset_path = PLAYSETS_DIR / active_file
             if not playset_path.exists():
-                return {"success": False, "error": f"Active playset file not found: {active_file}"}
+                return {"success": False, "invalid": f"Active playset file not found: {active_file}"}
             
             playset_data = json.loads(playset_path.read_text(encoding="utf-8-sig"))
         except Exception as e:
@@ -2488,9 +2485,10 @@ def _ck3_playset_internal(
         else:
             # It's a name - try to find the mod path
             # Look in common mod locations
+            from ck3lens.paths import ROOT_USER_DOCS
             mod_dirs = [
-                Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod",
-            ]
+                ROOT_USER_DOCS / "mod",
+            ] if ROOT_USER_DOCS else []
             for mod_dir in mod_dirs:
                 if not mod_dir.exists():
                     continue
@@ -2519,7 +2517,7 @@ def _ck3_playset_internal(
         if not mod_path:
             return {
                 "success": False, 
-                "error": f"Could not find mod '{mod_name}'. Provide full path or ensure mod is installed.",
+                "invalid": f"Could not find mod '{mod_name}'. Provide full path or ensure mod is installed.",
                 "hint": "Use full path to mod folder, e.g., 'C:\\...\\mod\\MyModFolder'"
             }
         
@@ -2529,7 +2527,7 @@ def _ck3_playset_internal(
             if existing.get("name", "").lower() == mod_name.lower() or existing.get("path") == mod_path:
                 return {
                     "success": False,
-                    "error": f"Mod '{mod_name}' is already in mods[]",
+                    "invalid": f"Mod '{mod_name}' is already in mods[]",
                     "existing_entry": existing
                 }
         
@@ -2598,19 +2596,20 @@ def _ck3_playset_internal(
         # Uses read-only connection - safe for concurrent launcher access
         from pathlib import Path
         from datetime import date
+        from ck3lens.paths import ROOT_USER_DOCS, ROOT_STEAM, ROOT_GAME
         
-        launcher_db_path = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "launcher-v2.sqlite"
-        local_mods_folder = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
-        steam_workshop = Path("C:/Program Files (x86)/Steam/steamapps/workshop/content/1158310")
-        vanilla_path = "C:/Program Files (x86)/Steam/steamapps/common/Crusader Kings III/game"
+        if not ROOT_USER_DOCS or not ROOT_STEAM or not ROOT_GAME:
+            return {"success": False, "invalid": "Missing path configuration (ROOT_USER_DOCS, ROOT_STEAM, or ROOT_GAME). Run ck3_paths_doctor() to diagnose."}
         
-        if not launcher_db_path.exists():
-            return {"success": False, "error": f"Launcher database not found: {launcher_db_path}"}
+        launcher_db = ROOT_USER_DOCS / "launcher-v2.sqlite"
+        
+        if not launcher_db.exists():
+            return {"success": False, "invalid": f"Launcher database not found: {launcher_db}"}
         
         # Connect in read-only mode (safe for concurrent access)
         import sqlite3
         try:
-            conn = sqlite3.connect(f"file:{launcher_db_path}?mode=ro", uri=True)
+            conn = sqlite3.connect(f"file:{launcher_db}?mode=ro", uri=True)
             conn.row_factory = sqlite3.Row
         except Exception as e:
             return {"success": False, "error": f"Failed to connect to launcher DB: {e}"}
@@ -2655,7 +2654,7 @@ def _ck3_playset_internal(
                 ).fetchone()
             
             if not row:
-                return {"success": False, "error": f"Playset '{launcher_playset_name}' not found in launcher DB"}
+                return {"success": False, "invalid": f"Playset '{launcher_playset_name}' not found in launcher DB"}
             
             playset_id = row["id"]
             playset_name_actual = row["name"]
@@ -2694,7 +2693,7 @@ def _ck3_playset_internal(
                 
                 if steam_id and not is_local:
                     # Steam workshop mod
-                    mod_path = str(steam_workshop / steam_id)
+                    mod_path = str(ROOT_STEAM / steam_id)
                     steam_count += 1
                 elif dir_path:
                     # Local mod - use dirPath
@@ -2704,7 +2703,7 @@ def _ck3_playset_internal(
                     is_local = True
                 else:
                     # Fallback - try to construct path
-                    mod_path = str(local_mods_folder / display_name.replace(" ", ""))
+                    mod_path = str(ROOT_USER_DOCS / "mod" / display_name.replace(" ", ""))
                     local_count += 1
                     local_positions.append(position)
                     is_local = True
@@ -2740,11 +2739,11 @@ def _ck3_playset_internal(
                 "last_modified": today,
                 "vanilla": {
                     "version": "1.18",
-                    "path": vanilla_path,
+                    "path": str(ROOT_GAME),
                     "enabled": True
                 },
                 "mods": mods_list,
-                "local_mods_folder": str(local_mods_folder),
+                "local_mods_folder": str(ROOT_USER_DOCS / "mod"),
                 "agent_briefing": {
                     "context": f"Playset '{playset_name_actual}' with {len(mods_list)} mods",
                     "error_analysis_notes": [
@@ -2806,7 +2805,7 @@ def _ck3_playset_internal(
         # Other commands not yet implemented for file-based
         return {
             "success": False,
-            "error": f"Command '{command}' not yet implemented for file-based playsets",
+            "invalid": f"Command '{command}' not yet implemented for file-based playsets",
             "hint": "Use 'get', 'list', 'switch', or 'mods' commands"
         }
 
@@ -3106,22 +3105,7 @@ def ck3_repair(
     trace_info = get_current_trace_info()
     rb = ReplyBuilder(trace_info, tool='ck3_repair')
     
-    result = _ck3_repair_internal(command, target, dry_run, backup_name)
-    
-    if result.get("error"):
-        err_msg = str(result.get("error", "")).lower()
-        # System failure requires POSITIVE evidence
-        if "failed to" in err_msg or "timeout" in err_msg or "connection" in err_msg or "exception" in err_msg:
-            return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Repair failed"))
-        # Default: Invalid (agent mistake / bad input)
-        return rb.invalid('MCP-SYS-I-001', data=result, message=result.get("error", "Repair failed"))
-    
-    # Repair operations are system-owned/ungoverned -> MCP layer owns success
-    if result.get("dry_run"):
-        # Dry run is a preview - still MCP since it's infrastructure
-        return rb.success('MCP-SYS-S-002', data=result, message=f"Dry run - {command} would make changes.")
-    
-    return rb.success('MCP-SYS-S-001', data=result, message=f"Repair {command} complete.")
+    return _ck3_repair_internal(command, target, dry_run, backup_name, rb=rb, trace_info=trace_info)
 
 
 def _ck3_repair_internal(
@@ -3129,16 +3113,20 @@ def _ck3_repair_internal(
     target: str | None,
     dry_run: bool,
     backup_name: str | None,
-) -> dict:
-    """Internal implementation returning dict."""
+    *,
+    rb: ReplyBuilder,
+    trace_info: TraceInfo,
+) -> Reply:
+    """Internal implementation returning Reply."""
     import shutil
     from pathlib import Path
     from datetime import datetime
+    from ck3lens.paths import ROOT_CK3RAVEN_DATA
     
     trace = _get_trace()
     session = _get_session()
     
-    ck3raven_dir = Path.home() / ".ck3raven"
+    ck3raven_dir = ROOT_CK3RAVEN_DATA
     
     # Launcher database location (CK3 stores this in Paradox settings)
     launcher_db_candidates = [
@@ -3171,12 +3159,10 @@ def _ck3_repair_internal(
                 "cache": {
                     "files": len(cache_files),
                     "path": str(ck3raven_dir),
-                    # NO permission oracles - enforcement decides at execution time
                 },
                 "wip": {
                     "files": len(wip_files),
                     "path": str(ck3raven_dir / "wip"),
-                    # NO permission oracles - enforcement decides at execution time
                 },
                 "launcher": {
                     "path": str(launcher_db) if launcher_db else None,
@@ -3188,28 +3174,24 @@ def _ck3_repair_internal(
         
         if target == "launcher" or target == "all":
             if launcher_db:
-                _repair_rb = ReplyBuilder(TraceInfo(trace_id="internal", session_id="internal"), tool='_repair_internal')
-                status["launcher_details"] = _diagnose_launcher_db(launcher_db, rb=_repair_rb).data
+                diag_reply = _diagnose_launcher_db(launcher_db, trace_info=trace_info)
+                status["launcher_details"] = diag_reply.data
         
         trace.log("mcp.repair", {"command": "query", "target": target}, {"success": True})
-        return status
+        return rb.success('MCP-SYS-S-001', data=status, message="Repair query complete.")
     
     elif command == "diagnose_launcher":
-        # Analyze launcher database for issues
         if not launcher_db:
-            return {"error": "CK3 launcher database not found", "checked_paths": [str(p) for p in launcher_db_candidates]}
+            return rb.invalid('MCP-SYS-I-001', data={
+                "checked_paths": [str(p) for p in launcher_db_candidates],
+            }, message="CK3 launcher database not found")
         
-        _repair_rb = ReplyBuilder(TraceInfo(trace_id="internal", session_id="internal"), tool='_repair_internal')
-        diagnosis_reply = _diagnose_launcher_db(launcher_db, rb=_repair_rb)
-        diagnosis = diagnosis_reply.data
-        
-        trace.log("mcp.repair", {"command": "diagnose_launcher"}, {"issues_found": diagnosis.get("issues_count", 0)})
-        return diagnosis
+        # Delegate to _diagnose_launcher_db which returns its own Reply
+        return _diagnose_launcher_db(launcher_db, trace_info=trace_info)
     
     elif command == "backup_launcher":
-        # Create backup of launcher database
         if not launcher_db:
-            return {"error": "CK3 launcher database not found"}
+            return rb.invalid('MCP-SYS-I-001', data={}, message="CK3 launcher database not found")
         
         backups_dir = ck3raven_dir / "launcher_backups"
         backups_dir.mkdir(parents=True, exist_ok=True)
@@ -3221,34 +3203,28 @@ def _ck3_repair_internal(
         shutil.copy2(launcher_db, backup_path)
         
         trace.log("mcp.repair", {"command": "backup_launcher"}, {"backup_path": str(backup_path)})
-        return {
-            "success": True,
+        return rb.success('MCP-SYS-S-001', data={
             "backup_path": str(backup_path),
             "original_path": str(launcher_db),
             "backup_size": backup_path.stat().st_size,
-        }
+        }, message="Launcher database backed up.")
     
     elif command == "repair_registry":
-        # Repair launcher registry (requires token in strict mode)
         if not launcher_db:
-            return {"error": "CK3 launcher database not found"}
+            return rb.invalid('MCP-SYS-I-001', data={}, message="CK3 launcher database not found")
         
         if dry_run:
-            return {
+            return rb.success('MCP-SYS-S-002', data={
                 "dry_run": True,
-                "message": "Would repair launcher registry. Set dry_run=False to proceed.",
                 "recommendation": "Run backup_launcher first, then diagnose_launcher to see issues.",
-            }
+            }, message="Would repair launcher registry. Set dry_run=False to proceed.")
         
-        # For now, return a placeholder - actual repair logic requires careful implementation
-        return {
-            "error": "Launcher repair not yet implemented",
+        return rb.error('MCP-SYS-E-001', data={
             "reason": "Launcher database modifications require careful testing to avoid data loss",
             "workaround": "Use the CK3 launcher UI to reset settings, or delete ~/.ck3raven/ck3raven.db to force rebuild",
-        }
+        }, message="Launcher repair not yet implemented")
     
     elif command == "delete_cache":
-        # Delete ck3raven cache files
         cache_dir = ck3raven_dir
         wip_dir = ck3raven_dir / "wip"
         
@@ -3256,28 +3232,25 @@ def _ck3_repair_internal(
             cache_files = list(cache_dir.glob("*.cache")) if cache_dir.exists() else []
             wip_files = list(wip_dir.rglob("*")) if wip_dir.exists() else []
             
-            return {
+            return rb.success('MCP-SYS-S-002', data={
                 "dry_run": True,
                 "would_delete": {
-                    "cache_files": [str(f) for f in cache_files[:10]],  # First 10
+                    "cache_files": [str(f) for f in cache_files[:10]],
                     "cache_count": len(cache_files),
                     "wip_files": [str(f) for f in wip_files[:10]],
                     "wip_count": len(wip_files),
                 },
-                "message": "Set dry_run=False to delete these files",
-            }
+            }, message="Set dry_run=False to delete these files")
         
         deleted = {"cache": 0, "wip": 0}
         
-        # Delete cache files
         for cache_file in cache_dir.glob("*.cache"):
             try:
                 cache_file.unlink()
                 deleted["cache"] += 1
-            except Exception as e:
+            except Exception:
                 pass
         
-        # Delete WIP directory contents (but keep directory)
         if wip_dir.exists():
             for item in wip_dir.rglob("*"):
                 if item.is_file():
@@ -3288,26 +3261,20 @@ def _ck3_repair_internal(
                         pass
         
         trace.log("mcp.repair", {"command": "delete_cache", "dry_run": False}, deleted)
-        return {
-            "success": True,
+        return rb.success('MCP-SYS-S-001', data={
             "deleted": deleted,
-            "message": "Cache cleared. ck3raven will rebuild as needed.",
-        }
+        }, message="Cache cleared. ck3raven will rebuild as needed.")
     
-    if command == "migrate_paths":
-        # Migrate playset paths to current user profile
+    elif command == "migrate_paths":
         from .ck3lens.path_migration import detect_path_mismatch, migrate_playset_paths
         
-        # Get active playset data
         if not session.playset_name:
-            return {"error": "No active playset. Use ck3_playset to switch to a playset first."}
+            return rb.invalid('MCP-SYS-I-001', data={}, message="No active playset. Use ck3_playset to switch to one first.")
         
-        # Find the playset file
-        playsets_dir = PLAYSET_DIR  # Use canonical path from paths.py
+        playsets_dir = PLAYSET_DIR
         playset_file = None
         playset_data = None
         
-        # Try to find playset file by name match
         for f in playsets_dir.glob("*.json"):
             try:
                 with open(f, 'r', encoding='utf-8') as fp:
@@ -3320,22 +3287,18 @@ def _ck3_repair_internal(
                 continue
         
         if not playset_data:
-            return {
-                "error": f"Could not find playset file for '{session.playset_name}'",
+            return rb.invalid('MCP-SYS-I-001', data={
                 "hint": "Playset may be stored in database only, not a JSON file",
-            }
+            }, message=f"Could not find playset file for '{session.playset_name}'")
         
-        # At this point playset_file is guaranteed to be set (found in loop above)
         assert playset_file is not None
         
-        # Detect path mismatch
-        local_mods_folder = playset_data.get("local_mods_folder", "")
-        mismatch = detect_path_mismatch(local_mods_folder)
+        local_mods_folder_val = playset_data.get("local_mods_folder", "")
+        mismatch = detect_path_mismatch(local_mods_folder_val)
         
         if not mismatch:
-            # Check individual mod paths too
-            mods = playset_data.get("mods", [])
-            for mod in mods:
+            mods_list = playset_data.get("mods", [])
+            for mod in mods_list:
                 disk_path = mod.get("disk_path", "")
                 if disk_path:
                     mismatch = detect_path_mismatch(disk_path)
@@ -3343,72 +3306,51 @@ def _ck3_repair_internal(
                         break
         
         if not mismatch:
-            return {
-                "success": True,
-                "message": "No path migration needed - paths already match current user profile",
-                "local_mods_folder": local_mods_folder,
-            }
+            return rb.success('MCP-SYS-S-001', data={
+                "local_mods_folder": local_mods_folder_val,
+            }, message="No path migration needed - paths already match current user profile")
         
         old_user, new_user = mismatch
-        
-        # Perform migration
         migrated_data, was_modified, migration_msg = migrate_playset_paths(playset_data)
         
         if not was_modified:
-            return {
-                "success": True,
-                "message": "No changes needed",
-            }
+            return rb.success('MCP-SYS-S-001', data={}, message="No changes needed")
         
         if dry_run:
-            return {
+            return rb.success('MCP-SYS-S-002', data={
                 "dry_run": True,
-                "migration": {
-                    "old_user": old_user,
-                    "new_user": new_user,
-                    "message": migration_msg,
-                },
+                "migration": {"old_user": old_user, "new_user": new_user, "message": migration_msg},
                 "playset_file": str(playset_file),
-                "message": "Set dry_run=False to save changes to playset file",
-            }
+            }, message="Set dry_run=False to save changes to playset file")
         
-        # Save migrated playset
         try:
             with open(playset_file, 'w', encoding='utf-8') as fp:
                 json.dump(migrated_data, fp, indent=2, ensure_ascii=False)
             
-            # Reload the playset
             _load_playset_from_json(playset_file)
             
             trace.log("mcp.repair", {"command": "migrate_paths", "dry_run": False}, {
-                "old_user": old_user,
-                "new_user": new_user,
-                "file": str(playset_file),
+                "old_user": old_user, "new_user": new_user, "file": str(playset_file),
             })
             
-            return {
-                "success": True,
-                "migration": {
-                    "old_user": old_user,
-                    "new_user": new_user,
-                    "message": migration_msg,
-                },
+            return rb.success('MCP-SYS-S-001', data={
+                "migration": {"old_user": old_user, "new_user": new_user, "message": migration_msg},
                 "playset_file": str(playset_file),
-                "message": "Paths migrated and playset reloaded",
-            }
+            }, message="Paths migrated and playset reloaded")
         except Exception as e:
-            return {"error": f"Failed to save migrated playset: {e}"}
+            return rb.error('MCP-SYS-E-001', data={}, message=f"Failed to save migrated playset: {e}")
     
-    return {"error": f"Unknown command: {command}"}
+    return rb.invalid('MCP-SYS-I-001', data={}, message=f"Unknown command: {command}")
 
 
-def _diagnose_launcher_db(launcher_db: Path, *, rb: ReplyBuilder) -> Reply:
+def _diagnose_launcher_db(launcher_db: Path, *, trace_info: TraceInfo) -> Reply:
     """
     Analyze CK3 launcher database for issues.
     
-    Returns diagnosis report with issues found.
+    Returns Reply with diagnosis report.
     """
     import sqlite3
+    rb = ReplyBuilder(trace_info, tool='_diagnose_launcher_db')
     
     try:
         conn = sqlite3.connect(launcher_db)

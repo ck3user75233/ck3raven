@@ -40,6 +40,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Any, TYPE_CHECKING, Set
 
+from ck3lens.paths import ROOT_USER_DOCS, ROOT_GAME, ROOT_CK3RAVEN_DATA
+
 if TYPE_CHECKING:
     from .db_queries import DBQueries
 
@@ -100,7 +102,7 @@ class Session:
     playset_name: Optional[str] = None
     db_path: Optional[Path] = None
     mods: list[ModEntry] = field(default_factory=list)
-    local_mods_folder: Path = field(default_factory=lambda: DEFAULT_CK3_MOD_DIR)
+    local_mods_folder: Path = field(default_factory=lambda: ROOT_USER_DOCS / "mod")
     
     def get_mod(self, mod_id: str) -> Optional[ModEntry]:
         """Get mod by ID or name from mods[]."""
@@ -144,12 +146,6 @@ class Session:
         return self.get_mod(mod_id)
 
 
-# Default CK3 mod directory (this is local_mods_folder)
-DEFAULT_CK3_MOD_DIR = Path.home() / "Documents" / "Paradox Interactive" / "Crusader Kings III" / "mod"
-
-# Default ck3raven database
-DEFAULT_DB_PATH = Path.home() / ".ck3raven" / "ck3raven.db"
-
 # Playsets directory - canonical location from paths.py
 # NOTE: Import PLAYSET_DIR at function scope to avoid circular imports
 # The canonical path is: ~/.ck3raven/playsets/
@@ -159,9 +155,6 @@ LEGACY_PLAYSETS_DIR = Path.home() / ".ck3raven" / "playsets"
 
 # Default config file location (portable - uses standard user data location)
 DEFAULT_CONFIG_PATH = Path.home() / ".ck3raven" / "ck3lens_config.yaml"
-
-# Default vanilla path
-DEFAULT_VANILLA_PATH = Path("C:/Program Files (x86)/Steam/steamapps/common/Crusader Kings III/game")
 
 
 def _expand_path(path_str: str) -> Path:
@@ -192,7 +185,7 @@ def _load_json_robust(path: Path) -> Optional[dict]:
 def _create_vanilla_entry(vanilla_path: Optional[Path] = None) -> ModEntry:
     """Create the vanilla ModEntry (always mods[0])."""
     if vanilla_path is None:
-        vanilla_path = DEFAULT_VANILLA_PATH
+        vanilla_path = ROOT_GAME
     
     return ModEntry(
         mod_id="vanilla",
@@ -217,7 +210,7 @@ def load_config(config_path: Optional[Path] = None) -> Session:
     """
     # Start with vanilla as mods[0] - ALWAYS present
     session = Session(
-        db_path=DEFAULT_DB_PATH,
+        db_path=ROOT_CK3RAVEN_DATA / "ck3raven.db",
         mods=[_create_vanilla_entry()]
     )
     
@@ -306,9 +299,7 @@ def _apply_playset(session: Session, data: dict) -> None:
     if vanilla_path_str:
         vanilla_path = _expand_path(vanilla_path_str)
     else:
-        vanilla_path = DEFAULT_VANILLA_PATH
-    
-    # Start with vanilla as mods[0]
+        vanilla_path = ROOT_GAME
     session.mods = [_create_vanilla_entry(vanilla_path)]
     
     # Add user mods from playset mods[] array
@@ -348,7 +339,7 @@ def _apply_config(session: Session, data: dict[str, Any]) -> None:
         if vanilla_path:
             vanilla_path = _expand_path(vanilla_path)
         else:
-            vanilla_path = DEFAULT_VANILLA_PATH
+            vanilla_path = ROOT_GAME
         
         # Start with vanilla as mods[0]
         session.mods = [_create_vanilla_entry(vanilla_path)]

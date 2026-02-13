@@ -107,6 +107,16 @@ BANNED_PATH_ORACLES = frozenset({
     "local_mod_root",
     "mod_paths",
     "active_mod_paths",
+    # Hardcoded path patterns (use ROOT_STEAM, ROOT_GAME, ROOT_USER_DOCS inline)
+    "steam_workshop",
+    "vanilla_path",
+    "launcher_db_path",
+    # Banned alias constants (use ROOT_CK3RAVEN_DATA / "ck3raven.db" inline, ROOT_USER_DOCS / "mod" inline)
+    "DB_PATH",
+    "DEFAULT_CK3_MOD_DIR",
+    "DEFAULT_VANILLA_PATH",
+    "DEFAULT_DB_PATH",
+    "LOCAL_MODS_FOLDER",
 })
 
 BANNED_VISIBILITY_CACHING = frozenset({
@@ -444,13 +454,11 @@ DEPRECATED_HINTS: list[str] = [
 # Raw text substrings that are always allowed
 
 RAW_ALLOWLIST_SUBSTRINGS: list[str] = [
-    "local_mods_folder",  # canonical allowed
     "scan_playset_conflicts",  # canonical allowed
 ]
 
 # Token sequences that are allowed
 ALLOWLIST_TOKEN_SEQUENCES: list[tuple[str, ...]] = [
-    ("local", "mods", "folder"),
 ]
 
 

@@ -34,6 +34,8 @@ EXCLUDE_DIRS = {
     "artifacts",  # Runtime artifacts - lint reports, symbol baselines, etc.
     "out",      # VS Code extension build output
     "dist",     # Build distributions
+    "test",     # Test directories
+    "tests",    # Test directories
 }
 
 EXCLUDE_FILES = {

@@ -77,16 +77,9 @@ ROOT_VSCODE: Path | None = _config.paths.root_vscode
 # =============================================================================
 
 WIP_DIR: Path = ROOT_CK3RAVEN_DATA / "wip"
-DB_PATH: Path = ROOT_CK3RAVEN_DATA / "ck3raven.db"
 PLAYSET_DIR: Path = ROOT_CK3RAVEN_DATA / "playsets"
 LOGS_DIR: Path = ROOT_CK3RAVEN_DATA / "logs"
 CONFIG_DIR: Path = ROOT_CK3RAVEN_DATA / "config"
-
-# Local mods folder - from config or derived from ROOT_USER_DOCS
-LOCAL_MODS_FOLDER: Path | None = (
-    _config.paths.local_mods_folder 
-    or (ROOT_USER_DOCS / "mod" if ROOT_USER_DOCS else None)
-)
 
 
 # =============================================================================

@@ -230,20 +230,17 @@ class WorldAdapter:
         mode: str = "uninitiated",
         db: Optional["DBQueries"] = None,
         *,
-        # Mod list and local mods folder for ck3lens mode
         mods: Optional[list] = None,
-        local_mods_folder: Optional[Path] = None,
     ) -> "WorldAdapter":
         """
         Factory method using paths.py constants for all roots.
         
-        NO LEGACY PARAMETERS - all paths come from paths.py constants.
+        All paths come from paths.py ROOT_* constants (config-driven).
         
         Args:
             mode: Agent mode ("ck3lens", "ck3raven-dev", or "uninitiated")
             db: DBQueries instance (optional)
             mods: List of mod objects with .name and .path attributes (ck3lens mode)
-            local_mods_folder: Override for local mods folder (defaults to paths.LOCAL_MODS_FOLDER)
         """
         from ck3lens.paths import (
             RootCategory,
@@ -253,36 +250,23 @@ class WorldAdapter:
             ROOT_STEAM,
             ROOT_USER_DOCS,
             ROOT_VSCODE,
-            LOCAL_MODS_FOLDER,
         )
         
         roots: dict[RootCategory, list[Path]] = {}
         mod_paths: dict[str, Path] = {}
         visible_cvids: Optional[FrozenSet[int]] = None
         
-        # Use local_mods_folder parameter or fall back to paths.py constant
-        effective_local_mods = local_mods_folder or LOCAL_MODS_FOLDER
-        
-        # ROOT_REPO - always from paths.py (computed from __file__)
-        if ROOT_REPO and ROOT_REPO.exists():
-            roots[RootCategory.ROOT_REPO] = [ROOT_REPO]
-        
         # ROOT_CK3RAVEN_DATA - always set (constant is never None)
         roots[RootCategory.ROOT_CK3RAVEN_DATA] = [ROOT_CK3RAVEN_DATA]
         
-        # ROOT_GAME - from paths.py (config-driven)
+        if ROOT_REPO and ROOT_REPO.exists():
+            roots[RootCategory.ROOT_REPO] = [ROOT_REPO]
         if ROOT_GAME and ROOT_GAME.exists():
             roots[RootCategory.ROOT_GAME] = [ROOT_GAME]
-        
-        # ROOT_STEAM - from paths.py (config-driven)
         if ROOT_STEAM and ROOT_STEAM.exists():
             roots[RootCategory.ROOT_STEAM] = [ROOT_STEAM]
-        
-        # ROOT_USER_DOCS - from paths.py (config-driven or OS-default)
         if ROOT_USER_DOCS and ROOT_USER_DOCS.exists():
             roots[RootCategory.ROOT_USER_DOCS] = [ROOT_USER_DOCS]
-        
-        # ROOT_VSCODE - from paths.py (config-driven or OS-default)
         if ROOT_VSCODE and ROOT_VSCODE.exists():
             roots[RootCategory.ROOT_VSCODE] = [ROOT_VSCODE]
         
@@ -699,23 +683,20 @@ def get_world_adapter(
     db: Optional["DBQueries"] = None,
     *,
     mods: Optional[list] = None,
-    local_mods_folder: Optional[Path] = None,
 ) -> WorldAdapter:
     """
     Factory function to create a WorldAdapter.
     
     This is a convenience wrapper around WorldAdapter.create().
-    All paths come from paths.py constants - no legacy parameters.
+    All paths come from paths.py ROOT_* constants (config-driven).
     
     Args:
         mode: Agent mode ("ck3lens", "ck3raven-dev", or "uninitiated")
         db: DBQueries instance (optional)
         mods: List of mod objects (for ck3lens mode)
-        local_mods_folder: Override for local mods folder (defaults to paths.LOCAL_MODS_FOLDER)
     """
     return WorldAdapter.create(
         mode=mode,
         db=db,
         mods=mods,
-        local_mods_folder=local_mods_folder,
     )
