@@ -16,7 +16,6 @@ Rules:
 """
 
 import sqlite3
-from typing import Optional
 
 
 QBUILDER_SCHEMA_SQL = """
@@ -202,33 +201,3 @@ def get_queue_counts(conn: sqlite3.Connection) -> dict:
         'discovery_total': sum(discovery.values()),
         'build_total': sum(build.values()),
     }
-
-
-def get_root_path_for_cvid(conn: sqlite3.Connection, cvid: int) -> Optional[str]:
-    """
-    Resolve content_version_id to filesystem root path.
-    
-    This is THE canonical way to get a root path from cvid.
-    Joins through content_versions → mod_packages (or vanilla).
-    """
-    # Check if vanilla
-    row = conn.execute("""
-        SELECT cv.kind, mp.source_path, vv.ck3_version
-        FROM content_versions cv
-        LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-        LEFT JOIN vanilla_versions vv ON cv.vanilla_version_id = vv.vanilla_version_id
-        WHERE cv.content_version_id = ?
-    """, (cvid,)).fetchone()
-    
-    if not row:
-        return None
-    
-    kind = row[0]
-    
-    if kind == 'vanilla':
-        # For vanilla, we need to get the path from config or environment
-        # This is a known limitation - vanilla path should be in content_versions
-        # or derived from vanilla_versions + config
-        return None  # TODO: implement vanilla path resolution
-    else:
-        return row[1]  # mod_packages.source_path

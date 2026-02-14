@@ -28,7 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Optional, FrozenSet, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .db_queries import DBQueries
@@ -203,8 +203,6 @@ class WorldAdapter:
         roots: Optional[dict["RootCategory", list[Path]]] = None,
         # Mod name → path mapping (for mod: address resolution)
         mod_paths: Optional[dict[str, Path]] = None,
-        # DB visibility filter (ck3lens only)
-        visible_cvids: Optional[FrozenSet[int]] = None,
     ):
         """
         Initialize WorldAdapter with canonical root paths.
@@ -214,7 +212,6 @@ class WorldAdapter:
             db: DBQueries instance (optional)
             roots: Dict mapping RootCategory to list of paths for that domain
             mod_paths: Dict mapping mod names to their filesystem paths
-            visible_cvids: Set of content_version_ids visible in ck3lens mode
         """
         from ck3lens.paths import RootCategory
         
@@ -222,7 +219,6 @@ class WorldAdapter:
         self._db = db
         self._roots: dict[RootCategory, list[Path]] = roots or {}
         self._mod_paths: dict[str, Path] = mod_paths or {}
-        self._visible_cvids = visible_cvids
     
     @classmethod
     def create(
@@ -254,7 +250,6 @@ class WorldAdapter:
         
         roots: dict[RootCategory, list[Path]] = {}
         mod_paths: dict[str, Path] = {}
-        visible_cvids: Optional[FrozenSet[int]] = None
         
         # ROOT_CK3RAVEN_DATA - always set (constant is never None)
         roots[RootCategory.ROOT_CK3RAVEN_DATA] = [ROOT_CK3RAVEN_DATA]
@@ -276,21 +271,12 @@ class WorldAdapter:
                 if hasattr(mod, 'name') and hasattr(mod, 'path'):
                     mod_path = Path(mod.path) if isinstance(mod.path, str) else mod.path
                     mod_paths[mod.name] = mod_path
-            
-            # Extract CVIDs for visibility filter
-            cvids = frozenset(
-                m.cvid for m in mods 
-                if hasattr(m, 'cvid') and m.cvid is not None
-            )
-            if cvids:
-                visible_cvids = cvids
         
         return cls(
             mode=mode,
             db=db,
             roots=roots,
             mod_paths=mod_paths,
-            visible_cvids=visible_cvids,
         )
     
     @property

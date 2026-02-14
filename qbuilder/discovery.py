@@ -25,8 +25,6 @@ from pathlib import Path
 from typing import Iterator, Optional
 import sqlite3
 
-from qbuilder.schema import get_root_path_for_cvid
-
 # Commit progress every N files
 COMMIT_BATCH_SIZE = 500
 
@@ -144,9 +142,16 @@ def enumerate_files(root_path: Path, resume_after: Optional[str] = None) -> Iter
             yield record
 
 
-def enqueue_playset_roots(conn: sqlite3.Connection, playset_path: Path) -> int:
+def enqueue_playset_roots(conn: sqlite3.Connection, playset_path: Path,
+                          game_root: Optional[Path] = None) -> int:
     """
     Read playset JSON and enqueue discovery tasks for all content sources.
+    
+    Args:
+        conn: Database connection
+        playset_path: Path to playset JSON file
+        game_root: ROOT_GAME path for vanilla. If not provided, reads from
+                   playset JSON (legacy fallback).
     
     Returns count of tasks enqueued.
     """
@@ -156,11 +161,17 @@ def enqueue_playset_roots(conn: sqlite3.Connection, playset_path: Path) -> int:
     now = time.time()
     count = 0
     
-    # Enqueue vanilla (check both formats: vanilla_path string or vanilla object)
-    vanilla = playset.get('vanilla') or {}
-    vanilla_path = playset.get('vanilla_path') or vanilla.get('path')
-    if vanilla_path and Path(vanilla_path).exists():
-        cvid = _ensure_cvid(conn, name='Vanilla CK3', source_path=vanilla_path, workshop_id=None)
+    # Determine vanilla path: prefer game_root param, fall back to playset JSON
+    vanilla_path_str: Optional[str] = None
+    if game_root and game_root.exists():
+        vanilla_path_str = str(game_root)
+    else:
+        # Legacy fallback: read from playset JSON
+        vanilla = playset.get('vanilla') or {}
+        vanilla_path_str = playset.get('vanilla_path') or vanilla.get('path')
+    
+    if vanilla_path_str and Path(vanilla_path_str).exists():
+        cvid = _ensure_cvid(conn, name='Vanilla CK3', source_path=vanilla_path_str, workshop_id=None)
         _enqueue_discovery(conn, cvid, now)
         count += 1
     
@@ -259,10 +270,12 @@ class IncrementalDiscovery:
     6. Mark complete
     """
     
-    def __init__(self, conn: sqlite3.Connection, worker_id: Optional[str] = None):
+    def __init__(self, conn: sqlite3.Connection, worker_id: Optional[str] = None,
+                 game_root: Optional[Path] = None):
         self.conn = conn
         self.worker_id = worker_id or f"worker-{os.getpid()}"
         self.routing_table = get_routing_table()
+        self._game_root = game_root  # ROOT_GAME fallback for vanilla cvids
     
     def claim_task(self) -> Optional[dict]:
         """Claim next available discovery task."""
@@ -350,7 +363,12 @@ class IncrementalDiscovery:
         return {'cvid': cvid, 'file_count': file_count}
     
     def _resolve_root_path(self, cvid: int) -> Optional[str]:
-        """Resolve cvid to root path via canonical joins."""
+        """
+        Resolve cvid to filesystem root path.
+        
+        Uses mod_packages.source_path for all content types.
+        Falls back to game_root for vanilla if source_path is NULL.
+        """
         row = self.conn.execute("""
             SELECT cv.kind, mp.source_path
             FROM content_versions cv
@@ -363,27 +381,14 @@ class IncrementalDiscovery:
         
         kind, source_path = row
         
-        if kind == 'vanilla':
-            # Get vanilla path from active playset or config
-            # For now, check if there's a recent playset file
-            return self._get_vanilla_path()
+        # source_path should always be populated (enqueue_playset_roots stores it)
+        if source_path:
+            return source_path
         
-        return source_path
-    
-    def _get_vanilla_path(self) -> Optional[str]:
-        """Get vanilla game path from playset or environment."""
-        # Try to find active playset
-        manifest_path = Path.home() / ".ck3raven" / "playsets" / "manifest.json"
-        if manifest_path.exists():
-            with open(manifest_path, 'r', encoding='utf-8-sig') as f:
-                manifest = json.load(f)
-            active = manifest.get('active_playset')
-            if active:
-                playset_path = manifest_path.parent / active
-                if playset_path.exists():
-                    with open(playset_path, 'r', encoding='utf-8-sig') as f:
-                        playset = json.load(f)
-                    return playset.get('vanilla_path')
+        # Fallback for vanilla records missing source_path
+        if kind == 'vanilla' and self._game_root:
+            return str(self._game_root)
+        
         return None
     
     def _get_display_name(self, cvid: int) -> str:
@@ -479,13 +484,19 @@ class IncrementalDiscovery:
         self.conn.commit()
 
 
-def run_discovery(conn: sqlite3.Connection, max_tasks: Optional[int] = None) -> dict:
+def run_discovery(conn: sqlite3.Connection, max_tasks: Optional[int] = None,
+                  game_root: Optional[Path] = None) -> dict:
     """
     Run discovery worker until no more tasks.
     
+    Args:
+        conn: Database connection
+        max_tasks: Maximum tasks to process (None = unlimited)
+        game_root: ROOT_GAME path for vanilla fallback
+    
     Returns summary of work done.
     """
-    discovery = IncrementalDiscovery(conn)
+    discovery = IncrementalDiscovery(conn, game_root=game_root)
     
     tasks_processed = 0
     total_files = 0
