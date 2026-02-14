@@ -142,16 +142,13 @@ def enumerate_files(root_path: Path, resume_after: Optional[str] = None) -> Iter
             yield record
 
 
-def enqueue_playset_roots(conn: sqlite3.Connection, playset_path: Path,
-                          game_root: Optional[Path] = None) -> int:
+def enqueue_playset_roots(conn: sqlite3.Connection, playset_path: Path) -> int:
     """
     Read playset JSON and enqueue discovery tasks for all content sources.
     
     Args:
         conn: Database connection
         playset_path: Path to playset JSON file
-        game_root: ROOT_GAME path for vanilla. If not provided, reads from
-                   playset JSON (legacy fallback).
     
     Returns count of tasks enqueued.
     """
@@ -161,14 +158,9 @@ def enqueue_playset_roots(conn: sqlite3.Connection, playset_path: Path,
     now = time.time()
     count = 0
     
-    # Determine vanilla path: prefer game_root param, fall back to playset JSON
-    vanilla_path_str: Optional[str] = None
-    if game_root and game_root.exists():
-        vanilla_path_str = str(game_root)
-    else:
-        # Legacy fallback: read from playset JSON
-        vanilla = playset.get('vanilla') or {}
-        vanilla_path_str = playset.get('vanilla_path') or vanilla.get('path')
+    # Vanilla path from playset JSON (stored in mod_packages.source_path)
+    vanilla = playset.get('vanilla') or {}
+    vanilla_path_str = playset.get('vanilla_path') or vanilla.get('path')
     
     if vanilla_path_str and Path(vanilla_path_str).exists():
         cvid = _ensure_cvid(conn, name='Vanilla CK3', source_path=vanilla_path_str, workshop_id=None)
@@ -270,12 +262,10 @@ class IncrementalDiscovery:
     6. Mark complete
     """
     
-    def __init__(self, conn: sqlite3.Connection, worker_id: Optional[str] = None,
-                 game_root: Optional[Path] = None):
+    def __init__(self, conn: sqlite3.Connection, worker_id: Optional[str] = None):
         self.conn = conn
         self.worker_id = worker_id or f"worker-{os.getpid()}"
         self.routing_table = get_routing_table()
-        self._game_root = game_root  # ROOT_GAME fallback for vanilla cvids
     
     def claim_task(self) -> Optional[dict]:
         """Claim next available discovery task."""
@@ -364,13 +354,13 @@ class IncrementalDiscovery:
     
     def _resolve_root_path(self, cvid: int) -> Optional[str]:
         """
-        Resolve cvid to filesystem root path.
+        Resolve cvid to filesystem root path via mod_packages.source_path.
         
-        Uses mod_packages.source_path for all content types.
-        Falls back to game_root for vanilla if source_path is NULL.
+        source_path is stored by enqueue_playset_roots for all content types
+        (vanilla and mods alike). Returns None only if DB data is missing.
         """
         row = self.conn.execute("""
-            SELECT cv.kind, mp.source_path
+            SELECT mp.source_path
             FROM content_versions cv
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE cv.content_version_id = ?
@@ -379,17 +369,7 @@ class IncrementalDiscovery:
         if not row:
             return None
         
-        kind, source_path = row
-        
-        # source_path should always be populated (enqueue_playset_roots stores it)
-        if source_path:
-            return source_path
-        
-        # Fallback for vanilla records missing source_path
-        if kind == 'vanilla' and self._game_root:
-            return str(self._game_root)
-        
-        return None
+        return row[0]  # source_path (absolute root directory)
     
     def _get_display_name(self, cvid: int) -> str:
         """Get human-readable name for cvid via joins."""
@@ -484,19 +464,17 @@ class IncrementalDiscovery:
         self.conn.commit()
 
 
-def run_discovery(conn: sqlite3.Connection, max_tasks: Optional[int] = None,
-                  game_root: Optional[Path] = None) -> dict:
+def run_discovery(conn: sqlite3.Connection, max_tasks: Optional[int] = None) -> dict:
     """
     Run discovery worker until no more tasks.
     
     Args:
         conn: Database connection
         max_tasks: Maximum tasks to process (None = unlimited)
-        game_root: ROOT_GAME path for vanilla fallback
     
     Returns summary of work done.
     """
-    discovery = IncrementalDiscovery(conn, game_root=game_root)
+    discovery = IncrementalDiscovery(conn)
     
     tasks_processed = 0
     total_files = 0
