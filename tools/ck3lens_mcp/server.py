@@ -138,7 +138,7 @@ from ck3lens.validate import parse_content, validate_artifact_bundle
 from ck3lens.contracts import ArtifactBundle
 from ck3lens.trace import ToolTrace
 # Canonical path constants - use these instead of computing paths from __file__
-from ck3lens.paths import ROOT_REPO, ROOT_CK3RAVEN_DATA, ROOT_GAME, PLAYSET_DIR
+from ck3lens.paths import ROOT_REPO, ROOT_CK3RAVEN_DATA, ROOT_GAME
 
 
 # =============================================================================
@@ -311,22 +311,18 @@ def _reset_world_cache():
 # Use _get_session() instead - it returns a proper Session object.
 
 # Playset folder - JSON files here define available playsets
-# CANONICAL LOCATION: ~/.ck3raven/playsets/ (from paths.py PLAYSET_DIR)
-# NOTE: PLAYSET_DIR imported from ck3lens.paths - THE single source of truth
+# CANONICAL LOCATION: ~/.ck3raven/playsets/
 
 def _get_playsets_dir() -> Path:
-    """Get the canonical playsets directory.
-    
-    Returns PLAYSET_DIR from paths.py - the single source of truth.
-    """
-    return PLAYSET_DIR
+    """Get the canonical playsets directory."""
+    return ROOT_CK3RAVEN_DATA / "playsets"
 
 # For backward compatibility during migration
-PLAYSETS_DIR = PLAYSET_DIR
+PLAYSETS_DIR = ROOT_CK3RAVEN_DATA / "playsets"
 
 # Manifest file - points to which playset is currently active
 # Lives in the playsets folder alongside the playset files
-PLAYSET_MANIFEST_FILE = PLAYSET_DIR / "playset_manifest.json"
+PLAYSET_MANIFEST_FILE = ROOT_CK3RAVEN_DATA / "playsets" / "playset_manifest.json"
 
 
 
@@ -1472,9 +1468,9 @@ def ck3_logs(
         limit: Max results for list commands
         source_path: Custom path to log file (for analyzing backups). Accepts:
             - Absolute paths: "C:/path/to/error.log"
-            - WIP paths: "wip:/log-backups/error_2025-02-02.log"
+            - Home-relative: "~/.ck3raven/wip/log-backups/error.log"
         export_to: Export results to WIP as markdown. Accepts:
-            - WIP paths: "wip:/analysis/error_summary.md"
+            - Absolute or home-relative paths
             - Use {timestamp} for auto-substitution
     
     Returns:
@@ -3271,7 +3267,7 @@ def _ck3_repair_internal(
         if not session.playset_name:
             return rb.invalid('MCP-SYS-I-001', data={}, message="No active playset. Use ck3_playset to switch to one first.")
         
-        playsets_dir = PLAYSET_DIR
+        playsets_dir = ROOT_CK3RAVEN_DATA / "playsets"
         playset_file = None
         playset_data = None
         
@@ -3995,6 +3991,29 @@ def ck3_exec(
     return rb.success('EN-EXEC-S-001', data=result, message="Complete.")
 
 
+def _kill_process_tree_windows(pid: int) -> None:
+    """
+    Kill an entire process tree on Windows using taskkill /T /F.
+    
+    subprocess.run(timeout=N) only kills the direct child (powershell.exe)
+    but orphans grandchild processes (python.exe, etc.). This uses
+    'taskkill /T /F /PID' which recursively terminates the full tree.
+    """
+    import subprocess as _sp
+    try:
+        _sp.run(
+            ["taskkill", "/T", "/F", "/PID", str(pid)],
+            capture_output=True,
+            timeout=10,
+        )
+    except Exception:
+        # Fallback: kill just the parent process
+        try:
+            os.kill(pid, 9)
+        except Exception:
+            pass
+
+
 def _ck3_exec_internal(
     command: str,
     working_dir: str | None,
@@ -4031,7 +4050,8 @@ def _ck3_exec_internal(
         resolution = world.resolve(target_paths[0])
     else:
         # Default to WIP for shell commands without explicit path
-        resolution = world.resolve("wip:/")
+        from ck3lens.paths import ROOT_CK3RAVEN_DATA
+        resolution = world.resolve(str(ROOT_CK3RAVEN_DATA / "wip"))
     
     if not resolution.found:
         return {
@@ -4067,6 +4087,19 @@ def _ck3_exec_internal(
     # Clamp timeout to max 300 seconds (moved outside try block for exception handler access)
     actual_timeout = min(max(timeout, 1), 300)
     
+    # ======================================================================
+    # FIX: Determine actual CWD for execution
+    # Resolution above is for ENFORCEMENT only (determines allow/deny).
+    # The execution CWD must be explicit — never inherit the MCP server's
+    # CWD (which is the user's home directory on Windows).
+    # ======================================================================
+    if working_dir:
+        exec_cwd = working_dir
+    else:
+        # Default to repo root (matches docstring: "defaults to ck3raven root")
+        from ck3lens.paths import ROOT_REPO as _EXEC_ROOT_REPO
+        exec_cwd = str(_EXEC_ROOT_REPO) if _EXEC_ROOT_REPO else None
+    
     # Actually execute
     try:
         import platform
@@ -4081,38 +4114,77 @@ def _ck3_exec_internal(
         exec_env["SSH_ASKPASS"] = ""  # Disable SSH askpass
         exec_env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"  # SSH non-interactive
         
-        # On Windows, use PowerShell to support & and other PS syntax
-        if platform.system() == "Windows":
+        is_windows = platform.system() == "Windows"
+        
+        if is_windows:
+            # =============================================================
+            # FIX: Use Popen + manual timeout + process tree kill on Windows
+            # subprocess.run(timeout=N) kills powershell.exe but orphans
+            # child processes (python.exe, etc.) — taskkill /T /F kills the
+            # entire process tree.
+            # =============================================================
             ps_command = ["powershell", "-NoProfile", "-NonInteractive", "-Command", command]
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 ps_command,
                 shell=False,
-                cwd=working_dir,
-                capture_output=True,
+                cwd=exec_cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=actual_timeout,
+                stdin=subprocess.DEVNULL,
                 env=exec_env,
-                stdin=subprocess.DEVNULL,  # Prevent any stdin reads
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
             )
+            
+            try:
+                stdout, stderr = proc.communicate(timeout=actual_timeout)
+            except subprocess.TimeoutExpired:
+                # Kill entire process tree on Windows
+                _kill_process_tree_windows(proc.pid)
+                # Drain any remaining output after kill
+                try:
+                    stdout, stderr = proc.communicate(timeout=5)
+                except Exception:
+                    stdout, stderr = "", ""
+                partial = f"{stdout}{stderr}".strip()
+                partial_msg = f"\nPartial output:\n{partial}" if partial else ""
+                return {
+                    "allowed": True,
+                    "executed": True,
+                    "output": f"Command timed out after {actual_timeout} seconds (process tree killed).{partial_msg}",
+                    "exit_code": -1,
+                    "policy": policy_info,
+                    "error": "timeout",
+                    "hint": f"Command exceeded timeout of {actual_timeout}s. Use timeout= parameter to increase (max 300s).",
+                }
+            
+            return {
+                "allowed": True,
+                "executed": True,
+                "output": stdout + stderr,
+                "exit_code": proc.returncode,
+                "policy": policy_info,
+            }
         else:
             proc = subprocess.run(
                 command,
                 shell=True,
-                cwd=working_dir,
+                cwd=exec_cwd,
                 capture_output=True,
                 text=True,
                 timeout=actual_timeout,
                 env=exec_env,
             )
-        
-        return {
-            "allowed": True,
-            "executed": True,
-            "output": proc.stdout + proc.stderr,
-            "exit_code": proc.returncode,
-            "policy": policy_info,
-        }
+            
+            return {
+                "allowed": True,
+                "executed": True,
+                "output": proc.stdout + proc.stderr,
+                "exit_code": proc.returncode,
+                "policy": policy_info,
+            }
     except subprocess.TimeoutExpired:
+        # Non-Windows timeout (from subprocess.run on Unix)
         return {
             "allowed": True,
             "executed": True,
@@ -5160,7 +5232,6 @@ def _ck3_get_mode_instructions_internal(mode: str, hat_token: str | None = None,
     """Internal implementation returning Reply."""
     from pathlib import Path
     from ck3lens.policy import AgentMode, initialize_workspace
-    from ck3lens.paths import WIP_DIR
     from ck3lens.agent_mode import set_agent_mode, VALID_MODES
     from tools.compliance.sigil import sigil_verify, sigil_available
     
@@ -5300,7 +5371,7 @@ def _ck3_get_mode_instructions_internal(mode: str, hat_token: str | None = None,
         trace.log("session.mode", {"mode": mode}, {
             "mode": mode,
             "source_file": str(instructions_path),
-            "wip_workspace": str(WIP_DIR),
+            "wip_workspace": str(ROOT_CK3RAVEN_DATA / "wip"),
             "playset_id": session_info.get("playset_id"),
             "playset_name": session_info.get("playset_name"),
         })
@@ -5944,7 +6015,7 @@ def ck3_paths_doctor(
     - Required paths (ROOT_GAME, ROOT_STEAM)
     - Optional paths (ROOT_USER_DOCS, ROOT_UTILITIES, etc.)
     - Computed paths (ROOT_REPO, ROOT_CK3RAVEN_DATA)
-    - Data structure (WIP_DIR, PLAYSET_DIR, etc.)
+    - Data structure (wip/, playsets/, logs/, config/ under ROOT_CK3RAVEN_DATA)
     - Local mods folder configuration
     - Config file health
     - Resolution cross-checks (optional)
