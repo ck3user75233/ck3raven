@@ -174,12 +174,8 @@ def export_snapshot_to_file(
     
     content_version_ids = get_snapshot_contents(conn, snapshot_id)
     
-    # Get vanilla version info
-    vv_row = conn.execute(
-        "SELECT * FROM vanilla_versions WHERE vanilla_version_id = ?",
-        (snapshot.vanilla_version_id,)
-    ).fetchone()
-    vanilla_version = vv_row['ck3_version'] if vv_row else 'unknown'
+    # Get vanilla version info (vanilla_versions table no longer exists)
+    vanilla_version = 'unknown'
     
     # Get playset name if applicable
     playset_name = None
@@ -202,7 +198,7 @@ def export_snapshot_to_file(
     # Collect data
     export_data = {
         'manifest': None,  # Will be filled at the end
-        'vanilla_version': dict(vv_row) if vv_row else {},
+        'vanilla_version': {},
         'files': [],
         'file_contents': {},  # content_hash -> content
         'asts': [],
@@ -348,29 +344,8 @@ def import_snapshot_from_file(
     export_data = json.loads(data_bytes.decode('utf-8'))
     manifest = CryoManifest(**export_data['manifest'])
     
-    # Get or create vanilla version
-    vv_data = export_data.get('vanilla_version', {})
-    if vv_data:
-        row = conn.execute("""
-            SELECT vanilla_version_id FROM vanilla_versions
-            WHERE ck3_version = ?
-        """, (vv_data.get('ck3_version', 'unknown'),)).fetchone()
-        
-        if row:
-            vanilla_version_id = row['vanilla_version_id']
-        else:
-            cursor = conn.execute("""
-                INSERT INTO vanilla_versions (ck3_version, notes)
-                VALUES (?, 'Imported from cryo')
-            """, (vv_data.get('ck3_version', 'unknown'),))
-            vanilla_version_id = cursor.lastrowid
-    else:
-        # Create placeholder
-        cursor = conn.execute("""
-            INSERT INTO vanilla_versions (ck3_version, notes)
-            VALUES ('unknown', 'Imported from cryo')
-        """)
-        vanilla_version_id = cursor.lastrowid
+    # vanilla_versions table no longer exists — use placeholder
+    vanilla_version_id = None
     
     # Create snapshot
     snapshot = create_snapshot(

@@ -1027,7 +1027,7 @@ def ck3_db_delete(
             
         scope: How to filter what gets deleted:
             - "all": Delete ALL entries of this target type
-            - "mods_only": Delete mod data, preserve vanilla (content_version_id > 1)
+            - "mods_only": Delete mod data, preserve game files (by name lookup)
             - "by_ids": Delete specific IDs (requires `ids` parameter)
             - "by_content_version": Delete by content_version_id (requires `content_version_ids`)
             
@@ -1152,18 +1152,26 @@ def _ck3_db_delete_internal(
         if scope == "all":
             return "", []
         elif scope == "mods_only":
+            # Find game files cvid by name, then exclude it.
+            # Game files are always named 'CK3 Game Files' in content_versions.
+            game_row = cur.execute(
+                "SELECT content_version_id FROM content_versions WHERE name = 'CK3 Game Files' LIMIT 1"
+            ).fetchone()
+            game_cvid = game_row[0] if game_row else None
+            
+            if game_cvid is None:
+                # No game files entry found — mods_only = all
+                return "", []
+            
             if table == "content_versions":
-                # Exclude vanilla (mod_package_id=1). 'kind' column is deprecated.
-                return "WHERE mod_package_id > 1", []
+                return "WHERE content_version_id != ?", [game_cvid]
             elif table in ("files", "asts"):
                 if table == "files":
-                    return "WHERE content_version_id > 1", []
+                    return "WHERE content_version_id != ?", [game_cvid]
                 else:
-                    # ASTs: filter by files with content_version_id > 1
-                    return "WHERE file_id IN (SELECT file_id FROM files WHERE content_version_id > 1)", []
+                    return "WHERE file_id IN (SELECT file_id FROM files WHERE content_version_id != ?)", [game_cvid]
             elif table in ("symbols", "refs"):
-                # CONTENT-KEYED: symbols/refs join through asts.file_id
-                return f"WHERE ast_id IN (SELECT ast_id FROM asts WHERE file_id IN (SELECT file_id FROM files WHERE content_version_id > 1))", []
+                return f"WHERE ast_id IN (SELECT ast_id FROM asts WHERE file_id IN (SELECT file_id FROM files WHERE content_version_id != ?))", [game_cvid]
             else:
                 return "", []  # For other tables, mods_only = all
         elif scope == "by_ids":
@@ -1267,9 +1275,6 @@ def _ck3_db_delete_internal(
                     cur.execute(f"DELETE FROM content_versions {where}", params)
                     cv_deleted = cur.rowcount
                     
-                    # Clean orphaned mod_packages
-                    cur.execute("DELETE FROM mod_packages WHERE mod_package_id NOT IN (SELECT DISTINCT mod_package_id FROM content_versions WHERE mod_package_id IS NOT NULL)")
-                    mod_packages_deleted = cur.rowcount
                     db.conn.commit()
                     
                     result["success"] = True
@@ -1279,7 +1284,6 @@ def _ck3_db_delete_internal(
                         "symbols_deleted": symbols_count,    # Cascaded via asts
                         "refs_deleted": refs_count,          # Cascaded via asts
                         "asts_deleted": asts_count,          # Cascaded from files
-                        "mod_packages_deleted": mod_packages_deleted,
                     }
                 else:
                     result["success"] = True
@@ -1620,10 +1624,9 @@ def ck3_conflicts(
             SELECT 
                 f.relpath,
                 f.content_version_id,
-                COALESCE(mp.name, 'vanilla') as mod_name
+                cv.name as mod_name
             FROM files f
             JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE f.content_version_id IN ({cv_filter})
         """
         params: list = []
@@ -2198,12 +2201,10 @@ def _ck3_playset_internal(
                                    (SELECT COUNT(*) FROM build_queue bq 
                                     JOIN files f ON bq.file_id = f.file_id
                                     JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-                                    JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-                                    WHERE mp.name = ? AND bq.status = 'pending') as pending_count
+                                    WHERE cv.name = ? AND bq.status = 'pending') as pending_count
                             FROM files f
                             JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-                            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-                            WHERE mp.name = ?
+                            WHERE cv.name = ?
                         """, (mod_name_check, mod_name_check)).fetchone()
                         
                         file_count = row[0] if row else 0
@@ -2406,13 +2407,12 @@ def _ck3_playset_internal(
         def mod_to_dict(m):
             return {
                 "name": m.name,
-                "mod_id": m.mod_id,
                 "path": str(m.path) if m.path else None,
                 "load_order": m.load_order,
-                "workshop_id": m.workshop_id,  # Correct attribute name
+                "workshop_id": m.workshop_id,
                 "cvid": m.cvid,
-                "is_indexed": m.is_indexed,  # Property that exists
-                "is_vanilla": m.is_vanilla,  # Property that exists
+                "is_indexed": m.is_indexed,
+                "is_vanilla": m.is_vanilla,
             }
         
         mods_to_return = mods_list[:limit] if limit else mods_list
@@ -2556,8 +2556,7 @@ def _ck3_playset_internal(
                     SELECT COUNT(*) as file_count
                     FROM files f
                     JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-                    JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-                    WHERE mp.name = ?
+                    WHERE cv.name = ?
                 """, (mod_name,)).fetchone()
                 
                 file_count = row[0] if row else 0
@@ -5115,17 +5114,16 @@ def ck3_search_mods(
     if search_by in ("workshop_id", "any") and query.isdigit():
         # Exact workshop ID match
         rows = db.conn.execute("""
-            SELECT mp.mod_package_id, mp.name, mp.workshop_id, mp.source_path,
-                   cv.content_version_id, cv.file_count
-            FROM mod_packages mp
-            LEFT JOIN content_versions cv ON cv.mod_package_id = mp.mod_package_id
-            WHERE mp.workshop_id = ?
+            SELECT cv.content_version_id, cv.name, cv.workshop_id, cv.source_path,
+                   cv.file_count
+            FROM content_versions cv
+            WHERE cv.workshop_id = ?
             ORDER BY cv.ingested_at DESC
         """, (query,)).fetchall()
         for r in rows:
             results.append({
-                "mod_package_id": r[0], "name": r[1], "workshop_id": r[2],
-                "source_path": r[3], "content_version_id": r[4], "file_count": r[5],
+                "content_version_id": r[0], "name": r[1], "workshop_id": r[2],
+                "source_path": r[3], "file_count": r[4],
                 "match_type": "exact_id"
             })
     
@@ -5147,15 +5145,14 @@ def ck3_search_mods(
                 token_pattern = "%".join(tokens)
                 patterns.append((f"%{token_pattern}%", "tokens"))
         
-        seen_ids = {r["mod_package_id"] for r in results}
+        seen_ids = {r["content_version_id"] for r in results}
         
         for pattern, match_type in patterns:
             rows = db.conn.execute("""
-                SELECT mp.mod_package_id, mp.name, mp.workshop_id, mp.source_path,
-                       cv.content_version_id, cv.file_count
-                FROM mod_packages mp
-                LEFT JOIN content_versions cv ON cv.mod_package_id = mp.mod_package_id
-                WHERE LOWER(mp.name) LIKE LOWER(?)
+                SELECT cv.content_version_id, cv.name, cv.workshop_id, cv.source_path,
+                       cv.file_count
+                FROM content_versions cv
+                WHERE LOWER(cv.name) LIKE LOWER(?)
                 ORDER BY cv.ingested_at DESC
                 LIMIT ?
             """, (pattern, limit)).fetchall()
@@ -5164,8 +5161,8 @@ def ck3_search_mods(
                 if r[0] not in seen_ids:
                     seen_ids.add(r[0])
                     results.append({
-                        "mod_package_id": r[0], "name": r[1], "workshop_id": r[2],
-                        "source_path": r[3], "content_version_id": r[4], "file_count": r[5],
+                        "content_version_id": r[0], "name": r[1], "workshop_id": r[2],
+                        "source_path": r[3], "file_count": r[4],
                         "match_type": match_type
                     })
     

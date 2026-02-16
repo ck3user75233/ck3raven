@@ -11,8 +11,6 @@ from ck3raven.db.schema import (
     DATABASE_VERSION,
 )
 from ck3raven.db.models import (
-    VanillaVersion,
-    ModPackage,
     ContentVersion,
     FileRecord,
     FileContent,
@@ -21,6 +19,7 @@ from ck3raven.db.models import (
     Symbol,
     Reference,
     # EXPUNGED: Playset, PlaysetMod models removed (now file-based JSON)
+    # EXPUNGED: VanillaVersion, ModPackage classes removed (Phase C collapse)
     Snapshot,
     ExemplarMod,
 )
@@ -100,8 +99,6 @@ __all__ = [
     "close_all_connections",
     "DATABASE_VERSION",
     # Models
-    "VanillaVersion",
-    "ModPackage",
     "ContentVersion",
     "FileRecord",
     "FileContent",

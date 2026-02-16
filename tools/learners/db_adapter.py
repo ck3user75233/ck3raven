@@ -133,9 +133,8 @@ class LearnerDb:
     def get_content_version_name(self, cvid: int) -> str:
         """Get display name for a content version."""
         row = self.conn.execute("""
-            SELECT mp.name as mod_name
+            SELECT cv.name as mod_name
             FROM content_versions cv
-            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE cv.content_version_id = ?
         """, (cvid,)).fetchone()
         
@@ -284,8 +283,7 @@ class LearnerDb:
         row = self.conn.execute("""
             SELECT cv.content_version_id
             FROM content_versions cv
-            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-            WHERE mp.name LIKE ?
+            WHERE cv.name LIKE ?
             ORDER BY cv.content_version_id DESC
             LIMIT 1
         """, (f"%{mod_name}%",)).fetchone()
@@ -297,8 +295,7 @@ class LearnerDb:
         row = self.conn.execute("""
             SELECT cv.content_version_id
             FROM content_versions cv
-            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-            WHERE mp.workshop_id = ?
+            WHERE cv.workshop_id = ?
             ORDER BY cv.content_version_id DESC
             LIMIT 1
         """, (workshop_id,)).fetchone()

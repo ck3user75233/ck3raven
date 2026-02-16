@@ -238,27 +238,12 @@ class DBQueries:
         if not mods:
             return stats
         
-        # Get vanilla cvid (mod_package_id=1 is always vanilla)
-        # Note: 'kind' column is deprecated - vanilla is identified by:
-        # - mod_package_id = 1 (by convention)
-        # - Being in ROOT_GAME path
-        # - Always load_order = 0 in playset
-        vanilla_row = self.conn.execute("""
-            SELECT content_version_id 
-            FROM content_versions 
-            WHERE mod_package_id = 1 
-            ORDER BY ingested_at DESC 
-            LIMIT 1
-        """).fetchone()
-        vanilla_cvid = vanilla_row["content_version_id"] if vanilla_row else None
-        
         # workshop_id -> cvid (latest)
         workshop_to_cv: dict[str, int] = {}
         rows = self.conn.execute("""
-            SELECT mp.workshop_id, cv.content_version_id
-            FROM mod_packages mp
-            JOIN content_versions cv ON cv.mod_package_id = mp.mod_package_id
-            WHERE mp.workshop_id IS NOT NULL
+            SELECT cv.workshop_id, cv.content_version_id
+            FROM content_versions cv
+            WHERE cv.workshop_id IS NOT NULL
             ORDER BY cv.ingested_at DESC
         """).fetchall()
         for row in rows:
@@ -269,10 +254,9 @@ class DBQueries:
         # normalized_path -> cvid (latest)
         path_to_cv: dict[str, int] = {}
         rows = self.conn.execute("""
-            SELECT mp.source_path, cv.content_version_id
-            FROM mod_packages mp
-            JOIN content_versions cv ON cv.mod_package_id = mp.mod_package_id
-            WHERE mp.source_path IS NOT NULL
+            SELECT cv.source_path, cv.content_version_id
+            FROM content_versions cv
+            WHERE cv.source_path IS NOT NULL
             ORDER BY cv.ingested_at DESC
         """).fetchall()
         for row in rows:
@@ -281,18 +265,10 @@ class DBQueries:
                 if norm not in path_to_cv:
                     path_to_cv[norm] = row["content_version_id"]
         
-        # Resolve each mod
+        # Resolve each mod — same logic for all, including mods[0] (game files).
+        # Game files resolve by path (ROOT_GAME), workshop mods by workshop_id,
+        # local mods by path. No special cases.
         for mod in mods:
-            mod_id = getattr(mod, 'mod_id', None)
-            
-            # Handle vanilla (mods[0])
-            if mod_id == "vanilla":
-                if vanilla_cvid:
-                    mod.cvid = vanilla_cvid
-                    stats["mods_resolved"] += 1
-                else:
-                    stats["mods_missing"].append("vanilla")
-                continue
             
             cv_id = None
             
@@ -399,19 +375,18 @@ class DBQueries:
                     s.symbol_type,
                     f.file_id,
                     f.relpath,
-                    COALESCE(mp.name, 'vanilla') as mod_name,
+                    cv.name as mod_name,
                     s.line_number,
                     f.content_version_id
                 FROM symbols s
                 JOIN asts a ON s.ast_id = a.ast_id
                 JOIN files f ON f.content_hash = a.content_hash
                 JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-                LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
                 WHERE LOWER(s.name) LIKE ?
                 {cv_filter}
                 {file_pattern_filter}
             """
-            params = [pattern] + file_pattern_param
+            params: list = [pattern] + file_pattern_param
             
             if symbol_type:
                 sql += " AND s.symbol_type = ?"
@@ -514,7 +489,7 @@ class DBQueries:
             return []
         
         placeholders = ",".join("?" * len(symbol_names))
-        params = list(symbol_names)
+        params: list = list(symbol_names)
         
         # CV filter via Golden Join to files
         cv_filter = self._cv_filter_sql(visible_cvids, "f.content_version_id")
@@ -535,12 +510,11 @@ class DBQueries:
                 r.line_number,
                 r.context,
                 f.relpath,
-                COALESCE(mp.name, 'vanilla') as mod_name
+                cv.name as mod_name
             FROM refs r
             JOIN asts a ON r.ast_id = a.ast_id
             JOIN files f ON f.content_hash = a.content_hash
             JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE r.name IN ({placeholders})
             {cv_filter}
             {file_filter}
@@ -621,7 +595,7 @@ class DBQueries:
         *,
         visible_cvids: Optional[FrozenSet[int]],
         file_id: Optional[int] = None,
-        expand: Optional[List[str]] = None,
+        expand: Optional[list[str]] = None,
     ) -> Optional[dict]:
         """
         Get file content by file_id or relpath.
@@ -644,12 +618,11 @@ class DBQueries:
                 f.relpath,
                 f.content_hash,
                 COALESCE(fc.content_text, fc.content_blob) as content,
-                COALESCE(mp.name, 'vanilla') as mod_name,
+                cv.name as mod_name,
                 fc.size as file_size
             FROM files f
             JOIN file_contents fc ON f.content_hash = fc.content_hash
             JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE 1=1 {cv_filter}
         """
         params = []
@@ -735,20 +708,19 @@ class DBQueries:
                 f.file_id,
                 f.relpath,
                 fc.size as file_size,
-                COALESCE(mp.name, 'vanilla') as source_name,
-                mp.mod_package_id
+                cv.name as source_name,
+                cv.content_version_id
             FROM files f
             JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             LEFT JOIN file_contents fc ON f.content_hash = fc.content_hash
             WHERE LOWER(f.relpath) LIKE LOWER(?)
             {cv_filter}
         """
-        params = [pattern]
+        params: list = [pattern]
         
         if source_filter:
-            # Filter by mod name or mod_package_id (kind column deprecated)
-            sql += " AND (LOWER(mp.name) LIKE LOWER(?) OR CAST(mp.mod_package_id AS TEXT) = ?)"
+            # Filter by mod name or content_version_id
+            sql += " AND (LOWER(cv.name) LIKE LOWER(?) OR CAST(cv.content_version_id AS TEXT) = ?)"
             params.extend([f"%{source_filter}%", source_filter])
         
         sql += " ORDER BY f.relpath LIMIT ?"
@@ -761,7 +733,7 @@ class DBQueries:
                 "relpath": row["relpath"],
                 "size": row["file_size"],
                 "source_name": row["source_name"],
-                "mod_id": row["mod_package_id"],
+                "cvid": row["content_version_id"],
             })
         
         return files
@@ -823,11 +795,10 @@ class DBQueries:
             SELECT 
                 f.file_id,
                 f.relpath,
-                COALESCE(mp.name, 'vanilla') as source_name,
+                cv.name as source_name,
                 fc.content_text
             FROM files f
             JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             JOIN file_contents fc ON f.content_hash = fc.content_hash
             WHERE {term_sql}
             {cv_filter}
@@ -838,8 +809,8 @@ class DBQueries:
             params.append(file_pattern)
         
         if source_filter:
-            # Filter by mod name only (kind column deprecated)
-            sql += " AND LOWER(mp.name) LIKE LOWER(?)"
+            # Filter by mod name
+            sql += " AND LOWER(cv.name) LIKE LOWER(?)"
             params.append(f"%{source_filter}%")
         
         sql += " LIMIT ?"
@@ -1071,13 +1042,12 @@ class DBQueries:
                 s.symbol_type,
                 f.file_id,
                 f.relpath,
-                COALESCE(mp.name, 'vanilla') as mod_name,
+                cv.name as mod_name,
                 s.line_number
             FROM symbols s
             JOIN asts a ON s.ast_id = a.ast_id
             JOIN files f ON f.content_hash = a.content_hash
             JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE s.name = ?
             {cv_filter}
         """
@@ -1169,16 +1139,15 @@ class DBQueries:
                 r.line_number,
                 r.context,
                 f.relpath,
-                COALESCE(mp.name, 'vanilla') as mod_name
+                cv.name as mod_name
             FROM refs r
             JOIN asts a ON r.ast_id = a.ast_id
             JOIN files f ON f.content_hash = a.content_hash
             JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE r.name = ?
             {cv_filter}
         """
-        params = [symbol_name]
+        params: list = [symbol_name]
         
         if file_pattern:
             sql += " AND LOWER(f.relpath) LIKE LOWER(?)"
@@ -1297,14 +1266,13 @@ class DBQueries:
             for cv_id in cv_ids_found:
                 detail_row = self.conn.execute("""
                     SELECT 
-                        COALESCE(mp.name, 'vanilla') as mod_name,
+                        cv.name as mod_name,
                         f.relpath,
                         s.line_number
                     FROM symbols s
                     JOIN asts a ON s.ast_id = a.ast_id
                     JOIN files f ON a.content_hash = f.content_hash
                     JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-                    LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
                     WHERE cv.content_version_id = ? AND s.symbol_type = ? AND s.name = ?
                     LIMIT 1
                 """, (cv_id, symbol_type_val, name)).fetchone()
@@ -1373,9 +1341,8 @@ class DBQueries:
     def _get_mod_name(self, content_version_id: int) -> str:
         """Get mod name from content_version_id."""
         row = self.conn.execute("""
-            SELECT COALESCE(mp.name, 'vanilla') as name
+            SELECT cv.name
             FROM content_versions cv
-            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE cv.content_version_id = ?
         """, (content_version_id,)).fetchone()
         return row["name"] if row else "unknown"
@@ -1460,14 +1427,14 @@ class DBQueries:
         cvids = self._extract_cvids_from_visibility(visibility)
         return self._search_content_internal(query, visible_cvids=cvids, **kwargs)
     
-    def get_file(self, *, visibility=None, relpath: str = None, file_id: int = None, include_ast: bool = False) -> Optional[dict]:
+    def get_file(self, *, visibility=None, relpath: Optional[str] = None, file_id: Optional[int] = None, include_ast: bool = False) -> Optional[dict]:
         """DEPRECATED: Use DbHandle.get_file() instead."""
         cvids = self._extract_cvids_from_visibility(visibility)
         # Convert include_ast to expand parameter expected by _get_file_internal
         expand = ["ast"] if include_ast else None
         return self._get_file_internal(relpath or "", visible_cvids=cvids, file_id=file_id, expand=expand)
     
-    def confirm_not_exists(self, query: str, symbol_type: str = None, *, visibility=None) -> dict:
+    def confirm_not_exists(self, query: str, symbol_type: Optional[str] = None, *, visibility=None) -> dict:
         """DEPRECATED: Use DbHandle.confirm_not_exists() instead."""
         cvids = self._extract_cvids_from_visibility(visibility)
         return self._confirm_not_exists_internal(query, symbol_type, visible_cvids=cvids)

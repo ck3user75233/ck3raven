@@ -49,13 +49,12 @@ def get_file_conflicts(
         sql = f"""
             SELECT f.relpath, 
                    GROUP_CONCAT(
-                       COALESCE(mp.name, 'vanilla') || ':' || cv.content_version_id, 
+                       cv.name || ':' || cv.content_version_id, 
                        '|'
                    ) as sources,
                    COUNT(*) as source_count
             FROM files f
             JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE f.relpath LIKE ?
             {cvid_clause}
             GROUP BY f.relpath
@@ -131,13 +130,12 @@ def get_symbol_conflicts(
         sql = f"""
             SELECT s.name, s.symbol_type,
                    GROUP_CONCAT(
-                       COALESCE(mp.name, 'vanilla') || ':' || cv.content_version_id,
+                       cv.name || ':' || cv.content_version_id,
                        '|'
                    ) as sources,
                    COUNT(*) as source_count
             FROM symbols s
             {GOLDEN_JOIN}
-            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE 1=1 {cvid_clause} {type_filter}
             GROUP BY s.name, s.symbol_type
             HAVING COUNT(DISTINCT cv.content_version_id) > 1

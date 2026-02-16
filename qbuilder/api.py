@@ -92,7 +92,7 @@ def enqueue_file(
     The file is added to build_queue with the given priority.
     
     Args:
-        mod_name: Mod name (maps to content_version via mod_packages)
+        mod_name: Mod name (maps to content_version directly)
         rel_path: Relative path within the mod
         content: Optional file content (if None, reads from disk)
         priority: 0=normal, 1=flash (default=flash for mutations)
@@ -110,21 +110,19 @@ def enqueue_file(
         # Find the file_id for this (mod_name, rel_path)
         row = conn.execute("""
             SELECT f.file_id, f.file_mtime, f.file_size, f.file_hash,
-                   mp.source_path
+                   cv.source_path
             FROM files f
             JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-            WHERE mp.name = ? AND f.relpath = ?
+            WHERE cv.name = ? AND f.relpath = ?
         """, (mod_name, rel_path)).fetchone()
         
         if not row:
             # File not in DB yet - need to create it
             # First find the mod
             mod_row = conn.execute("""
-                SELECT mp.mod_package_id, mp.source_path, cv.content_version_id
-                FROM mod_packages mp
-                JOIN content_versions cv ON mp.mod_package_id = cv.mod_package_id
-                WHERE mp.name = ?
+                SELECT cv.content_version_id, cv.source_path
+                FROM content_versions cv
+                WHERE cv.name = ?
             """, (mod_name,)).fetchone()
             
             if not mod_row:
@@ -135,7 +133,7 @@ def enqueue_file(
                     message=f"Mod not found: {mod_name}"
                 )
             
-            mod_package_id, source_path, cvid = mod_row
+            cvid, source_path = mod_row
             abspath = Path(source_path) / rel_path
             
             if not abspath.exists():
@@ -282,8 +280,7 @@ def delete_file(
             SELECT f.file_id
             FROM files f
             JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-            WHERE mp.name = ? AND f.relpath = ?
+            WHERE cv.name = ? AND f.relpath = ?
         """, (mod_name, rel_path)).fetchone()
         
         if not row:
@@ -499,12 +496,10 @@ def check_playset_build_status(playset_data: dict, db_path: Optional[Path] = Non
                        (SELECT COUNT(*) FROM build_queue bq 
                         JOIN files f ON bq.file_id = f.file_id
                         JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-                        JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-                        WHERE mp.name = ? AND bq.status = 'pending') as pending_count
+                        WHERE cv.name = ? AND bq.status = 'pending') as pending_count
                 FROM files f
                 JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-                JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-                WHERE mp.name = ?
+                WHERE cv.name = ?
             """, (mod_name, mod_name)).fetchone()
             
             file_count = row['file_count'] if row else 0

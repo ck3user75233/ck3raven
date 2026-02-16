@@ -28,9 +28,6 @@ from .query import find_blocks_by_name, find_by_path, search_values
 # Merge
 from .merge import PDXMerger, MergeResult, MergeConflict, MergeStrategy
 
-# Conflicts
-from .conflicts import ConflictInfo, find_conflicts, analyze_conflict, generate_report
-
 # Trace (function-based)
 from .trace import trace_key_in_files
 

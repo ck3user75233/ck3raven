@@ -24,7 +24,7 @@ import threading
 import time
 
 # Schema version - bump when schema changes
-DATABASE_VERSION = 6  # Added node_hash_norm, node_start_offset, node_end_offset to symbols
+DATABASE_VERSION = 7  # Phase C: collapse mod_packages into content_versions
 
 # Thread-local storage for connections
 _local = threading.local()
@@ -38,34 +38,26 @@ SCHEMA_SQL = """
 -- VERSIONING & IDENTITIES
 -- ============================================================================
 
--- Mod package identities (e.g., Steam Workshop ID)
-CREATE TABLE IF NOT EXISTS mod_packages (
-    mod_package_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    workshop_id TEXT,                        -- Steam Workshop ID (can be NULL for local mods)
-    name TEXT NOT NULL,
-    source_path TEXT,                        -- Original filesystem path
-    source_url TEXT,                         -- Workshop URL or other source
-    notes TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(workshop_id)
-);
-
 -- Content versions - specific version of vanilla or a mod
 -- Keyed by content_root_hash (hash of all file hashes + paths)
--- NOTE: mod_package_id FK will be removed in Phase C (collapse mod_packages into this table)
+-- Phase C: mod_packages columns collapsed directly into this table
 CREATE TABLE IF NOT EXISTS content_versions (
     content_version_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    mod_package_id INTEGER,                  -- FK to mod_packages (Phase C: replace with inline columns)
-    content_root_hash TEXT NOT NULL UNIQUE,  -- SHA256 of sorted (relpath, file_hash) pairs
+    name TEXT NOT NULL DEFAULT '',            -- Mod/vanilla display name (was mod_packages.name)
+    source_path TEXT,                         -- Original filesystem path (was mod_packages.source_path)
+    workshop_id TEXT,                         -- Steam Workshop ID, NULL for vanilla/local (was mod_packages.workshop_id)
+    source_url TEXT,                          -- Workshop URL or other source
+    notes TEXT,
+    content_root_hash TEXT NOT NULL UNIQUE,   -- SHA256 of sorted (relpath, file_hash) pairs
     file_count INTEGER NOT NULL DEFAULT 0,
     total_size INTEGER NOT NULL DEFAULT 0,
     ingested_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
     -- Lifecycle tracking
-    downloaded_at TEXT,                      -- When mod was downloaded from workshop (for mods)
-    source_mtime TEXT,                       -- Latest mtime of source directory
-    symbols_extracted_at TEXT,               -- When symbols were extracted
-    contributions_extracted_at TEXT,         -- When contributions were extracted
-    FOREIGN KEY (mod_package_id) REFERENCES mod_packages(mod_package_id)
+    downloaded_at TEXT,                       -- When mod was downloaded from workshop (for mods)
+    source_mtime TEXT,                        -- Latest mtime of source directory
+    symbols_extracted_at TEXT,                -- When symbols were extracted
+    contributions_extracted_at TEXT           -- When contributions were extracted
 );
 
 -- ============================================================================
@@ -795,8 +787,6 @@ def init_database(db_path: Optional[Path] = None, force: bool = False) -> sqlite
             DROP TABLE IF EXISTS files;
             DROP TABLE IF EXISTS file_contents;
             DROP TABLE IF EXISTS content_versions;
-            DROP TABLE IF EXISTS mod_packages;
-            DROP TABLE IF EXISTS vanilla_versions;
             DROP TABLE IF EXISTS db_metadata;
             
             -- Lookup tables

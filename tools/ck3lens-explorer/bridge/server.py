@@ -650,10 +650,9 @@ class CK3LensBridge:
             
             # Get files directly in this folder
             files_sql = f"""
-                SELECT f.file_id, f.relpath, mp.name as mod_name
+                SELECT f.file_id, f.relpath, cv.name as mod_name
                 FROM files f
                 JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-                LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
                 WHERE {cvid_filter}
                 AND f.relpath LIKE ? || '/%'
                 AND f.relpath NOT LIKE ? || '/%/%'

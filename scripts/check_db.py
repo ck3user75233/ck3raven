@@ -24,7 +24,7 @@ for t in tables:
     print(f'  - {t["name"]}')
 
 # Check key table counts
-for table in ['files', 'content_versions', 'mod_packages', 'vanilla_versions']:
+for table in ['files', 'content_versions']:
     try:
         row = conn.execute(f"SELECT COUNT(*) as cnt FROM {table}").fetchone()
         print(f'{table}: {row["cnt"]}')

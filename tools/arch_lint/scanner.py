@@ -157,7 +157,7 @@ def is_deprecated_line(line_text: str, hints: list[str]) -> bool:
 _SQL_CONTEXT_KEYWORDS = frozenset({
     "insert into", "select ", "update ", "delete from", "create table",
     "alter table", "values (", "values(", "from ", "where ", "join ",
-    "content_root", "_root_hash", "mod_package_id", "content_version",
+    "content_root", "_root_hash", "content_version",
 })
 
 # Phrases that contain banned word patterns but are benign

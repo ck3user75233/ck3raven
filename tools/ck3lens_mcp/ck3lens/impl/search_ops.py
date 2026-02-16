@@ -79,11 +79,10 @@ def search_symbols(
         sql = f"""
             SELECT s.symbol_id, s.name, s.symbol_type, s.scope,
                    s.line_number, f.relpath, cv.content_version_id,
-                   mp.name as mod_name, rank
+                   cv.name as mod_name, rank
             FROM symbols_fts fts
             JOIN symbols s ON s.symbol_id = fts.rowid
             {GOLDEN_JOIN}
-            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE symbols_fts MATCH ?
             {cvid_clause}
         """
@@ -158,10 +157,9 @@ def confirm_not_exists(
         
         # 1. Exact match search using Golden Join
         sql = f"""
-            SELECT s.name, s.symbol_type, mp.name as mod_name
+            SELECT s.name, s.symbol_type, cv.name as mod_name
             FROM symbols s
             {GOLDEN_JOIN}
-            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE s.name = ?
             {cvid_clause}
         """
@@ -189,10 +187,9 @@ def confirm_not_exists(
         # 2. Similar match search (fuzzy) using Golden Join
         cvid_clause2, cvid_params2 = cvid_filter_clause(cvids)
         fuzzy_sql = f"""
-            SELECT DISTINCT s.name, s.symbol_type, mp.name as mod_name
+            SELECT DISTINCT s.name, s.symbol_type, cv.name as mod_name
             FROM symbols s
             {GOLDEN_JOIN}
-            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE s.name LIKE ?
             {cvid_clause2}
         """

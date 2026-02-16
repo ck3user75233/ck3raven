@@ -48,10 +48,9 @@ def list_files(
         
         # Get files directly in this folder
         files_sql = f"""
-            SELECT f.file_id, f.relpath, mp.name as mod_name
+            SELECT f.file_id, f.relpath, cv.name as mod_name
             FROM files f
             JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE {cvid_filter}
             AND f.relpath LIKE ? || '/%'
             AND f.relpath NOT LIKE ? || '/%/%'
@@ -129,20 +128,18 @@ def get_file(
         if file_id:
             sql = f"""
                 SELECT f.file_id, f.relpath, f.content_version_id,
-                       mp.name as mod_name, mp.source_path
+                       cv.name as mod_name, cv.source_path
                 FROM files f
                 JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-                LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
                 WHERE f.file_id = ? {cvid_filter}
             """
             params = [file_id] + params
         else:
             sql = f"""
                 SELECT f.file_id, f.relpath, f.content_version_id,
-                       mp.name as mod_name, mp.source_path
+                       cv.name as mod_name, cv.source_path
                 FROM files f
                 JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-                LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
                 WHERE f.relpath = ? {cvid_filter}
             """
             params = [relpath] + params

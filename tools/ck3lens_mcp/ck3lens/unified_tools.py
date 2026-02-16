@@ -1060,7 +1060,7 @@ def _file_write(mod_name, rel_path, content, validate_syntax, session, trace, *,
     # Inline write operation
     mod = session.get_mod(mod_name)
     if not mod:
-        return rb.invalid("WA-RES-I-001", {"input_path": f"{mod_name}:{rel_path}", "error": f"Unknown mod_id: {mod_name}"})
+        return rb.invalid("WA-RES-I-001", {"input_path": f"{mod_name}:{rel_path}", "error": f"Unknown mod: {mod_name}"})
     
     valid, err = validate_relpath(rel_path)
     if not valid:
@@ -1072,7 +1072,7 @@ def _file_write(mod_name, rel_path, content, validate_syntax, session, trace, *,
         file_path.write_text(content, encoding="utf-8")
         
         data = {
-            "mod_id": mod_name,
+            "mod": mod.name,
             "relpath": rel_path,
             "bytes_written": len(content.encode("utf-8")),
             "full_path": str(file_path),
@@ -1243,7 +1243,7 @@ def _file_edit(mod_name, rel_path, old_content, new_content, validate_syntax, se
     # Inline edit operation
     mod = session.get_mod(mod_name)
     if not mod:
-        result = {"success": False, "error": f"Unknown mod_id: {mod_name}"}
+        result = {"success": False, "error": f"Unknown mod: {mod_name}"}
     else:
         valid, err = validate_relpath(rel_path)
         if not valid:
@@ -1261,7 +1261,7 @@ def _file_edit(mod_name, rel_path, old_content, new_content, validate_syntax, se
                     else:
                         updated = current.replace(old_content, new_content)
                         file_path.write_text(updated, encoding="utf-8")
-                        result = {"success": True, "mod_id": mod_name, "relpath": rel_path, "replacements": count}
+                        result = {"success": True, "mod": mod.name, "relpath": rel_path, "replacements": count}
                 except Exception as e:
                     result = {"success": False, "error": str(e)}
     
@@ -1307,7 +1307,7 @@ def _file_delete(mod_name, rel_path, session, trace):
     
     mod = session.get_mod(mod_name)
     if not mod:
-        result = {"success": False, "error": f"Unknown mod_id: {mod_name}"}
+        result = {"success": False, "error": f"Unknown mod: {mod_name}"}
     else:
         valid, err = validate_relpath(rel_path)
         if not valid:
@@ -1319,7 +1319,7 @@ def _file_delete(mod_name, rel_path, session, trace):
             else:
                 try:
                     file_path.unlink()
-                    result = {"success": True, "mod_id": mod_name, "relpath": rel_path}
+                    result = {"success": True, "mod": mod.name, "relpath": rel_path}
                 except Exception as e:
                     result = {"success": False, "error": str(e)}
     
@@ -1341,7 +1341,7 @@ def _file_rename(mod_name, old_path, new_path, session, trace):
     
     mod = session.get_mod(mod_name)
     if not mod:
-        result = {"success": False, "error": f"Unknown mod_id: {mod_name}"}
+        result = {"success": False, "error": f"Unknown mod: {mod_name}"}
     else:
         valid, err = validate_relpath(old_path)
         if not valid:
@@ -1363,7 +1363,7 @@ def _file_rename(mod_name, old_path, new_path, session, trace):
                         old_file.rename(new_file)
                         result = {
                             "success": True,
-                            "mod_id": mod_name,
+                            "mod": mod.name,
                             "old_relpath": old_path,
                             "new_relpath": new_path,
                             "full_path": str(new_file)
@@ -2369,7 +2369,7 @@ def ck3_git_impl(
             "hint": "Use mod folder name, not display name"
         }
 
-    # git_ops functions expect (session, mod_id) - pass correctly
+    # git_ops functions expect (session, mod_name) - pass correctly
     if command == "status":
         result = git_ops.git_status(session, mod_name)
     

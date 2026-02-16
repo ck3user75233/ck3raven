@@ -77,12 +77,11 @@ db_path = Path.home() / ".ck3raven" / "ck3raven.db"
 conn = sqlite3.connect(str(db_path))
 
 # Get 5 files: 2 small, 2 medium, 1 large (by file size)
-# Need to join files -> content_versions -> mod_packages to get source_path
+# Need to join files -> content_versions to get source_path
 test_files = conn.execute("""
-    SELECT f.file_id, f.relpath, mp.source_path, f.file_size
+    SELECT f.file_id, f.relpath, cv.source_path, f.file_size
     FROM files f
     JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-    JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
     WHERE (f.relpath LIKE 'common/traits/%.txt'
        OR f.relpath LIKE 'common/scripted_effects/%.txt')
        AND f.deleted = 0
@@ -94,13 +93,13 @@ test_files = conn.execute("""
 if not test_files:
     # Fallback: any .txt files from vanilla
     test_files = conn.execute("""
-        SELECT f.file_id, f.relpath, vv.install_path as source_path, f.file_size
+        SELECT f.file_id, f.relpath, cv.source_path, f.file_size
         FROM files f
         JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-        JOIN vanilla_versions vv ON cv.vanilla_version_id = vv.vanilla_version_id
         WHERE f.relpath LIKE 'common/%.txt'
            AND f.deleted = 0
            AND f.file_size IS NOT NULL
+           AND cv.workshop_id IS NULL
         ORDER BY f.file_size
         LIMIT 5
     """).fetchall()

@@ -162,21 +162,21 @@ def enqueue_playset_roots(conn: sqlite3.Connection, playset_path: Path) -> int:
     
     # Vanilla: use ROOT_GAME constant, not playset JSON path
     if ROOT_GAME and ROOT_GAME.exists():
-        cvid = _ensure_cvid(conn, name='Vanilla CK3', source_path=str(ROOT_GAME), workshop_id=None)
+        cvid = _ensure_cvid(conn, name='CK3 Game Files', source_path=str(ROOT_GAME), workshop_id=None)
         _enqueue_discovery(conn, cvid, now)
         count += 1
     
     # Enqueue mods
     for mod in playset.get('mods', []):
-        mod_path = mod.get('path') or mod.get('source_path')
-        if not mod_path or not Path(mod_path).exists():
+        source_path = mod.get('path')
+        if not source_path or not Path(source_path).exists():
             continue
         
         cvid = _ensure_cvid(
             conn, 
             name=mod.get('name', 'Unknown'),
-            source_path=mod_path,
-            workshop_id=mod.get('steam_id') or mod.get('workshop_id')
+            source_path=source_path,
+            workshop_id=mod.get('steam_id')
         )
         _enqueue_discovery(conn, cvid, now)
         count += 1
@@ -194,45 +194,29 @@ def _ensure_cvid(conn: sqlite3.Connection, name: str, source_path: str,
     1. By workshop_id if provided
     2. By source_path otherwise
     
-    Creates mod_package + content_version if not found.
+    Creates content_version directly if not found (mod_packages collapsed).
     """
     # Try to find existing by workshop_id or source_path
     if workshop_id:
         row = conn.execute(
-            "SELECT mod_package_id FROM mod_packages WHERE workshop_id = ?",
+            "SELECT content_version_id FROM content_versions WHERE workshop_id = ?",
             (workshop_id,)
         ).fetchone()
     else:
         row = conn.execute(
-            "SELECT mod_package_id FROM mod_packages WHERE source_path = ?",
+            "SELECT content_version_id FROM content_versions WHERE source_path = ?",
             (source_path,)
         ).fetchone()
     
     if row:
-        mp_id = row[0]
-    else:
-        # Create mod_package
-        cursor = conn.execute("""
-            INSERT INTO mod_packages (name, source_path, workshop_id)
-            VALUES (?, ?, ?)
-        """, (name, source_path, workshop_id))
-        conn.commit()
-        mp_id = cursor.lastrowid
-        assert mp_id is not None  # INSERT always sets lastrowid
-    
-    # Get or create content_version
-    row = conn.execute(
-        "SELECT content_version_id FROM content_versions WHERE mod_package_id = ?",
-        (mp_id,)
-    ).fetchone()
-    if row:
         return row[0]
     
+    # Create content_version directly
     content_root_hash = hashlib.sha256(source_path.encode()).hexdigest()[:32]
     cursor = conn.execute("""
-        INSERT INTO content_versions (mod_package_id, content_root_hash)
-        VALUES (?, ?)
-    """, (mp_id, content_root_hash))
+        INSERT INTO content_versions (name, source_path, workshop_id, content_root_hash)
+        VALUES (?, ?, ?, ?)
+    """, (name, source_path, workshop_id, content_root_hash))
     conn.commit()
     cvid = cursor.lastrowid
     assert cvid is not None  # INSERT always sets lastrowid
@@ -308,12 +292,10 @@ class IncrementalDiscovery:
         cvid = task['cvid']
         resume_after = task.get('last_path_processed')
         
-        # Resolve root path from mod_packages.source_path
-        # (vanilla's source_path stores ROOT_GAME at ingestion time)
+        # Resolve root path from content_versions.source_path
         row = self.conn.execute("""
-            SELECT mp.source_path
+            SELECT cv.source_path
             FROM content_versions cv
-            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE cv.content_version_id = ?
         """, (cvid,)).fetchone()
         
@@ -360,11 +342,10 @@ class IncrementalDiscovery:
         return {'cvid': cvid, 'file_count': file_count}
     
     def _get_display_name(self, cvid: int) -> str:
-        """Get human-readable name for cvid via mod_packages."""
+        """Get human-readable name for cvid from content_versions."""
         row = self.conn.execute("""
-            SELECT mp.name
+            SELECT cv.name
             FROM content_versions cv
-            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE cv.content_version_id = ?
         """, (cvid,)).fetchone()
         

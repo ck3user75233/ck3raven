@@ -39,9 +39,9 @@ def test_database_init():
         table_names = {r['name'] for r in tables}
         
         required_tables = {
-            'db_metadata', 'vanilla_versions', 'mod_packages', 'content_versions',
+            'db_metadata', 'content_versions',
             'file_contents', 'files', 'parsers', 'asts', 'symbols', 'refs',
-            'playsets', 'playset_mods', 'builds', 'snapshots', 'snapshot_members',
+            'builds', 'snapshots', 'snapshot_members',
             'exemplar_mods'
         }
         

@@ -9,7 +9,7 @@ WorldAdapter does NOT make permission decisions - enforcement.py does that
 using the RootCategory returned by classify_path.
 
 Address Scheme (maps directly to RootCategory):
-- mod:<mod_id>/<relative_path>     - Mod files → ROOT_STEAM or ROOT_USER_DOCS
+- mod:<mod_name>/<relative_path>     - Mod files → ROOT_STEAM or ROOT_USER_DOCS
 - ck3raven:/<relative_path>        - ck3raven source code → ROOT_REPO
 
 All other inputs are treated as filesystem paths and classified by containment.
@@ -336,14 +336,14 @@ class WorldAdapter:
         
         # --- Mod references: look up path, then classify ---
         if ref.mod_name is not None:
-            mod_id = ref.mod_name
-            if mod_id not in self._mod_paths:
+            mod_name = ref.mod_name
+            if mod_name not in self._mod_paths:
                 return ResolutionResult.not_found(
                     ref.raw_input,
-                    f"Mod '{mod_id}' not in active playset"
+                    f"Mod '{mod_name}' not in active playset"
                 )
             
-            abs_path = self._mod_paths[mod_id] / ref.relative_path
+            abs_path = self._mod_paths[mod_name] / ref.relative_path
             root_category = self.classify_path(abs_path)
             
             subdirectory = None
@@ -354,7 +354,7 @@ class WorldAdapter:
                     rel = abs_path.resolve().relative_to(ROOT_USER_DOCS.resolve())
                     relative_path_str = str(rel).replace("\\", "/")
                 except ValueError:
-                    relative_path_str = f"mod/{mod_id}/{ref.relative_path}"
+                    relative_path_str = f"mod/{mod_name}/{ref.relative_path}"
             
             return ResolutionResult(
                 found=True,
@@ -362,7 +362,7 @@ class WorldAdapter:
                 root_category=root_category,
                 subdirectory=subdirectory,
                 relative_path=relative_path_str,
-                mod_name=mod_id,
+                mod_name=mod_name,
             )
         
         # --- Root-category references: declarative lookup ---
@@ -421,7 +421,7 @@ class WorldAdapter:
         """Parse a canonical address string into _ParsedRef.
         
         Only two schemes:
-        - mod:<mod_id>/<rel_path> → mod reference (root_category from classify_path)
+        - mod:<mod_name>/<rel_path> → mod reference (root_category from classify_path)
         - ck3raven:/<rel_path>   → ROOT_REPO
         
         BANNED SCHEMES (February 2026):
@@ -435,10 +435,10 @@ class WorldAdapter:
         if address.startswith("mod:"):
             rest = address[4:]
             if "/" in rest:
-                mod_id, rel_path = rest.split("/", 1)
+                mod_name, rel_path = rest.split("/", 1)
                 return _ParsedRef(
                     root_category=None,  # Determined during resolution via classify_path
-                    mod_name=mod_id,
+                    mod_name=mod_name,
                     relative_path=rel_path,
                     raw_input=address,
                 )

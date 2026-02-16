@@ -35,10 +35,9 @@ def get_test_file() -> Path:
     conn = sqlite3.connect(str(db_path))
     
     row = conn.execute("""
-        SELECT f.relpath, mp.source_path
+        SELECT f.relpath, cv.source_path
         FROM files f
         JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-        JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
         WHERE f.relpath LIKE 'common/traits/%.txt'
            AND f.deleted = 0
            AND f.file_size > 100

@@ -38,12 +38,11 @@ def get_test_files(n: int = 100) -> list:
     db_path = Path.home() / ".ck3raven" / "ck3raven.db"
     conn = sqlite3.connect(str(db_path))
     
-    # Get files from any content version (vanilla stored as mod_package)
+    # Get files from any content version
     rows = conn.execute("""
-        SELECT f.file_id, f.relpath, mp.source_path, f.file_size
+        SELECT f.file_id, f.relpath, cv.source_path, f.file_size
         FROM files f
         JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-        JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
         WHERE f.relpath LIKE 'common/%.txt'
            AND f.deleted = 0
            AND f.file_size IS NOT NULL

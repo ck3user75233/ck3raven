@@ -18,76 +18,27 @@ import json
 
 
 @dataclass
-class VanillaVersion:
-    """A specific CK3 base game state (immutable once stored)."""
-    vanilla_version_id: Optional[int] = None
-    ck3_version: str = ""
-    dlc_set: List[str] = field(default_factory=list)
-    build_hash: Optional[str] = None
-    ingested_at: Optional[datetime] = None
-    notes: Optional[str] = None
-    
-    @property
-    def dlc_set_json(self) -> str:
-        return json.dumps(self.dlc_set)
-    
-    @classmethod
-    def from_row(cls, row) -> "VanillaVersion":
-        return cls(
-            vanilla_version_id=row['vanilla_version_id'],
-            ck3_version=row['ck3_version'],
-            dlc_set=json.loads(row['dlc_set_json']) if row['dlc_set_json'] else [],
-            build_hash=row['build_hash'],
-            ingested_at=row['ingested_at'],
-            notes=row['notes'],
-        )
-    
-    def __repr__(self):
-        return f"VanillaVersion({self.ck3_version}, {len(self.dlc_set)} DLCs)"
-
-
-@dataclass
-class ModPackage:
-    """A mod identity (e.g., Steam Workshop ID) that can have many versions."""
-    mod_package_id: Optional[int] = None
-    workshop_id: Optional[str] = None
+class ContentVersion:
+    """A specific version of vanilla or a mod, with identity columns inline."""
+    content_version_id: Optional[int] = None
     name: str = ""
     source_path: Optional[str] = None
+    workshop_id: Optional[str] = None
     source_url: Optional[str] = None
     notes: Optional[str] = None
-    created_at: Optional[datetime] = None
-    
-    @classmethod
-    def from_row(cls, row) -> "ModPackage":
-        return cls(
-            mod_package_id=row['mod_package_id'],
-            workshop_id=row['workshop_id'],
-            name=row['name'],
-            source_path=row['source_path'],
-            source_url=row['source_url'],
-            notes=row['notes'],
-            created_at=row['created_at'],
-        )
-    
-    def __repr__(self):
-        return f"ModPackage({self.name}, workshop={self.workshop_id})"
-
-
-@dataclass
-class ContentVersion:
-    """A specific version of vanilla or a mod package."""
-    content_version_id: Optional[int] = None
-    mod_package_id: Optional[int] = None
     content_root_hash: str = ""
     file_count: int = 0
     total_size: int = 0
     ingested_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
     
     @classmethod
     def from_row(cls, row) -> "ContentVersion":
         return cls(
             content_version_id=row['content_version_id'],
-            mod_package_id=row['mod_package_id'],
+            name=row['name'] if 'name' in row.keys() else '',
+            source_path=row['source_path'] if 'source_path' in row.keys() else None,
+            workshop_id=row['workshop_id'] if 'workshop_id' in row.keys() else None,
             content_root_hash=row['content_root_hash'],
             file_count=row['file_count'],
             total_size=row['total_size'],
@@ -95,7 +46,7 @@ class ContentVersion:
         )
     
     def __repr__(self):
-        return f"ContentVersion(hash={self.content_root_hash[:12]}...)"
+        return f"ContentVersion({self.name}, hash={self.content_root_hash[:12]}...)"
 
 
 @dataclass

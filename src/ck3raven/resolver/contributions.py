@@ -98,8 +98,7 @@ class ContributionUnit:
 class ConflictCandidate:
     """A candidate in a conflict - one of the competing contributions."""
     candidate_id: str
-    source_kind: str                         # 'vanilla' or 'mod'
-    source_name: str                         # 'vanilla' or mod name
+    source_name: str                         # mod name (including game files)
     content_version_id: int
     load_order_index: int
     contrib_id: str                          # FK to contribution
@@ -140,10 +139,6 @@ class ConflictUnit:
     @property
     def candidate_count(self) -> int:
         return len(self.candidates)
-    
-    @property
-    def is_vanilla_involved(self) -> bool:
-        return any(c.source_kind == 'vanilla' for c in self.candidates)
     
     def get_winner_by_load_order(self) -> Optional[ConflictCandidate]:
         """Get the candidate that would win by load order (LIOS)."""
@@ -603,8 +598,7 @@ CREATE TABLE IF NOT EXISTS conflict_candidates (
     conflict_unit_id TEXT NOT NULL,
     candidate_id TEXT NOT NULL,               -- Unique within conflict
     contrib_id TEXT NOT NULL,                 -- FK to contribution_units
-    source_kind TEXT NOT NULL,                -- vanilla or mod
-    source_name TEXT NOT NULL,                -- Mod name
+    source_name TEXT NOT NULL,                -- Mod name (including game files)
     load_order_index INTEGER NOT NULL,
     is_winner INTEGER NOT NULL DEFAULT 0,     -- 1 if this would win by load order
     PRIMARY KEY (conflict_unit_id, candidate_id),

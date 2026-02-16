@@ -321,7 +321,9 @@ def find_content_version_by_hash(
 def create_content_version(
     conn: sqlite3.Connection,
     content_root_hash: str,
-    mod_package_id: Optional[int] = None,
+    name: Optional[str] = None,
+    source_path: Optional[str] = None,
+    workshop_id: Optional[str] = None,
     file_count: int = 0,
     total_size: int = 0
 ) -> int:
@@ -332,8 +334,8 @@ def create_content_version(
         content_version_id
     """
     cursor = conn.execute("""
-        INSERT INTO content_versions (mod_package_id, content_root_hash, file_count, total_size)
-        VALUES (?, ?, ?, ?)
-    """, (mod_package_id, content_root_hash, file_count, total_size))
+        INSERT INTO content_versions (name, source_path, workshop_id, content_root_hash, file_count, total_size)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (name, source_path, workshop_id, content_root_hash, file_count, total_size))
     
     return cursor.lastrowid

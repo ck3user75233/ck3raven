@@ -131,9 +131,8 @@ class GameState:
 def get_source_name(conn: sqlite3.Connection, content_version_id: int) -> str:
     """Get human-readable name for a content version."""
     row = conn.execute("""
-        SELECT mp.name
+        SELECT cv.name
         FROM content_versions cv
-        JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
         WHERE cv.content_version_id = ?
     """, (content_version_id,)).fetchone()
     

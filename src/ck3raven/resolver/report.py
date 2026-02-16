@@ -18,7 +18,7 @@ import json
 import hashlib
 import sqlite3
 from dataclasses import dataclass, field, asdict
-from typing import List, Dict, Optional, Any, Literal, Iterator, Tuple
+from typing import List, Dict, Optional, Any, Iterator, Tuple
 from datetime import datetime, timezone
 from enum import Enum
 
@@ -124,29 +124,29 @@ DOMAIN_MERGE_CONFIDENCE = {
 
 @dataclass
 class SourceInfo:
-    """Identifies a content source (vanilla or mod)."""
-    kind: Literal["vanilla", "mod"]
+    """Identifies a content source (game files or mod).
+    
+    No 'kind' field — the name is sufficient. Game files are named
+    'CK3 Game Files' and are always mods[0] in the load order.
+    """
     content_version_id: int
     name: str
-    mod_id: Optional[str] = None
     
     def to_dict(self) -> Dict[str, Any]:
-        d = {"kind": self.kind, "content_version_id": self.content_version_id, "name": self.name}
-        if self.mod_id:
-            d["mod_id"] = self.mod_id
-        return d
+        return {"content_version_id": self.content_version_id, "name": self.name}
 
 
 @dataclass
 class LoadOrderEntry:
-    """An entry in the load order."""
-    kind: Literal["vanilla", "mod"]
+    """An entry in the load order.
+    
+    No 'kind' field — game files are mods[0], identified by name.
+    """
     content_version_id: int
-    mod_id: Optional[str] = None
-    name: Optional[str] = None
+    name: str
     
     def to_dict(self) -> Dict[str, Any]:
-        return {k: v for k, v in asdict(self).items() if v is not None}
+        return {"content_version_id": self.content_version_id, "name": self.name}
 
 
 # =============================================================================
@@ -424,8 +424,6 @@ class ReportContext:
     """Context for report generation."""
     playset_id: int
     playset_name: str
-    vanilla_version_id: int
-    vanilla_version: str
     parser_version: str
     ruleset_version: str
     load_order: List[LoadOrderEntry] = field(default_factory=list)
@@ -434,8 +432,6 @@ class ReportContext:
         d = {
             "playset_id": self.playset_id,
             "playset_name": self.playset_name,
-            "vanilla_version_id": self.vanilla_version_id,
-            "vanilla_version": self.vanilla_version,
             "parser_version": self.parser_version,
             "ruleset_version": self.ruleset_version,
             "load_order": [e.to_dict() for e in self.load_order],
@@ -715,57 +711,27 @@ class ConflictsReportGenerator:
         return report
     
     def _build_context(self, playset_id: int) -> ReportContext:
-        """Build the report context with load order."""
-        # Get playset info
-        playset = self.conn.execute("""
-            SELECT p.playset_id, p.name, p.vanilla_version_id, vv.ck3_version
-            FROM playsets p
-            JOIN vanilla_versions vv ON p.vanilla_version_id = vv.vanilla_version_id
-            WHERE p.playset_id = ?
-        """, (playset_id,)).fetchone()
+        """Build the report context with load order.
         
-        if not playset:
-            raise ValueError(f"Playset {playset_id} not found")
-        
-        # Build load order: vanilla first, then mods by position
+        Queries all content_versions ordered by content_version_id.
+        Game files are mods[0] — no special identification needed.
+        """
         load_order = []
         
-        # Vanilla entry
-        vanilla_cv = self.conn.execute("""
-            SELECT content_version_id FROM content_versions
-            WHERE kind = 'vanilla' AND vanilla_version_id = ?
-        """, (playset["vanilla_version_id"],)).fetchone()
+        rows = self.conn.execute("""
+            SELECT content_version_id, name FROM content_versions
+            ORDER BY content_version_id ASC
+        """).fetchall()
         
-        if vanilla_cv:
+        for row in rows:
             load_order.append(LoadOrderEntry(
-                kind="vanilla",
-                content_version_id=vanilla_cv[0],
-                name="vanilla"
-            ))
-        
-        # Mod entries
-        mods = self.conn.execute("""
-            SELECT pm.content_version_id, pm.load_order_index, mp.mod_package_id, mp.name
-            FROM playset_mods pm
-            JOIN content_versions cv ON pm.content_version_id = cv.content_version_id
-            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-            WHERE pm.playset_id = ? AND pm.enabled = 1
-            ORDER BY pm.load_order_index ASC
-        """, (playset_id,)).fetchall()
-        
-        for mod in mods:
-            load_order.append(LoadOrderEntry(
-                kind="mod",
-                content_version_id=mod["content_version_id"],
-                mod_id=str(mod["mod_package_id"]),
-                name=mod["name"],
+                content_version_id=row["content_version_id"],
+                name=row["name"] or "Unknown",
             ))
         
         return ReportContext(
-            playset_id=playset["playset_id"],
-            playset_name=playset["name"],
-            vanilla_version_id=playset["vanilla_version_id"],
-            vanilla_version=playset["ck3_version"],
+            playset_id=playset_id,
+            playset_name=f"playset_{playset_id}",
             parser_version=self.parser_version,
             ruleset_version=RULESET_VERSION,
             load_order=load_order,
@@ -783,13 +749,8 @@ class ConflictsReportGenerator:
         """Find all file-level conflicts (path collisions)."""
         conflicts = []
         
-        # Get vanilla version for this playset
-        vanilla_vid = self.conn.execute("""
-            SELECT vanilla_version_id FROM playsets WHERE playset_id = ?
-        """, (playset_id,)).fetchone()[0]
-        
-        # Query all files from vanilla + enabled mods, grouped by relpath
-        # This finds path collisions
+        # Query all files from all content_versions, grouped by relpath
+        # This finds path collisions (same relpath in multiple CVs)
         sql = """
             SELECT 
                 f.relpath as vpath,
@@ -797,17 +758,11 @@ class ConflictsReportGenerator:
                 COUNT(DISTINCT f.content_version_id) as source_count
             FROM files f
             JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-            LEFT JOIN playset_mods pm ON cv.content_version_id = pm.content_version_id
-                AND pm.playset_id = ? AND pm.enabled = 1
-            WHERE (
-                (cv.kind = 'vanilla' AND cv.vanilla_version_id = ?)
-                OR pm.playset_id IS NOT NULL
-            )
         """
-        params = [playset_id, vanilla_vid]
+        params: list = []
         
         if paths_filter:
-            sql += " AND f.relpath LIKE ?"
+            sql += " WHERE f.relpath LIKE ?"
             params.append(paths_filter)
         
         sql += " GROUP BY f.relpath HAVING source_count >= ?"
@@ -833,22 +788,19 @@ class ConflictsReportGenerator:
                 file_row = self.conn.execute("""
                     SELECT 
                         f.file_id, f.content_hash,
-                        cv.kind, cv.mod_package_id,
-                        COALESCE(mp.name, 'vanilla') as source_name,
+                        cv.content_version_id,
+                        cv.name as source_name,
                         fc.size as file_size
                     FROM files f
                     JOIN content_versions cv ON f.content_version_id = cv.content_version_id
-                    LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
                     LEFT JOIN file_contents fc ON f.content_hash = fc.content_hash
                     WHERE f.content_version_id = ? AND f.relpath = ?
                 """, (cv_id, vpath)).fetchone()
                 
                 if file_row:
                     source = SourceInfo(
-                        kind=file_row["kind"],
                         content_version_id=cv_id,
                         name=file_row["source_name"],
-                        mod_id=str(file_row["mod_package_id"]) if file_row["mod_package_id"] else None,
                     )
                     candidates.append(FileCandidate(
                         source=source,
@@ -924,27 +876,9 @@ class ConflictsReportGenerator:
         
         # Check if contribution_units table exists and has data
         try:
-            # Use CTE to get contributions for this playset
             count = self.conn.execute("""
-                WITH playset_contribs AS (
-                    -- Vanilla contributions
-                    SELECT cu.contrib_id
-                    FROM contribution_units cu
-                    JOIN content_versions cv ON cu.content_version_id = cv.content_version_id
-                    JOIN vanilla_versions vv ON cv.vanilla_version_id = vv.vanilla_version_id
-                    JOIN playsets p ON p.vanilla_version_id = vv.vanilla_version_id
-                    WHERE p.playset_id = ? AND cv.kind = 'vanilla'
-                    
-                    UNION ALL
-                    
-                    -- Mod contributions
-                    SELECT cu.contrib_id
-                    FROM contribution_units cu
-                    JOIN playset_mods pm ON cu.content_version_id = pm.content_version_id
-                    WHERE pm.playset_id = ? AND pm.enabled = 1
-                )
-                SELECT COUNT(*) FROM playset_contribs
-            """, (playset_id, playset_id)).fetchone()[0]
+                SELECT COUNT(*) FROM contribution_units
+            """).fetchone()[0]
         except sqlite3.OperationalError:
             # Table doesn't exist - no ID-level analysis available
             return conflicts
@@ -952,37 +886,18 @@ class ConflictsReportGenerator:
         if count == 0:
             return conflicts
         
-        # Build CTE for playset contributions with full data
+        # Build CTE for playset contributions with full data.
+        # Single JOIN — every content_version has a name, no special cases.
         playset_cte = """
             playset_contribs AS (
-                -- Vanilla contributions
                 SELECT 
                     cu.contrib_id, cu.content_version_id, cu.file_id,
                     cu.domain, cu.unit_key, cu.node_path, cu.relpath, cu.line_number,
                     cu.merge_behavior, cu.symbols_json, cu.refs_json, cu.node_hash, cu.summary,
-                    -1 as load_order_index, 'vanilla' as source_kind, 'vanilla' as source_name,
-                    NULL as mod_package_id
+                    cv.content_version_id as load_order_index,
+                    cv.name as source_name
                 FROM contribution_units cu
                 JOIN content_versions cv ON cu.content_version_id = cv.content_version_id
-                JOIN vanilla_versions vv ON cv.vanilla_version_id = vv.vanilla_version_id
-                JOIN playsets p ON p.vanilla_version_id = vv.vanilla_version_id
-                WHERE p.playset_id = :playset_id AND cv.kind = 'vanilla'
-                
-                UNION ALL
-                
-                -- Mod contributions
-                SELECT 
-                    cu.contrib_id, cu.content_version_id, cu.file_id,
-                    cu.domain, cu.unit_key, cu.node_path, cu.relpath, cu.line_number,
-                    cu.merge_behavior, cu.symbols_json, cu.refs_json, cu.node_hash, cu.summary,
-                    pm.load_order_index, 'mod' as source_kind,
-                    COALESCE(mp.name, 'Unknown Mod') as source_name,
-                    cv.mod_package_id
-                FROM contribution_units cu
-                JOIN playset_mods pm ON cu.content_version_id = pm.content_version_id
-                JOIN content_versions cv ON cu.content_version_id = cv.content_version_id
-                LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-                WHERE pm.playset_id = :playset_id AND pm.enabled = 1
             )
         """
         
@@ -1023,7 +938,7 @@ class ConflictsReportGenerator:
                     pc.contrib_id, pc.content_version_id, pc.file_id,
                     pc.node_path, pc.relpath, pc.line_number,
                     pc.node_hash, pc.summary, pc.symbols_json, pc.refs_json,
-                    pc.source_kind, pc.mod_package_id, pc.source_name
+                    pc.source_name
                 FROM playset_contribs pc
                 WHERE pc.unit_key = :unit_key
                 ORDER BY pc.content_version_id
@@ -1034,10 +949,8 @@ class ConflictsReportGenerator:
             
             for i, cr in enumerate(candidates_rows):
                 source = SourceInfo(
-                    kind=cr["source_kind"],
                     content_version_id=cr["content_version_id"],
                     name=cr["source_name"],
-                    mod_id=str(cr["mod_package_id"]) if cr["mod_package_id"] else None,
                 )
                 
                 # Parse symbols and refs
@@ -1200,7 +1113,6 @@ def report_summary_cli(report: ConflictsReport) -> str:
     
     if report.context:
         lines.append(f"Playset: {report.context.playset_name}")
-        lines.append(f"Vanilla: {report.context.vanilla_version}")
         lines.append(f"Mods: {len(report.context.load_order) - 1}")
     
     lines.append(f"Generated: {report.generated_at}")

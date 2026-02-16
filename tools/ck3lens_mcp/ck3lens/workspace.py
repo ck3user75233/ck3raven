@@ -61,12 +61,11 @@ _logger = logging.getLogger(__name__)
 class ModEntry:
     """A mod entry from the active playset.
     
-    mods[0] is always vanilla (name="vanilla", load_order=0).
+    mods[0] is always game files (name="CK3 Game Files", load_order=0).
     mods[1:] are user mods in load order.
     
     cvid is resolved from database when playset is loaded.
     """
-    mod_id: str
     name: str
     path: Path
     load_order: int = 0
@@ -84,7 +83,7 @@ class ModEntry:
     @property
     def is_vanilla(self) -> bool:
         """True if this is the vanilla game (always mods[0])."""
-        return self.mod_id == "vanilla"
+        return self.load_order == 0
 
 
 @dataclass
@@ -104,10 +103,10 @@ class Session:
     mods: list[ModEntry] = field(default_factory=list)
     local_mods_folder: Path = field(default_factory=lambda: ROOT_USER_DOCS / "mod")
     
-    def get_mod(self, mod_id: str) -> Optional[ModEntry]:
-        """Get mod by ID or name from mods[]."""
+    def get_mod(self, mod_name: str) -> Optional[ModEntry]:
+        """Get mod by name from mods[]."""
         for mod in self.mods:
-            if mod.mod_id == mod_id or mod.name == mod_id:
+            if mod.name == mod_name:
                 return mod
         return None
     
@@ -141,9 +140,9 @@ class Session:
         return db.get_cvids(self.mods)
     
     # DEPRECATED - use get_mod instead
-    def get_local_mod(self, mod_id: str) -> Optional[ModEntry]:
+    def get_local_mod(self, mod_name: str) -> Optional[ModEntry]:
         """DEPRECATED: Use get_mod() instead."""
-        return self.get_mod(mod_id)
+        return self.get_mod(mod_name)
 
 
 # Playsets directory: ROOT_CK3RAVEN_DATA / "playsets"
@@ -187,8 +186,7 @@ def _create_vanilla_entry(vanilla_path: Optional[Path] = None) -> ModEntry:
         vanilla_path = ROOT_GAME
     
     return ModEntry(
-        mod_id="vanilla",
-        name="vanilla",
+        name="CK3 Game Files",
         path=vanilla_path,
         load_order=0,
     )
@@ -309,12 +307,11 @@ def _apply_playset(session: Session, data: dict) -> None:
             path = _expand_path(path_str)
         else:
             # Fallback: construct from local_mods_folder + folder name
-            folder = m.get("folder", m.get("mod_id", ""))
+            folder = m.get("folder", m.get("name", ""))
             path = session.local_mods_folder / folder
         
         mod = ModEntry(
-            mod_id=m.get("mod_id", m.get("name", "")),
-            name=m.get("name", m.get("mod_id", "")),
+            name=m.get("name", "Unknown"),
             path=path,
             load_order=m.get("load_order", i + 1),  # Use explicit load_order if present, else i+1
             workshop_id=m.get("steam_id", m.get("workshop_id")),
@@ -345,10 +342,10 @@ def _apply_config(session: Session, data: dict[str, Any]) -> None:
         session.mods = [_create_vanilla_entry(vanilla_path)]
         
         for i, m in enumerate(mods_data):
-            path = _expand_path(m["path"]) if "path" in m else session.local_mods_folder / m["mod_id"]
+            mod_name = m.get("name", m.get("mod_id", "Unknown"))
+            path = _expand_path(m["path"]) if "path" in m else session.local_mods_folder / mod_name
             mod = ModEntry(
-                mod_id=m["mod_id"],
-                name=m.get("name", m["mod_id"]),
+                name=mod_name,
                 path=path,
                 load_order=i + 1,
                 workshop_id=m.get("workshop_id"),

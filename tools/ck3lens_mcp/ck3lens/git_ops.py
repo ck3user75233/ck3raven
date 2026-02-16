@@ -48,14 +48,14 @@ def _run_git(mod_path: Path, *args: str, timeout: int = 60) -> tuple[bool, str, 
         return False, "", str(e)
 
 
-def git_status(session: Session, mod_id: str) -> dict:
+def git_status(session: Session, mod_name: str) -> dict:
     """Git status for a mod."""
-    mod = session.get_local_mod(mod_id)
+    mod = session.get_local_mod(mod_name)
     if not mod:
-        return {"error": f"Unknown mod_id: {mod_id}"}
+        return {"error": f"Unknown mod: {mod_name}"}
     
     if not (mod.path / ".git").exists():
-        return {"error": f"{mod_id} is not a git repository"}
+        return {"error": f"{mod_name} is not a git repository"}
     
     # Get branch
     ok, branch, err = _run_git(mod.path, "rev-parse", "--abbrev-ref", "HEAD")
@@ -87,7 +87,7 @@ def git_status(session: Session, mod_id: str) -> dict:
             unstaged.append({"status": worktree, "file": filename})
     
     return {
-        "mod_id": mod_id,
+        "mod": mod.name,
         "branch": branch,
         "staged": staged,
         "unstaged": unstaged,
@@ -96,11 +96,11 @@ def git_status(session: Session, mod_id: str) -> dict:
     }
 
 
-def git_diff(session: Session, mod_id: str, staged: bool = False) -> dict:
+def git_diff(session: Session, mod_name: str, staged: bool = False) -> dict:
     """Show uncommitted changes."""
-    mod = session.get_local_mod(mod_id)
+    mod = session.get_local_mod(mod_name)
     if not mod:
-        return {"error": f"Unknown mod_id: {mod_id}"}
+        return {"error": f"Unknown mod: {mod_name}"}
     
     args = ["diff"]
     if staged:
@@ -111,7 +111,7 @@ def git_diff(session: Session, mod_id: str, staged: bool = False) -> dict:
         return {"error": err}
     
     return {
-        "mod_id": mod_id,
+        "mod": mod.name,
         "staged": staged,
         "diff": diff
     }
@@ -119,14 +119,14 @@ def git_diff(session: Session, mod_id: str, staged: bool = False) -> dict:
 
 def git_add(
     session: Session,
-    mod_id: str,
+    mod_name: str,
     files: Optional[list[str]] = None,
     all_files: bool = False
 ) -> dict:
     """Stage files for commit."""
-    mod = session.get_local_mod(mod_id)
+    mod = session.get_local_mod(mod_name)
     if not mod:
-        return {"error": f"Unknown mod_id: {mod_id}"}
+        return {"error": f"Unknown mod: {mod_name}"}
     
     if all_files:
         args = ["add", "-A"]
@@ -139,14 +139,14 @@ def git_add(
     if not ok:
         return {"success": False, "error": err}
     
-    return {"success": True, "mod_id": mod_id}
+    return {"success": True, "mod": mod.name}
 
 
-def git_commit(session: Session, mod_id: str, message: str) -> dict:
+def git_commit(session: Session, mod_name: str, message: str) -> dict:
     """Commit staged changes."""
-    mod = session.get_local_mod(mod_id)
+    mod = session.get_local_mod(mod_name)
     if not mod:
-        return {"error": f"Unknown mod_id: {mod_id}"}
+        return {"error": f"Unknown mod: {mod_name}"}
     
     ok, out, err = _run_git(mod.path, "commit", "-m", message)
     if not ok:
@@ -160,7 +160,7 @@ def git_commit(session: Session, mod_id: str, message: str) -> dict:
     
     return {
         "success": True,
-        "mod_id": mod_id,
+        "mod": mod.name,
         "commit_hash": commit_hash,
         "message": message
     }
@@ -168,14 +168,14 @@ def git_commit(session: Session, mod_id: str, message: str) -> dict:
 
 def git_push(
     session: Session,
-    mod_id: str,
+    mod_name: str,
     remote: str = "origin",
     branch: Optional[str] = None
 ) -> dict:
     """Push to remote."""
-    mod = session.get_local_mod(mod_id)
+    mod = session.get_local_mod(mod_name)
     if not mod:
-        return {"error": f"Unknown mod_id: {mod_id}"}
+        return {"error": f"Unknown mod: {mod_name}"}
     
     args = ["push", remote]
     if branch:
@@ -188,7 +188,7 @@ def git_push(
     
     return {
         "success": True,
-        "mod_id": mod_id,
+        "mod": mod.name,
         "remote": remote,
         "output": out + err
     }
@@ -196,14 +196,14 @@ def git_push(
 
 def git_pull(
     session: Session,
-    mod_id: str,
+    mod_name: str,
     remote: str = "origin",
     branch: Optional[str] = None
 ) -> dict:
     """Pull from remote."""
-    mod = session.get_local_mod(mod_id)
+    mod = session.get_local_mod(mod_name)
     if not mod:
-        return {"error": f"Unknown mod_id: {mod_id}"}
+        return {"error": f"Unknown mod: {mod_name}"}
     
     args = ["pull", remote]
     if branch:
@@ -216,17 +216,17 @@ def git_pull(
     
     return {
         "success": True,
-        "mod_id": mod_id,
+        "mod": mod.name,
         "remote": remote,
         "output": out + err
     }
 
 
-def git_log(session: Session, mod_id: str, limit: int = 10, file_path: Optional[str] = None) -> dict:
+def git_log(session: Session, mod_name: str, limit: int = 10, file_path: Optional[str] = None) -> dict:
     """Recent commit history."""
-    mod = session.get_local_mod(mod_id)
+    mod = session.get_local_mod(mod_name)
     if not mod:
-        return {"error": f"Unknown mod_id: {mod_id}"}
+        return {"error": f"Unknown mod: {mod_name}"}
     args = ["log", f"-{limit}", "--pretty=format:%H|%an|%ai|%s"]
     if file_path:
         args.append("--")
@@ -250,6 +250,6 @@ def git_log(session: Session, mod_id: str, limit: int = 10, file_path: Optional[
             })
     
     return {
-        "mod_id": mod_id,
+        "mod": mod.name,
         "commits": commits
     }

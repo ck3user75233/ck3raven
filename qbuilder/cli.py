@@ -184,7 +184,6 @@ def cmd_daemon(args: argparse.Namespace) -> int:
                         pass
                 conn.execute("DELETE FROM files")
                 conn.execute("DELETE FROM content_versions")
-                conn.execute("DELETE FROM mod_packages")
                 conn.commit()
             reset_qbuilder_tables(conn)
             print("[OK] Data reset complete")
@@ -508,9 +507,8 @@ def cmd_reset(args: argparse.Namespace) -> int:
                 # Clear files
                 conn.execute("DELETE FROM files")
                 
-                # Clear content_versions and mod_packages
+                # Clear content_versions
                 conn.execute("DELETE FROM content_versions")
-                conn.execute("DELETE FROM mod_packages")
                 
                 conn.commit()
             print("  Cleared all derived data")
