@@ -38,17 +38,6 @@ SCHEMA_SQL = """
 -- VERSIONING & IDENTITIES
 -- ============================================================================
 
--- Vanilla game versions (immutable once stored)
-CREATE TABLE IF NOT EXISTS vanilla_versions (
-    vanilla_version_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ck3_version TEXT NOT NULL,              -- e.g., "1.13.2"
-    dlc_set_json TEXT NOT NULL DEFAULT '[]', -- JSON array of DLC IDs enabled
-    build_hash TEXT,                         -- Optional build identifier
-    ingested_at TEXT NOT NULL DEFAULT (datetime('now')),
-    notes TEXT,
-    UNIQUE(ck3_version, dlc_set_json)
-);
-
 -- Mod package identities (e.g., Steam Workshop ID)
 CREATE TABLE IF NOT EXISTS mod_packages (
     mod_package_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,11 +52,10 @@ CREATE TABLE IF NOT EXISTS mod_packages (
 
 -- Content versions - specific version of vanilla or a mod
 -- Keyed by content_root_hash (hash of all file hashes + paths)
+-- NOTE: mod_package_id FK will be removed in Phase C (collapse mod_packages into this table)
 CREATE TABLE IF NOT EXISTS content_versions (
     content_version_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind TEXT NOT NULL CHECK(kind IN ('vanilla', 'mod')),
-    vanilla_version_id INTEGER,              -- FK if kind='vanilla'
-    mod_package_id INTEGER,                  -- FK if kind='mod'
+    mod_package_id INTEGER,                  -- FK to mod_packages (Phase C: replace with inline columns)
     content_root_hash TEXT NOT NULL UNIQUE,  -- SHA256 of sorted (relpath, file_hash) pairs
     file_count INTEGER NOT NULL DEFAULT 0,
     total_size INTEGER NOT NULL DEFAULT 0,
@@ -77,8 +65,6 @@ CREATE TABLE IF NOT EXISTS content_versions (
     source_mtime TEXT,                       -- Latest mtime of source directory
     symbols_extracted_at TEXT,               -- When symbols were extracted
     contributions_extracted_at TEXT,         -- When contributions were extracted
-    is_stale INTEGER NOT NULL DEFAULT 1,     -- DEPRECATED: never read, use symbols_extracted_at=NULL instead
-    FOREIGN KEY (vanilla_version_id) REFERENCES vanilla_versions(vanilla_version_id),
     FOREIGN KEY (mod_package_id) REFERENCES mod_packages(mod_package_id)
 );
 

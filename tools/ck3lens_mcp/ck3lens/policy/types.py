@@ -54,12 +54,13 @@ class WipWorkspaceInfo:
     @classmethod
     def get_current(cls, mode: AgentMode = AgentMode.CK3LENS) -> "WipWorkspaceInfo":
         """Get current WIP workspace state."""
-        from ..paths import WIP_DIR
-        exists = WIP_DIR.exists()
+        from ..paths import ROOT_CK3RAVEN_DATA
+        _wip = ROOT_CK3RAVEN_DATA / "wip"
+        exists = _wip.exists()
         file_count = 0
         if exists:
-            file_count = sum(1 for _ in WIP_DIR.rglob("*") if _.is_file())
-        return cls(path=WIP_DIR, exists=exists, mode=mode, file_count=file_count)
+            file_count = sum(1 for _ in _wip.rglob("*") if _.is_file())
+        return cls(path=_wip, exists=exists, mode=mode, file_count=file_count)
 
 
 # =============================================================================
@@ -120,7 +121,6 @@ class ValidationContext:
     
     # Session scope (auto-populated from server session state)
     playset_id: Optional[int] = None
-    vanilla_version_id: Optional[str] = None
     
     # Active playset details (auto-populated from server session state)
     active_mod_ids: Optional[set[str]] = None
@@ -154,7 +154,6 @@ class ValidationContext:
         Args:
             scope: Dict from _get_session_scope() containing:
                 - playset_id
-                - vanilla_version_id
                 - active_mod_ids
                 - active_roots
                 - local_mods_folder
@@ -164,8 +163,6 @@ class ValidationContext:
         """
         if scope.get("playset_id") is not None:
             self.playset_id = scope["playset_id"]
-        if scope.get("vanilla_version_id") is not None:
-            self.vanilla_version_id = scope["vanilla_version_id"]
         if scope.get("active_mod_ids") is not None:
             self.active_mod_ids = scope["active_mod_ids"]
         if scope.get("active_roots") is not None:

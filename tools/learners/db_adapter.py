@@ -133,17 +133,15 @@ class LearnerDb:
     def get_content_version_name(self, cvid: int) -> str:
         """Get display name for a content version."""
         row = self.conn.execute("""
-            SELECT cv.kind, mp.name as mod_name
+            SELECT mp.name as mod_name
             FROM content_versions cv
-            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE cv.content_version_id = ?
         """, (cvid,)).fetchone()
         
         if not row:
             return f"cv_{cvid}"
         
-        if row["kind"] == "vanilla":
-            return "vanilla"
         return row["mod_name"] or f"mod_{cvid}"
     
     def get_symbol_with_ast(

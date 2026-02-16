@@ -473,7 +473,6 @@ def _load_playset_from_json(playset_file: Path) -> Optional[dict]:
             "playset_name": data.get("playset_name", "JSON Playset"),
             "active_mod_ids": active_mod_ids,
             "active_roots": active_roots,
-            "vanilla_version_id": None,
             "vanilla_root": str(Path(vanilla_root).expanduser()),
             "source": "json",
             "file_path": str(playset_file),
@@ -1260,11 +1259,7 @@ def _ck3_db_delete_internal(
                     cur.execute(f"SELECT COUNT(*) FROM files WHERE content_version_id IN ({placeholders})", cv_ids)
                     files_count = cur.fetchone()[0]
                     
-                    # Delete playset_mods first (no cascade)
-                    cur.execute(f"DELETE FROM playset_mods WHERE content_version_id IN ({placeholders})", cv_ids)
-                    playset_mods_deleted = cur.rowcount
-                    
-                    # Delete files - CASCADE handles asts ? symbols/refs
+                    # Delete files - CASCADE handles asts → symbols/refs
                     cur.execute(f"DELETE FROM files WHERE content_version_id IN ({placeholders})", cv_ids)
                     files_deleted = cur.rowcount
                     
@@ -1284,7 +1279,6 @@ def _ck3_db_delete_internal(
                         "symbols_deleted": symbols_count,    # Cascaded via asts
                         "refs_deleted": refs_count,          # Cascaded via asts
                         "asts_deleted": asts_count,          # Cascaded from files
-                        "playset_mods_deleted": playset_mods_deleted,
                         "mod_packages_deleted": mod_packages_deleted,
                     }
                 else:
@@ -1323,28 +1317,6 @@ def _ck3_db_delete_internal(
                 result["success"] = True
                 result["rows_deleted"] = total
                 result["details"] = counts
-                trace.log("mcp.tool", {"target": target, "scope": scope}, result)
-                return result
-                
-        elif target == "playsets":
-            if not confirm:
-                cur.execute("SELECT COUNT(*) FROM playsets")
-                playsets = cur.fetchone()[0]
-                cur.execute("SELECT COUNT(*) FROM playset_mods")
-                playset_mods = cur.fetchone()[0]
-                result["rows_would_delete"] = playsets + playset_mods
-                result["details"] = {"playsets": playsets, "playset_mods": playset_mods}
-                trace.log("mcp.tool", {"target": target, "scope": scope}, result)
-                return result
-            else:
-                cur.execute("DELETE FROM playset_mods")
-                pm_deleted = cur.rowcount
-                cur.execute("DELETE FROM playsets")
-                p_deleted = cur.rowcount
-                db.conn.commit()
-                result["success"] = True
-                result["rows_deleted"] = p_deleted + pm_deleted
-                result["details"] = {"playsets": p_deleted, "playset_mods": pm_deleted}
                 trace.log("mcp.tool", {"target": target, "scope": scope}, result)
                 return result
                 
@@ -2002,7 +1974,6 @@ def ck3_playset(
     # For create
     name: str | None = None,
     description: str | None = None,
-    vanilla_version_id: int | None = None,
     mod_ids: list[int] | None = None,
     # For import
     launcher_playset_name: str | None = None,
@@ -2035,7 +2006,6 @@ def ck3_playset(
         new_position: New load order position (for reorder, 0-indexed)
         name: New playset name (for create)
         description: Playset description (for create)
-        vanilla_version_id: Vanilla content version (for create)
         mod_ids: List of content_version_ids (for create)
         launcher_playset_name: Launcher playset to import (for import)
         limit: Max mods to return for 'mods' command (default: None = all mods)
@@ -2048,7 +2018,7 @@ def ck3_playset(
     
     result = _ck3_playset_internal(
         command, playset_name, mod_name, new_position,
-        name, description, vanilla_version_id, mod_ids, launcher_playset_name, limit
+        name, description, mod_ids, launcher_playset_name, limit
     )
     
     if result.get("invalid"):
@@ -2074,7 +2044,6 @@ def _ck3_playset_internal(
     new_position: int | None,
     name: str | None,
     description: str | None,
-    vanilla_version_id: int | None,
     mod_ids: list[int] | None,
     launcher_playset_name: str | None,
     limit: int | None,

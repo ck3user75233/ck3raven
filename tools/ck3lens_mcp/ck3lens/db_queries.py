@@ -40,7 +40,6 @@ if CK3RAVEN_PATH.exists():
     sys.path.insert(0, str(CK3RAVEN_PATH))
 
 from ck3raven.db.schema import get_connection
-from ck3raven.resolver import SQLResolver, MergePolicy, get_policy_for_path
 
 
 # =============================================================================

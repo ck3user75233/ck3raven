@@ -129,7 +129,7 @@ def get_file(
         if file_id:
             sql = f"""
                 SELECT f.file_id, f.relpath, f.content_version_id,
-                       mp.name as mod_name, cv.source_path
+                       mp.name as mod_name, mp.source_path
                 FROM files f
                 JOIN content_versions cv ON f.content_version_id = cv.content_version_id
                 LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
@@ -139,7 +139,7 @@ def get_file(
         else:
             sql = f"""
                 SELECT f.file_id, f.relpath, f.content_version_id,
-                       mp.name as mod_name, cv.source_path
+                       mp.name as mod_name, mp.source_path
                 FROM files f
                 JOIN content_versions cv ON f.content_version_id = cv.content_version_id
                 LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
@@ -152,20 +152,21 @@ def get_file(
         if not row:
             return {"error": "File not found or not in active playset"}
         
+        root_path = row[4]  # mp.source_path
+        
         result = {
             "fileId": row[0],
             "relpath": row[1],
             "contentVersionId": row[2],
             "mod": row[3] or "vanilla",
-            "sourcePath": row[4],
+            "sourcePath": root_path,
         }
         
         # Get content if requested
         if include_content:
             from pathlib import Path
-            source_path = row[4]
-            if source_path:
-                full_path = Path(source_path) / row[1]
+            if root_path:
+                full_path = Path(root_path) / row[1]
                 if full_path.exists():
                     try:
                         result["content"] = full_path.read_text(encoding="utf-8-sig")

@@ -72,11 +72,9 @@ agents:
 
     scope:
       restrict_to_active_playset: true
-      restrict_to_selected_vanilla_version: true
       # Required scope fields in tool-call args for scoped operations
       required_scope_fields:
         - playset_id
-        - vanilla_version_id
       optional_scope_fields:
         - roots  # List of mod/vanilla roots being searched
         - mod_ids  # Specific mod IDs being queried
@@ -86,12 +84,12 @@ agents:
       active_playset_enforcement:
         description: >
           Searches, reads, and conclusions must be limited
-          to the active playset and selected vanilla version.
+          to the active playset.
         enforcement_stage: pre_call_wrapper
         severity: error
         scope_injection:
           # Pre-call wrapper auto-injects these from session state
-          auto_inject: [playset_id, vanilla_version_id]
+          auto_inject: [playset_id]
           # Post-trace validator verifies all scoped calls have these
           verify_present: [playset_id]
 

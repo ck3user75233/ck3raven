@@ -146,7 +146,6 @@ def extract_search_scope_from_call(call: ToolCall) -> dict[str, Any]:
     - playset_id
     - mod_ids (set)
     - roots (set)
-    - vanilla_version_id
     - query
     """
     args = call.args
@@ -154,7 +153,6 @@ def extract_search_scope_from_call(call: ToolCall) -> dict[str, Any]:
         "playset_id": args.get("playset_id"),
         "mod_ids": set(args.get("mod_ids", []) or []),
         "roots": set(args.get("roots", []) or []),
-        "vanilla_version_id": args.get("vanilla_version_id"),
         "query": args.get("query"),
     }
 

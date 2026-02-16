@@ -77,8 +77,6 @@ class ModPackage:
 class ContentVersion:
     """A specific version of vanilla or a mod package."""
     content_version_id: Optional[int] = None
-    kind: str = "mod"  # 'vanilla' or 'mod'
-    vanilla_version_id: Optional[int] = None
     mod_package_id: Optional[int] = None
     content_root_hash: str = ""
     file_count: int = 0
@@ -89,8 +87,6 @@ class ContentVersion:
     def from_row(cls, row) -> "ContentVersion":
         return cls(
             content_version_id=row['content_version_id'],
-            kind=row['kind'],
-            vanilla_version_id=row['vanilla_version_id'],
             mod_package_id=row['mod_package_id'],
             content_root_hash=row['content_root_hash'],
             file_count=row['file_count'],
@@ -99,7 +95,7 @@ class ContentVersion:
         )
     
     def __repr__(self):
-        return f"ContentVersion({self.kind}, hash={self.content_root_hash[:12]}...)"
+        return f"ContentVersion(hash={self.content_root_hash[:12]}...)"
 
 
 @dataclass

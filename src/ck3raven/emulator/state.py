@@ -131,16 +131,10 @@ class GameState:
 def get_source_name(conn: sqlite3.Connection, content_version_id: int) -> str:
     """Get human-readable name for a content version."""
     row = conn.execute("""
-        SELECT cv.kind, vv.ck3_version, mp.name
+        SELECT mp.name
         FROM content_versions cv
-        LEFT JOIN vanilla_versions vv ON cv.vanilla_version_id = vv.vanilla_version_id
-        LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+        JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
         WHERE cv.content_version_id = ?
     """, (content_version_id,)).fetchone()
     
-    if row:
-        if row['kind'] == 'vanilla':
-            return f"vanilla ({row['ck3_version'] or 'unknown'})"
-        else:
-            return row['name'] or f"mod_{content_version_id}"
-    return f"unknown_{content_version_id}"
+    return row['name'] if row else f"unknown_{content_version_id}"

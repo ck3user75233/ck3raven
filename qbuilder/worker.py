@@ -461,7 +461,7 @@ class BuildWorker:
         
         # Resolve file context via canonical join
         file_row = self.conn.execute("""
-            SELECT f.content_version_id, f.relpath, mp.source_path, cv.kind
+            SELECT f.content_version_id, f.relpath, mp.source_path
             FROM files f
             JOIN content_versions cv ON f.content_version_id = cv.content_version_id
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
@@ -472,13 +472,10 @@ class BuildWorker:
             self._mark_error(build_id, f"File not found: file_id={file_id}", None)
             return None
         
-        cvid, relpath, source_path, kind = file_row
+        cvid, relpath, source_path = file_row
         
-        # Resolve absolute path
-        if kind == 'vanilla':
-            root_path = self._get_vanilla_path()
-        else:
-            root_path = source_path
+        # source_path is always populated (vanilla and mods both have it on mod_packages)
+        root_path = source_path
         
         if not root_path:
             self._mark_error(build_id, f"Cannot resolve root for cvid={cvid}", None)

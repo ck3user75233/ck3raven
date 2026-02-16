@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Iterator, Optional
 import sqlite3
 
+from ck3lens.paths import ROOT_GAME
+
 # Commit progress every N files
 COMMIT_BATCH_SIZE = 500
 
@@ -158,12 +160,9 @@ def enqueue_playset_roots(conn: sqlite3.Connection, playset_path: Path) -> int:
     now = time.time()
     count = 0
     
-    # Vanilla path from playset JSON (stored in mod_packages.source_path)
-    vanilla = playset.get('vanilla') or {}
-    vanilla_path_str = playset.get('vanilla_path') or vanilla.get('path')
-    
-    if vanilla_path_str and Path(vanilla_path_str).exists():
-        cvid = _ensure_cvid(conn, name='Vanilla CK3', source_path=vanilla_path_str, workshop_id=None)
+    # Vanilla: use ROOT_GAME constant, not playset JSON path
+    if ROOT_GAME and ROOT_GAME.exists():
+        cvid = _ensure_cvid(conn, name='Vanilla CK3', source_path=str(ROOT_GAME), workshop_id=None)
         _enqueue_discovery(conn, cvid, now)
         count += 1
     
@@ -231,8 +230,8 @@ def _ensure_cvid(conn: sqlite3.Connection, name: str, source_path: str,
     
     content_root_hash = hashlib.sha256(source_path.encode()).hexdigest()[:32]
     cursor = conn.execute("""
-        INSERT INTO content_versions (kind, mod_package_id, content_root_hash)
-        VALUES ('mod', ?, ?)
+        INSERT INTO content_versions (mod_package_id, content_root_hash)
+        VALUES (?, ?)
     """, (mp_id, content_root_hash))
     conn.commit()
     cvid = cursor.lastrowid
@@ -309,14 +308,22 @@ class IncrementalDiscovery:
         cvid = task['cvid']
         resume_after = task.get('last_path_processed')
         
-        # Resolve root path via canonical join
-        root_path = self._resolve_root_path(cvid)
-        if not root_path:
-            self._mark_error(discovery_id, f"Cannot resolve root path for cvid={cvid}")
-            return {'error': f"Cannot resolve root path for cvid={cvid}"}
+        # Resolve root path from mod_packages.source_path
+        # (vanilla's source_path stores ROOT_GAME at ingestion time)
+        row = self.conn.execute("""
+            SELECT mp.source_path
+            FROM content_versions cv
+            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            WHERE cv.content_version_id = ?
+        """, (cvid,)).fetchone()
         
-        root_path = Path(root_path)
-        if not root_path.exists():
+        if not row or not row[0]:
+            self._mark_error(discovery_id, f"No source_path for cvid={cvid}")
+            return {'error': f"No source_path for cvid={cvid}"}
+        
+        root_path = Path(row[0])
+        
+        if not root_path or not root_path.exists():
             self._mark_error(discovery_id, f"Root path does not exist: {root_path}")
             return {'error': f"Root path does not exist: {root_path}"}
         
@@ -352,39 +359,17 @@ class IncrementalDiscovery:
         print(f"  Discovered: {file_count} files")
         return {'cvid': cvid, 'file_count': file_count}
     
-    def _resolve_root_path(self, cvid: int) -> Optional[str]:
-        """
-        Resolve cvid to filesystem root path via mod_packages.source_path.
-        
-        source_path is stored by enqueue_playset_roots for all content types
-        (vanilla and mods alike). Returns None only if DB data is missing.
-        """
-        row = self.conn.execute("""
-            SELECT mp.source_path
-            FROM content_versions cv
-            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
-            WHERE cv.content_version_id = ?
-        """, (cvid,)).fetchone()
-        
-        if not row:
-            return None
-        
-        return row[0]  # source_path (absolute root directory)
-    
     def _get_display_name(self, cvid: int) -> str:
-        """Get human-readable name for cvid via joins."""
+        """Get human-readable name for cvid via mod_packages."""
         row = self.conn.execute("""
-            SELECT cv.kind, mp.name
+            SELECT mp.name
             FROM content_versions cv
-            LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
+            JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE cv.content_version_id = ?
         """, (cvid,)).fetchone()
         
-        if row:
-            kind, name = row
-            if kind == 'vanilla':
-                return 'Vanilla CK3'
-            return name or f'Mod #{cvid}'
+        if row and row[0]:
+            return row[0]
         return f'Unknown #{cvid}'
     
     def _commit_batch(self, cvid: int, batch: list[FileRecord], 
