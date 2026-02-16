@@ -1522,7 +1522,9 @@ def ck3_conflicts(
                         "name": str,
                         "symbol_type": str,
                         "source_count": int,
-                        "sources": [{"mod": str, "file": str, "line": int}],
+                        "policy": str,  # OVERRIDE, FIOS, CONTAINER_MERGE, PER_KEY_OVERRIDE
+                        "winner": str,  # mod name of the winning definition
+                        "sources": [{"mod": str, "file": str, "line": int, "load_order": int, "is_winner": bool}],
                     }
                 ],
                 "compatch_conflicts_hidden": int
@@ -1534,7 +1536,9 @@ def ck3_conflicts(
                     {
                         "relpath": str,
                         "mods": [str],
-                        "has_zzz_prefix": bool  # True if any mod uses zzz_ prefix
+                        "winner": str,  # mod with highest load_order (LIOS - files always last wins)
+                        "sources": [{"mod": str, "load_order": int, "is_winner": bool}],
+                        "has_zzz_prefix": bool
                     }
                 ]
             }
@@ -1567,6 +1571,13 @@ def ck3_conflicts(
         if hasattr(m, 'cvid') and m.cvid is not None
     )
     
+    # Build CVID → load_order mapping for winner determination
+    load_order_map: dict[int, int] = {
+        m.cvid: m.load_order
+        for m in session.mods
+        if hasattr(m, 'cvid') and m.cvid is not None
+    }
+    
     if not cvids:
         return rb.error(
             'MCP-SYS-E-001',
@@ -1582,6 +1593,7 @@ def ck3_conflicts(
             game_folder=game_folder,
             limit=limit,
             include_compatch=include_compatch,
+            load_order_map=load_order_map,
         )
         
         # Apply symbol_names filter if provided
@@ -1600,48 +1612,61 @@ def ck3_conflicts(
         )
     
     elif command == "files":
-        # File-level conflict detection
-        # Note: cvids already validated above - this code path only reached if cvids exist
+        # File-level conflict detection with winner determination
+        # File conflicts are ALWAYS LIOS (last wins) regardless of content policy
         cv_filter = ",".join(str(cv) for cv in cvids)
         
         sql = f"""
             SELECT 
                 f.relpath,
-                GROUP_CONCAT(DISTINCT COALESCE(mp.name, 'vanilla')) as mods,
-                COUNT(DISTINCT f.content_version_id) as mod_count
+                f.content_version_id,
+                COALESCE(mp.name, 'vanilla') as mod_name
             FROM files f
             JOIN content_versions cv ON f.content_version_id = cv.content_version_id
             LEFT JOIN mod_packages mp ON cv.mod_package_id = mp.mod_package_id
             WHERE f.content_version_id IN ({cv_filter})
         """
-        params = []
+        params: list = []
         
         if game_folder:
             sql += " AND f.relpath LIKE ?"
             params.append(f"{game_folder}%")
         
-        sql += """
-            GROUP BY f.relpath
-            HAVING mod_count > 1
-            ORDER BY mod_count DESC
-            LIMIT ?
-        """
-        params.append(limit)
+        sql += " ORDER BY f.relpath"
         
         rows = db.conn.execute(sql, params).fetchall()
         
-        conflicts = []
+        # Group by relpath, attach load_order, determine winner
+        from collections import defaultdict
+        by_relpath: dict[str, list[dict]] = defaultdict(list)
         for row in rows:
-            relpath = row["relpath"]
-            mods = row["mods"].split(",")
-            has_zzz = any("zzz_" in relpath for _ in [1])  # Check prefix
+            cv_id = row["content_version_id"]
+            by_relpath[row["relpath"]].append({
+                "mod": row["mod_name"],
+                "load_order": load_order_map.get(cv_id, -1),
+            })
+        
+        conflicts = []
+        for relpath, sources in by_relpath.items():
+            if len(sources) < 2:
+                continue
+            # File-level is always LIOS (last wins)
+            winner_order = max(s["load_order"] for s in sources)
+            for s in sources:
+                s["is_winner"] = (s["load_order"] == winner_order)
+            winners = [s for s in sources if s["is_winner"]]
             
+            fname = relpath.rsplit("/", 1)[-1] if "/" in relpath else relpath
             conflicts.append({
                 "relpath": relpath,
-                "mods": mods,
-                "mod_count": row["mod_count"],
-                "has_zzz_prefix": has_zzz,
+                "mods": [s["mod"] for s in sources],
+                "sources": sources,
+                "mod_count": len(sources),
+                "winner": winners[0]["mod"] if winners else None,
+                "has_zzz_prefix": fname.startswith("zzz_"),
             })
+            if len(conflicts) >= limit:
+                break
         
         return rb.success(
             'WA-READ-S-001',

@@ -40,6 +40,15 @@ if CK3RAVEN_PATH.exists():
     sys.path.insert(0, str(CK3RAVEN_PATH))
 
 from ck3raven.db.schema import get_connection
+from ck3raven.resolver.policies import MergePolicy, get_policy_for_folder as _get_policy_for_path
+
+
+def _get_policy_for_folder(relpath: str) -> MergePolicy:
+    """Extract folder from relpath and determine merge policy."""
+    # relpath like "common/traits/00_traits.txt" → folder "common/traits"
+    parts = relpath.replace("\\", "/").rsplit("/", 1)
+    folder = parts[0] if len(parts) > 1 else ""
+    return _get_policy_for_path(folder)
 
 
 # =============================================================================
@@ -1206,7 +1215,8 @@ class DBQueries:
         game_folder: Optional[str] = None,
         limit: int = 100,
         include_compatch: bool = False,
-        playset_name: Optional[str] = None
+        playset_name: Optional[str] = None,
+        load_order_map: Optional[dict[int, int]] = None,
     ) -> dict:
         """
         Fast ID-level conflict detection using the symbols table.
@@ -1216,6 +1226,12 @@ class DBQueries:
         Uses Golden Join pattern: symbols → asts → files → content_versions
         This is INSTANT compared to contribution_units extraction.
         Uses GROUP BY to find symbols defined in multiple mods.
+        
+        Args:
+            load_order_map: Optional CVID → load_order mapping from session.mods[].
+                When provided, each conflict source gets load_order and is_winner fields,
+                and the conflict gets a policy field (OVERRIDE/FIOS/CONTAINER_MERGE/PER_KEY_OVERRIDE).
+                Winner determination: FIOS → lowest load_order wins. All others → highest wins (LIOS).
         """
         if not visible_cvids:
             return {"conflict_count": 0, "conflicts": [], "compatch_conflicts_hidden": 0}
@@ -1271,6 +1287,7 @@ class DBQueries:
             # Get details for each source using Golden Join
             sources = []
             is_compatch_conflict = False
+            first_relpath = None
             
             for cv_id in cv_ids_found:
                 detail_row = self.conn.execute("""
@@ -1291,24 +1308,51 @@ class DBQueries:
                     mod_name = detail_row["mod_name"]
                     if self._is_compatch_mod(mod_name):
                         is_compatch_conflict = True
-                    sources.append({
+                    source_entry: dict = {
                         "mod": mod_name,
                         "file": detail_row["relpath"],
-                        "line": detail_row["line_number"]
-                    })
+                        "line": detail_row["line_number"],
+                    }
+                    if load_order_map is not None:
+                        source_entry["load_order"] = load_order_map.get(cv_id, -1)
+                    if first_relpath is None:
+                        first_relpath = detail_row["relpath"]
+                    sources.append(source_entry)
             
             # Filter out compatch conflicts if requested
             if is_compatch_conflict and not include_compatch:
                 compatch_hidden += 1
                 continue
             
-            conflicts.append({
+            # Determine winner using merge policy if load_order_map provided
+            conflict_entry: dict = {
                 "name": name,
                 "symbol_type": symbol_type_val,
                 "source_count": row["source_count"],
                 "sources": sources,
-                "is_compatch_conflict": is_compatch_conflict
-            })
+                "is_compatch_conflict": is_compatch_conflict,
+            }
+            
+            if load_order_map is not None and sources:
+                # Determine policy from file path
+                policy = _get_policy_for_folder(first_relpath or "")
+                conflict_entry["policy"] = policy.name
+                
+                # FIOS: lowest load_order wins. All others (LIOS): highest wins.
+                if policy == MergePolicy.FIOS:
+                    winner_order = min(s.get("load_order", 999999) for s in sources)
+                else:
+                    winner_order = max(s.get("load_order", -1) for s in sources)
+                
+                for s in sources:
+                    s["is_winner"] = (s.get("load_order") == winner_order)
+                
+                # Tag the overall winner mod
+                winners = [s for s in sources if s.get("is_winner")]
+                if winners:
+                    conflict_entry["winner"] = winners[0]["mod"]
+            
+            conflicts.append(conflict_entry)
         
         return {
             "conflict_count": len(conflicts),
