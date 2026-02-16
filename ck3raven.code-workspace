@@ -1,7 +1,10 @@
-﻿{
+{
 	"folders": [
 		{
 			"path": "."
+		},
+		{
+			"path": "../.ck3raven"
 		}
 	],
 	"settings": {

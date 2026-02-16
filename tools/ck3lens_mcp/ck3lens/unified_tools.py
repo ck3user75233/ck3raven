@@ -151,18 +151,12 @@ def _resolve_log_source_path(source_path: str) -> Path | None:
     
     Supports:
     - Absolute paths: "C:/path/to/error.log"
-    - WIP paths: "wip:/log-backups/error.log"
-    - Home-relative: "~/backups/error.log"
+    - Home-relative: "~/.ck3raven/wip/log-backups/error.log"
     
     Returns None if path doesn't exist or can't be resolved.
     """
-    # Handle WIP paths
-    if source_path.startswith("wip:"):
-        wip_base = Path.home() / ".ck3raven" / "wip"
-        rel_path = source_path[4:].lstrip("/")
-        resolved = wip_base / rel_path
     # Handle home-relative
-    elif source_path.startswith("~"):
+    if source_path.startswith("~"):
         resolved = Path(source_path).expanduser()
     # Absolute or relative path
     else:
@@ -819,7 +813,6 @@ def ck3_file_impl(
     
     # HARD INVARIANT (Proposal V3 Instruction 1):
     # All commands except get/create_patch resolve through normalize_path_input() FIRST.
-    # This ensures mod_name="wip" and path="wip:/..." work uniformly for read/list/refresh.
     resolve_commands = {"read", "write", "edit", "delete", "rename", "refresh", "list"}
     if command in resolve_commands and world is not None and (path or mod_name):
         resolution = normalize_path_input(world, path=path, mod_name=mod_name, rel_path=rel_path)

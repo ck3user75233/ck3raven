@@ -31,7 +31,7 @@ class DoctorFinding:
     """Single diagnostic finding."""
     id: str                 # stable identifier, e.g. PD-ROOT-GAME-MISSING
     severity: Literal["OK", "WARN", "ERROR"]
-    subject: str            # e.g. ROOT_GAME, WIP_DIR, config
+    subject: str            # e.g. ROOT_GAME, config
     message: str            # human-readable description
     remediation: str | None # concrete next step for the user
 
@@ -62,12 +62,13 @@ def _get_playset_paths() -> dict[str, Path | None]:
     Returns dict with 'vanilla_path' and 'workshop_root' (either may be None).
     """
     import json
-    from .paths import PLAYSET_DIR
+    from .paths import ROOT_CK3RAVEN_DATA
     
     result: dict[str, Path | None] = {'vanilla_path': None, 'workshop_root': None}
     
     try:
-        manifest_path = PLAYSET_DIR / "playset_manifest.json"
+        _playsets = ROOT_CK3RAVEN_DATA / "playsets"
+        manifest_path = _playsets / "playset_manifest.json"
         
         if not manifest_path.exists():
             logger.debug(f"No playset manifest at {manifest_path}")
@@ -82,7 +83,7 @@ def _get_playset_paths() -> dict[str, Path | None]:
             logger.debug("No active playset in manifest")
             return result
         
-        playset_path = PLAYSET_DIR / active_filename
+        playset_path = _playsets / active_filename
         if not playset_path.exists():
             logger.debug(f"Active playset file not found: {playset_path}")
             return result
@@ -346,24 +347,24 @@ def _check_computed_roots() -> list[DoctorFinding]:
 
 def _check_data_structure() -> list[DoctorFinding]:
     """Check expected subdirectories under ROOT_CK3RAVEN_DATA."""
-    from .paths import WIP_DIR, PLAYSET_DIR, LOGS_DIR, CONFIG_DIR, ROOT_CK3RAVEN_DATA
+    from .paths import ROOT_CK3RAVEN_DATA
     
     findings = []
     
-    # Check expected directories
+    # Check expected directories (inline, no aliases)
     expected_dirs = [
-        (WIP_DIR, "WIP_DIR", "wip"),
-        (PLAYSET_DIR, "PLAYSET_DIR", "playsets"),
-        (LOGS_DIR, "LOGS_DIR", "logs"),
-        (CONFIG_DIR, "CONFIG_DIR", "config"),
+        (ROOT_CK3RAVEN_DATA / "wip", "wip"),
+        (ROOT_CK3RAVEN_DATA / "playsets", "playsets"),
+        (ROOT_CK3RAVEN_DATA / "logs", "logs"),
+        (ROOT_CK3RAVEN_DATA / "config", "config"),
     ]
     
-    for path, name, dirname in expected_dirs:
+    for path, dirname in expected_dirs:
         if not path.exists():
             findings.append(DoctorFinding(
                 id=f"PD-DATA-{dirname.upper()}-MISSING",
                 severity="WARN",
-                subject=name,
+                subject=dirname,
                 message=f"{dirname}/ directory does not exist: {path}",
                 remediation=f"Run MCP server or daemon to initialize, or create manually"
             ))
@@ -371,7 +372,7 @@ def _check_data_structure() -> list[DoctorFinding]:
             findings.append(DoctorFinding(
                 id=f"PD-DATA-{dirname.upper()}-NOTDIR",
                 severity="ERROR",
-                subject=name,
+                subject=dirname,
                 message=f"{dirname} is a file, should be a directory: {path}",
                 remediation=f"Remove the file and create a directory"
             ))
@@ -379,8 +380,8 @@ def _check_data_structure() -> list[DoctorFinding]:
             findings.append(DoctorFinding(
                 id=f"PD-DATA-{dirname.upper()}-OK",
                 severity="OK",
-                subject=name,
-                message=f"{name}: {path}",
+                subject=dirname,
+                message=f"{dirname}: {path}",
                 remediation=None
             ))
     
@@ -459,12 +460,12 @@ def _check_local_mods() -> list[DoctorFinding]:
 
 def _check_config_health() -> list[DoctorFinding]:
     """Report config source and any errors."""
-    from .paths import CONFIG_DIR, _config
+    from .paths import ROOT_CK3RAVEN_DATA, _config
     
     findings = []
     
     # Report config path
-    config_path = CONFIG_DIR / "workspace.toml"
+    config_path = ROOT_CK3RAVEN_DATA / "config" / "workspace.toml"
     if config_path.exists():
         findings.append(DoctorFinding(
             id="PD-CONFIG-LOADED",
@@ -484,13 +485,13 @@ def _check_config_health() -> list[DoctorFinding]:
     
     # Report any config errors from _config.errors
     if hasattr(_config, 'errors') and _config.errors:
-        for error in _config.errors:
+        for issue in _config.errors:
             findings.append(DoctorFinding(
-                id="PD-CONFIG-ERROR",
+                id="PD-CONFIG-INVALID",
                 severity="ERROR",
                 subject="config",
-                message=f"Config error: {error}",
-                remediation="Fix the error in workspace.toml"
+                message=f"Config invalid: {issue}",
+                remediation="Fix the issue in workspace.toml"
             ))
     
     # Report defaults in use
@@ -509,7 +510,7 @@ def _check_config_health() -> list[DoctorFinding]:
 
 def _check_resolution() -> list[DoctorFinding]:
     """Cross-check resolution against expected classifications."""
-    from .paths import RootCategory, WIP_DIR, ROOT_REPO, ROOT_USER_DOCS
+    from .paths import RootCategory, ROOT_CK3RAVEN_DATA, ROOT_REPO, ROOT_USER_DOCS
     
     findings = []
     
@@ -527,7 +528,7 @@ def _check_resolution() -> list[DoctorFinding]:
     
     test_cases: list[tuple[str, RootCategory, str]] = [
         # (path, expected_root_category, description)
-        (str(WIP_DIR / "doctor_probe.txt"), RootCategory.ROOT_CK3RAVEN_DATA, "WIP path"),
+        (str((ROOT_CK3RAVEN_DATA / "wip") / "doctor_probe.txt"), RootCategory.ROOT_CK3RAVEN_DATA, "WIP path"),
     ]
     
     # Only test repo if it's configured and exists
@@ -594,7 +595,7 @@ def run_paths_doctor(*, include_resolution_checks: bool = True) -> PathsDoctorRe
     Returns:
         PathsDoctorReport with all findings
     """
-    from .paths import CONFIG_DIR
+    from .paths import ROOT_CK3RAVEN_DATA
     
     all_findings: list[DoctorFinding] = []
     
@@ -626,7 +627,7 @@ def run_paths_doctor(*, include_resolution_checks: bool = True) -> PathsDoctorRe
     sorted_findings = sorted(all_findings, key=lambda f: (severity_order[f.severity], f.id))
     
     # Determine config path
-    config_path = CONFIG_DIR / "workspace.toml"
+    config_path = ROOT_CK3RAVEN_DATA / "config" / "workspace.toml"
     config_path_str = str(config_path) if config_path.exists() else None
     
     return PathsDoctorReport(

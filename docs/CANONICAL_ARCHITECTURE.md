@@ -738,13 +738,12 @@ Previously, there were separate `LensWorldAdapter` and `DevWorldAdapter` classes
 ### Path Resolution is Structural, Not Permission-Based
 
 Resolution determines:
-- What canonical domain does this path belong to? (ROOT_REPO, ROOT_GAME, ROOT_WIP, etc.)
+- What canonical domain does this path belong to? (ROOT_REPO, ROOT_GAME, ROOT_CK3RAVEN_DATA, etc.)
 - What is the absolute filesystem path?
+- If a path is invalid (and that includes being invalid because it is not visible to the agent which is requesting that path to be resolved)
 
-Resolution does NOT:
-- Filter based on agent mode
-- Decide what operations are allowed
-- Return different results for ck3lens vs ck3raven-dev
+Resolution code should endeavour to avoid complex branching logic within World_Adapter, instead relying on the canonical, modular visibility framework. [under construction]
+
 
 ### Mode Matters for Enforcement, Not Resolution
 

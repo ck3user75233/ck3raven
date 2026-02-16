@@ -150,7 +150,7 @@ class HintEngine:
         return {
             "is_policy_denial": True,
             "you_can_write_to": writable_paths,
-            "suggestion": f"Write to WIP: ck3_file(command='write', mod_name='wip', rel_path='{filename}', content='...')",
+            "suggestion": f"Write to WIP: ck3_file(command='write', path='~/.ck3raven/wip/{filename}', content='...')",
             "do_not": [
                 "Attempt workarounds to evade this policy",
                 "Write to alternate paths hoping to bypass checks",

@@ -1229,9 +1229,14 @@ class DBQueries:
         
         Args:
             load_order_map: Optional CVID → load_order mapping from session.mods[].
-                When provided, each conflict source gets load_order and is_winner fields,
+                When provided, each conflict source gets load_order and is_last_loaded fields,
                 and the conflict gets a policy field (OVERRIDE/FIOS/CONTAINER_MERGE/PER_KEY_OVERRIDE).
-                Winner determination: FIOS → lowest load_order wins. All others → highest wins (LIOS).
+                
+                NOTE: This is a symbol-level approximation, NOT full AST-level resolution.
+                For OVERRIDE: last_loaded is correct per-identity (same name → LIOS wins).
+                For CONTAINER_MERGE (on_actions): sub-block conflicts (effect/trigger) need AST analysis.
+                For FIOS (gui): first_loaded wins per-identity.
+                True resolution requires AST-level diffing — planned for future phase.
         """
         if not visible_cvids:
             return {"conflict_count": 0, "conflicts": [], "compatch_conflicts_hidden": 0}
@@ -1345,12 +1350,12 @@ class DBQueries:
                     winner_order = max(s.get("load_order", -1) for s in sources)
                 
                 for s in sources:
-                    s["is_winner"] = (s.get("load_order") == winner_order)
+                    s["is_last_loaded"] = (s.get("load_order") == winner_order)
                 
-                # Tag the overall winner mod
-                winners = [s for s in sources if s.get("is_winner")]
-                if winners:
-                    conflict_entry["winner"] = winners[0]["mod"]
+                # Tag the last-loaded mod (approximate winner for OVERRIDE/FIOS)
+                last_loaded = [s for s in sources if s.get("is_last_loaded")]
+                if last_loaded:
+                    conflict_entry["last_loaded"] = last_loaded[0]["mod"]
             
             conflicts.append(conflict_entry)
         

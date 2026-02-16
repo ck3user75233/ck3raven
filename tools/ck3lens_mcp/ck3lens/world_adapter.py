@@ -10,21 +10,26 @@ using the RootCategory returned by classify_path.
 
 Address Scheme (maps directly to RootCategory):
 - mod:<mod_id>/<relative_path>     - Mod files → ROOT_STEAM or ROOT_USER_DOCS
-- vanilla:/<relative_path>         - Vanilla game files → ROOT_GAME
 - ck3raven:/<relative_path>        - ck3raven source code → ROOT_REPO
-- wip:/<relative_path>             - WIP workspace files → ROOT_CK3RAVEN_DATA/wip
-- data:/<relative_path>            - CK3Raven data files → ROOT_CK3RAVEN_DATA
+
+All other inputs are treated as filesystem paths and classified by containment.
 
 BANNED CONCEPTS:
 - AddressType enum (February 2026) — use RootCategory directly
 - CanonicalAddress dataclass (February 2026) — replaced by _ParsedRef (internal)
+- vanilla:/ scheme (February 2026) — use actual ROOT_GAME path
+- wip:/ scheme (February 2026) — use actual ROOT_CK3RAVEN_DATA/wip path
+- data:/ scheme (February 2026) — use actual ROOT_CK3RAVEN_DATA path
 - utility:/ scheme (February 2026) — ROOT_UTILITIES removed
+- _ParsedRef.subdirectory field (February 2026) — derived from relative_path
 - DbHandle, FsHandle (dead code, never called)
 - _CAP_TOKEN (dead code)
 - CapabilityError (dead code)
 - self._vanilla_root, self._ck3raven_root, self._wip_root (use paths.py constants)
 - vanilla_root, ck3raven_root, wip_root parameters (use paths.py constants)
 - world_router module (all routing is via WorldAdapter.resolve())
+- mod_name="wip" pseudo-routing (February 2026) — pass actual filesystem path
+- mod_name="vanilla" pseudo-routing (February 2026) — pass actual filesystem path
 """
 from __future__ import annotations
 
@@ -34,6 +39,7 @@ from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .db_queries import DBQueries
+    from .paths import RootCategory
 
 
 # =============================================================================
@@ -56,7 +62,6 @@ class _ParsedRef:
     mod_name: Optional[str]  # Non-None for mod: addresses
     relative_path: str
     raw_input: str
-    subdirectory: Optional[str] = None  # Pre-known for wip:, data: schemes
 
 
 @dataclass
@@ -106,29 +111,19 @@ def normalize_path_input(
     CANONICAL PATH NORMALIZATION UTILITY
     
     This is THE single entry point for path resolution in MCP tools.
+    Accepts either a path string or mod_name + rel_path, then delegates to
+    world.resolve() for all resolution and classification.
     
-    Special handling:
-    - mod_name="wip" -> routes to WIP workspace (wip:/<rel_path>)
-    - mod_name="vanilla" -> routes to vanilla game (vanilla:/<rel_path>)
-    - Other mod_name values -> routes to mod files (mod:<mod_name>/<rel_path>)
+    No pseudo-mod routing — mod_name must be an actual mod in the playset.
+    For WIP, pass path=<actual filesystem path to WIP>.
+    For vanilla, pass path=<actual ROOT_GAME path>.
     """
     if path:
         address_to_resolve = path
     elif mod_name and rel_path:
-        # Handle special pseudo-mod names that map to other domains
-        if mod_name.lower() == "wip":
-            address_to_resolve = f"wip:/{rel_path}"
-        elif mod_name.lower() == "vanilla":
-            address_to_resolve = f"vanilla:/{rel_path}"
-        else:
-            address_to_resolve = f"mod:{mod_name}/{rel_path}"
+        address_to_resolve = f"mod:{mod_name}/{rel_path}"
     elif mod_name:
-        if mod_name.lower() == "wip":
-            address_to_resolve = "wip:/"
-        elif mod_name.lower() == "vanilla":
-            address_to_resolve = "vanilla:/"
-        else:
-            address_to_resolve = f"mod:{mod_name}/"
+        address_to_resolve = f"mod:{mod_name}/"
     else:
         return ResolutionResult.not_found(
             "<no input>",
@@ -166,7 +161,7 @@ class WorldAdapter:
     WorldAdapter does NOT make permission decisions - enforcement.py does that
     using the RootCategory returned by classify_path.
     
-    NOTE: WIP is NOT a separate root - it's ROOT_CK3RAVEN_DATA with subdirectory="wip"
+    NOTE: WIP is NOT a separate root - it's ROOT_CK3RAVEN_DATA with subdirectory "wip" (derived from relative_path).
     """
     
     def __init__(
@@ -328,95 +323,72 @@ class WorldAdapter:
             )
         
         ref = self._parse_or_translate(path_or_address)
-        
-        from ck3lens.paths import RootCategory
-        if ref.root_category == RootCategory.ROOT_EXTERNAL and ref.mod_name is None:
-            return ResolutionResult.not_found(
-                path_or_address,
-                "Could not resolve reference"
-            )
-        
         return self._resolve_to_absolute(ref)
     
     def _resolve_to_absolute(self, ref: _ParsedRef) -> ResolutionResult:
         """Resolve _ParsedRef to absolute path.
         
-        Dispatches on ref.root_category (or mod_name for mod references).
-        
-        IMPORTANT: This method MUST set subdirectory and relative_path fields
-        for proper capability matrix lookup. The capability matrix uses:
-        - subdirectory: first path component under root (e.g., "mod", "wip")
-        - relative_path: full path from root (for subfolders_writable check)
+        Declarative: abs_path = root_path / relative_path.
+        Mod references are separate (need _mod_paths lookup + classify_path).
+        Subdirectory is derived from the first component of relative_path.
         """
-        from ck3lens.paths import RootCategory, ROOT_USER_DOCS, ROOT_CK3RAVEN_DATA
+        from ck3lens.paths import RootCategory, ROOT_USER_DOCS
         
-        abs_path: Optional[Path] = None
-        root_category: Optional[RootCategory] = None
-        mod_name: Optional[str] = None
-        subdirectory: Optional[str] = ref.subdirectory
-        relative_path_for_cap: Optional[str] = None
-        
+        # --- Mod references: look up path, then classify ---
         if ref.mod_name is not None:
-            # Mod reference: look up path from _mod_paths
             mod_id = ref.mod_name
-            if mod_id in self._mod_paths:
-                mod_path = self._mod_paths[mod_id]
-                abs_path = mod_path / ref.relative_path
-                root_category = self.classify_path(abs_path)
-                mod_name = mod_id
-                
-                if root_category == RootCategory.ROOT_USER_DOCS and ROOT_USER_DOCS:
-                    subdirectory = "mod"
-                    try:
-                        rel_from_docs = abs_path.resolve().relative_to(ROOT_USER_DOCS.resolve())
-                        relative_path_for_cap = str(rel_from_docs).replace("\\", "/")
-                    except ValueError:
-                        relative_path_for_cap = f"mod/{mod_id}/{ref.relative_path}"
-            else:
+            if mod_id not in self._mod_paths:
                 return ResolutionResult.not_found(
                     ref.raw_input,
                     f"Mod '{mod_id}' not in active playset"
                 )
+            
+            abs_path = self._mod_paths[mod_id] / ref.relative_path
+            root_category = self.classify_path(abs_path)
+            
+            subdirectory = None
+            relative_path_str = None
+            if root_category == RootCategory.ROOT_USER_DOCS and ROOT_USER_DOCS:
+                subdirectory = "mod"
+                try:
+                    rel = abs_path.resolve().relative_to(ROOT_USER_DOCS.resolve())
+                    relative_path_str = str(rel).replace("\\", "/")
+                except ValueError:
+                    relative_path_str = f"mod/{mod_id}/{ref.relative_path}"
+            
+            return ResolutionResult(
+                found=True,
+                absolute_path=abs_path,
+                root_category=root_category,
+                subdirectory=subdirectory,
+                relative_path=relative_path_str,
+                mod_name=mod_id,
+            )
         
-        elif ref.root_category == RootCategory.ROOT_GAME:
-            root = self._get_root(RootCategory.ROOT_GAME)
-            if root:
-                abs_path = root / ref.relative_path
-                root_category = RootCategory.ROOT_GAME
-                mod_name = "vanilla"
+        # --- Root-category references: declarative lookup ---
+        if ref.root_category is None or ref.root_category == RootCategory.ROOT_EXTERNAL:
+            return ResolutionResult.not_found(ref.raw_input, "Unresolvable input")
         
-        elif ref.root_category == RootCategory.ROOT_CK3RAVEN_DATA:
-            # Could be wip: or data: — subdirectory distinguishes them
-            if ref.subdirectory == "wip":
-                abs_path = ROOT_CK3RAVEN_DATA / "wip" / ref.relative_path
-                relative_path_for_cap = f"wip/{ref.relative_path}"
-            else:
-                abs_path = ROOT_CK3RAVEN_DATA / ref.relative_path
-                parts = ref.relative_path.replace("\\", "/").strip("/").split("/")
-                if parts and parts[0]:
-                    subdirectory = parts[0]
-                    relative_path_for_cap = ref.relative_path.replace("\\", "/")
-            root_category = RootCategory.ROOT_CK3RAVEN_DATA
-        
-        elif ref.root_category == RootCategory.ROOT_REPO:
-            root = self._get_root(RootCategory.ROOT_REPO)
-            if root:
-                abs_path = root / ref.relative_path
-                root_category = RootCategory.ROOT_REPO
-        
-        if abs_path is None:
+        root_path = self._get_root(ref.root_category)
+        if root_path is None:
             return ResolutionResult.not_found(
                 ref.raw_input,
-                f"No root configured for {ref.root_category.name if ref.root_category else 'unknown'}"
+                f"No root configured for {ref.root_category.name}"
             )
+        
+        abs_path = root_path / ref.relative_path
+        
+        # Derive subdirectory from first path component
+        rel_normalized = ref.relative_path.replace("\\", "/").strip("/")
+        parts = rel_normalized.split("/")
+        subdirectory = parts[0] if parts and parts[0] else None
         
         return ResolutionResult(
             found=True,
             absolute_path=abs_path,
-            root_category=root_category,
+            root_category=ref.root_category,
             subdirectory=subdirectory,
-            relative_path=relative_path_for_cap,
-            mod_name=mod_name,
+            relative_path=rel_normalized,
         )
     
     def is_visible(self, path_or_address: str) -> bool:
@@ -440,13 +412,24 @@ class WorldAdapter:
                 len(input_str) == 2 or input_str[2] in "\\/"
             ):
                 return self._translate_raw_path(input_str)
-            # Otherwise it's a canonical address like "mod:Name/path" or "wip:/file"
+            # Otherwise it's a canonical address like "mod:Name/path" or "ck3raven:/file"
             return self._parse_canonical(input_str)
         
         return self._translate_raw_path(input_str)
     
     def _parse_canonical(self, address: str) -> _ParsedRef:
-        """Parse a canonical address string into _ParsedRef."""
+        """Parse a canonical address string into _ParsedRef.
+        
+        Only two schemes:
+        - mod:<mod_id>/<rel_path> → mod reference (root_category from classify_path)
+        - ck3raven:/<rel_path>   → ROOT_REPO
+        
+        BANNED SCHEMES (February 2026):
+        - vanilla:/ — use actual ROOT_GAME path
+        - wip:/     — use actual ROOT_CK3RAVEN_DATA/wip path
+        - data:/    — use actual ROOT_CK3RAVEN_DATA path
+        - utility:/ — ROOT_UTILITIES removed
+        """
         from ck3lens.paths import RootCategory
         
         if address.startswith("mod:"):
@@ -459,41 +442,11 @@ class WorldAdapter:
                     relative_path=rel_path,
                     raw_input=address,
                 )
-        elif address.startswith("vanilla:/"):
-            return _ParsedRef(
-                root_category=RootCategory.ROOT_GAME,
-                mod_name=None,
-                relative_path=address[9:],
-                raw_input=address,
-            )
         elif address.startswith("ck3raven:/"):
             return _ParsedRef(
                 root_category=RootCategory.ROOT_REPO,
                 mod_name=None,
                 relative_path=address[10:],
-                raw_input=address,
-            )
-        elif address.startswith("wip:/"):
-            return _ParsedRef(
-                root_category=RootCategory.ROOT_CK3RAVEN_DATA,
-                mod_name=None,
-                relative_path=address[5:],
-                raw_input=address,
-                subdirectory="wip",
-            )
-        elif address.startswith("data:/"):
-            return _ParsedRef(
-                root_category=RootCategory.ROOT_CK3RAVEN_DATA,
-                mod_name=None,
-                relative_path=address[6:],
-                raw_input=address,
-            )
-        elif address.startswith("utility:/"):
-            # utility: scheme is deprecated (ROOT_UTILITIES removed)
-            return _ParsedRef(
-                root_category=RootCategory.ROOT_EXTERNAL,
-                mod_name=None,
-                relative_path="",
                 raw_input=address,
             )
         
@@ -511,7 +464,7 @@ class WorldAdapter:
         Path classification is structural — determines which RootCategory a path
         belongs to. This is the same regardless of agent mode.
         """
-        from ck3lens.paths import RootCategory, ROOT_CK3RAVEN_DATA, WIP_DIR
+        from ck3lens.paths import RootCategory, ROOT_CK3RAVEN_DATA
         
         raw = Path(raw_path)
         
@@ -531,19 +484,6 @@ class WorldAdapter:
         path = raw.resolve()
         
         # Check all roots in priority order (more specific first)
-        
-        # Check WIP first (most specific — subdirectory of ROOT_CK3RAVEN_DATA)
-        try:
-            rel = path.relative_to(WIP_DIR.resolve())
-            return _ParsedRef(
-                root_category=RootCategory.ROOT_CK3RAVEN_DATA,
-                mod_name=None,
-                relative_path=str(rel).replace("\\", "/"),
-                raw_input=raw_path,
-                subdirectory="wip",
-            )
-        except ValueError:
-            pass
         
         # Check ck3raven source (ROOT_REPO)
         repo_root = self._get_root(RootCategory.ROOT_REPO)

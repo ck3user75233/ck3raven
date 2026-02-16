@@ -3,7 +3,7 @@ WIP Workspace Management
 
 Manages the disposable workspace for agent temporary scripts and outputs.
 
-Location: ~/.ck3raven/wip/ (WIP_DIR constant from paths.py)
+Location: ~/.ck3raven/wip/ (ROOT_CK3RAVEN_DATA / "wip")
 
 Both modes share the same WIP workspace. WIP is:
 - A scratch area for analysis scripts and temporary outputs
@@ -26,7 +26,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .types import AgentMode
-from ..paths import WIP_DIR
+from ..paths import ROOT_CK3RAVEN_DATA
+
+# WIP workspace: ROOT_CK3RAVEN_DATA / "wip" — no alias needed
+_WIP = ROOT_CK3RAVEN_DATA / "wip"
 
 
 # =============================================================================
@@ -47,21 +50,21 @@ class WipWorkspaceState:
 
 def get_workspace_state(mode: AgentMode = AgentMode.CK3LENS) -> WipWorkspaceState:
     """Get the current WIP workspace state."""
-    exists = WIP_DIR.exists()
+    exists = _WIP.exists()
     files = []
     stale_files = []
     stale_threshold = time.time() - (24 * 60 * 60)  # 24 hours ago
     
     if exists:
-        for f in WIP_DIR.rglob("*"):
+        for f in _WIP.rglob("*"):
             if f.is_file():
-                rel_path = str(f.relative_to(WIP_DIR))
+                rel_path = str(f.relative_to(_WIP))
                 files.append(rel_path)
                 if f.stat().st_mtime < stale_threshold:
                     stale_files.append(rel_path)
     
     return WipWorkspaceState(
-        path=WIP_DIR,
+        path=_WIP,
         exists=exists,
         mode=mode,
         file_count=len(files),
@@ -89,33 +92,33 @@ def initialize_workspace(
     wiped_count = 0
     stale_cleaned = 0
     
-    if wipe and WIP_DIR.exists():
+    if wipe and _WIP.exists():
         # Count files before wiping
-        wiped_count = sum(1 for _ in WIP_DIR.rglob("*") if _.is_file())
+        wiped_count = sum(1 for _ in _WIP.rglob("*") if _.is_file())
         
         # Remove all contents but keep the directory
-        for item in WIP_DIR.iterdir():
+        for item in _WIP.iterdir():
             if item.is_dir():
                 shutil.rmtree(item)
             else:
                 item.unlink()
-    elif WIP_DIR.exists():
+    elif _WIP.exists():
         # Just clean stale files (older than 24h)
         stale_threshold = time.time() - (24 * 60 * 60)
-        for f in WIP_DIR.rglob("*"):
+        for f in _WIP.rglob("*"):
             if f.is_file() and f.stat().st_mtime < stale_threshold:
                 f.unlink()
                 stale_cleaned += 1
     
     # Ensure directory exists
-    WIP_DIR.mkdir(parents=True, exist_ok=True)
+    _WIP.mkdir(parents=True, exist_ok=True)
     
     # Write marker file with wipe timestamp
-    marker = WIP_DIR / ".wip_session"
+    marker = _WIP / ".wip_session"
     marker.write_text(f"wiped_at: {time.time()}\nmode: {mode.value}\n")
     
     return {
-        "path": str(WIP_DIR),
+        "path": str(_WIP),
         "mode": mode.value,
         "exists": True,
         "wiped": wipe,
@@ -132,21 +135,21 @@ def cleanup_stale_files(mode: AgentMode = AgentMode.CK3LENS) -> dict[str, Any]:
     Returns:
         Status dict with cleanup results
     """
-    if not WIP_DIR.exists():
-        return {"path": str(WIP_DIR), "exists": False, "cleaned": 0}
+    if not _WIP.exists():
+        return {"path": str(_WIP), "exists": False, "cleaned": 0}
     
     stale_threshold = time.time() - (24 * 60 * 60)
     cleaned = []
     
-    for f in WIP_DIR.rglob("*"):
+    for f in _WIP.rglob("*"):
         if f.is_file() and f.name != ".wip_session":
             if f.stat().st_mtime < stale_threshold:
-                rel_path = str(f.relative_to(WIP_DIR))
+                rel_path = str(f.relative_to(_WIP))
                 f.unlink()
                 cleaned.append(rel_path)
     
     return {
-        "path": str(WIP_DIR),
+        "path": str(_WIP),
         "mode": mode.value,
         "exists": True,
         "cleaned": len(cleaned),

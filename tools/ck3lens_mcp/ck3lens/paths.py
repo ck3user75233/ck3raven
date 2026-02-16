@@ -71,17 +71,6 @@ ROOT_STEAM: Path | None = _config.paths.root_steam
 ROOT_USER_DOCS: Path | None = _config.paths.root_user_docs
 ROOT_VSCODE: Path | None = _config.paths.root_vscode
 
-
-# =============================================================================
-# DERIVED PATHS (subdirectories of ROOT_CK3RAVEN_DATA)
-# =============================================================================
-
-WIP_DIR: Path = ROOT_CK3RAVEN_DATA / "wip"
-PLAYSET_DIR: Path = ROOT_CK3RAVEN_DATA / "playsets"
-LOGS_DIR: Path = ROOT_CK3RAVEN_DATA / "logs"
-CONFIG_DIR: Path = ROOT_CK3RAVEN_DATA / "config"
-
-
 # =============================================================================
 # LOG WARNINGS FOR MISSING CONFIG
 # =============================================================================
@@ -91,5 +80,5 @@ if _config.options.warn_on_default_paths and _config.paths.using_defaults:
         logger.warning(f"Using OS-default for {path_name} - configure in ~/.ck3raven/config/workspace.toml")
 
 if _config.errors:
-    for error in _config.errors:
-        logger.warning(f"Config error: {error}")
+    for issue in _config.errors:
+        logger.warning(f"Config invalid: {issue}")

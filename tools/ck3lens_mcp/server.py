@@ -1523,8 +1523,8 @@ def ck3_conflicts(
                         "symbol_type": str,
                         "source_count": int,
                         "policy": str,  # OVERRIDE, FIOS, CONTAINER_MERGE, PER_KEY_OVERRIDE
-                        "winner": str,  # mod name of the winning definition
-                        "sources": [{"mod": str, "file": str, "line": int, "load_order": int, "is_winner": bool}],
+                        "last_loaded": str,  # mod loaded last for this identity (approx - true resolution needs AST)
+                        "sources": [{"mod": str, "file": str, "line": int, "load_order": int, "is_last_loaded": bool}],
                     }
                 ],
                 "compatch_conflicts_hidden": int
@@ -1536,8 +1536,8 @@ def ck3_conflicts(
                     {
                         "relpath": str,
                         "mods": [str],
-                        "winner": str,  # mod with highest load_order (LIOS - files always last wins)
-                        "sources": [{"mod": str, "load_order": int, "is_winner": bool}],
+                        "last_loaded": str,  # mod with highest load_order (per-identity, not whole-file)
+                        "sources": [{"mod": str, "load_order": int, "is_last_loaded": bool}],
                         "has_zzz_prefix": bool
                     }
                 ]
@@ -1571,7 +1571,7 @@ def ck3_conflicts(
         if hasattr(m, 'cvid') and m.cvid is not None
     )
     
-    # Build CVID → load_order mapping for winner determination
+    # Build CVID → load_order mapping for last-loaded determination
     load_order_map: dict[int, int] = {
         m.cvid: m.load_order
         for m in session.mods
@@ -1612,7 +1612,7 @@ def ck3_conflicts(
         )
     
     elif command == "files":
-        # File-level conflict detection with winner determination
+        # File-level conflict detection with last-loaded determination
         # File conflicts are ALWAYS LIOS (last wins) regardless of content policy
         cv_filter = ",".join(str(cv) for cv in cvids)
         
@@ -1636,7 +1636,7 @@ def ck3_conflicts(
         
         rows = db.conn.execute(sql, params).fetchall()
         
-        # Group by relpath, attach load_order, determine winner
+        # Group by relpath, attach load_order, determine last-loaded
         from collections import defaultdict
         by_relpath: dict[str, list[dict]] = defaultdict(list)
         for row in rows:
@@ -1650,11 +1650,11 @@ def ck3_conflicts(
         for relpath, sources in by_relpath.items():
             if len(sources) < 2:
                 continue
-            # File-level is always LIOS (last wins)
-            winner_order = max(s["load_order"] for s in sources)
+            # File-level is always LIOS (last loaded wins for overlapping identities)
+            last_order = max(s["load_order"] for s in sources)
             for s in sources:
-                s["is_winner"] = (s["load_order"] == winner_order)
-            winners = [s for s in sources if s["is_winner"]]
+                s["is_last_loaded"] = (s["load_order"] == last_order)
+            last_loaded_sources = [s for s in sources if s["is_last_loaded"]]
             
             fname = relpath.rsplit("/", 1)[-1] if "/" in relpath else relpath
             conflicts.append({
@@ -1662,7 +1662,7 @@ def ck3_conflicts(
                 "mods": [s["mod"] for s in sources],
                 "sources": sources,
                 "mod_count": len(sources),
-                "winner": winners[0]["mod"] if winners else None,
+                "last_loaded": last_loaded_sources[0]["mod"] if last_loaded_sources else None,
                 "has_zzz_prefix": fname.startswith("zzz_"),
             })
             if len(conflicts) >= limit:

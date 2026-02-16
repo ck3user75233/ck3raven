@@ -146,9 +146,8 @@ class Session:
         return self.get_mod(mod_id)
 
 
-# Playsets directory - canonical location from paths.py
-# NOTE: Import PLAYSET_DIR at function scope to avoid circular imports
-# The canonical path is: ~/.ck3raven/playsets/
+# Playsets directory: ROOT_CK3RAVEN_DATA / "playsets"
+# NOTE: Import ROOT_CK3RAVEN_DATA at function scope to avoid circular imports
 
 # Legacy location (deprecated)
 LEGACY_PLAYSETS_DIR = Path.home() / ".ck3raven" / "playsets"
@@ -258,9 +257,10 @@ def _load_active_playset() -> Optional[dict]:
     Handles UTF-8 BOM gracefully (common from Windows/PowerShell tools).
     Returns None if no active playset or if loading fails.
     """
-    from .paths import PLAYSET_DIR  # Import here to avoid circular imports
+    from .paths import ROOT_CK3RAVEN_DATA  # Import here to avoid circular imports
     
-    manifest_file = PLAYSET_DIR / "playset_manifest.json"
+    _playsets = ROOT_CK3RAVEN_DATA / "playsets"
+    manifest_file = _playsets / "playset_manifest.json"
     
     if not manifest_file.exists():
         return None
@@ -273,7 +273,7 @@ def _load_active_playset() -> Optional[dict]:
     if not active_filename:
         return None
     
-    playset_file = PLAYSET_DIR / active_filename
+    playset_file = _playsets / active_filename
     
     if not playset_file.exists():
         _logger.warning(f"Active playset file not found: {playset_file}")
