@@ -6325,6 +6325,97 @@ def ck3_qbuilder(
 
 
 # ============================================================================
+# World Adapter v2 — Canonical Addressing (Sprint 0)
+# ============================================================================
+
+_cached_world_adapter_v2 = None
+
+
+def _get_world_v2():
+    """
+    Get or create the WorldAdapterV2 singleton.
+
+    Lazy initialization — created on first ck3_dir call.
+    Uses the same paths.py constants and session mods as v1.
+    """
+    global _cached_world_adapter_v2
+
+    if _cached_world_adapter_v2 is not None:
+        return _cached_world_adapter_v2
+
+    from ck3lens.world_adapter_v2 import WorldAdapterV2
+
+    session = _get_session()
+    _cached_world_adapter_v2 = WorldAdapterV2.create(
+        mods=session.mods or [],
+    )
+    return _cached_world_adapter_v2
+
+
+@mcp.tool()
+@mcp_safe_tool
+def ck3_dir(
+    command: Literal["pwd", "cd", "list", "tree"],
+    path: str | None = None,
+    depth: int = 3,
+) -> Reply:
+    """
+    Directory navigation using canonical addressing v2.
+
+    This is the Sprint 0 pilot tool for the canonical addressing refactor.
+    All paths are expressed as session-absolute addresses — no host paths
+    are ever exposed to the agent.
+
+    Commands:
+        pwd  — Show current session home root
+        cd   — Change session home root (e.g. 'root:repo', 'root:game')
+        list — List directory contents (files and folders)
+        tree — Show directory tree (folders only, depth-limited)
+
+    Canonical address syntax:
+        root:repo/src/server.py          (root-category addressing)
+        root:ck3raven_data/wip/          (data folder)
+        mod:SomeMod/common/traits        (mod addressing)
+
+    If no path is given, commands operate on the current home root.
+    Bare relative paths are resolved against the current home root.
+
+    Args:
+        command: One of pwd, cd, list, tree
+        path: Canonical address or relative path (optional for pwd)
+        depth: Tree depth limit (default 3, only used by tree command)
+    """
+    from ck3lens.impl.dir_ops import ck3_dir_impl
+    from ck3lens.leak_detector import HostPathLeakError
+
+    trace_info = get_current_trace_info()
+    rb = ReplyBuilder(trace_info, tool="ck3_dir")
+
+    wa2 = _get_world_v2()
+
+    try:
+        data = ck3_dir_impl(command=command, path=path, depth=depth, wa2=wa2)
+    except HostPathLeakError as e:
+        return rb.error(
+            "WA-DIR-E-001",
+            data={"error": str(e), "command": command},
+            message=f"Internal error: host path leaked in output",
+        )
+    except ValueError as e:
+        return rb.invalid(
+            "WA-DIR-I-001",
+            data={"error": str(e), "command": command, "path": path},
+            message=str(e),
+        )
+
+    return rb.success(
+        "WA-DIR-S-001",
+        data=data,
+        message=f"ck3_dir {command} complete",
+    )
+
+
+# ============================================================================
 # Main Entry Point
 # ============================================================================
 

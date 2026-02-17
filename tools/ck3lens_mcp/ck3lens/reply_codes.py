@@ -77,6 +77,7 @@ class Area(str, Enum):
     GIT = "GIT"      # Git operations
     LOG = "LOG"      # Logs, journals, diagnostics
     CFG = "CFG"      # Configuration, setup, mode, state
+    DIR = "DIR"      # Directory navigation (v2 canonical addressing)
 
 
 class ReplyType(str, Enum):
@@ -242,6 +243,14 @@ class Codes:
         "IO_UNAVAILABLE", "IO target unavailable")
     WA_IO_E_001 = ReplyCode("WA-IO-E-001", Layer.WA, Area.IO, ReplyType.E, 1,
         "IO_ERROR", "IO error")
+    
+    # Directory Navigation (v2 canonical addressing)
+    WA_DIR_S_001 = ReplyCode("WA-DIR-S-001", Layer.WA, Area.DIR, ReplyType.S, 1,
+        "DIR_OP_OK", "Directory operation complete")
+    WA_DIR_I_001 = ReplyCode("WA-DIR-I-001", Layer.WA, Area.DIR, ReplyType.I, 1,
+        "DIR_INVALID", "Directory operation input invalid")
+    WA_DIR_E_001 = ReplyCode("WA-DIR-E-001", Layer.WA, Area.DIR, ReplyType.E, 1,
+        "DIR_LEAK", "Host path leaked in directory output (internal error)")
     
     # =========================================================================
     # EN (Enforcement) - Governance, authorization, policy
