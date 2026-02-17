@@ -125,6 +125,7 @@ def wa2(tmp_roots, tmp_mods):
 | `root:game/common/traits/00_traits.txt` | `root:game/common/traits/00_traits.txt` | `True` |
 
 All return `ok=True`, with a valid `VisibilityRef`.
+**All must assert `res.exists is True`.**
 
 ### WA2-02: Mod Address Resolution
 
@@ -138,6 +139,7 @@ All return `ok=True`, with a valid `VisibilityRef`.
 | `mod:TestModA/common` | `mod:TestModA/common` | `True` |
 
 All return `ok=True`.
+**All must assert `res.exists is True`.**
 
 ### WA2-03: Unknown Root Key → Invalid
 
@@ -182,7 +184,7 @@ All return `ok=True`.
 **Description:** When `require_exists=False`, structurally valid but non-existent paths succeed.
 
 **Criteria:**
-- `res = wa2.resolve("root:repo/nonexistent.py", require_exists=False)` → `ok=True`, `res.exists=False`
+- `res = wa2.resolve("root:repo/nonexistent.py", require_exists=False)` → `ok=True`, **`res.exists is False`**
 - `res.ref` is a valid VisibilityRef
 - `wa2.host_path(res.ref)` returns a `Path` under the repo root
 
@@ -193,6 +195,17 @@ All return `ok=True`.
 **Criteria:**
 - `wa2.resolve("root:bogus/foo", require_exists=False)` → `ok=False`
 - `wa2.resolve("root:repo/../../escape", require_exists=False)` → `ok=False`
+
+### WA2-10: Non-Truncation Guarantee
+
+**Description:** `require_exists=False` must NOT truncate to the last existing ancestor folder. The full requested path is preserved in the resolution.
+
+**Criteria:**
+- `res = wa2.resolve("root:repo/src/does_not_exist/file.py", require_exists=False)`
+- `res.ok is True`
+- `res.relative_path == "src/does_not_exist/file.py"`
+- `res.ref.session_abs == "root:repo/src/does_not_exist/file.py"`
+- `res.exists is False`
 
 ---
 
@@ -251,8 +264,12 @@ All return `ok=True`.
 **Description:** Registry raises deterministic error at 10,000 tokens.
 
 **Criteria:**
-- Resolve 10,000 distinct paths successfully
-- The 10,001st resolve returns `ok=False` with message containing `"capacity exceeded"`
+- Use synthetic unique paths with `require_exists=False`:
+  ```python
+  for i in range(10000):
+      wa2.resolve(f"root:repo/src/synthetic_{i}.py", require_exists=False)
+  ```
+- The 10,001st call must return `ok=False` with message containing `"capacity exceeded"`
 
 ### REG-04: Token Uniqueness Under Volume
 
@@ -398,11 +415,12 @@ All return `ok=True`.
 
 ### GATE-01: v2 Module Imports Are Isolated
 
-**Description:** The arch_lint v2_isolation rule passes on the Sprint 0 codebase.
+**Description:** The arch_lint v2_isolation rule passes on the Sprint 0 codebase. The test uses **AST-based import scanning** (not grep) to detect direct imports, alias imports, nested imports, and relative imports.
 
 **Criteria:**
 - No file in `tools/ck3lens_mcp/` outside the allowed set imports from `world_adapter_v2`
 - Allowed importers: `world_adapter_v2.py`, `impl/dir_ops.py`, `leak_detector.py`, `server.py`, any `*_v2.py`
+- Detection method: `ast.parse()` + `ast.walk()` for `Import` and `ImportFrom` nodes
 
 ### GATE-02: v1 WorldAdapter Unchanged
 
@@ -424,7 +442,7 @@ All return `ok=True`.
 - `impl/playset_ops.py`
 
 **Criteria:**
-- `grep -r "world_adapter_v2" <file>` returns nothing for each listed file
+- AST-based scan (`ast.walk()` for `Import`/`ImportFrom` nodes) on each listed file returns no `world_adapter_v2` references
 
 ---
 
@@ -464,11 +482,15 @@ All return `ok=True`.
 
 | File | Contents |
 |------|----------|
-| `tests/test_world_adapter_v2.py` | Sections 1-4 (VR-*, WA2-*, NORM-*, REG-*) |
-| `tests/test_leak_detector.py` | Section 5 (LEAK-*) |
-| `tests/test_dir_ops.py` | Section 6 (DIR-*) |
-| `tests/test_v2_purity_gate.py` | Section 7 (GATE-*) |
-| `tests/test_e2e_canonical_addressing.py` | Section 8 (E2E-*) |
+| `tests/sprint0/conftest.py` | Shared fixtures (tmp_roots, tmp_mods, wa2) |
+| `tests/sprint0/test_visibility_ref.py` | Section 1 (VR-*) |
+| `tests/sprint0/test_world_adapter_v2.py` | Section 2 (WA2-*) |
+| `tests/sprint0/test_normalization.py` | Section 3 (NORM-*) |
+| `tests/sprint0/test_registry.py` | Section 4 (REG-*) |
+| `tests/sprint0/test_leak_detector.py` | Section 5 (LEAK-*) |
+| `tests/sprint0/test_dir_ops.py` | Section 6 (DIR-*) |
+| `tests/sprint0/test_v2_purity_gate.py` | Section 7 (GATE-*) |
+| `tests/sprint0/test_e2e_canonical_addressing.py` | Section 8 (E2E-*) |
 
 ---
 
