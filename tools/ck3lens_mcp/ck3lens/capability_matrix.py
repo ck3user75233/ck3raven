@@ -111,8 +111,8 @@ CAPABILITY_MATRIX: dict[MatrixKey, Capability] = {
     # VS Code (read-only)
     ("ck3lens", RootCategory.ROOT_VSCODE, None): _RO,
     #
-    # Repo / External: denied
-    ("ck3lens", RootCategory.ROOT_REPO, None): _DENY,
+    # Repo: read-only (ck3lens CAN see repo, just not write)
+    ("ck3lens", RootCategory.ROOT_REPO, None): _RO,
     ("ck3lens", RootCategory.ROOT_EXTERNAL, None): _DENY,
     #
     # =================================================================

@@ -69,7 +69,7 @@ class ResolutionResult:
     """
     Result of resolving an address through the WorldAdapter.
     
-    If found=False, the reference does not exist in this world.
+    If found=False, the path could not be resolved.
     
     The root_category and subdirectory are used by enforcement.py to check
     the capability matrix. This is STRUCTURAL classification only - 
@@ -309,10 +309,13 @@ class WorldAdapter:
     def resolve(self, path_or_address: str) -> ResolutionResult:
         """Resolve a path or address to absolute filesystem path.
         
-        Resolution is MODE-AGNOSTIC - it determines structural identity only:
-        - What canonical domain does this path belong to?
-        - What is the absolute filesystem path?
+        Resolution is MODE-SENSITIVE:
+        - Uninitiated mode: returns not_found (must initialize first)
+        - ck3lens mode: mod references only resolve for mods in session.mods
+          (playset-scoped visibility). Non-playset mods resolve as ROOT_EXTERNAL.
+        - ck3raven-dev mode: all configured roots are visible.
         
+        Structural classification (RootCategory) is the same for all modes.
         Enforcement (not resolution) determines what operations are allowed
         on the resolved path based on mode + domain.
         """

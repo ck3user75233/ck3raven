@@ -247,52 +247,37 @@ def _get_world():
     """
     Get the WorldAdapter for the current agent mode.
     
-    The WorldAdapter provides unified path resolution and visibility control:
-    - In ck3lens mode: paths are resolved within the active playset
-    - In ck3raven-dev mode: paths are resolved with ck3raven source priority
+    One adapter, one construction path. Mode-sensitivity is handled inside
+    WorldAdapter (e.g., mod visibility scoped by session.mods in ck3lens).
     
     All MCP tools should use this to resolve paths before policy checks.
     
     Returns:
-        WorldAdapter appropriate for the current mode
-        
-    Raises:
-        RuntimeError: If mode is not initialized
+        WorldAdapter appropriate for the current mode, or None if mode not initialized
     """
     global _cached_world_adapter, _cached_world_mode
     
     from ck3lens.agent_mode import get_agent_mode
     from ck3lens.world_adapter import WorldAdapter
-    from ck3lens.paths import ROOT_REPO, ROOT_CK3RAVEN_DATA
     
     mode = get_agent_mode()
     
     if mode is None:
-        raise RuntimeError(
-            "Agent mode not initialized. Call ck3_get_mode_instructions() first."
-        )
+        return None
     
     # Check cache
     if _cached_world_adapter is not None and _cached_world_mode == mode:
         return _cached_world_adapter
     
-    # Get session for mod paths
+    # Get session for mod paths (ck3lens gets playset mods, ck3raven-dev gets empty)
     session = _get_session()
     
-    # Build adapter - all paths from paths.py constants, no legacy params
-    if mode == "ck3lens":
-        adapter = WorldAdapter.create(
-            mode="ck3lens",
-            db=None,  # DB not needed for path resolution
-            mods=session.mods or [],
-        )
-    elif mode == "ck3raven-dev":
-        adapter = WorldAdapter.create(
-            mode="ck3raven-dev",
-            db=None,
-        )
-    else:
-        raise RuntimeError(f"Unknown agent mode: {mode}")
+    # Single construction path — no mode branching at call site
+    adapter = WorldAdapter.create(
+        mode=mode,
+        db=None,
+        mods=session.mods or [],
+    )
     
     _cached_world_adapter = adapter
     _cached_world_mode = mode
@@ -4035,6 +4020,11 @@ def _ck3_exec_internal(
     # ==========================================================================
     
     world = _get_world()
+    if world is None:
+        return rb.denied("EN-MODE-D-001", {
+            "detail": "Agent mode not initialized",
+            "action": "Click 'Initialize Agent' in the CK3 Lens sidebar.",
+        })
     
     # Resolve working directory or use repo root
     if working_dir:
@@ -4517,6 +4507,11 @@ def ck3_search(
     # Build file_pattern from game_folder if provided
     effective_file_pattern = file_pattern
     if game_folder:
+        if world is None:
+            return rb.denied("EN-MODE-D-001", {
+                "detail": "Agent mode not initialized",
+                "action": "Click 'Initialize Agent' in the CK3 Lens sidebar.",
+            })
         # Normalize folder path
         # Use canonical path normalization via WorldAdapter
         folder = world.normalize(game_folder)
@@ -4642,6 +4637,11 @@ def ck3_grep_raw(
     
     # WorldAdapter visibility - THE canonical way
     world = _get_world()
+    if world is None:
+        return rb.denied("EN-MODE-D-001", {
+            "detail": "Agent mode not initialized",
+            "action": "Click 'Initialize Agent' in the CK3 Lens sidebar.",
+        })
     resolution = world.resolve(str(search_path))
     if not resolution.found:
         return rb.invalid(
@@ -4760,6 +4760,11 @@ def ck3_file_search(
     trace = _get_trace()
     session = _get_session()
     world = _get_world()
+    if world is None:
+        return rb.denied("EN-MODE-D-001", {
+            "detail": "Agent mode not initialized",
+            "action": "Click 'Initialize Agent' in the CK3 Lens sidebar.",
+        })
     
     # Get agent mode first for path defaults
     mode = get_agent_mode()
