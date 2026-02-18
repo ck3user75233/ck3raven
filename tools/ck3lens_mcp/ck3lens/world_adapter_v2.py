@@ -244,38 +244,30 @@ class WorldAdapterV2:
             parts = rel_normalized.split("/")
             subdirectory = parts[0] if parts[0] else None
 
-        # Extract mod name for visibility context
-        # mod:SomeName/path -> mod_name = "SomeName"
-        # root:user_docs/mod/SomeName/... -> mod_name = "SomeName" (subfolder after subdirectory)
-        mod_name = None
-        if is_mod and session_abs.startswith("mod:"):
-            mod_part = session_abs[4:]  # strip "mod:"
-            slash_idx = mod_part.find("/")
-            mod_name = mod_part[:slash_idx] if slash_idx >= 0 else mod_part
-        elif not is_mod and rel_normalized:
-            # For root paths like user_docs/mod/SomeName/..., the mod name is
-            # the component AFTER subdirectory
-            rparts = rel_normalized.split("/")
-            if len(rparts) >= 2 and rparts[1]:
-                mod_name = rparts[1]
-
-        # Build session mods set for visibility conditions
-        session_mods: set[str] = set()
+        # Build session mod paths for visibility conditions
+        session_mod_paths: list[Path] = []
         if self._session is not None and hasattr(self._session, "mods") and self._session.mods:
-            session_mods = set(self._session.mods)
+            for mod in self._session.mods:
+                if hasattr(mod, "path") and mod.path:
+                    session_mod_paths.append(
+                        Path(mod.path) if isinstance(mod.path, str) else mod.path
+                    )
 
-        # Visibility gate — conditions checked by check_visibility
-        if not check_visibility(
+        # Visibility gate — check_visibility returns (passed, failed_names)
+        visible, failed_conditions = check_visibility(
             mode, root_key, subdirectory,
-            mod_name=mod_name,
-            session_mods=session_mods,
+            host_abs=host_abs,
+            session_mod_paths=session_mod_paths,
+            is_mod_address=is_mod,
             relative_path=rel_normalized,
-        ):
+        )
+        if not visible:
             return self._fail(rb, "WA-VIS-I-001", "Not visible in current mode", {
                 "input_path": input_str,
                 "root_key": root_key,
                 "subdirectory": subdirectory,
                 "mode": mode,
+                "failed_conditions": failed_conditions,
             })
 
         # Mint token
