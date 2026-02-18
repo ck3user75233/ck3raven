@@ -1,7 +1,7 @@
 """
 ck3_dir implementation — directory navigation for canonical addressing v2.
 
-Sprint 0 vertical slice. The ONLY consumer of WorldAdapterV2.
+Sprint 0 vertical slice. Consumer of WorldAdapterV2.
 
 Commands:
     pwd   — return current session home root
@@ -18,12 +18,12 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from ck3lens.leak_detector import HostPathLeakError, check_no_host_paths
+from ck3lens.capability_matrix_v2 import VALID_ROOT_KEYS
 from ck3lens.world_adapter_v2 import (
-    VALID_ROOT_KEYS,
-    VisibilityResolution,
+    VisibilityRef,
     WorldAdapterV2,
 )
 
@@ -59,25 +59,26 @@ def ck3_dir_impl(
     depth: int = 3,
     *,
     wa2: WorldAdapterV2,
+    rb: Any = None,
 ) -> dict:
     """
     Implementation for the ck3_dir MCP tool.
 
     Returns a dict suitable for Reply.data. Raises HostPathLeakError if
-    the leak detector catches a host path in the output (should never happen
-    if this code is correct — it's a safety net).
+    the leak detector catches a host path in the output.
 
-    The caller (@mcp_safe_tool wrapper in server.py) is responsible for
-    converting this to a proper Reply via ReplyBuilder.
+    Args:
+        wa2: WorldAdapterV2 instance
+        rb: ReplyBuilder for constructing Reply (passed through to wa2.resolve)
     """
     if command == "pwd":
         return _cmd_pwd()
     elif command == "cd":
         return _cmd_cd(path)
     elif command == "list":
-        return _cmd_list(path, wa2=wa2)
+        return _cmd_list(path, wa2=wa2, rb=rb)
     elif command == "tree":
-        return _cmd_tree(path, depth=depth, wa2=wa2)
+        return _cmd_tree(path, depth=depth, wa2=wa2, rb=rb)
     else:
         raise ValueError(f"Unknown ck3_dir command: {command!r}")
 
@@ -125,27 +126,26 @@ def _cmd_cd(path: str | None) -> dict:
     }
 
 
-def _cmd_list(path: str | None, *, wa2: WorldAdapterV2) -> dict:
+def _cmd_list(path: str | None, *, wa2: WorldAdapterV2, rb: Any = None) -> dict:
     """List immediate children of a directory."""
-    # Resolve the target
     address = _resolve_with_home(path)
-    res = wa2.resolve(address, require_exists=True)
+    reply, ref = wa2.resolve(address, require_exists=True, rb=rb)
 
-    if not res.ok:
-        raise ValueError(res.error_message or "Invalid path / not found")
+    if ref is None:
+        raise ValueError(reply.message or "Invalid path / not found")
 
-    host = wa2.host_path(res.ref)
+    host = wa2.host_path(ref)
     if host is None:
         raise ValueError("Token lookup failed (internal error)")
 
     if not host.is_dir():
-        raise ValueError(f"Not a directory: {res.ref.session_abs}")
+        raise ValueError(f"Not a directory: {ref.session_abs}")
 
     entries = []
     for child in sorted(host.iterdir()):
         child_name = child.name
         is_dir = child.is_dir()
-        child_session_abs = f"{res.ref.session_abs}/{child_name}"
+        child_session_abs = f"{ref.session_abs}/{child_name}"
         entries.append({
             "name": child_name,
             "path": child_session_abs + ("/" if is_dir else ""),
@@ -153,7 +153,7 @@ def _cmd_list(path: str | None, *, wa2: WorldAdapterV2) -> dict:
         })
 
     data = {
-        "target": res.ref.session_abs,
+        "target": ref.session_abs,
         "entries": entries,
         "count": len(entries),
     }
@@ -164,26 +164,26 @@ def _cmd_list(path: str | None, *, wa2: WorldAdapterV2) -> dict:
 
 
 def _cmd_tree(
-    path: str | None, *, depth: int, wa2: WorldAdapterV2
+    path: str | None, *, depth: int, wa2: WorldAdapterV2, rb: Any = None,
 ) -> dict:
     """Recursive directory listing (directories only)."""
     address = _resolve_with_home(path)
-    res = wa2.resolve(address, require_exists=True)
+    reply, ref = wa2.resolve(address, require_exists=True, rb=rb)
 
-    if not res.ok:
-        raise ValueError(res.error_message or "Invalid path / not found")
+    if ref is None:
+        raise ValueError(reply.message or "Invalid path / not found")
 
-    host = wa2.host_path(res.ref)
+    host = wa2.host_path(ref)
     if host is None:
         raise ValueError("Token lookup failed (internal error)")
 
     if not host.is_dir():
-        raise ValueError(f"Not a directory: {res.ref.session_abs}")
+        raise ValueError(f"Not a directory: {ref.session_abs}")
 
-    dirs = _walk_dirs(host, res.ref.session_abs, depth)
+    dirs = _walk_dirs(host, ref.session_abs, depth)
 
     data = {
-        "target": res.ref.session_abs,
+        "target": ref.session_abs,
         "depth": depth,
         "directories": dirs,
     }
@@ -216,12 +216,12 @@ def _resolve_with_home(path: str | None) -> str:
 
 
 def _walk_dirs(
-    host_path: Path, session_abs: str, remaining_depth: int
+    host_path: Path, session_abs: str, remaining_depth: int,
 ) -> list[dict]:
     """
     Recursively walk directories, returning a tree structure.
 
-    Only includes directories (files are excluded from tree output).
+    Only includes directories (files excluded from tree output).
     Uses session-absolute paths exclusively — no host paths in output.
     """
     if remaining_depth <= 0:

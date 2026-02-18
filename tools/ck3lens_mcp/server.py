@@ -285,7 +285,11 @@ def _get_world():
 
 
 def _reset_world_cache():
-    """Reset the cached world adapter (for mode changes)."""
+    """Reset cached world adapter v1 for mode changes.
+
+    v2 is mode-agnostic (reads mode dynamically), so no invalidation needed.
+    v1 bakes mode at construction, so must be rebuilt on mode change.
+    """
     global _cached_world_adapter, _cached_world_mode
     _cached_world_adapter = None
     _cached_world_mode = None
@@ -4002,59 +4006,61 @@ def _ck3_exec_internal(
     rb=None,  # ReplyBuilder from tool handler — used by enforce()
 ) -> Reply | dict:
     """Internal implementation returning dict (or Reply for enforcement denials)."""
-    from ck3lens.policy.enforcement import enforce, OperationType
+    from ck3lens.policy.enforcement_v2 import enforce
     from ck3lens.policy.contract_v1 import get_active_contract
     import subprocess
-    
+
     # Get active contract
     active_contract = get_active_contract()
     has_contract = active_contract is not None
-    
-    # Get agent mode
-    from ck3lens.agent_mode import get_agent_mode
-    mode = get_agent_mode() or "unknown"
-    
+
     # ==========================================================================
-    # CANONICAL ENFORCEMENT: Shell execution is a WRITE operation
-    # Uses WorldAdapter for path resolution (canonical pattern)
+    # V2 ENFORCEMENT: Uses WorldAdapterV2 + enforcement_v2
+    # ck3_exec is an EXECUTE operation on the resolved path.
     # ==========================================================================
-    
-    world = _get_world()
-    if world is None:
-        return rb.denied("EN-MODE-D-001", {
-            "detail": "Agent mode not initialized",
-            "action": "Click 'Initialize Agent' in the CK3 Lens sidebar.",
-        })
-    
-    # Resolve working directory or use repo root
+
+    wa2 = _get_world_v2()
+
+    # Resolve working directory or default to wip
     if working_dir:
-        resolution = world.resolve(working_dir)
+        resolve_input = working_dir
     elif target_paths:
-        resolution = world.resolve(target_paths[0])
+        resolve_input = target_paths[0]
     else:
-        # Default to WIP for shell commands without explicit path
-        from ck3lens.paths import ROOT_CK3RAVEN_DATA
-        resolution = world.resolve(str(ROOT_CK3RAVEN_DATA / "wip"))
-    
-    if not resolution.found:
+        resolve_input = "root:ck3raven_data/wip"
+
+    reply, ref = wa2.resolve(resolve_input, require_exists=True, rb=rb)
+    if ref is None:
         return {
             "allowed": False,
             "executed": False,
             "output": None,
             "exit_code": None,
             "policy": {"decision": "PATH_NOT_FOUND"},
-            "error": f"Could not resolve path: {working_dir or target_paths}",
+            "error": f"Could not resolve path: {resolve_input}",
         }
-    
-    # Shell execution is a WRITE operation — enforcement returns Reply
-    result = enforce(rb, mode, OperationType.WRITE, resolution, has_contract)
-    
+
+    root_key = reply.data.get("root_key", "")
+    subdirectory = reply.data.get("subdirectory")
+
+    # Shell execution is an EXECUTE operation
+    result = enforce(
+        rb,
+        mode=wa2.mode,
+        tool="ck3_exec",
+        command=command,
+        root_key=root_key,
+        subdirectory=subdirectory,
+        has_contract=has_contract,
+        exec_signature_valid=False,  # TODO: wire up HMAC signature validation
+    )
+
     # Enforcement denial → Reply passes through directly
     if result.is_denied:
         return result
-    
+
     # Enforcement passed — build policy info for response
-    policy_info = {"decision": "ALLOW", "reason": f"Write allowed ({result.code})"}
+    policy_info = {"decision": "ALLOW", "reason": f"Execute allowed ({result.code})"}
     
     # Allowed
     if dry_run:
@@ -4071,15 +4077,12 @@ def _ck3_exec_internal(
     actual_timeout = min(max(timeout, 1), 300)
     
     # ======================================================================
-    # FIX: Determine actual CWD for execution
-    # Resolution above is for ENFORCEMENT only (determines allow/deny).
-    # The execution CWD must be explicit — never inherit the MCP server's
-    # CWD (which is the user's home directory on Windows).
+    # Determine actual CWD for execution using WA v2 host_path
     # ======================================================================
-    if working_dir:
-        exec_cwd = working_dir
+    host = wa2.host_path(ref)
+    if host is not None:
+        exec_cwd = str(host) if host.is_dir() else str(host.parent)
     else:
-        # Default to repo root (matches docstring: "defaults to ck3raven root")
         from ck3lens.paths import ROOT_REPO as _EXEC_ROOT_REPO
         exec_cwd = str(_EXEC_ROOT_REPO) if _EXEC_ROOT_REPO else None
     
@@ -6340,8 +6343,8 @@ def _get_world_v2():
     """
     Get or create the WorldAdapterV2 singleton.
 
-    Lazy initialization — created on first ck3_dir call.
-    Uses the same paths.py constants and session mods as v1.
+    Mode-agnostic: WA v2 reads agent mode dynamically on every resolve() call.
+    No mode baked in at construction. No cache invalidation needed for mode changes.
     """
     global _cached_world_adapter_v2
 
@@ -6352,7 +6355,7 @@ def _get_world_v2():
 
     session = _get_session()
     _cached_world_adapter_v2 = WorldAdapterV2.create(
-        mods=session.mods or [],
+        session=session,
     )
     return _cached_world_adapter_v2
 
@@ -6399,7 +6402,7 @@ def ck3_dir(
     wa2 = _get_world_v2()
 
     try:
-        data = ck3_dir_impl(command=command, path=path, depth=depth, wa2=wa2)
+        data = ck3_dir_impl(command=command, path=path, depth=depth, wa2=wa2, rb=rb)
     except HostPathLeakError as e:
         return rb.error(
             "WA-DIR-E-001",
