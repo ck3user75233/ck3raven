@@ -210,7 +210,7 @@ class WorldAdapterV2:
             require_exists: If True, non-existent paths fail.
             rb: ReplyBuilder for constructing Reply. If None, creates a minimal Reply.
         """
-        from .capability_matrix_v2 import is_visible
+        from .capability_matrix_v2 import check_visibility
 
         # Dynamic mode read — every resolve() checks current mode
         mode = _get_mode()
@@ -237,33 +237,46 @@ class WorldAdapterV2:
                 "mode": mode,
             })
 
-        # Derive subdirectory and subfolder from path components
+        # Derive subdirectory from first path component
         subdirectory = None
-        subfolder_name = None
         rel_normalized = rel_path.replace("\\", "/").strip("/")
         if rel_normalized:
             parts = rel_normalized.split("/")
             subdirectory = parts[0] if parts[0] else None
-            # subfolder_name = the component AFTER subdirectory (e.g., mod name under user_docs/mod/)
-            if len(parts) >= 2 and parts[1]:
-                subfolder_name = parts[1]
 
-        # Visibility gate (mods skip this — structural visibility via session.mods)
-        if not is_mod:
-            # Build context for visibility conditions
-            vis_context: dict = {}
-            if subfolder_name is not None:
-                vis_context["subfolder_name"] = subfolder_name
-            if self._session is not None and hasattr(self._session, "mods"):
-                vis_context["session_mods"] = set(self._session.mods) if self._session.mods else set()
+        # Extract mod name for visibility context
+        # mod:SomeName/path -> mod_name = "SomeName"
+        # root:user_docs/mod/SomeName/... -> mod_name = "SomeName" (subfolder after subdirectory)
+        mod_name = None
+        if is_mod and session_abs.startswith("mod:"):
+            mod_part = session_abs[4:]  # strip "mod:"
+            slash_idx = mod_part.find("/")
+            mod_name = mod_part[:slash_idx] if slash_idx >= 0 else mod_part
+        elif not is_mod and rel_normalized:
+            # For root paths like user_docs/mod/SomeName/..., the mod name is
+            # the component AFTER subdirectory
+            rparts = rel_normalized.split("/")
+            if len(rparts) >= 2 and rparts[1]:
+                mod_name = rparts[1]
 
-            if not is_visible(mode, root_key, subdirectory, **vis_context):
-                return self._fail(rb, "WA-VIS-I-001", "Not visible in current mode", {
-                    "input_path": input_str,
-                    "root_key": root_key,
-                    "subdirectory": subdirectory,
-                    "mode": mode,
-                })
+        # Build session mods set for visibility conditions
+        session_mods: set[str] = set()
+        if self._session is not None and hasattr(self._session, "mods") and self._session.mods:
+            session_mods = set(self._session.mods)
+
+        # Visibility gate — conditions checked by check_visibility
+        if not check_visibility(
+            mode, root_key, subdirectory,
+            mod_name=mod_name,
+            session_mods=session_mods,
+            relative_path=rel_normalized,
+        ):
+            return self._fail(rb, "WA-VIS-I-001", "Not visible in current mode", {
+                "input_path": input_str,
+                "root_key": root_key,
+                "subdirectory": subdirectory,
+                "mode": mode,
+            })
 
         # Mint token
         token = str(uuid.uuid4())
