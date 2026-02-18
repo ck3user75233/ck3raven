@@ -1,16 +1,16 @@
 """
-Enforcement v2 — THE single gate for all policy decisions.
+Enforcement v2 — THE single gate for all mutation decisions.
 
 Canonical Architecture Rule 1: only this module may deny operations.
 
 Walks capability_matrix_v2 data structures:
-  1. classify_command(tool, command) → "read" | category | None
-  2. "read" → immediate success (visibility already checked by WA)
-  3. category → MUTATIONS_MATRIX lookup (subdirectory-specific, then root-level)
-  4. No entry → DENY
-  5. Conditions check
+  1. is_read_command(tool, command) -> True? immediate success (visibility already checked by WA)
+  2. find_mutation_rule(mode, root_key, subdirectory, tool, command) -> rule or None
+  3. None -> DENY (no rule governs this command at this location)
+  4. Rule found -> check conditions with **context -> all pass? ALLOW : DENY
 
 Returns Reply (the canonical type), never a parallel concept.
+Denial codes are produced HERE, not by conditions. Conditions just return True/False.
 
 Design brief: docs/Canonical address refactor/v2_enforcement_design_brief.md
 """
@@ -20,14 +20,13 @@ from typing import Any
 
 from ck3raven.core.reply import Reply
 from ..capability_matrix_v2 import (
-    classify_command,
-    MUTATIONS_MATRIX,
-    MutationRule,
+    is_read_command,
+    find_mutation_rule,
 )
 
 
 def enforce(
-    rb: Any,           # ReplyBuilder — passed from tool handler
+    rb: Any,           # ReplyBuilder -- passed from tool handler
     mode: str,
     tool: str,
     command: str,
@@ -48,38 +47,28 @@ def enforce(
         **context: Forwarded to condition predicates (e.g. has_contract, exec_signature_valid)
 
     Returns:
-        Reply — success or denied.
+        Reply -- success or denied.
     """
-    # 1. Classify the tool+command
-    category = classify_command(tool, command)
-
-    if category is None:
-        return rb.denied("EN-GATE-D-001", {
-            "detail": f"Unknown command: ({tool}, {command})",
-        })
-
-    # 2. Reads pass immediately — visibility already checked by WA
-    if category == "read":
+    # 1. Reads pass immediately -- visibility already checked by WA
+    if is_read_command(tool, command):
         return rb.success("EN-READ-S-001", {})
 
-    # 3. Mutation — subdirectory-specific lookup first
-    rule: MutationRule | None = None
-    if subdirectory:
-        rule = MUTATIONS_MATRIX.get((mode, category, root_key, subdirectory))
+    # 2. Find the mutation rule governing this (tool, command) at this location
+    rule = find_mutation_rule(mode, root_key, subdirectory, tool, command)
 
-    # 4. Fall back to root-level entry
-    if rule is None:
-        rule = MUTATIONS_MATRIX.get((mode, category, root_key, None))
-
-    # 5. No entry → DENY
+    # 3. No rule -> DENY
     if rule is None:
         return rb.denied("EN-GATE-D-001", {
-            "detail": f"No mutation rule for ({mode}, {category}, {root_key}, {subdirectory})",
+            "detail": f"No mutation rule for ({tool}, {command}) at ({mode}, {root_key}, {subdirectory})",
         })
 
-    # 6. Conditions check
-    denials = [c.denial for c in rule.conditions if not c.check(**context)]
-    if denials:
-        return rb.denied(denials[0], {"denials": denials})
+    # 4. Check conditions -- all must pass
+    failed = [c.name for c in rule.conditions if not c.check(**context)]
+    if failed:
+        return rb.denied("EN-COND-D-001", {
+            "failed_conditions": failed,
+            "tool": tool,
+            "command": command,
+        })
 
     return rb.success("EN-WRITE-S-001", {})

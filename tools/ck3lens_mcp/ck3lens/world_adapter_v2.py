@@ -237,20 +237,33 @@ class WorldAdapterV2:
                 "mode": mode,
             })
 
-        # Visibility gate (mods skip this — structural visibility via session.mods)
-        if not is_mod and not is_visible(mode, root_key):
-            return self._fail(rb, "WA-VIS-I-001", "Not visible in current mode", {
-                "input_path": input_str,
-                "root_key": root_key,
-                "mode": mode,
-            })
-
-        # Derive subdirectory from first path component
+        # Derive subdirectory and subfolder from path components
         subdirectory = None
+        subfolder_name = None
         rel_normalized = rel_path.replace("\\", "/").strip("/")
         if rel_normalized:
             parts = rel_normalized.split("/")
             subdirectory = parts[0] if parts[0] else None
+            # subfolder_name = the component AFTER subdirectory (e.g., mod name under user_docs/mod/)
+            if len(parts) >= 2 and parts[1]:
+                subfolder_name = parts[1]
+
+        # Visibility gate (mods skip this — structural visibility via session.mods)
+        if not is_mod:
+            # Build context for visibility conditions
+            vis_context: dict = {}
+            if subfolder_name is not None:
+                vis_context["subfolder_name"] = subfolder_name
+            if self._session is not None and hasattr(self._session, "mods"):
+                vis_context["session_mods"] = set(self._session.mods) if self._session.mods else set()
+
+            if not is_visible(mode, root_key, subdirectory, **vis_context):
+                return self._fail(rb, "WA-VIS-I-001", "Not visible in current mode", {
+                    "input_path": input_str,
+                    "root_key": root_key,
+                    "subdirectory": subdirectory,
+                    "mode": mode,
+                })
 
         # Mint token
         token = str(uuid.uuid4())
