@@ -175,15 +175,16 @@ VALID_ROOT_KEYS: frozenset[str] = frozenset({
 # Entry exists -> visible (subject to conditions). No entry -> not visible.
 # WA calls check_visibility() which evaluates conditions with context.
 #
-# mod_in_session() — pure session check:
-#   For mod: addresses, checks mod_name against session.get_mod().
-#   If the mod isn't in session.mods, it's not visible. Done.
+# Mod visibility is a GLOBAL PREDICATE, not a matrix entry:
+#   If mod_name is set, the mod must be in the active playset (session.mods).
+#   This is checked before the matrix is consulted. No per-subdirectory
+#   entries needed for mods — the root-level entry for their underlying
+#   infrastructure root (steam, user_docs) handles the rest.
 # =============================================================================
 
 VisibilityKey = tuple[str, str, str | None]
 
 _V = VisibilityRule  # shorthand
-_MOD_IN_SESSION = mod_in_session()  # shared instance for visibility conditions
 
 VISIBILITY_MATRIX: dict[VisibilityKey, VisibilityRule] = {
 
@@ -191,23 +192,11 @@ VISIBILITY_MATRIX: dict[VisibilityKey, VisibilityRule] = {
     # ck3lens mode
     # =================================================================
 
-    # Game and steam root: visible unconditionally
     ("ck3lens", "game", None):              _V(),
     ("ck3lens", "steam", None):             _V(),
-
-    # Steam mod folders: mod must be in active session
-    ("ck3lens", "steam", "mod"):            _V((_MOD_IN_SESSION,)),
-
-    # User docs / mod: mod must be in active session
-    ("ck3lens", "user_docs", "mod"):        _V((_MOD_IN_SESSION,)),
-
-    # ck3raven_data: visible unconditionally (writes gated by operations matrix)
+    ("ck3lens", "user_docs", None):         _V(),
     ("ck3lens", "ck3raven_data", None):     _V(),
-
-    # VS Code: visible unconditionally
     ("ck3lens", "vscode", None):            _V(),
-
-    # Repo: visible unconditionally
     ("ck3lens", "repo", None):              _V(),
 
     # =================================================================
@@ -216,8 +205,7 @@ VISIBILITY_MATRIX: dict[VisibilityKey, VisibilityRule] = {
 
     ("ck3raven-dev", "game", None):             _V(),
     ("ck3raven-dev", "steam", None):            _V(),
-    ("ck3raven-dev", "steam", "mod"):           _V(),
-    ("ck3raven-dev", "user_docs", "mod"):       _V(),
+    ("ck3raven-dev", "user_docs", None):        _V(),
     ("ck3raven-dev", "ck3raven_data", None):    _V(),
     ("ck3raven-dev", "vscode", None):           _V(),
     ("ck3raven-dev", "repo", None):             _V(),
@@ -235,18 +223,26 @@ def check_visibility(
     """
     Check if a location is visible.
 
-    Looks up (mode, root_key, subdirectory) first, then falls back to
-    (mode, root_key, None). Returns (False, ["no_entry"]) if no entry.
-    Evaluates all conditions — all must pass.
+    Global mod predicate (applied first):
+        If mod_name is set, the mod must be in the active playset
+        (session.mods). If not, visibility fails immediately.
 
-    Context kwargs passed through to conditions:
-        session: Session object (for mod_in_session condition)
-        mod_name: str | None — mod display name (from mod: address)
+    Then matrix lookup:
+        (mode, root_key, subdirectory) first, falls back to
+        (mode, root_key, None). No entry → not visible.
 
     Returns:
         (True, []) if visible.
-        (False, [name, ...]) with names of failed conditions (or ["no_entry"]).
+        (False, [reason, ...]) with failure reasons.
     """
+    # Global mod predicate — mods must be in active playset
+    if mod_name is not None:
+        if session is None:
+            return (False, ["mod_not_in_playset"])
+        get_mod = getattr(session, 'get_mod', None)
+        if not get_mod or get_mod(mod_name) is None:
+            return (False, ["mod_not_in_playset"])
+
     context = {"session": session, "mod_name": mod_name}
 
     # Subdirectory-specific lookup first
