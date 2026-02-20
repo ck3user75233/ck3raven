@@ -3996,6 +3996,45 @@ def _kill_process_tree_windows(pid: int) -> None:
             pass
 
 
+def _detect_script_path(command: str, cwd: Path | None) -> Path | None:
+    """
+    Detect if a shell command is executing a Python script file.
+
+    Returns the absolute path to the script if detected, None otherwise.
+    Handles:
+        python script.py [args]
+        python ./subdir/script.py
+        python3 script.py
+
+    Does NOT handle (whitelist territory):
+        python -c "code"
+        python -m module
+        echo hello
+        git status
+    """
+    import shlex
+    parts = command.strip().split()
+    if len(parts) < 2:
+        return None
+
+    exe = parts[0].lower()
+    if exe not in ("python", "python3", "python.exe", "python3.exe"):
+        return None
+
+    # Skip flags: -c, -m are not file execution
+    script_arg = parts[1]
+    if script_arg.startswith("-"):
+        return None
+
+    # Resolve relative to cwd
+    script = Path(script_arg)
+    if not script.is_absolute() and cwd:
+        script = cwd / script
+
+    return script.resolve() if script.exists() else None
+
+
+
 def _ck3_exec_internal(
     command: str,
     working_dir: str | None,
@@ -4043,7 +4082,32 @@ def _ck3_exec_internal(
     root_key = reply.data.get("root_key", "")
     subdirectory = reply.data.get("subdirectory")
 
-    # Shell execution is an EXECUTE operation
+    # ======================================================================
+    # Data gathering (NOT a policy decision).
+    # Detect script, hash content. Passed to enforce() as context kwargs.
+    # The exec_signed condition loads the active contract and validates
+    # the script signature.
+    # ======================================================================
+    content_sha256 = None
+
+    # Get host path for working directory
+    host = wa2.host_path(ref)  # type: ignore[attr-defined]
+    cwd = None
+    if host is not None:
+        cwd = host if host.is_dir() else host.parent
+
+    # Detect if this is a script execution
+    script_host_path = _detect_script_path(command, cwd)
+
+    if script_host_path is not None:
+        import hashlib as _hashlib
+        try:
+            current_content = script_host_path.read_bytes()
+            content_sha256 = _hashlib.sha256(current_content).hexdigest()
+        except OSError:
+            pass  # content unreadable — condition will fail naturally
+
+    # Shell execution is an EXECUTE operation — enforcement walks the matrix
     result = enforce(
         rb,
         mode=wa2.mode,
@@ -4052,10 +4116,11 @@ def _ck3_exec_internal(
         root_key=root_key,
         subdirectory=subdirectory,
         has_contract=has_contract,
-        exec_signature_valid=False,  # TODO: wire up HMAC signature validation
+        script_host_path=str(script_host_path) if script_host_path else None,
+        content_sha256=content_sha256,
     )
 
-    # Enforcement denial → Reply passes through directly
+    # Enforcement denial — pass through
     if result.is_denied:
         return result
 
@@ -5920,81 +5985,8 @@ def _get_table_stats(*, rb: ReplyBuilder) -> Reply:
 
 
 # ============================================================================
-# Journal - Chat Session Archive Tools
+# Journal - REMOVED (February 2026)
 # ============================================================================
-
-@mcp.tool()
-@mcp_safe_tool
-def ck3_journal(
-    command: Literal["list", "read", "search", "status"] = "status",
-    # List parameters
-    target: Optional[Literal["workspaces", "windows", "sessions"]] = None,
-    workspace_key: Optional[str] = None,
-    window_id: Optional[str] = None,
-    # Read parameters
-    session_id: Optional[str] = None,
-    format: Literal["json", "markdown"] = "markdown",
-    # Search parameters
-    pattern: Optional[str] = None,
-    limit: int = 50,
-) -> Reply:
-    """
-    Access journal archives from Copilot Chat sessions.
-    
-    Commands:
-    
-    command=list     → List workspaces, windows, or sessions
-    command=read     → Read session content or manifest
-    command=search   → Search tags across journals
-    command=status   → Get journal status
-    
-    Args:
-        command: Operation to perform
-        target: What to list (workspaces, windows, sessions)
-        workspace_key: Workspace identifier (SHA-256)
-        window_id: Window identifier
-        session_id: Session to read
-        format: Output format for read (json, markdown)
-        pattern: Tag pattern for search (* = wildcard)
-        limit: Max results for search
-    
-    Returns:
-        Dict with results based on command
-    
-    Examples:
-        ck3_journal(command="status")
-        ck3_journal(command="list", target="workspaces")
-        ck3_journal(command="list", target="windows", workspace_key="abc123...")
-        ck3_journal(command="read", workspace_key="...", window_id="...", session_id="...")
-        ck3_journal(command="search", pattern="bug*")
-    """
-    from ck3lens.tools.journal import ck3_journal as journal_impl
-    
-    # Delegate to the implementation module
-    result = journal_impl(
-        command=command,
-        target=target,
-        workspace_key=workspace_key,
-        window_id=window_id,
-        session_id=session_id,
-        format=format,
-        pattern=pattern,
-        limit=limit,
-    )
-    
-    # The journal module returns dict, convert to Reply
-    trace_info = get_current_trace_info()
-    rb = ReplyBuilder(trace_info, tool='ck3_journal')
-    
-    if result.get("success", False):
-        return rb.success('WA-LOG-S-001', data=result, message=result.get("message", "OK"))
-    else:
-        # Differentiate error types - Error requires POSITIVE evidence
-        err_msg = str(result.get("error", "")).lower()
-        if "failed to" in err_msg or "timeout" in err_msg or "connection" in err_msg or "exception" in err_msg:
-            return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "System error"))
-        # Default: Invalid (agent mistake / bad input)
-        return rb.invalid('WA-LOG-I-001', data=result, message=result.get("error", "Invalid input"))
 
 
 # ============================================================================

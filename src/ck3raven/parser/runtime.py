@@ -113,6 +113,8 @@ def _run_parse_subprocess(
             [python_exe, "-c", subprocess_code] + args,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             env=env,
             cwd=str(repo_root),

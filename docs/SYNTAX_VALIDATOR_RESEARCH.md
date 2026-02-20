@@ -106,7 +106,6 @@ This document compares CK3Raven's validation capabilities against industry-leadi
 
 5. **Validation Infrastructure**
    - `parse_content()` - Parse and return AST or errors
-   - `validate_patchdraft()` - Path and content validation
    - `lint_file()` - Bridge server linting stub
 
 ### What We Can Build (Have Foundations)

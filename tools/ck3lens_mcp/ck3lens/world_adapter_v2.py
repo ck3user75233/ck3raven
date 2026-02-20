@@ -244,22 +244,44 @@ class WorldAdapterV2:
             parts = rel_normalized.split("/")
             subdirectory = parts[0] if parts[0] else None
 
-        # Build session mod paths for visibility conditions
-        session_mod_paths: list[Path] = []
+        # Build session mod root paths for visibility conditions (pre-resolved)
+        session_mod_root_paths: list[Path] = []
         if self._session is not None and hasattr(self._session, "mods") and self._session.mods:
             for mod in self._session.mods:
                 if hasattr(mod, "path") and mod.path:
-                    session_mod_paths.append(
-                        Path(mod.path) if isinstance(mod.path, str) else mod.path
-                    )
+                    p = Path(mod.path) if isinstance(mod.path, str) else mod.path
+                    try:
+                        session_mod_root_paths.append(p.resolve())
+                    except OSError:
+                        continue
+
+        # Pre-resolve host_abs for condition predicates
+        try:
+            resolved_host_abs = host_abs.resolve()
+        except OSError:
+            resolved_host_abs = host_abs
+
+        # For mod: addresses, override subdirectory with the mod's geographic
+        # position under its infrastructure root.  rel_path for mod: addresses
+        # is relative to the mod root, but the matrix keys reference the mod's
+        # position within the infrastructure root (e.g. "mod" under user_docs).
+        # The mod's host path is already resolved from session.mods; we just
+        # need to know WHERE under the root it sits geographically.
+        if is_mod and root_key in self._roots:
+            try:
+                root_resolved = self._roots[root_key].resolve()
+                geo_rel = resolved_host_abs.relative_to(root_resolved)
+                geo_parts = geo_rel.parts
+                if geo_parts:
+                    subdirectory = geo_parts[0]
+            except (ValueError, OSError):
+                pass  # keep rel-path-derived subdirectory as fallback
 
         # Visibility gate — check_visibility returns (passed, failed_names)
         visible, failed_conditions = check_visibility(
             mode, root_key, subdirectory,
-            host_abs=host_abs,
-            session_mod_paths=session_mod_paths,
-            is_mod_address=is_mod,
-            relative_path=rel_normalized,
+            host_abs=resolved_host_abs,
+            session_mod_root_paths=session_mod_root_paths,
         )
         if not visible:
             return self._fail(rb, "WA-VIS-I-001", "Not visible in current mode", {

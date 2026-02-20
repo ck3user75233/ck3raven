@@ -186,6 +186,3 @@ def validate_artifact_bundle(bundle: ArtifactBundle) -> ValidationReport:
     }
     return ValidationReport(ok=ok, errors=errors, warnings=warnings, summary=summary)
 
-
-# Backwards compatibility alias
-validate_patchdraft = validate_artifact_bundle

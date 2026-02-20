@@ -19,7 +19,7 @@
 7. **Reply.data["resolved"] is the session-absolute path.** For infrastructure roots: `root:<key>/<rel_path>`. For mod-addressed input: `mod:Name/<rel_path>`. Output namespace matches input namespace.
 8. **Host paths never appear in Reply.** Reply is semantic. VisibilityRef is capability.
 9. **No OperationType enum.** Tool+command pairs are classified explicitly — reads vs mutation categories. The matrix knows what's what.
-10. **No _RO entries in the mutations matrix.** If it's not a mutation, it's not in the mutations matrix. Reads are handled entirely by WA visibility.
+10. **No _RO entries in the operations matrix.** Reads use `OperationRule` with no conditions. Mutations use `OperationRule` with conditions. Both live in the same `OPERATIONS_MATRIX`.
 
 ---
 
@@ -36,10 +36,11 @@ Tool Handler (server.py)
     │   └─ Returns session-absolute path in Reply.data["resolved"]
     │
     ├─ enforce(rb, mode, tool, command, root_key, subdirectory, **context)
-    │   ├─ classify_command(tool, command) → "read" | category | None
-    │   ├─ "read" → immediate success (WA already gated visibility)
-    │   ├─ category → MUTATIONS_MATRIX lookup (subdirectory-specific, then root-level)
-    │   ├─ No entry → DENY
+    │   ├─ Looks up (mode, root_key, subdirectory) in OPERATIONS_MATRIX
+    │   ├─ Scans rules for matching (tool, command)
+    │   ├─ "read" commands → no conditions → immediate success
+    │   ├─ mutation commands → check conditions → success or denied
+    │   ├─ No matching rule → DENY
     │   └─ Conditions check → Returns Reply (success or denied)
     │
     └─ Execute operation using wa.host_path(ref)
@@ -50,9 +51,9 @@ Three modules, three responsibilities:
 | Module | Responsibility | File |
 |--------|---------------|------|
 | **VISIBILITY_MATRIX** | Binary: can this agent see this root category? | `capability_matrix_v2.py` |
-| **MUTATIONS_MATRIX** | What mutations are allowed, with what conditions? | `capability_matrix_v2.py` |
-| **COMMAND CLASSIFICATION** | (tool, command) → "read" / category / None | `capability_matrix_v2.py` |
-| **enforcement_v2.py** | Single `enforce()` that classifies + walks MUTATIONS_MATRIX | `enforcement_v2.py` |
+| **OPERATIONS_MATRIX** | What operations are allowed (reads + mutations), with what conditions? | `capability_matrix_v2.py` |
+| **COMMAND CLASSIFICATION** | Exact (tool, command) frozensets: reads vs mutations | `capability_matrix_v2.py` |
+| **enforcement_v2.py** | Single `enforce()` that looks up (tool, command) in OPERATIONS_MATRIX | `enforcement_v2.py` |
 | **world_adapter_v2.py** | `resolve()` → `tuple[Reply, Optional[VisibilityRef]]`, walks VISIBILITY_MATRIX | `world_adapter_v2.py` |
 
 ---
@@ -107,56 +108,78 @@ Mods are NOT in the visibility matrix. Mod visibility is structural:
 
 ## 3) COMMAND CLASSIFICATION
 
-Explicit (tool, command) → category mapping. No abstract tool clusters. No OperationType enum.
+Commands are organized as named `frozenset` constants. Each `OperationRule` in the matrix carries its command set directly — no separate classification function is needed.
 
 ```python
-# Read-only commands — visibility is sufficient, no enforcement needed
-READ_COMMANDS: frozenset[tuple[str, str]] = frozenset({
+# Read command sets (no conditions — always allowed if visible)
+FILE_READ_COMMANDS: frozenset[tuple[str, str]] = frozenset({
     ("ck3_file", "read"), ("ck3_file", "get"), ("ck3_file", "list"), ("ck3_file", "refresh"),
+})
+DIR_READ_COMMANDS: frozenset[tuple[str, str]] = frozenset({
     ("ck3_dir", "pwd"), ("ck3_dir", "cd"), ("ck3_dir", "list"), ("ck3_dir", "tree"),
+})
+GIT_READ_COMMANDS: frozenset[tuple[str, str]] = frozenset({
     ("ck3_git", "status"), ("ck3_git", "diff"), ("ck3_git", "log"),
+})
+FOLDER_READ_COMMANDS: frozenset[tuple[str, str]] = frozenset({
     ("ck3_folder", "list"), ("ck3_folder", "contents"), ("ck3_folder", "top_level"), ("ck3_folder", "mod_folders"),
 })
+ALL_READ_COMMANDS = FILE_READ_COMMANDS | DIR_READ_COMMANDS | GIT_READ_COMMANDS | FOLDER_READ_COMMANDS
 
-# Mutation categories — each label maps to exact (tool, command) pairs
-MUTATION_CATEGORIES: dict[str, frozenset[tuple[str, str]]] = {
-    "file_write":  {("ck3_file","write"), ("ck3_file","edit"), ("ck3_file","rename"), ("ck3_file","create_patch")},
-    "file_delete": {("ck3_file","delete")},
-    "git_mutate":  {("ck3_git","add"), ("ck3_git","commit"), ("ck3_git","push"), ("ck3_git","pull")},
-    "exec":        {},  # ck3_exec special-cased by tool name
-}
-
-def classify_command(tool: str, command: str) -> str | None:
-    """Returns "read", category label, or None (unknown → deny)."""
+# Mutation command sets
+FILE_WRITE_COMMANDS: frozenset[tuple[str, str]] = frozenset({
+    ("ck3_file", "write"), ("ck3_file", "edit"), ("ck3_file", "rename"), ("ck3_file", "create_patch"),
+})
+FILE_DELETE_COMMANDS: frozenset[tuple[str, str]] = frozenset({("ck3_file", "delete")})
+GIT_MUTATE_COMMANDS: frozenset[tuple[str, str]] = frozenset({
+    ("ck3_git", "add"), ("ck3_git", "commit"), ("ck3_git", "push"), ("ck3_git", "pull"),
+})
+EXEC_COMMANDS: frozenset[tuple[str, str]] = frozenset({})  # ck3_exec special-cased by tool name
 ```
 
-**Why file_write and file_delete are separate categories:** Some locations allow write but not delete (e.g., ck3lens config, logs, journal, artifacts — writable but not deletable).
+Each `OperationRule` carries its command frozenset + conditions. `find_operation_rule()` scans the rules for a matching (tool, command). No separate `classify_command()` function.
+
+**Why file_write and file_delete are separate command sets:** Some locations allow write but not delete (e.g., config, artifacts — writable but not deletable).
 
 ---
 
-## 4) MUTATIONS_MATRIX
+## 4) OPERATIONS_MATRIX
 
-Pure data. Keyed by `(mode, category, root_key, subdirectory | None)`. Only mutations. No reads.
+Pure data. Keyed by `(mode, root_key, subdirectory | None)`. Contains ALL operations — reads AND mutations.
 
 ```python
 @dataclass(frozen=True)
-class MutationRule:
+class OperationRule:
+    """Exact (tool, command) pairs this rule governs, plus conditions."""
+    commands: frozenset[tuple[str, str]]
     conditions: tuple[Condition, ...] = ()
 
-MUTATIONS_MATRIX: dict[MutationKey, MutationRule] = {
-    # ck3lens — file writes
-    ("ck3lens", "file_write", "user_docs", "mod"):           MutationRule((VALID_CONTRACT,)),
-    ("ck3lens", "file_write", "ck3raven_data", "wip"):       MutationRule(),  # no contract
-    # ...
-    # ck3raven-dev — file writes
-    ("ck3raven-dev", "file_write", "repo", None):            MutationRule((VALID_CONTRACT,)),
+OperationKey = tuple[str, str, str | None]  # (mode, root_key, subdirectory)
+
+OPERATIONS_MATRIX: dict[OperationKey, tuple[OperationRule, ...]] = {
+    # ck3lens — game: read-only
+    ("ck3lens", "game", None): (
+        OperationRule(ALL_READ_COMMANDS),
+    ),
+    # ck3lens — user_docs/mod: reads + writes (with contract)
+    ("ck3lens", "user_docs", "mod"): (
+        OperationRule(ALL_READ_COMMANDS),
+        OperationRule(FILE_WRITE_COMMANDS, (_HAS_CONTRACT,)),
+    ),
+    # ck3raven-dev — repo: reads + writes (with contract)
+    # ck3raven-dev — repo: reads + writes (with contract)
+    ("ck3raven-dev", "repo", None): (
+        OperationRule(ALL_READ_COMMANDS),
+        OperationRule(FILE_WRITE_COMMANDS, (_HAS_CONTRACT,)),
+        OperationRule(GIT_MUTATE_COMMANDS, (_HAS_CONTRACT,)),
+    ),
     # ...
 }
 ```
 
 ### Default: DENY
 
-Any `(mode, category, root_key, subdir)` not in the matrix → DENY.
+Any `(mode, root_key, subdir)` not in the matrix → DENY.
 
 ---
 
@@ -172,14 +195,14 @@ def enforce(
     subdirectory: str | None,
     **context,
 ) -> Reply:
-    # 1. classify_command(tool, command)
-    # 2. "read" → rb.success("EN-READ-S-001")
-    # 3. category → MUTATIONS_MATRIX lookup (subdirectory-specific, then root-level)
-    # 4. No entry → rb.denied("EN-GATE-D-001")
+    # 1. Look up (mode, root_key, subdirectory) in OPERATIONS_MATRIX
+    # 2. Scan rules for one whose commands contain (tool, command)
+    # 3. No matching rule → rb.denied("EN-GATE-D-001")
+    # 4. Rule has no conditions (read) → rb.success("EN-READ-S-001")
     # 5. Conditions check → rb.denied(denial_code) or rb.success("EN-WRITE-S-001")
 ```
 
-No `OperationType`. No `tool_cluster`. The tool handler passes its real `tool` name and `command`. Enforcement classifies and decides.
+No `OperationType`. No `tool_cluster`. No `classify_command()`. The tool handler passes its real `tool` name and `command`. Enforcement scans rules and decides.
 
 ---
 
@@ -263,10 +286,10 @@ result = enforce(
 
 | File | Status | Notes |
 |------|--------|-------|
-| `capability_matrix_v2.py` | **REWRITTEN** | New architecture: classify_command + MUTATIONS_MATRIX. No OperationType, no Capability, no _RO |
-| `enforcement_v2.py` | **REWRITTEN** | New signature: (rb, mode, tool, command, root_key, subdirectory). Calls classify_command |
+| `capability_matrix_v2.py` | **REWRITTEN** | OperationRule + OPERATIONS_MATRIX architecture. No OperationType, no Capability, no _RO, no classify_command |
+| `enforcement_v2.py` | **REWRITTEN** | Single enforce() with find_operation_rule() scan. No classify_command |
 | `world_adapter_v2.py` | **REWRITTEN** | Mode-agnostic: reads mode dynamically. No mode param in constructor/factory |
-| `server.py _ck3_exec_internal` | **UPDATED** | Uses new enforce() signature: tool="ck3_exec", command=command |
+| `server.py _ck3_exec_internal` | **PARTIALLY UPDATED** | Uses new enforce() signature, but ck3_exec is NOT yet functional end-to-end (inline ban, script location restriction, HMAC not implemented) |
 | `server.py _get_world_v2` | **UPDATED** | No mode param in create() call |
 | `server.py _reset_world_cache` | **UPDATED** | No longer clears v2 cache on mode change |
 | `dir_ops.py` | **CLEAN** | Imports VALID_ROOT_KEYS (still valid), no OperationType import |
@@ -297,8 +320,8 @@ result = enforce(
 - **No `mod_paths` dict** — WA consults `session.mods` directly.
 - **No host paths in Reply** — Reply is semantic, VisibilityRef is capability.
 - **No namespace coercion** — output preserves input namespace.
-- **No OperationType enum** — classify_command handles tool+command → category.
-- **No _RO entries** — reads handled by visibility, never by mutations matrix.
+- **No OperationType enum** — `find_operation_rule()` scans OPERATIONS_MATRIX rules directly.
+- **No _RO entries** — reads and mutations both use `OperationRule` in the same OPERATIONS_MATRIX; reads have no conditions.
 - **No abstract tool clusters** — real tool+command pairs are the classification key.
 
 ---
@@ -309,5 +332,6 @@ result = enforce(
 |------|--------|
 | 2026-02-18 (initial) | Design brief created with OperationType + Capability + OPERATIONS_MATRIX |
 | 2026-02-18 (rev 1) | WA v2 made mode-agnostic (dynamic mode reads) |
-| 2026-02-18 (rev 2) | **Major rewrite:** Removed OperationType enum, Capability class, _RO. Added classify_command, MUTATION_CATEGORIES, MUTATIONS_MATRIX. enforcement_v2 takes (tool, command) not (tool_cluster, operation). |
+| 2026-02-18 (rev 2) | **Major rewrite:** Removed OperationType enum, Capability class, _RO. Introduced OperationRule + OPERATIONS_MATRIX with command frozensets. enforcement_v2 uses find_operation_rule() instead of classify_command. |
 | 2026-02-18 (rev 2, addendum) | Identified open design issue: VISIBILITY_MATRIX needs subfolder gating with conditions (from v1, not yet ported) |
+| 2026-02-20 (rev 3) | **Doc sync:** Updated all references from MutationRule/MUTATIONS_MATRIX/MutationKey to OperationRule/OPERATIONS_MATRIX/OperationKey to match actual code. Updated ck3_exec status to NOT FUNCTIONAL. Removed classify_command references. |

@@ -103,12 +103,10 @@ def initialize_workspace(
             else:
                 item.unlink()
     elif _WIP.exists():
-        # Just clean stale files (older than 24h)
-        stale_threshold = time.time() - (24 * 60 * 60)
-        for f in _WIP.rglob("*"):
-            if f.is_file() and f.stat().st_mtime < stale_threshold:
-                f.unlink()
-                stale_cleaned += 1
+        # DISABLED: Stale file deletion removed entirely.
+        # User requirement: NO automatic deletion of WIP files.
+        # Future: implement 10-day retention with 3-day access buffer and warnings.
+        pass
     
     # Ensure directory exists
     _WIP.mkdir(parents=True, exist_ok=True)
@@ -130,30 +128,21 @@ def initialize_workspace(
 
 def cleanup_stale_files(mode: AgentMode = AgentMode.CK3LENS) -> dict[str, Any]:
     """
-    Clean up files older than 24 hours (best-effort).
+    DISABLED: No automatic file deletion.
+    
+    Previously deleted files older than 24 hours. Disabled per user requirement.
+    Future: implement 10-day retention with 3-day access buffer and warnings.
     
     Returns:
-        Status dict with cleanup results
+        Status dict (always reports 0 cleaned)
     """
-    if not _WIP.exists():
-        return {"path": str(_WIP), "exists": False, "cleaned": 0}
-    
-    stale_threshold = time.time() - (24 * 60 * 60)
-    cleaned = []
-    
-    for f in _WIP.rglob("*"):
-        if f.is_file() and f.name != ".wip_session":
-            if f.stat().st_mtime < stale_threshold:
-                rel_path = str(f.relative_to(_WIP))
-                f.unlink()
-                cleaned.append(rel_path)
-    
     return {
         "path": str(_WIP),
         "mode": mode.value,
-        "exists": True,
-        "cleaned": len(cleaned),
-        "cleaned_files": cleaned,
+        "exists": _WIP.exists(),
+        "cleaned": 0,
+        "cleaned_files": [],
+        "note": "Automatic deletion disabled. No files were removed.",
     }
 
 

@@ -394,34 +394,6 @@ export class CK3LensSession implements vscode.Disposable {
     }
 
     /**
-     * Validate a PatchDraft contract
-     */
-    async validatePatchDraft(patchDraft: any): Promise<{
-        valid: boolean;
-        errors: string[];
-        warnings: string[];
-    }> {
-        try {
-            const result = await this.pythonBridge.call('validate_patchdraft', {
-                patchdraft: patchDraft
-            });
-
-            return {
-                valid: result.errors?.length === 0,
-                errors: result.errors || [],
-                warnings: result.warnings || []
-            };
-        } catch (error) {
-            this.logger.error('Validate patch draft failed', error);
-            return {
-                valid: false,
-                errors: [String(error)],
-                warnings: []
-            };
-        }
-    }
-
-    /**
      * Get git status for a live mod
      */
     async getGitStatus(modName: string): Promise<{

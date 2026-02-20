@@ -11,7 +11,7 @@ Consolidated tools:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Literal
 
 from .db.golden_join import GOLDEN_JOIN
 # Canonical path constants - use these instead of computing paths from __file__
@@ -19,6 +19,10 @@ from .paths import ROOT_REPO
 
 # Canonical Reply System (Phase C migration)
 from ck3raven.core.reply import Reply
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from ck3lens_mcp.safety import ReplyBuilder
 
 
 # ============================================================================
@@ -80,7 +84,7 @@ def ck3_logs_impl(
     # FR-2: Export results to WIP
     export_to: str | None = None,
     # Reply builder
-    *, rb=None,
+    *, rb: ReplyBuilder,
 ) -> Reply:
     """
     Unified logging tool implementation.
@@ -176,7 +180,7 @@ def _export_logs_result(
     source: str,
     command: str,
     export_to: str,
-    *, rb=None,
+    *, rb: ReplyBuilder,
 ) -> Reply:
     """
     Export logs result to markdown file in WIP.
@@ -300,7 +304,7 @@ def _error_log_handler(
     query: str | None,
     limit: int,
     source_path: Path | None = None,
-    *, rb=None,
+    *, rb: ReplyBuilder,
 ) -> Reply:
     """Handle error.log commands."""
     from ck3raven.analyzers.error_parser import CK3ErrorParser, ERROR_CATEGORIES
@@ -377,7 +381,7 @@ def _game_log_handler(
     query: str | None,
     limit: int,
     source_path: Path | None = None,
-    *, rb=None,
+    *, rb: ReplyBuilder,
 ) -> Reply:
     """Handle game.log commands."""
     from ck3raven.analyzers.log_parser import CK3LogParser, LogType, GAME_LOG_CATEGORIES
@@ -440,7 +444,7 @@ def _game_log_handler(
     return rb.invalid("MCP-SYS-I-001", data={"error": f"Unknown command for game source: {command}"})
 
 
-def _debug_log_handler(command: str, source_path: Path | None = None, *, rb=None) -> Reply:
+def _debug_log_handler(command: str, source_path: Path | None = None, *, rb: ReplyBuilder) -> Reply:
     """Handle debug.log commands."""
     from ck3raven.analyzers.log_parser import CK3LogParser
     
@@ -459,7 +463,7 @@ def _debug_log_handler(command: str, source_path: Path | None = None, *, rb=None
     return rb.invalid("MCP-SYS-I-001", data={"error": f"Unknown command for debug source: {command}"})
 
 
-def _crash_handler(command: str, crash_id: str | None, limit: int, *, rb=None) -> Reply:
+def _crash_handler(command: str, crash_id: str | None, limit: int, *, rb: ReplyBuilder) -> Reply:
     """Handle crash report commands."""
     
     if command == "summary":
@@ -513,7 +517,7 @@ def _read_log_raw(
     from_end: bool,
     search: str | None,
     source_path: Path | None = None,
-    *, rb=None,
+    *, rb: ReplyBuilder,
 ) -> Reply:
     """Read raw log content.
     
@@ -623,7 +627,7 @@ def _read_log_raw(
         return rb.error("MCP-SYS-E-001", data={"error": str(e)})
 
 
-def _read_log_full(source: str, source_path: Path | None = None, *, rb=None) -> Reply:
+def _read_log_full(source: str, source_path: Path | None = None, *, rb: ReplyBuilder) -> Reply:
     """Return raw log file content for backup/archival.
     
     MEMORY-SAFE: Refuses files larger than 100KB to prevent OOM.
@@ -763,14 +767,15 @@ def ck3_file_impl(
     source_path: str | None = None,
     source_mod: str | None = None,  # Source mod containing the file to patch
     patch_mode: str | None = None,  # "partial_patch" or "full_replace"
-    # Dependencies (injected)
+    # Dependencies (injected, keyword-only)
+    *,
     session=None,
     db=None,
     trace=None,
     visibility=None,  # VisibilityScope for DB queries
     world=None,  # WorldAdapter for unified path resolution
     # Reply system
-    rb: Any | None = None,  # ReplyBuilder from server.py — used by enforce() and sub-functions
+    rb: ReplyBuilder,  # ReplyBuilder from server.py — used by enforce() and sub-functions
 ) -> Reply | dict:
     """
     Unified file operations tool.
@@ -970,7 +975,7 @@ def _file_get(path, include_ast, max_bytes, db, trace, visibility):
     return {"error": f"File not found: {path}"}
 
 
-def _file_read_raw(path, start_line, end_line, trace, world=None, *, rb=None) -> Reply:
+def _file_read_raw(path, start_line, end_line, trace, world=None, *, rb: ReplyBuilder) -> Reply:
     """
     Read file from filesystem with WorldAdapter visibility enforcement.
     
@@ -1026,7 +1031,7 @@ def _file_read_raw(path, start_line, end_line, trace, world=None, *, rb=None) ->
 # All read operations now go through _file_read_raw with pre-resolved absolute path.
 
 
-def _file_write(mod_name, rel_path, content, validate_syntax, session, trace, *, rb=None) -> Reply:
+def _file_write(mod_name, rel_path, content, validate_syntax, session, trace, *, rb: ReplyBuilder) -> Reply:
     """
     Write file to mod.
     
@@ -1096,7 +1101,7 @@ def _file_write(mod_name, rel_path, content, validate_syntax, session, trace, *,
         return rb.error("WA-RES-E-001", {"error": str(e), "input_path": f"{mod_name}:{rel_path}"})
 
 
-def _file_write_raw(path, content, validate_syntax, token_id, trace, world=None, *, rb=None) -> Reply:
+def _file_write_raw(path, content, validate_syntax, token_id, trace, world=None, *, rb: ReplyBuilder) -> Reply:
     """
     Write file to raw filesystem path.
     
@@ -1509,7 +1514,7 @@ def _file_list_raw(path, pattern, trace, world=None):
     return {"path": path, "pattern": glob_pattern, "files": sorted(files, key=lambda x: x.get("relpath", ""))}
 
 
-def _file_create_patch(mod_name, source_mod, source_path, patch_mode, initial_content, validate_syntax, session, trace, mode, rb=None):
+def _file_create_patch(mod_name, source_mod, source_path, patch_mode, initial_content, validate_syntax, session, trace, mode, rb: ReplyBuilder):
     """
     Create an override patch file in a mod.
     
@@ -2250,11 +2255,12 @@ def ck3_git_impl(
     message: str | None = None,
     # For log
     limit: int = 10,
-    # Dependencies
+    # Dependencies (keyword-only)
+    *,
     session=None,
     trace=None,
     world=None,  # WorldAdapter for canonical path resolution
-    rb: Any | None = None,  # ReplyBuilder from server.py — used by enforce()
+    rb: ReplyBuilder,  # ReplyBuilder from server.py — used by enforce()
 ) -> Reply | dict:
     """
     Unified git operations.

@@ -13,11 +13,7 @@ Modules:
 
 from ck3lens.validate import parse_content, validate_artifact_bundle
 
-# Backwards compatibility aliases
-validate_patchdraft = validate_artifact_bundle
-
 __all__ = [
     "parse_content",
     "validate_artifact_bundle",
-    "validate_patchdraft",  # Backwards compatibility alias
 ]

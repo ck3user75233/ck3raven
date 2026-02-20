@@ -95,12 +95,11 @@ _V1_OPTIONAL_FIELDS = frozenset({
     "notes",
     "schema_version",
     # Phase 1.5 compliance fields
-    "baseline_snapshot_path",  # Path to symbol snapshot at contract open
-    "baseline_playset_hash",   # Playset hash captured at contract open
-    "audit_result_path",       # Path to audit result on close
     "base_commit",              # Git commit SHA at contract open (for scoped lint)
     # Sigil — session-scoped cryptographic signing
     "session_signature",       # HMAC signature via Sigil; missing/invalid = rejected
+    # Script execution — Sigil signature covering (contract_id, script_path, content_sha256)
+    "script_signature",        # dict with script_path, content_sha256, signature, signed_at
 })
 
 _V1_ALL_FIELDS = _V1_REQUIRED_FIELDS | _V1_OPTIONAL_FIELDS
@@ -289,13 +288,13 @@ class ContractV1:
     schema_version: str = CONTRACT_SCHEMA_VERSION
     
     # Phase 1.5 compliance fields
-    baseline_snapshot_path: Optional[str] = None  # Symbol snapshot at open
-    baseline_playset_hash: Optional[str] = None   # Playset hash at open
-    audit_result_path: Optional[str] = None       # Audit result on close
     base_commit: Optional[str] = None             # Git commit SHA at contract open
     
     # Sigil — session-scoped cryptographic signature
     session_signature: Optional[str] = None       # Set by save_contract, verified on every load
+    
+    # Script execution — Sigil signature covering (contract_id, script_path, content_sha256)
+    script_signature: Optional[dict] = None
     
     def __post_init__(self):
         # Normalize mode
@@ -383,12 +382,11 @@ class ContractV1:
             "closed_at": self.closed_at,
             "notes": self.notes,
             # Phase 1.5 compliance fields
-            "baseline_snapshot_path": self.baseline_snapshot_path,
-            "baseline_playset_hash": self.baseline_playset_hash,
-            "audit_result_path": self.audit_result_path,
             "base_commit": self.base_commit,
             # Sigil session signature
             "session_signature": self.session_signature,
+            # Script execution signature
+            "script_signature": self.script_signature,
         }
     
     @classmethod
@@ -436,12 +434,11 @@ class ContractV1:
             notes=data.get("notes"),
             schema_version=data.get("schema_version", CONTRACT_SCHEMA_VERSION),
             # Phase 1.5 compliance fields
-            baseline_snapshot_path=data.get("baseline_snapshot_path"),
-            baseline_playset_hash=data.get("baseline_playset_hash"),
-            audit_result_path=data.get("audit_result_path"),
             base_commit=data.get("base_commit"),
             # Sigil session signature
             session_signature=data.get("session_signature"),
+            # Script execution signature
+            script_signature=data.get("script_signature"),
         )
 
 
@@ -496,6 +493,49 @@ def _verify_contract_signature(contract: ContractV1) -> bool:
         return False
     payload = _contract_signing_payload(contract.contract_id, contract.created_at)
     return sigil_verify(payload, contract.session_signature)
+
+
+def validate_script_signature(contract: ContractV1, script_path: str, content_sha256: str) -> bool:
+    """
+    Validate the script_signature on a contract.
+
+    Pure predicate — checks that the script_signature field has a valid
+    Sigil HMAC for the given script_path and content_sha256.
+
+    Called by enforcement's exec_signed condition. No side effects.
+
+    Args:
+        contract: The contract to check.
+        script_path: Absolute host path to the script being executed.
+        content_sha256: SHA-256 hash of the script's current content.
+
+    Returns:
+        True only if all checks pass.
+    """
+    from tools.compliance.sigil import sigil_verify, sigil_available
+
+    if not sigil_available():
+        return False
+
+    ss = contract.script_signature
+    if not ss:
+        return False
+
+    stored_path = ss.get("script_path", "")
+    stored_hash = ss.get("content_sha256", "")
+    stored_sig = ss.get("signature", "")
+
+    if not stored_path or not stored_hash or not stored_sig:
+        return False
+
+    if script_path != stored_path:
+        return False
+
+    if content_sha256 != stored_hash:
+        return False
+
+    payload = f"script:{contract.contract_id}|{stored_path}|{stored_hash}"
+    return sigil_verify(payload, stored_sig)
 
 
 def save_contract(contract: ContractV1) -> Path:
@@ -693,8 +733,6 @@ def open_contract(
 
     # Phase 1.5: Evidence capture deferred to contract CLOSE audit.
     # Contract OPEN must be O(1) - no DB queries, no symbol snapshots.
-    baseline_snapshot_path: Optional[str] = None
-    baseline_playset_hash: Optional[str] = None
     base_commit: Optional[str] = None
     
     # Generate contract ID (instant)
@@ -712,8 +750,6 @@ def open_contract(
         author=author,
         expires_at=(datetime.now() + timedelta(hours=expires_hours)).isoformat(),
         notes=notes,
-        baseline_snapshot_path=baseline_snapshot_path,
-        baseline_playset_hash=baseline_playset_hash,
         base_commit=base_commit,
     )
     

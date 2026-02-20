@@ -151,7 +151,6 @@ Even without the ck3raven database indexed, these tools work:
 | `ck3_delete_file` | ✅ Works |
 | `ck3_list_live_files` | ✅ Works |
 | `ck3_parse_content` | ✅ Works |
-| `ck3_validate_patchdraft` | ✅ Works |
 | `ck3_git_*` | ✅ Works |
 | `ck3_search_symbols` | ⚠️ Needs DB |
 | `ck3_confirm_not_exists` | ⚠️ Needs DB |

@@ -138,7 +138,7 @@ class Codes:
     WA_RES_S_001 = ReplyCode("WA-RES-S-001", Layer.WA, Area.RES, ReplyType.S, 1,
         "RESOLUTION_OK", "Path/symbol resolved successfully")
     WA_RES_I_001 = ReplyCode("WA-RES-I-001", Layer.WA, Area.RES, ReplyType.I, 1,
-        "PATH_NOT_FOUND", "Path does not exist in world")
+        "PATH_NOT_FOUND", "Path not found")
     WA_RES_I_002 = ReplyCode("WA-RES-I-002", Layer.WA, Area.RES, ReplyType.I, 2,
         "SYMBOL_NOT_FOUND", "Symbol not found in index")
     WA_RES_I_003 = ReplyCode("WA-RES-I-003", Layer.WA, Area.RES, ReplyType.I, 3,

@@ -37,15 +37,6 @@ import { Ck3RavenParticipant } from './chat/participant';
 import { registerSearchCommand } from './chat/search';
 import { runHealthCheck, formatHealthForChat } from './chat/diagnose';
 import { registerDoctorCommands } from './setup/doctor';
-import { 
-    initializeWindowManager, 
-    registerJournalCommands, 
-    createJournalStatusBar,
-    WindowManager,
-    JournalStatusBar,
-    setShuttingDown,
-} from './journal';
-import { registerJournalTreeView } from './journal/journalTreeProvider';
 
 // Global extension state
 let session: CK3LensSession | undefined;
@@ -56,8 +47,6 @@ let mcpRegistration: vscode.Disposable | undefined;
 let diagnosticsServer: DiagnosticsServer | undefined;
 let tokenWatcher: TokenWatcher | undefined;
 let chatParticipant: Ck3RavenParticipant | undefined;
-let journalWindowManager: WindowManager | undefined;
-let journalStatusBar: JournalStatusBar | undefined;
 let logger: Logger;
 let structuredLogger: StructuredLogger | undefined;
 let outputChannel: vscode.OutputChannel;
@@ -149,96 +138,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         instance_id: instanceId
     });
 
-    // ========================================================================
-    // CRITICAL: Journal Extractor - "Flight Recorder" (HOISTED - MUST init before risky subsystems)
-    // ========================================================================
-    // Chat Journaling v2.0 - Manifest Only (NO file reads from chatSessions)
-    // ========================================================================
-    // v1.0 was disabled due to ChatSessionStore file locking conflicts.
-    // v2.0 approach: Extension ONLY writes workspace paths to manifest.
-    // Extraction happens via external CLI when VS Code is CLOSED.
-    // See: docs/CHAT_JOURNALING_V2.md
-    // ========================================================================
-    
-    // A5b-e: Journal subsystem - Manifest Collection (Phase 2)
-    console.log('[CK3RAVEN] A5b JOURNAL: Writing manifest (v2.0 - no file reads)');
-    if (structuredLogger) {
-        try {
-            // Derive chatSessions path from context.storageUri (safe - VS Code API only)
-            const storageUri = context.storageUri;
-            if (storageUri) {
-                const workspaceStorageRoot = path.dirname(storageUri.fsPath);
-                const chatSessionsPath = path.join(workspaceStorageRoot, 'chatSessions');
-                const workspaceKey = path.basename(workspaceStorageRoot);
-                
-                // Get workspace name for debugging
-                const workspaceName = vscode.workspace.name || 'unnamed-workspace';
-                
-                // Write/update manifest (safe - our own file in ~/.ck3raven)
-                const manifestPath = path.join(os.homedir(), '.ck3raven', 'journal_manifest.json');
-                let manifest: {
-                    version: string;
-                    last_updated: string;
-                    workspaces: Array<{
-                        workspace_key: string;
-                        workspace_name: string;
-                        storage_root: string;
-                        chat_sessions_path: string;
-                        last_seen: string;
-                    }>;
-                } = { version: '2.0', last_updated: '', workspaces: [] };
-                
-                // Load existing manifest if present
-                if (fs.existsSync(manifestPath)) {
-                    try {
-                        manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-                    } catch {
-                        // Corrupted manifest - start fresh
-                    }
-                }
-                
-                // Update or add this workspace
-                const now = new Date().toISOString();
-                const existingIdx = manifest.workspaces.findIndex(w => w.workspace_key === workspaceKey);
-                const workspaceEntry = {
-                    workspace_key: workspaceKey,
-                    workspace_name: workspaceName,
-                    storage_root: workspaceStorageRoot,
-                    chat_sessions_path: chatSessionsPath,
-                    last_seen: now,
-                };
-                
-                if (existingIdx >= 0) {
-                    manifest.workspaces[existingIdx] = workspaceEntry;
-                } else {
-                    manifest.workspaces.push(workspaceEntry);
-                }
-                manifest.last_updated = now;
-                
-                // Write manifest
-                fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
-                fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
-                
-                structuredLogger.info('ext.journal', 'Journal manifest updated (v2.0)', {
-                    workspace_key: workspaceKey,
-                    manifest_path: manifestPath,
-                    workspaces_tracked: manifest.workspaces.length,
-                });
-            } else {
-                structuredLogger.warn('ext.journal', 'No storageUri - cannot write manifest', {});
-            }
-            
-            // Register tree view for existing archives (safe - reads our own files)
-            registerJournalTreeView(context);
-            structuredLogger.info('ext.journal', 'Journal tree view registered');
-            
-        } catch (err) {
-            structuredLogger.warn('ext.journal', 'Journal manifest write failed (non-fatal)', {
-                error: (err as Error).message,
-            });
-        }
-    }
-    console.log('[CK3RAVEN] A5c JOURNAL: Manifest complete');
+    // Journal system removed (February 2026)
 
     
     // CRITICAL: Per-instance mode blanking
@@ -435,10 +335,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         console.log('[CK3RAVEN] A11c participant created');
         context.subscriptions.push(chatParticipant);
 
-        // Register search command pointing to NEW journal system path
-        const journalsBase = path.join(os.homedir(), '.ck3raven', 'journals');
-        registerSearchCommand(context, () => vscode.Uri.file(journalsBase));
-        console.log('[CK3RAVEN] A11d journal search command registered');
+        // Journal search command removed (February 2026)
 
         // Health check command
         context.subscriptions.push(
@@ -453,16 +350,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 );
             })
         );
-
-        // Check for conflicting chat recorder extensions (Q3)
-        const knownRecorders = vscode.workspace.getConfiguration('ck3raven.chatJournal')
-            .get<string[]>('knownChatRecorderExtensions', []);
-        if (knownRecorders.length > 0) {
-            const installed = knownRecorders.filter(id => vscode.extensions.getExtension(id));
-            if (installed.length > 0) {
-                logger.info(`Chat recorders detected: ${installed.join(', ')}`);
-            }
-        }
 
         logger.info('CK3 Raven Chat Participant registered');
     }
@@ -482,16 +369,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger.info('Doctor commands registered');
 
     // ========================================================================
-    // Journal Tree View (UI chrome - can init late, flight recorder already started above)
+    // Journal Tree View — REMOVED (February 2026)
     // ========================================================================
-    console.log('[CK3RAVEN] A21 Journal tree view');
-    if (structuredLogger) {
-        // Register journal tree view for browsing archives
-        // Note: journalWindowManager was already initialized early (Lifeboat Protocol)
-        registerJournalTreeView(context);
-        structuredLogger.info('ext.journal', 'Journal tree view registered');
-    }
-    console.log('[CK3RAVEN] A22 after Journal tree view');
+    console.log('[CK3RAVEN] A21 Journal system removed');
+    console.log('[CK3RAVEN] A22 after Journal removal');
 
     logger.info('CK3 Lens Explorer activated successfully');
     console.log('[CK3RAVEN] A23 ACTIVATE COMPLETE - returning from activate()');
@@ -1290,22 +1171,9 @@ except Exception as e:
  * preventing it from caching a stale connection to the old server.
  */
 export async function deactivate(): Promise<void> {
-    // CRITICAL: Set shutdown flag FIRST to prevent any chatSession access
-    // This guards against file locking issues with VS Code's workspaceStorage
-    // See: docs/bugs/JOURNAL_EXTRACTOR_CHAT_SESSION_LOSS.md
-    setShuttingDown(true);
-    
     // Log deactivation start with structured logger (CANONICAL per docs/CANONICAL_LOGS.md)
     structuredLogger?.info('ext.deactivate', 'Extension deactivating');
     logger?.info('CK3 Lens Explorer deactivating...');
-    
-    // Dispose Journal subsystem first (auto-closes any active window)
-    if (journalWindowManager) {
-        await journalWindowManager.dispose();
-        journalWindowManager = undefined;
-    }
-    journalStatusBar?.dispose();
-    journalStatusBar = undefined;
     
     // Clean up database state (checkpoint WAL, clean stale locks)
     if (logger) {

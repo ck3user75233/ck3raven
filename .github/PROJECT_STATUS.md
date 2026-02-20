@@ -222,7 +222,7 @@ python scripts/rebuild_database.py --refresh-symbols
 | Files | `ck3_get_file`, `ck3_list_live_files`, `ck3_read_live_file` |
 | Playset | `ck3_get_active_playset`, `ck3_list_playsets`, `ck3_search_mods`, `ck3_add_mod_to_playset`, `ck3_remove_mod_from_playset` |
 | Conflicts | `ck3_scan_unit_conflicts`, `ck3_get_conflict_summary`, `ck3_list_conflict_units`, `ck3_get_conflict_detail`, `ck3_resolve_conflict`, `ck3_get_unit_content`, `ck3_get_conflicts` |
-| Validation | `ck3_parse_content`, `ck3_validate_patchdraft` |
+| Validation | `ck3_parse_content` |
 | Live Ops | `ck3_write_file`, `ck3_edit_file`, `ck3_delete_file` |
 | Git | `ck3_git_status`, `ck3_git_diff`, `ck3_git_add`, `ck3_git_commit`, `ck3_git_pull`, `ck3_git_push` |
 

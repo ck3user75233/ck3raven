@@ -7,29 +7,28 @@ Two matrices, both with conditions:
    Consulted by WA v2 on every resolve(). Entry exists = visible, subject to conditions.
    No entry = not visible. Conditions are evaluated with context from WA.
 
-2. MUTATIONS_MATRIX — what mutations are allowed at this (root_key, subdirectory)?
+2. OPERATIONS_MATRIX — what operations are allowed at this (root_key, subdirectory)?
    Each rule carries the exact (tool, command) pairs it governs, plus conditions.
-   No entry = mutation denied. Enforcement finds the matching rule and checks conditions.
+   No entry = operation denied. Enforcement finds the matching rule and checks conditions.
+   Reads are rules with no conditions (always allowed if visible).
+   Mutations carry conditions (e.g. has_contract, exec_signed).
 
 Plus:
-
-- READ_COMMANDS — explicit list of (tool, command) pairs that are reads.
-  Reads need only visibility (WA). No enforcement needed.
 
 - Conditions — standalone named predicates returning True/False, built via factories.
   No denial codes. WA and EN produce their own response codes.
   Modular: swap/add conditions without touching WA or EN.
 
-Enforcement (enforcement_v2.py) walks MUTATIONS_MATRIX.
+Enforcement (enforcement_v2.py) walks OPERATIONS_MATRIX for ALL operations (reads and mutations).
 WA (world_adapter_v2.py) walks VISIBILITY_MATRIX.
-This module is data only.
+This module is data only (conditions may call sigil_verify for cryptographic checks).
 
 Design brief: docs/Canonical address refactor/v2_enforcement_design_brief.md
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Callable, Sequence
 
 
@@ -45,38 +44,6 @@ class Condition:
 
 
 # =============================================================================
-# PATH UTILITIES — used by condition predicates
-# =============================================================================
-
-def _as_pure_posix_path(value: str | None) -> PurePosixPath | None:
-    """Normalize a path string to PurePosixPath for depth/component checks.
-
-    Strips leading/trailing slashes, normalises backslashes.
-    Returns None if value is None or empty after stripping.
-    """
-    if value is None:
-        return None
-    cleaned = value.replace("\\", "/").strip("/")
-    if not cleaned:
-        return None
-    return PurePosixPath(cleaned)
-
-
-def _path_is_safe_relative(p: PurePosixPath) -> bool:
-    """Reject absolute or traversal paths.
-
-    Returns False if:
-      - The path is absolute
-      - Any component is '..'
-    """
-    if p.is_absolute():
-        return False
-    if ".." in p.parts:
-        return False
-    return True
-
-
-# =============================================================================
 # CONDITION FACTORIES
 #
 # Each factory returns a Condition instance. Conditions are pure bool predicates.
@@ -84,73 +51,44 @@ def _path_is_safe_relative(p: PurePosixPath) -> bool:
 # WA and EN own their own response codes.
 # =============================================================================
 
-def is_subfolder(*, min_depth: int = 1) -> Condition:
-    """True if relative_path has at least min_depth path components.
+def host_path_in_session_mod_roots() -> Condition:
+    """True iff host_abs is within (or equal to) one of session_mod_root_paths.
 
-    Uses PurePosixPath for cross-platform depth counting.
-    Rejects absolute or traversal paths.
+    Pure predicate over already-canonical inputs. No .resolve(), no filesystem
+    calls. WA must pass pre-resolved paths.
 
-    Context keys:
-        relative_path: str | None — the relative path from root
-    """
-    def _check(*, relative_path: str | None = None, **_: object) -> bool:
-        pp = _as_pure_posix_path(relative_path)
-        if pp is None:
-            return False
-        if not _path_is_safe_relative(pp):
-            return False
-        return len(pp.parts) >= min_depth
-    return Condition(name=f"is_subfolder(min_depth={min_depth})", check=_check)
+    No branching by address form. Pure containment test.
+    WA resolves both mod:<name>/path and root:user_docs/mod/X/path to
+    host_abs before calling this, so the condition is address-form-agnostic.
 
-
-def path_in_session_mods() -> Condition:
-    """True if the resolved host path is within (or equal to) any session mod path.
-
-    For mod: addresses (is_mod_address=True), returns True immediately — WA
-    already resolved the mod name from session.mods, so it is in-session by
-    definition.
-
-    For root: addresses in steam or user_docs/mod, checks host_abs
-    containment against session_mod_paths. This naturally excludes:
+    Naturally excludes:
       - .mod registry files (siblings of mod dirs, not inside them)
       - The mod/ directory itself (parent of mod dirs, not inside them)
       - Mods not in the active session/playset
 
     Context keys:
-        host_abs: Path | None — resolved host-absolute path (from WA)
-        session_mod_paths: Sequence[Path] | None — mod paths from session.mods
-        is_mod_address: bool — True if input was a mod:Name address
+        host_abs: Path | None — pre-resolved host-absolute path (from WA)
+        session_mod_root_paths: Sequence[Path] | None — pre-resolved mod root paths
     """
     def _check(
         *,
         host_abs: Path | None = None,
-        session_mod_paths: Sequence[Path] | None = None,
-        is_mod_address: bool = False,
+        session_mod_root_paths: Sequence[Path] | None = None,
         **_: object,
     ) -> bool:
-        # mod: addresses are in-session by definition
-        # (WA already validated mod name against session.mods)
-        if is_mod_address:
-            return True
-
-        # Path-based check: host_abs must be within a session mod directory
-        if host_abs is None or not session_mod_paths:
+        if host_abs is None or not session_mod_root_paths:
             return False
 
-        try:
-            resolved = host_abs.resolve()
-        except (OSError, ValueError):
-            return False
-
-        for mod_path in session_mod_paths:
+        for root in session_mod_root_paths:
             try:
-                resolved.relative_to(mod_path.resolve())
+                host_abs.relative_to(root)
                 return True
-            except (ValueError, OSError):
+            except ValueError:
                 continue
+
         return False
 
-    return Condition(name="path_in_session_mods", check=_check)
+    return Condition(name="host_path_in_session_mod_roots", check=_check)
 
 
 def has_contract() -> Condition:
@@ -165,13 +103,38 @@ def has_contract() -> Condition:
 
 
 def exec_signed() -> Condition:
-    """True if exec_signature_valid is truthy in context.
+    """True if the active contract has a valid script signature for this script.
+
+    Inline cryptographic validation:
+    1. Loads the active contract (get_active_contract)
+    2. Checks contract.script_signature exists
+    3. Validates script_path, content_sha256, and HMAC signature match
+
+    NOT a permission oracle — this is a predicate called BY enforcement
+    as part of walking the capability matrix. Enforcement makes the
+    allow/deny decision based on this predicate's True/False return.
 
     Context keys:
-        exec_signature_valid: bool
+        script_host_path: str | None — absolute host path to the script
+        content_sha256: str | None — current SHA-256 of script content
     """
-    def _check(*, exec_signature_valid: bool = False, **_: object) -> bool:
-        return bool(exec_signature_valid)
+    def _check(
+        *,
+        script_host_path: str | None = None,
+        content_sha256: str | None = None,
+        **_: object,
+    ) -> bool:
+        if not script_host_path or not content_sha256:
+            return False
+
+        from ck3lens.policy.contract_v1 import get_active_contract, validate_script_signature
+
+        contract = get_active_contract()
+        if contract is None:
+            return False
+
+        return validate_script_signature(contract, script_host_path, content_sha256)
+
     return Condition(name="exec_signed", check=_check)
 
 
@@ -186,18 +149,22 @@ class VisibilityRule:
 
 
 # =============================================================================
-# MUTATION RULE — commands this rule governs + conditions
+# OPERATION RULE — commands this rule governs + conditions
 # =============================================================================
 
 @dataclass(frozen=True)
-class MutationRule:
+class OperationRule:
     """
     Exact (tool, command) pairs this rule governs, plus conditions.
     Enforcement finds the rule whose commands contain the (tool, command),
     then checks conditions. Data only.
+
+    Reads: rules with no conditions (always allowed if visible).
+    Mutations: rules with conditions (e.g. has_contract, exec_signed).
     """
     commands: frozenset[tuple[str, str]]
     conditions: tuple[Condition, ...] = ()
+
 
 
 # =============================================================================
@@ -216,17 +183,15 @@ VALID_ROOT_KEYS: frozenset[str] = frozenset({
 # Entry exists -> visible (subject to conditions). No entry -> not visible.
 # WA calls check_visibility() which evaluates conditions with context.
 #
-# path_in_session_mods() checks host path containment against session.mod.paths:
-#   - mod: addresses -> True (WA already validated name against session.mods)
-#   - root: addresses -> checks host_abs is within a session mod directory
+# host_path_in_session_mod_roots() — pure containment:
+#   host_abs must be within (or equal to) a session mod root path.
+#   Works identically for mod: and root: addresses because WA already
+#   resolved both to host_abs before the condition runs.
 # =============================================================================
 
 VisibilityKey = tuple[str, str, str | None]
 
 _V = VisibilityRule  # shorthand
-
-# Shared condition instances (created once from factories)
-_PATH_IN_SESSION = path_in_session_mods()
 
 VISIBILITY_MATRIX: dict[VisibilityKey, VisibilityRule] = {
 
@@ -238,21 +203,21 @@ VISIBILITY_MATRIX: dict[VisibilityKey, VisibilityRule] = {
     ("ck3lens", "game", None):              _V(),
     ("ck3lens", "steam", None):             _V(),
 
-    # Steam mod folders: path must be inside a session mod directory
-    ("ck3lens", "steam", "mod"):            _V((_PATH_IN_SESSION,)),
+    # Steam mod folders: host path must be within a session mod root
+    ("ck3lens", "steam", "mod"):            _V((host_path_in_session_mod_roots(),)),
 
-    # User docs root: NOT visible (contains .mod registry files)
-    # User docs / mod: path must be inside a session mod directory
-    # (path_in_session_mods naturally excludes .mod files and the mod/ dir itself)
-    ("ck3lens", "user_docs", "mod"):        _V((_PATH_IN_SESSION,)),
+    # User docs / mod: host path must be within a session mod root
+    # (naturally excludes .mod registry files, the mod/ dir itself,
+    #  and mods not in the active session)
+    ("ck3lens", "user_docs", "mod"):        _V((host_path_in_session_mod_roots(),)),
 
-    # ck3raven_data: visible unconditionally
+    # ck3raven_data: visible unconditionally (writes gated by operations matrix)
     ("ck3lens", "ck3raven_data", None):     _V(),
 
     # VS Code: visible unconditionally
     ("ck3lens", "vscode", None):            _V(),
 
-    # Repo: visible unconditionally (read-only — no mutation rules)
+    # Repo: visible unconditionally
     ("ck3lens", "repo", None):              _V(),
 
     # =================================================================
@@ -261,8 +226,8 @@ VISIBILITY_MATRIX: dict[VisibilityKey, VisibilityRule] = {
 
     ("ck3raven-dev", "game", None):             _V(),
     ("ck3raven-dev", "steam", None):            _V(),
-    ("ck3raven-dev", "steam", "mod"):           _V((_PATH_IN_SESSION,)),
-    ("ck3raven-dev", "user_docs", "mod"):       _V((_PATH_IN_SESSION,)),
+    ("ck3raven-dev", "steam", "mod"):           _V(),
+    ("ck3raven-dev", "user_docs", "mod"):       _V(),
     ("ck3raven-dev", "ck3raven_data", None):    _V(),
     ("ck3raven-dev", "vscode", None):           _V(),
     ("ck3raven-dev", "repo", None):             _V(),
@@ -303,50 +268,53 @@ def check_visibility(
 
 
 # =============================================================================
-# READ COMMANDS — explicit (tool, command) pairs that are reads.
-# If visible -> allowed. No enforcement needed.
+# OPERATIONS_MATRIX
+#
+# Key: (mode, root_key, subdirectory | None)
+# Value: tuple of OperationRules. Each rule carries its command set + conditions.
+# Enforcement looks up key, scans rules for matching (tool, command), checks
+# conditions. No entry -> operation denied. No matching command in any rule -> denied.
+#
+# ALL operations go through this matrix — reads AND mutations. No bypass branches.
 # =============================================================================
 
-READ_COMMANDS: frozenset[tuple[str, str]] = frozenset({
-    # ck3_file reads
+OperationKey = tuple[str, str, str | None]
+
+
+# --- Read command sets (no conditions — always allowed if visible) ---
+
+FILE_READ_COMMANDS: frozenset[tuple[str, str]] = frozenset({
     ("ck3_file", "read"),
     ("ck3_file", "get"),
     ("ck3_file", "list"),
     ("ck3_file", "refresh"),
-    # ck3_dir (all commands are reads)
+})
+
+DIR_READ_COMMANDS: frozenset[tuple[str, str]] = frozenset({
     ("ck3_dir", "pwd"),
     ("ck3_dir", "cd"),
     ("ck3_dir", "list"),
     ("ck3_dir", "tree"),
-    # ck3_git reads
+})
+
+GIT_READ_COMMANDS: frozenset[tuple[str, str]] = frozenset({
     ("ck3_git", "status"),
     ("ck3_git", "diff"),
     ("ck3_git", "log"),
-    # ck3_folder reads
+})
+
+FOLDER_READ_COMMANDS: frozenset[tuple[str, str]] = frozenset({
     ("ck3_folder", "list"),
     ("ck3_folder", "contents"),
     ("ck3_folder", "top_level"),
     ("ck3_folder", "mod_folders"),
 })
 
+ALL_READ_COMMANDS: frozenset[tuple[str, str]] = (
+    FILE_READ_COMMANDS | DIR_READ_COMMANDS | GIT_READ_COMMANDS | FOLDER_READ_COMMANDS
+)
 
-def is_read_command(tool: str, command: str) -> bool:
-    """True if this (tool, command) is a read. Reads need only visibility."""
-    return (tool, command) in READ_COMMANDS
-
-
-# =============================================================================
-# MUTATIONS_MATRIX
-#
-# Key: (mode, root_key, subdirectory | None)
-# Value: tuple of MutationRules. Each rule carries its command set + conditions.
-# Enforcement looks up key, scans rules for matching (tool, command), checks
-# conditions. No entry -> mutation denied. No matching command in any rule -> denied.
-# =============================================================================
-
-MutationKey = tuple[str, str, str | None]
-
-# --- Shared command sets (avoid repetition in matrix) ---
+# --- Mutation command sets ---
 
 FILE_WRITE_COMMANDS: frozenset[tuple[str, str]] = frozenset({
     ("ck3_file", "write"),
@@ -370,106 +338,162 @@ GIT_MUTATE_COMMANDS: frozenset[tuple[str, str]] = frozenset({
 
 EXEC_COMMANDS: frozenset[tuple[str, str]] = frozenset({
     # ck3_exec has no sub-command; the "command" param is the shell string.
-    # find_mutation_rule() special-cases tool="ck3_exec".
+    # find_operation_rule() special-cases tool="ck3_exec".
 })
 
-# Shared condition instances for mutations (created once from factories)
+# Shared condition instances (created once from factories)
 _HAS_CONTRACT = has_contract()
 _EXEC_SIGNED = exec_signed()
 
-_R = MutationRule  # shorthand
+# Shared read rule — no conditions, always allowed if visible
+_READS = OperationRule(ALL_READ_COMMANDS)
 
-MUTATIONS_MATRIX: dict[MutationKey, tuple[MutationRule, ...]] = {
+_R = OperationRule  # shorthand
+
+OPERATIONS_MATRIX: dict[OperationKey, tuple[OperationRule, ...]] = {
 
     # =================================================================
     # ck3lens mode
     # =================================================================
 
-    # user_docs / mod subfolders: write + delete + git, all need contract
+    # Game: read-only
+    ("ck3lens", "game", None): (
+        _READS,
+    ),
+
+    # Steam root: read-only
+    ("ck3lens", "steam", None): (
+        _READS,
+    ),
+
+    # Steam mod folders: read-only (visibility already checks session mod roots)
+    ("ck3lens", "steam", "mod"): (
+        _READS,
+    ),
+
+    # User docs / mod: reads + writes + git, mutations need contract
     ("ck3lens", "user_docs", "mod"): (
+        _READS,
         _R(FILE_ALL_COMMANDS, (_HAS_CONTRACT,)),
         _R(GIT_MUTATE_COMMANDS, (_HAS_CONTRACT,)),
     ),
 
-    # ck3raven_data / wip: write + delete + exec, NO contract for files
+    # ck3raven_data root: read-only
+    ("ck3lens", "ck3raven_data", None): (
+        _READS,
+    ),
+
+    # ck3raven_data / wip: reads + writes + exec
     ("ck3lens", "ck3raven_data", "wip"): (
+        _READS,
         _R(FILE_ALL_COMMANDS),          # no contract needed
         _R(EXEC_COMMANDS, (_EXEC_SIGNED,)),
     ),
 
-    # ck3raven_data per-subdirectory: write only, with contract
-    ("ck3lens", "ck3raven_data", "config"): (
-        _R(FILE_WRITE_COMMANDS, (_HAS_CONTRACT,)),
-    ),
+    # ck3raven_data / playsets: reads + writes with contract
     ("ck3lens", "ck3raven_data", "playsets"): (
+        _READS,
         _R(FILE_ALL_COMMANDS, (_HAS_CONTRACT,)),
     ),
-    ("ck3lens", "ck3raven_data", "logs"): (
-        _R(FILE_WRITE_COMMANDS, (_HAS_CONTRACT,)),
+
+    # VS Code: read-only
+    ("ck3lens", "vscode", None): (
+        _READS,
     ),
-    ("ck3lens", "ck3raven_data", "journal"): (
-        _R(FILE_WRITE_COMMANDS, (_HAS_CONTRACT,)),
+
+    # Repo: read-only
+    ("ck3lens", "repo", None): (
+        _READS,
     ),
-    ("ck3lens", "ck3raven_data", "cache"): (
-        _R(FILE_ALL_COMMANDS, (_HAS_CONTRACT,)),
-    ),
-    ("ck3lens", "ck3raven_data", "artifacts"): (
-        _R(FILE_WRITE_COMMANDS, (_HAS_CONTRACT,)),
-    ),
-    # NOTE: ck3raven_data/db, ck3raven_data/daemon — no mutations in ck3lens
 
     # =================================================================
     # ck3raven-dev mode
     # =================================================================
 
+    # Game: read-only
+    ("ck3raven-dev", "game", None): (
+        _READS,
+    ),
+
+    # Steam root: read-only
+    ("ck3raven-dev", "steam", None): (
+        _READS,
+    ),
+
+    # Steam mod folders: read-only
+    ("ck3raven-dev", "steam", "mod"): (
+        _READS,
+    ),
+
+    # User docs / mod: reads + writes + git
+    ("ck3raven-dev", "user_docs", "mod"): (
+        _READS,
+        _R(FILE_ALL_COMMANDS, (_HAS_CONTRACT,)),
+        _R(GIT_MUTATE_COMMANDS, (_HAS_CONTRACT,)),
+    ),
+
+    # ck3raven_data root: read-only
+    ("ck3raven-dev", "ck3raven_data", None): (
+        _READS,
+    ),
+
     # Repo: full file + git, all with contract
     ("ck3raven-dev", "repo", None): (
+        _READS,
         _R(FILE_ALL_COMMANDS, (_HAS_CONTRACT,)),
         _R(GIT_MUTATE_COMMANDS, (_HAS_CONTRACT,)),
     ),
 
     # ck3raven_data / wip: same as ck3lens
     ("ck3raven-dev", "ck3raven_data", "wip"): (
+        _READS,
         _R(FILE_ALL_COMMANDS),
         _R(EXEC_COMMANDS, (_EXEC_SIGNED,)),
     ),
 
     # ck3raven_data per-subdirectory: full access with contract
     ("ck3raven-dev", "ck3raven_data", "config"): (
+        _READS,
         _R(FILE_ALL_COMMANDS, (_HAS_CONTRACT,)),
     ),
     ("ck3raven-dev", "ck3raven_data", "playsets"): (
+        _READS,
         _R(FILE_ALL_COMMANDS, (_HAS_CONTRACT,)),
     ),
     ("ck3raven-dev", "ck3raven_data", "logs"): (
+        _READS,
         _R(FILE_ALL_COMMANDS, (_HAS_CONTRACT,)),
     ),
     ("ck3raven-dev", "ck3raven_data", "journal"): (
+        _READS,
         _R(FILE_ALL_COMMANDS, (_HAS_CONTRACT,)),
     ),
     ("ck3raven-dev", "ck3raven_data", "cache"): (
+        _READS,
         _R(FILE_ALL_COMMANDS, (_HAS_CONTRACT,)),
     ),
     ("ck3raven-dev", "ck3raven_data", "artifacts"): (
+        _READS,
         _R(FILE_ALL_COMMANDS, (_HAS_CONTRACT,)),
     ),
 
-    # VS Code settings: write with contract (no delete)
+    # VS Code settings: reads + write with contract (no delete)
     ("ck3raven-dev", "vscode", None): (
+        _READS,
         _R(FILE_WRITE_COMMANDS, (_HAS_CONTRACT,)),
     ),
 }
 
 
-def find_mutation_rule(
+def find_operation_rule(
     mode: str,
     root_key: str,
     subdirectory: str | None,
     tool: str,
     command: str,
-) -> MutationRule | None:
+) -> OperationRule | None:
     """
-    Find the MutationRule governing this (tool, command) at this location.
+    Find the OperationRule governing this (tool, command) at this location.
 
     Looks up (mode, root_key, subdirectory) first, then (mode, root_key, None).
     Scans rules for one whose commands contain (tool, command).
@@ -478,8 +502,8 @@ def find_mutation_rule(
     Special case: tool="ck3_exec" matches any rule with EXEC_COMMANDS
     (since ck3_exec's "command" param is the shell string, not a subcommand).
     """
-    for key in _mutation_keys(mode, root_key, subdirectory):
-        rules = MUTATIONS_MATRIX.get(key)
+    for key in _operation_keys(mode, root_key, subdirectory):
+        rules = OPERATIONS_MATRIX.get(key)
         if rules is None:
             continue
         for rule in rules:
@@ -490,8 +514,9 @@ def find_mutation_rule(
     return None
 
 
-def _mutation_keys(mode: str, root_key: str, subdirectory: str | None):
+def _operation_keys(mode: str, root_key: str, subdirectory: str | None):
     """Yield lookup keys: subdirectory-specific first, then root-level."""
     if subdirectory:
         yield (mode, root_key, subdirectory)
     yield (mode, root_key, None)
+
