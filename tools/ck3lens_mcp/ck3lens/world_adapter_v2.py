@@ -57,6 +57,20 @@ from .capability_matrix_v2 import VALID_ROOT_KEYS  # noqa: E402
 
 
 # ============================================================================
+# Parsed Address — replaces raw 5-tuple from _parse_and_compute
+# ============================================================================
+
+class ParsedAddress(NamedTuple):
+    """Result of parsing a canonical address."""
+    session_abs: str      # canonical address string (root:key/path or mod:name/path)
+    host_abs: Path        # host-absolute path
+    root_key: str         # infrastructure root key (for matrix lookup)
+    rel_path: str         # relative path within root or mod
+    is_mod: bool          # True if this was a mod: address
+    mod_name: str | None  # mod display name (only set for mod: addresses)
+
+
+# ============================================================================
 # Helpers
 # ============================================================================
 
@@ -92,20 +106,6 @@ def _get_mode() -> Optional[str]:
     """
     from ck3lens.agent_mode import get_agent_mode
     return get_agent_mode()
-
-
-# ============================================================================
-# Data Models
-# ============================================================================
-
-class ParsedAddress(NamedTuple):
-    """Result of parsing a canonical address. Self-documenting fields."""
-    session_abs: str       # Canonical address (root:key/path or mod:name/path)
-    host_abs: Path         # Host-absolute path
-    root_key: str          # Infrastructure root key (repo, user_docs, steam, etc.)
-    rel_path: str          # Relative path within root (or mod)
-    is_mod: bool           # True if this was a mod: address
-    mod_name: str | None   # Mod display name (only for mod: addresses)
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,6 +215,9 @@ class WorldAdapterV2:
         Reads agent mode dynamically via _get_mode(). If mode is None
         (agent not initialized), returns WA-SYS-I-001 immediately.
 
+        For mod: addresses, visibility is structural — if the mod is in
+        session.mods, it's visible. If not, resolution fails.
+
         Returns:
             (Reply, VisibilityRef) on success — Reply.data["resolved"] is the
             session-absolute path preserving input namespace.
@@ -230,77 +233,52 @@ class WorldAdapterV2:
         # Dynamic mode read — every resolve() checks current mode
         mode = _get_mode()
         if mode is None:
-            return self._invalid(rb, "WA-SYS-I-001",
-                "Agent mode not initialized. Call ck3_get_mode_instructions first.", {
-                    "input_path": input_str,
-                })
+            return self._reply_invalid(rb, "WA-SYS-I-001",
+                "Agent mode not initialized. Call ck3_get_mode_instructions first.",
+                {"input_path": input_str})
 
         parsed = self._parse_and_compute(input_str)
         if parsed is None:
-            return self._invalid(rb, "WA-RES-I-001", "Invalid or unresolvable path", {
-                "input_path": input_str,
-                "mode": mode,
-            })
+            return self._reply_invalid(rb, "WA-RES-I-001",
+                "Invalid or unresolvable path",
+                {"input_path": input_str, "mode": mode})
 
         # Existence check
         if require_exists and not parsed.host_abs.exists():
-            return self._invalid(rb, "WA-RES-I-001", "Path does not exist", {
-                "input_path": input_str,
-                "resolved": parsed.session_abs,
-                "mode": mode,
-            })
+            return self._reply_invalid(rb, "WA-RES-I-001",
+                "Path does not exist",
+                {"input_path": input_str, "resolved": parsed.session_abs, "mode": mode})
 
         # Derive subdirectory for matrix lookup
         rel_normalized = parsed.rel_path.replace("\\", "/").strip("/")
-        if parsed.is_mod:
-            # mod: addresses always map to subdirectory "mod" in the matrix
-            subdirectory: str | None = "mod"
-        elif rel_normalized:
-            parts = rel_normalized.split("/")
-            subdirectory = parts[0] if parts[0] else None
+        subdirectory: str | None
+        if rel_normalized:
+            subdirectory = rel_normalized.split("/")[0] or None
         else:
             subdirectory = None
 
-        # For root: addresses to mod subdirectories, extract mod folder name
-        # e.g. root:user_docs/mod/SomeMod/common/traits → mod_folder_name="SomeMod"
-        mod_folder_name: str | None = None
-        if not parsed.is_mod and subdirectory == "mod" and rel_normalized:
-            parts = rel_normalized.split("/")
-            if len(parts) >= 2:
-                mod_folder_name = parts[1]
-
-        # Visibility gate — check_visibility evaluates conditions with context
+        # Visibility gate
         visible, failed_conditions = check_visibility(
             mode, parsed.root_key, subdirectory,
             session=self._session,
             mod_name=parsed.mod_name,
-            mod_folder_name=mod_folder_name,
         )
         if not visible:
-            return self._invalid(rb, "WA-VIS-I-001", "Not visible in current mode", {
-                "input_path": input_str,
-                "root_key": parsed.root_key,
-                "subdirectory": subdirectory,
-                "mode": mode,
-                "failed_conditions": failed_conditions,
-            })
+            return self._reply_invalid(rb, "WA-VIS-I-001",
+                "Not visible in current mode", {
+                    "input_path": input_str,
+                    "root_key": parsed.root_key,
+                    "subdirectory": subdirectory,
+                    "mode": mode,
+                    "failed_conditions": failed_conditions,
+                })
 
         # Mint token
         token = str(uuid.uuid4())
         with self._registry_lock:
             if len(self._token_registry) >= MAX_TOKENS:
-                error_data: dict = {}
-                if rb is not None:
-                    return (rb.error("WA-RES-E-001", error_data,
-                        message="Token registry full — restart server"), None)
-                from ck3raven.core.reply import TraceInfo, MetaInfo
-                return (Reply.error(
-                    code="WA-RES-E-001",
-                    message="Token registry full — restart server",
-                    data=error_data,
-                    trace=TraceInfo(trace_id="", session_id=""),
-                    meta=MetaInfo(layer="WA", tool="world_adapter_v2"),
-                ), None)
+                return self._reply_error(rb, "WA-RES-E-001",
+                    "Token registry full — restart server", {})
             self._token_registry[token] = parsed.host_abs
 
         ref = VisibilityRef(token=token, session_abs=parsed.session_abs)
@@ -361,7 +339,7 @@ class WorldAdapterV2:
     # Private: Reply construction
     # ========================================================================
 
-    def _invalid(
+    def _reply_invalid(
         self, rb: Any, code: str, message: str, data: dict,
     ) -> tuple[Reply, None]:
         """Build an Invalid Reply. Uses rb.invalid() when available."""
@@ -369,6 +347,19 @@ class WorldAdapterV2:
             return (rb.invalid(code, data, message=message), None)
         from ck3raven.core.reply import TraceInfo, MetaInfo
         return (Reply.invalid(
+            code=code, message=message, data=data,
+            trace=TraceInfo(trace_id="", session_id=""),
+            meta=MetaInfo(layer="WA", tool="world_adapter_v2"),
+        ), None)
+
+    def _reply_error(
+        self, rb: Any, code: str, message: str, data: dict,
+    ) -> tuple[Reply, None]:
+        """Build an Error Reply. Uses rb.error() when available."""
+        if rb is not None:
+            return (rb.error(code, data, message=message), None)
+        from ck3raven.core.reply import TraceInfo, MetaInfo
+        return (Reply.error(
             code=code, message=message, data=data,
             trace=TraceInfo(trace_id="", session_id=""),
             meta=MetaInfo(layer="WA", tool="world_adapter_v2"),

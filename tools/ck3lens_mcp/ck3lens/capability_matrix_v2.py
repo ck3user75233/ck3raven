@@ -231,7 +231,6 @@ def check_visibility(
     *,
     session: object | None = None,
     mod_name: str | None = None,
-    mod_folder_name: str | None = None,
 ) -> tuple[bool, list[str]]:
     """
     Check if a location is visible.
@@ -243,13 +242,12 @@ def check_visibility(
     Context kwargs passed through to conditions:
         session: Session object (for mod_in_session condition)
         mod_name: str | None — mod display name (from mod: address)
-        mod_folder_name: str | None — folder name (from root: address to mod subdir)
 
     Returns:
         (True, []) if visible.
         (False, [name, ...]) with names of failed conditions (or ["no_entry"]).
     """
-    context = {"session": session, "mod_name": mod_name, "mod_folder_name": mod_folder_name}
+    context = {"session": session, "mod_name": mod_name}
 
     # Subdirectory-specific lookup first
     if subdirectory:
