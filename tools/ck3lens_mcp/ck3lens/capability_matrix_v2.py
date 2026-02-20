@@ -18,6 +18,7 @@ Plus:
 - Conditions — standalone named predicates returning True/False, built via factories.
   No denial codes. WA and EN produce their own response codes.
   Modular: swap/add conditions without touching WA or EN.
+  Session-level: conditions check session.mods, not host paths.
 
 Enforcement (enforcement_v2.py) walks OPERATIONS_MATRIX for ALL operations (reads and mutations).
 WA (world_adapter_v2.py) walks VISIBILITY_MATRIX.
@@ -29,7 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable
 
 
 # =============================================================================
@@ -51,44 +52,35 @@ class Condition:
 # WA and EN own their own response codes.
 # =============================================================================
 
-def host_path_in_session_mod_roots() -> Condition:
-    """True iff host_abs is within (or equal to) one of session_mod_root_paths.
+def mod_in_session() -> Condition:
+    """True if the addressed mod is in session.mods.
 
-    Pure predicate over already-canonical inputs. No .resolve(), no filesystem
-    calls. WA must pass pre-resolved paths.
-
-    No branching by address form. Pure containment test.
-    WA resolves both mod:<name>/path and root:user_docs/mod/X/path to
-    host_abs before calling this, so the condition is address-form-agnostic.
-
-    Naturally excludes:
-      - .mod registry files (siblings of mod dirs, not inside them)
-      - The mod/ directory itself (parent of mod dirs, not inside them)
-      - Mods not in the active session/playset
+    Pure session-level check — no host path containment.
+    WA passes mod_name (display name) from the mod: address.
+    Checked via session.get_mod(mod_name).
 
     Context keys:
-        host_abs: Path | None — pre-resolved host-absolute path (from WA)
-        session_mod_root_paths: Sequence[Path] | None — pre-resolved mod root paths
+        session: Session | None — the session object (has .mods, .get_mod())
+        mod_name: str | None — mod display name (from mod: address)
     """
     def _check(
         *,
-        host_abs: Path | None = None,
-        session_mod_root_paths: Sequence[Path] | None = None,
+        session: object | None = None,
+        mod_name: str | None = None,
         **_: object,
     ) -> bool:
-        if host_abs is None or not session_mod_root_paths:
+        if session is None or not mod_name:
+            return False
+        mods = getattr(session, 'mods', None)
+        if not mods:
             return False
 
-        for root in session_mod_root_paths:
-            try:
-                host_abs.relative_to(root)
-                return True
-            except ValueError:
-                continue
+        get_mod = getattr(session, 'get_mod', None)
+        if get_mod:
+            return get_mod(mod_name) is not None
+        return any(getattr(m, 'name', None) == mod_name for m in mods)
 
-        return False
-
-    return Condition(name="host_path_in_session_mod_roots", check=_check)
+    return Condition(name="mod_in_session", check=_check)
 
 
 def has_contract() -> Condition:
@@ -183,15 +175,15 @@ VALID_ROOT_KEYS: frozenset[str] = frozenset({
 # Entry exists -> visible (subject to conditions). No entry -> not visible.
 # WA calls check_visibility() which evaluates conditions with context.
 #
-# host_path_in_session_mod_roots() — pure containment:
-#   host_abs must be within (or equal to) a session mod root path.
-#   Works identically for mod: and root: addresses because WA already
-#   resolved both to host_abs before the condition runs.
+# mod_in_session() — pure session check:
+#   For mod: addresses, checks mod_name against session.get_mod().
+#   If the mod isn't in session.mods, it's not visible. Done.
 # =============================================================================
 
 VisibilityKey = tuple[str, str, str | None]
 
 _V = VisibilityRule  # shorthand
+_MOD_IN_SESSION = mod_in_session()  # shared instance for visibility conditions
 
 VISIBILITY_MATRIX: dict[VisibilityKey, VisibilityRule] = {
 
@@ -203,13 +195,11 @@ VISIBILITY_MATRIX: dict[VisibilityKey, VisibilityRule] = {
     ("ck3lens", "game", None):              _V(),
     ("ck3lens", "steam", None):             _V(),
 
-    # Steam mod folders: host path must be within a session mod root
-    ("ck3lens", "steam", "mod"):            _V((host_path_in_session_mod_roots(),)),
+    # Steam mod folders: mod must be in active session
+    ("ck3lens", "steam", "mod"):            _V((_MOD_IN_SESSION,)),
 
-    # User docs / mod: host path must be within a session mod root
-    # (naturally excludes .mod registry files, the mod/ dir itself,
-    #  and mods not in the active session)
-    ("ck3lens", "user_docs", "mod"):        _V((host_path_in_session_mod_roots(),)),
+    # User docs / mod: mod must be in active session
+    ("ck3lens", "user_docs", "mod"):        _V((_MOD_IN_SESSION,)),
 
     # ck3raven_data: visible unconditionally (writes gated by operations matrix)
     ("ck3lens", "ck3raven_data", None):     _V(),
@@ -238,19 +228,29 @@ def check_visibility(
     mode: str,
     root_key: str,
     subdirectory: str | None,
-    **context: object,
+    *,
+    session: object | None = None,
+    mod_name: str | None = None,
+    mod_folder_name: str | None = None,
 ) -> tuple[bool, list[str]]:
     """
     Check if a location is visible.
 
     Looks up (mode, root_key, subdirectory) first, then falls back to
     (mode, root_key, None). Returns (False, ["no_entry"]) if no entry.
-    Evaluates all conditions with **context — all must pass.
+    Evaluates all conditions — all must pass.
+
+    Context kwargs passed through to conditions:
+        session: Session object (for mod_in_session condition)
+        mod_name: str | None — mod display name (from mod: address)
+        mod_folder_name: str | None — folder name (from root: address to mod subdir)
 
     Returns:
         (True, []) if visible.
         (False, [name, ...]) with names of failed conditions (or ["no_entry"]).
     """
+    context = {"session": session, "mod_name": mod_name, "mod_folder_name": mod_folder_name}
+
     # Subdirectory-specific lookup first
     if subdirectory:
         rule = VISIBILITY_MATRIX.get((mode, root_key, subdirectory))
