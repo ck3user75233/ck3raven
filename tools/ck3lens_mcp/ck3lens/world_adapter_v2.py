@@ -264,8 +264,8 @@ class WorldAdapterV2:
             mod_name=parsed.mod_name,
         )
         if not visible:
-            return self._reply_invalid(rb, "WA-VIS-I-001",
-                "Not visible in current mode", {
+            return self._reply_invalid(rb, "WA-RES-I-001",
+                "Path not visible in current mode", {
                     "input_path": input_str,
                     "root_key": parsed.root_key,
                     "subdirectory": subdirectory,
@@ -477,12 +477,14 @@ class WorldAdapterV2:
         """
         Determine which root key a mod's path falls under.
 
-        Two cases: steam workshop mods or user_docs local mods.
+        Iterates self._roots and returns the key whose path contains mod_path.
+        Falls back to "user_docs" if no root matches (defensive default).
         """
-        if "steam" in self._roots:
+        resolved = mod_path.resolve()
+        for key, root in self._roots.items():
             try:
-                mod_path.resolve().relative_to(self._roots["steam"].resolve())
-                return "steam"
+                resolved.relative_to(root.resolve())
+                return key
             except (ValueError, OSError):
-                pass
+                continue
         return "user_docs"
