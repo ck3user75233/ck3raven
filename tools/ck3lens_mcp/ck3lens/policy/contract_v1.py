@@ -209,6 +209,9 @@ class SymbolIntent:
     
     @classmethod
     def from_dict(cls, data: dict) -> "SymbolIntent":
+        # Guard: if data is not a dict (e.g. "none", None), return defaults
+        if not isinstance(data, dict):
+            return cls()
         return cls(
             creating_symbols=data.get("creating_symbols", False),
             symbols=data.get("symbols", []),
@@ -246,12 +249,17 @@ class WorkDeclaration:
     
     @classmethod
     def from_dict(cls, data: dict) -> "WorkDeclaration":
+        if not isinstance(data, dict):
+            data = {}
         symbol_intent = SymbolIntent.from_dict(data.get("symbol_intent", {}))
-        edits = [EditDeclaration.from_dict(e) for e in data.get("edits", [])]
+        edits = [EditDeclaration.from_dict(e) for e in data.get("edits", []) if isinstance(e, dict)]
+        out_of_scope = data.get("out_of_scope", [])
+        if isinstance(out_of_scope, str):
+            out_of_scope = [out_of_scope] if out_of_scope else []
         return cls(
             work_summary=data.get("work_summary", ""),
             work_plan=data.get("work_plan", ["TBD"]),
-            out_of_scope=data.get("out_of_scope", []),
+            out_of_scope=out_of_scope,
             symbol_intent=symbol_intent,
             edits=edits,
         )

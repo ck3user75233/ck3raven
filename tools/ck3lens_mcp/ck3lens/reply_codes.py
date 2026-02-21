@@ -143,6 +143,8 @@ class Codes:
         "SYMBOL_NOT_FOUND", "Symbol not found in index")
     WA_RES_I_003 = ReplyCode("WA-RES-I-003", Layer.WA, Area.RES, ReplyType.I, 3,
         "PATH_NOT_VISIBLE", "Path exists but not in current visibility scope")
+    WA_RES_I_004 = ReplyCode("WA-RES-I-004", Layer.WA, Area.RES, ReplyType.I, 4,
+        "PATH_ABSENT", "Path resolved but does not exist on disk")
     WA_RES_E_001 = ReplyCode("WA-RES-E-001", Layer.WA, Area.RES, ReplyType.E, 1,
         "RESOLUTION_ERROR", "Unexpected error during resolution")
     
@@ -208,7 +210,7 @@ class Codes:
     WA_SYS_S_002 = ReplyCode("WA-SYS-S-002", Layer.WA, Area.SYS, ReplyType.S, 2,
         "SYS_PREVIEW_OK", "Preview/dry-run complete")
     WA_SYS_I_001 = ReplyCode("WA-SYS-I-001", Layer.WA, Area.SYS, ReplyType.I, 1,
-        "SERVICE_UNAVAILABLE", "Required service not available")
+        "SERVICE_UNAVAILABLE", "Agent mode not initialized — ask the user to initialize you")
     WA_SYS_E_001 = ReplyCode("WA-SYS-E-001", Layer.WA, Area.SYS, ReplyType.E, 1,
         "SYS_ERROR", "System error")
     

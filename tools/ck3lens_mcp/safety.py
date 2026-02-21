@@ -215,7 +215,7 @@ def _log_canonical_tool_end(
     
     # Optional DEBUG detail with richer info (not required for validation)
     if message or data_keys:
-        detail_data = {
+        detail_data: dict[str, object] = {
             "tool": tool_name,
             "code": code,
         }

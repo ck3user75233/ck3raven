@@ -3500,11 +3500,16 @@ def ck3_contract(
         expires_hours, contract_id, closure_commit, cancel_reason, status_filter, include_archived
     )
     
-    if result.get("error"):
+    if result.get("error") or result.get("success") is False:
+        error_msg = result.get("error") or result.get("message") or "Contract operation failed"
         # Authorization denial -> EN layer (CT cannot emit D)
-        if "not authorized" in str(result.get("error", "")).lower():
-            return rb.denied('EN-GATE-D-001', data=result, message=result.get("error", "Not authorized"))
-        return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Contract operation failed"))
+        if "not authorized" in str(error_msg).lower():
+            return rb.denied('EN-GATE-D-001', data=result, message=error_msg)
+        return rb.error(
+            result.get("code", "MCP-SYS-E-001"),
+            data=result,
+            message=error_msg,
+        )
     
     if command == "status":
         if result.get("has_active_contract"):
@@ -3940,37 +3945,8 @@ def ck3_exec(
     trace_info = get_current_trace_info()
     rb = ReplyBuilder(trace_info, tool='ck3_exec')
     
-    result = _ck3_exec_internal(command, working_dir, target_paths, token_id, dry_run, timeout, rb=rb)
-    
-    # Enforcement denial returns Reply directly — pass through
-    if isinstance(result, Reply):
-        return result
-    
-    if result.get("error") and not result.get("allowed"):
-        err_msg = str(result.get("error", "")).lower()
-        policy_decision = result.get("policy", {}).get("decision", "")
-        
-        # Path not found is a resolution failure -> WA layer
-        if policy_decision == "PATH_NOT_FOUND":
-            return rb.invalid('MCP-SYS-I-001', data=result, message=result.get("error", "Path not found"))
-        
-        # System failure requires POSITIVE evidence
-        if "failed to" in err_msg or "timeout" in err_msg or "connection" in err_msg or "exception" in err_msg:
-            return rb.error('MCP-SYS-E-001', data=result, message=result.get("error", "Command failed"))
-        
-        # Default: Invalid (agent mistake / bad input)
-        return rb.invalid('MCP-SYS-I-001', data=result, message=result.get("error", "Command failed"))
-    
-    if result.get("executed"):
-        exit_code = result.get("exit_code", 0)
-        msg = f"Command executed. Exit code: {exit_code}."
-        return rb.success('EN-EXEC-S-001', data=result, message=msg)
-    
-    if result.get("allowed") and not result.get("executed"):
-        # Dry run is a success (preview), not invalid
-        return rb.success('EN-EXEC-S-002', data=result, message="Dry run - command would be allowed.")
-    
-    return rb.success('EN-EXEC-S-001', data=result, message="Complete.")
+    # _ck3_exec_internal always returns Reply (normalized as of Feb 22, 2026)
+    return _ck3_exec_internal(command, working_dir, target_paths, token_id, dry_run, timeout, rb=rb)
 
 
 def _kill_process_tree_windows(pid: int) -> None:
@@ -4043,8 +4019,8 @@ def _ck3_exec_internal(
     dry_run: bool,
     timeout: int,
     rb=None,  # ReplyBuilder from tool handler — used by enforce()
-) -> Reply | dict:
-    """Internal implementation returning dict (or Reply for enforcement denials)."""
+) -> Reply:
+    """Internal implementation. Always returns Reply."""
     from ck3lens.policy.enforcement_v2 import enforce
     from ck3lens.policy.contract_v1 import get_active_contract
     import subprocess
@@ -4070,17 +4046,16 @@ def _ck3_exec_internal(
 
     reply, ref = wa2.resolve(resolve_input, require_exists=True, rb=rb)
     if ref is None:
-        return {
+        return rb.invalid('WA-RES-I-001', data={
             "allowed": False,
             "executed": False,
             "output": None,
             "exit_code": None,
-            "policy": {"decision": "PATH_NOT_FOUND"},
-            "error": f"Could not resolve path: {resolve_input}",
-        }
+        }, message=f"Could not resolve path: {resolve_input}")
 
-    root_key = reply.data.get("root_key", "")
-    subdirectory = reply.data.get("subdirectory")
+    # Working directory coordinates (used as fallback for enforcement)
+    wd_root_key = reply.data.get("root_key", "")
+    wd_subdirectory = reply.data.get("subdirectory")
 
     # ======================================================================
     # Data gathering (NOT a policy decision).
@@ -4099,13 +4074,47 @@ def _ck3_exec_internal(
     # Detect if this is a script execution
     script_host_path = _detect_script_path(command, cwd)
 
+    # ======================================================================
+    # SCRIPT PATH WA2 RESOLUTION (§2)
+    # If a script was detected, resolve its path through WA2 to get
+    # the script's own root_key/subdirectory for enforcement.
+    # This ensures enforcement evaluates the script's location,
+    # not the working directory's location.
+    # ======================================================================
     if script_host_path is not None:
+        # Try to resolve the script's host-absolute path through WA2.
+        # WA2.resolve() accepts canonical addresses, so we need to find
+        # which root the script path falls under.
+        script_root_key = wd_root_key
+        script_subdirectory = wd_subdirectory
+        for rk, root_path in wa2._roots.items():
+            try:
+                script_host_path.relative_to(root_path)
+                # Script is under this root — resolve canonically
+                rel = script_host_path.relative_to(root_path).as_posix()
+                script_reply, script_ref = wa2.resolve(
+                    f"root:{rk}/{rel}", require_exists=True, rb=rb
+                )
+                if script_ref is not None:
+                    script_root_key = script_reply.data.get("root_key", rk)
+                    script_subdirectory = script_reply.data.get("subdirectory")
+                break
+            except (ValueError, OSError):
+                continue
+
         import hashlib as _hashlib
         try:
             current_content = script_host_path.read_bytes()
             content_sha256 = _hashlib.sha256(current_content).hexdigest()
         except OSError:
             pass  # content unreadable — condition will fail naturally
+    else:
+        script_root_key = wd_root_key
+        script_subdirectory = wd_subdirectory
+
+    # Use script coordinates for enforcement (script location matters, not cwd)
+    enforce_root_key = script_root_key
+    enforce_subdirectory = script_subdirectory
 
     # Shell execution is an EXECUTE operation — enforcement walks the matrix
     result = enforce(
@@ -4113,11 +4122,11 @@ def _ck3_exec_internal(
         mode=wa2.mode,
         tool="ck3_exec",
         command=command,
-        root_key=root_key,
-        subdirectory=subdirectory,
+        root_key=enforce_root_key,
+        subdirectory=enforce_subdirectory,
         # Context for exec_gate condition predicate
         exec_command=command,
-        exec_subdirectory=subdirectory,
+        exec_subdirectory=enforce_subdirectory,
         has_contract=has_contract,
         script_host_path=str(script_host_path) if script_host_path else None,
         content_sha256=content_sha256,
@@ -4130,18 +4139,17 @@ def _ck3_exec_internal(
     # Enforcement passed — build policy info for response
     policy_info = {"decision": "ALLOW", "reason": f"Execute allowed ({result.code})"}
     
-    # Allowed
+    # Allowed — dry run
     if dry_run:
-        return {
+        return rb.success('EN-EXEC-S-002', data={
             "allowed": True,
             "executed": False,
             "output": None,
             "exit_code": None,
             "policy": policy_info,
-            "message": "Dry run - command would be allowed",
-        }
+        }, message="Dry run - command would be allowed.")
     
-    # Clamp timeout to max 300 seconds (moved outside try block for exception handler access)
+    # Clamp timeout to max 300 seconds
     actual_timeout = min(max(timeout, 1), 300)
     
     # ======================================================================
@@ -4202,23 +4210,21 @@ def _ck3_exec_internal(
                     stdout, stderr = "", ""
                 partial = f"{stdout}{stderr}".strip()
                 partial_msg = f"\nPartial output:\n{partial}" if partial else ""
-                return {
+                return rb.error('MCP-SYS-E-001', data={
                     "allowed": True,
                     "executed": True,
                     "output": f"Command timed out after {actual_timeout} seconds (process tree killed).{partial_msg}",
                     "exit_code": -1,
                     "policy": policy_info,
-                    "error": "timeout",
-                    "hint": f"Command exceeded timeout of {actual_timeout}s. Use timeout= parameter to increase (max 300s).",
-                }
+                }, message=f"Command timed out after {actual_timeout}s. Use timeout= parameter to increase (max 300s).")
             
-            return {
+            return rb.success('EN-EXEC-S-001', data={
                 "allowed": True,
                 "executed": True,
                 "output": stdout + stderr,
                 "exit_code": proc.returncode,
                 "policy": policy_info,
-            }
+            }, message=f"Command executed. Exit code: {proc.returncode}.")
         else:
             proc = subprocess.run(
                 command,
@@ -4230,33 +4236,31 @@ def _ck3_exec_internal(
                 env=exec_env,
             )
             
-            return {
+            return rb.success('EN-EXEC-S-001', data={
                 "allowed": True,
                 "executed": True,
                 "output": proc.stdout + proc.stderr,
                 "exit_code": proc.returncode,
                 "policy": policy_info,
-            }
+            }, message=f"Command executed. Exit code: {proc.returncode}.")
     except subprocess.TimeoutExpired:
         # Non-Windows timeout (from subprocess.run on Unix)
-        return {
+        return rb.error('MCP-SYS-E-001', data={
             "allowed": True,
             "executed": True,
             "output": f"Command timed out after {actual_timeout} seconds",
             "exit_code": -1,
             "policy": policy_info,
-            "error": "timeout",
-            "hint": f"Command exceeded timeout of {actual_timeout}s. Use timeout= parameter to increase (max 300s).",
-        }
+        }, message=f"Command timed out after {actual_timeout}s. Use timeout= parameter to increase (max 300s).")
     except Exception as e:
-        return {
+        return rb.error('MCP-SYS-E-001', data={
             "allowed": True,
             "executed": False,
             "output": None,
             "exit_code": None,
             "policy": policy_info,
             "error": str(e),
-        }
+        }, message=f"Execution failed: {e}")
 
 
 @mcp.tool()

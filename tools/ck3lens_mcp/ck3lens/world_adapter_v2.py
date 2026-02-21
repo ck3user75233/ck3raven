@@ -50,8 +50,6 @@ _ROOT_KEY_FROM_ENUM: dict[str, str] = {
     "ROOT_USER_DOCS": "user_docs",
     "ROOT_VSCODE": "vscode",
 }
-_ENUM_FROM_ROOT_KEY: dict[str, str] = {v: k for k, v in _ROOT_KEY_FROM_ENUM.items()}
-
 # Valid v2 root keys (closed set) — re-exported from capability_matrix_v2
 from .capability_matrix_v2 import VALID_ROOT_KEYS  # noqa: E402
 
@@ -66,8 +64,7 @@ class ParsedAddress(NamedTuple):
     host_abs: Path        # host-absolute path
     root_key: str         # infrastructure root key (for matrix lookup)
     rel_path: str         # relative path within root or mod
-    is_mod: bool          # True if this was a mod: address
-    mod_name: str | None  # mod display name (only set for mod: addresses)
+    mod_name: str | None  # mod display name (None for root addresses)
 
 
 # ============================================================================
@@ -234,19 +231,16 @@ class WorldAdapterV2:
         mode = _get_mode()
         if mode is None:
             return self._reply_invalid(rb, "WA-SYS-I-001",
-                "Agent mode not initialized. Call ck3_get_mode_instructions first.",
                 {"input_path": input_str})
 
         parsed = self._parse_and_compute(input_str)
         if parsed is None:
             return self._reply_invalid(rb, "WA-RES-I-001",
-                "Invalid or unresolvable path",
                 {"input_path": input_str, "mode": mode})
 
         # Existence check
         if require_exists and not parsed.host_abs.exists():
-            return self._reply_invalid(rb, "WA-RES-I-001",
-                "Path does not exist",
+            return self._reply_invalid(rb, "WA-RES-I-004",
                 {"input_path": input_str, "resolved": parsed.session_abs, "mode": mode})
 
         # Derive subdirectory for matrix lookup
@@ -264,8 +258,7 @@ class WorldAdapterV2:
             host_abs=parsed.host_abs,
         )
         if not visible:
-            return self._reply_invalid(rb, "WA-RES-I-001",
-                "Path not visible in current mode", {
+            return self._reply_invalid(rb, "WA-RES-I-003", {
                     "input_path": input_str,
                     "root_key": parsed.root_key,
                     "subdirectory": subdirectory,
@@ -277,8 +270,7 @@ class WorldAdapterV2:
         token = str(uuid.uuid4())
         with self._registry_lock:
             if len(self._token_registry) >= MAX_TOKENS:
-                return self._reply_error(rb, "WA-RES-E-001",
-                    "Token registry full — restart server", {})
+                return self._reply_error(rb, "WA-RES-E-001", {})
             self._token_registry[token] = parsed.host_abs
 
         ref = VisibilityRef(token=token, session_abs=parsed.session_abs)
@@ -288,15 +280,17 @@ class WorldAdapterV2:
             "root_key": parsed.root_key,
             "subdirectory": subdirectory,
             "relative_path": rel_normalized,
+            "mod_name": parsed.mod_name,
         }
 
         if rb is not None:
             reply = rb.success("WA-RES-S-001", reply_data)
         else:
             from ck3raven.core.reply import TraceInfo, MetaInfo
+            from ck3lens.reply_codes import get_message
             reply = Reply.success(
                 code="WA-RES-S-001",
-                message="Path resolved",
+                message=get_message("WA-RES-S-001"),
                 data=reply_data,
                 trace=TraceInfo(trace_id="", session_id=""),
                 meta=MetaInfo(layer="WA", tool="world_adapter_v2"),
@@ -340,27 +334,31 @@ class WorldAdapterV2:
     # ========================================================================
 
     def _reply_invalid(
-        self, rb: Any, code: str, message: str, data: dict,
+        self, rb: Any, code: str, data: dict,
     ) -> tuple[Reply, None]:
-        """Build an Invalid Reply. Uses rb.invalid() when available."""
+        """Build an Invalid Reply. Message comes from reply_codes registry."""
         if rb is not None:
-            return (rb.invalid(code, data, message=message), None)
+            return (rb.invalid(code, data), None)
         from ck3raven.core.reply import TraceInfo, MetaInfo
+        from ck3lens.reply_codes import get_message
         return (Reply.invalid(
-            code=code, message=message, data=data,
+            code=code, message=get_message(code),
+            data=data,
             trace=TraceInfo(trace_id="", session_id=""),
             meta=MetaInfo(layer="WA", tool="world_adapter_v2"),
         ), None)
 
     def _reply_error(
-        self, rb: Any, code: str, message: str, data: dict,
+        self, rb: Any, code: str, data: dict,
     ) -> tuple[Reply, None]:
-        """Build an Error Reply. Uses rb.error() when available."""
+        """Build an Error Reply. Message comes from reply_codes registry."""
         if rb is not None:
-            return (rb.error(code, data, message=message), None)
+            return (rb.error(code, data), None)
         from ck3raven.core.reply import TraceInfo, MetaInfo
+        from ck3lens.reply_codes import get_message
         return (Reply.error(
-            code=code, message=message, data=data,
+            code=code, message=get_message(code),
+            data=data,
             trace=TraceInfo(trace_id="", session_id=""),
             meta=MetaInfo(layer="WA", tool="world_adapter_v2"),
         ), None)
@@ -373,14 +371,59 @@ class WorldAdapterV2:
         """
         Parse input and compute a ParsedAddress.
 
+        Accepts any supported address format:
+          - root:key/path       canonical root address
+          - mod:name/path       canonical mod address
+          - ROOT_X:/path        legacy root enum syntax (normalized to root:)
+          - C:\\path or /path   host-absolute (reverse-resolved against known roots/mods)
+
         Returns None if the input is invalid or unresolvable.
         """
         input_str = input_str.strip()
         if not input_str:
             return None
 
-        # Reject host-absolute paths
+        # Host-absolute: reverse-resolve against known roots, then session mods
         if _is_host_absolute(input_str):
+            try:
+                target = Path(input_str).resolve()
+            except (OSError, ValueError):
+                return None
+
+            # Find best (longest) root match
+            best_key: str | None = None
+            best_rel: str = ""
+            best_len = -1
+
+            for key, root_path in self._roots.items():
+                try:
+                    resolved_root = root_path.resolve()
+                    rel = target.relative_to(resolved_root)
+                    root_len = len(str(resolved_root))
+                    if root_len > best_len:
+                        best_len = root_len
+                        best_key = key
+                        best_rel = str(rel).replace("\\", "/") if str(rel) != "." else ""
+                except (ValueError, OSError):
+                    continue
+
+            if best_key is not None:
+                session_abs = f"root:{best_key}/{best_rel}" if best_rel else f"root:{best_key}"
+                return ParsedAddress(session_abs, target, best_key, best_rel, None)
+
+            # Fallback: check session mods
+            if self._session and hasattr(self._session, 'mods'):
+                for mod in self._session.mods:
+                    try:
+                        mod_path = Path(mod.path).resolve()
+                        rel = target.relative_to(mod_path)
+                        rel_str = str(rel).replace("\\", "/") if str(rel) != "." else ""
+                        root_key = self._classify_mod_root(mod_path)
+                        session_abs = f"mod:{mod.name}/{rel_str}" if rel_str else f"mod:{mod.name}"
+                        return ParsedAddress(session_abs, target, root_key, rel_str, mod.name)
+                    except (ValueError, OSError, AttributeError):
+                        continue
+
             return None
 
         # Canonical: root:key/path
@@ -391,7 +434,7 @@ class WorldAdapterV2:
         if input_str.startswith("mod:"):
             return self._parse_mod(input_str[4:])
 
-        # Legacy: ROOT_X:/path
+        # Legacy: ROOT_X:/path — normalize and delegate to _parse_root
         if input_str.startswith("ROOT_"):
             return self._parse_legacy_root(input_str)
 
@@ -416,7 +459,7 @@ class WorldAdapterV2:
             return None
 
         session_abs = f"root:{key}/{rel_path}" if rel_path else f"root:{key}"
-        return ParsedAddress(session_abs, host_abs, key, rel_path, False, None)
+        return ParsedAddress(session_abs, host_abs, key, rel_path, None)
 
     def _parse_mod(self, rest: str) -> ParsedAddress | None:
         """
@@ -451,26 +494,15 @@ class WorldAdapterV2:
 
         # Session-absolute preserves mod: namespace
         session_abs = f"mod:{mod_name}/{rel_path}" if rel_path else f"mod:{mod_name}"
-        return ParsedAddress(session_abs, host_abs, root_key, rel_path, True, mod_name)
+        return ParsedAddress(session_abs, host_abs, root_key, rel_path, mod_name)
 
     def _parse_legacy_root(self, address: str) -> ParsedAddress | None:
-        """Parse legacy ROOT_X:/path syntax and normalize to root:key/path."""
+        """Parse legacy ROOT_X:/path syntax by normalizing to root:key and delegating."""
         for enum_name, key in _ROOT_KEY_FROM_ENUM.items():
             prefix = f"{enum_name}:/"
             if address.startswith(prefix):
                 rel_path = address[len(prefix):].strip("/")
-
-                if key not in self._roots:
-                    return None
-
-                host_abs = _resolve_within(self._roots[key], rel_path)
-                if host_abs is None:
-                    return None
-
-                # Legacy input normalized to root: output
-                session_abs = f"root:{key}/{rel_path}" if rel_path else f"root:{key}"
-                return ParsedAddress(session_abs, host_abs, key, rel_path, False, None)
-
+                return self._parse_root(f"{key}/{rel_path}" if rel_path else key)
         return None
 
     def _classify_mod_root(self, mod_path: Path) -> str:
