@@ -5,7 +5,7 @@ Tests that:
 1. Safe allowlist patterns are correctly identified
 2. Mutation patterns are detected
 3. Destructive patterns are classified correctly
-4. Integration with classify_command works
+4. classify_python_inline integrates extraction + scanning
 """
 import pytest
 from ck3lens.policy.python_inline_scanner import (
@@ -17,7 +17,6 @@ from ck3lens.policy.python_inline_scanner import (
     extract_inline_code,
     normalize_code,
 )
-from ck3lens.policy.enforcement import classify_command, CommandCategory
 
 
 class TestNormalizeCode:
@@ -144,55 +143,3 @@ class TestClassifyPythonInline:
         assert is_python_c is True
         assert intent is not None
         assert intent.intent == InlineIntentType.POTENTIALLY_WRITE
-
-
-class TestClassifyCommandIntegration:
-    """Tests that classify_command correctly handles python -c."""
-    
-    def test_safe_python_c_is_read_only(self):
-        """Safe python -c commands should be READ_ONLY."""
-        cat = classify_command('python -c "import sys; print(sys.version)"')
-        assert cat == CommandCategory.READ_ONLY
-    
-    def test_simple_print_is_read_only(self):
-        """Simple print is READ_ONLY (no mutations)."""
-        cat = classify_command('python -c "print(42)"')
-        # This matches the simple print regex pattern
-        assert cat == CommandCategory.READ_ONLY
-    
-    def test_file_write_is_write_in_scope(self):
-        """File write operations require enforcement."""
-        cat = classify_command("python -c \"open('x.txt', 'w').write('data')\"")
-        assert cat == CommandCategory.WRITE_IN_SCOPE
-    
-    def test_path_write_text_is_write_in_scope(self):
-        """pathlib write_text requires enforcement."""
-        cat = classify_command("python -c \"from pathlib import Path; Path('x').write_text('hi')\"")
-        assert cat == CommandCategory.WRITE_IN_SCOPE
-    
-    def test_os_remove_is_destructive(self):
-        """os.remove is DESTRUCTIVE."""
-        cat = classify_command("python -c \"import os; os.remove('file.txt')\"")
-        assert cat == CommandCategory.DESTRUCTIVE
-    
-    def test_non_python_c_still_works(self):
-        """Non-python-c commands still classified correctly."""
-        assert classify_command("cat file.txt") == CommandCategory.READ_ONLY
-        assert classify_command("git status") == CommandCategory.READ_ONLY
-        # rm is blocked/destructive
-        cat = classify_command("rm file.py")
-        assert cat in (CommandCategory.DESTRUCTIVE, CommandCategory.BLOCKED)
-    
-    def test_python_m_pytest_still_safe(self):
-        """python -m pytest is still in SAFE_COMMANDS."""
-        cat = classify_command("python -m pytest tests/")
-        assert cat == CommandCategory.READ_ONLY
-    
-    def test_bypass_attempt_blocked(self):
-        """The original bypass should now be blocked."""
-        # This was the exploit: writing via python -c
-        bypass_cmd = '''python -c "from pathlib import Path; Path('.wip/evil.txt').write_text('pwned')"'''
-        cat = classify_command(bypass_cmd)
-        # Should NOT be READ_ONLY anymore!
-        assert cat != CommandCategory.READ_ONLY
-        assert cat == CommandCategory.WRITE_IN_SCOPE

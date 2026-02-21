@@ -1,5 +1,5 @@
 {
-  "include": ["src", "scripts", "tools", "qbuilder"],
+  "include": ["src", "scripts", "tools", "qbuilder", "tests"],
   "extraPaths": [
     "src",
     "tools/ck3lens_mcp"

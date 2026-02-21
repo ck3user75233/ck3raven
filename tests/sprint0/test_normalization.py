@@ -21,19 +21,22 @@ class TestNORM01LegacyRootAccepted:
     """Sprint 0 accepts legacy ROOT_REPO:/... syntax and normalizes to root:repo/..."""
 
     def test_legacy_root_repo(self, wa2: WorldAdapterV2) -> None:
-        res = wa2.resolve("ROOT_REPO:/src/server.py")
-        assert res.ok
-        assert res.ref.session_abs == "root:repo/src/server.py"
+        reply, ref = wa2.resolve("ROOT_REPO:/src/server.py")
+        assert reply.reply_type == "S"
+        assert ref is not None
+        assert ref.session_abs == "root:repo/src/server.py"
 
     def test_legacy_root_game(self, wa2: WorldAdapterV2) -> None:
-        res = wa2.resolve("ROOT_GAME:/common/traits/00_traits.txt")
-        assert res.ok
-        assert res.ref.session_abs == "root:game/common/traits/00_traits.txt"
+        reply, ref = wa2.resolve("ROOT_GAME:/common/traits/00_traits.txt")
+        assert reply.reply_type == "S"
+        assert ref is not None
+        assert ref.session_abs == "root:game/common/traits/00_traits.txt"
 
     def test_legacy_root_ck3raven_data(self, wa2: WorldAdapterV2) -> None:
-        res = wa2.resolve("ROOT_CK3RAVEN_DATA:/wip/analysis.py")
-        assert res.ok
-        assert res.ref.session_abs == "root:ck3raven_data/wip/analysis.py"
+        reply, ref = wa2.resolve("ROOT_CK3RAVEN_DATA:/wip/analysis.py")
+        assert reply.reply_type == "S"
+        assert ref is not None
+        assert ref.session_abs == "root:ck3raven_data/wip/analysis.py"
 
 
 # =========================================================================
@@ -44,9 +47,10 @@ class TestNORM02LegacyModAccepted:
     """Sprint 0 accepts mod:Name:/path (colon-slash separator) and normalizes."""
 
     def test_legacy_mod_colon_slash(self, wa2: WorldAdapterV2) -> None:
-        res = wa2.resolve("mod:TestModA:/common/traits")
-        assert res.ok
-        assert res.ref.session_abs == "mod:TestModA/common/traits"
+        reply, ref = wa2.resolve("mod:TestModA:/common/traits")
+        assert reply.reply_type == "S"
+        assert ref is not None
+        assert ref.session_abs == "mod:TestModA/common/traits"
 
 
 # =========================================================================
@@ -54,7 +58,7 @@ class TestNORM02LegacyModAccepted:
 # =========================================================================
 
 class TestNORM03NeverEmitsLegacy:
-    """No VisibilityResolution or VisibilityRef contains ROOT_ prefix or :/ separator."""
+    """No VisibilityRef contains ROOT_ prefix or :/ separator."""
 
     _LEGACY_ROOT_RE = re.compile(r"ROOT_")
     _LEGACY_MOD_COLON_SLASH_RE = re.compile(r"mod:.*:/")
@@ -70,10 +74,10 @@ class TestNORM03NeverEmitsLegacy:
         ],
     )
     def test_session_abs_no_legacy_root(self, wa2: WorldAdapterV2, input_str: str) -> None:
-        res = wa2.resolve(input_str)
-        if res.ok:
-            assert not self._LEGACY_ROOT_RE.search(res.ref.session_abs), (
-                f"Legacy ROOT_ found in session_abs: {res.ref.session_abs}"
+        reply, ref = wa2.resolve(input_str)
+        if reply.reply_type == "S" and ref is not None:
+            assert not self._LEGACY_ROOT_RE.search(ref.session_abs), (
+                f"Legacy ROOT_ found in session_abs: {ref.session_abs}"
             )
 
     @pytest.mark.parametrize(
@@ -84,10 +88,10 @@ class TestNORM03NeverEmitsLegacy:
         ],
     )
     def test_session_abs_no_legacy_mod(self, wa2: WorldAdapterV2, input_str: str) -> None:
-        res = wa2.resolve(input_str)
-        if res.ok:
-            assert not self._LEGACY_MOD_COLON_SLASH_RE.search(res.ref.session_abs), (
-                f"Legacy mod colon-slash found in session_abs: {res.ref.session_abs}"
+        reply, ref = wa2.resolve(input_str)
+        if reply.reply_type == "S" and ref is not None:
+            assert not self._LEGACY_MOD_COLON_SLASH_RE.search(ref.session_abs), (
+                f"Legacy mod colon-slash found in session_abs: {ref.session_abs}"
             )
 
     @pytest.mark.parametrize(
@@ -98,11 +102,13 @@ class TestNORM03NeverEmitsLegacy:
         ],
     )
     def test_root_category_lowercase(self, wa2: WorldAdapterV2, input_str: str) -> None:
-        res = wa2.resolve(input_str)
-        if res.ok and res.root_category:
-            assert res.root_category == res.root_category.lower(), (
-                f"root_category not lowercase: {res.root_category}"
-            )
-            assert not res.root_category.startswith("ROOT_"), (
-                f"root_category uses enum form: {res.root_category}"
-            )
+        reply, ref = wa2.resolve(input_str)
+        if reply.reply_type == "S":
+            root_key = reply.data.get("root_key")
+            if root_key:
+                assert root_key == root_key.lower(), (
+                    f"root_key not lowercase: {root_key}"
+                )
+                assert not root_key.startswith("ROOT_"), (
+                    f"root_key uses enum form: {root_key}"
+                )

@@ -94,6 +94,50 @@ def has_contract() -> Condition:
     return Condition(name="has_contract", check=_check)
 
 
+def path_in_session_mods() -> Condition:
+    """True if host_abs is inside or equal to any session.mods entry's path.
+
+    For ck3lens mode: gates root:steam and root:user_docs/mod visibility
+    so only paths within active playset mods are visible — not arbitrary
+    paths under those roots.
+
+    WA already converted the session_abs to host_abs during parsing.
+    This condition compares that host_abs against session.mods[*].path
+    (which are host-absolute).
+
+    Context keys:
+        session: Session | None — the session object (has .mods)
+        host_abs: Path | None — resolved host-absolute path from WA
+    """
+    def _check(
+        *,
+        session: object | None = None,
+        host_abs: object | None = None,
+        **_: object,
+    ) -> bool:
+        if session is None or host_abs is None:
+            return False
+        mods = getattr(session, 'mods', None)
+        if not mods:
+            return False
+
+        resolved = Path(str(host_abs)).resolve() if not isinstance(host_abs, Path) else host_abs.resolve()
+
+        for mod in mods:
+            mod_path = getattr(mod, 'path', None)
+            if mod_path is None:
+                continue
+            mp = Path(str(mod_path)).resolve() if not isinstance(mod_path, Path) else mod_path.resolve()
+            try:
+                resolved.relative_to(mp)
+                return True
+            except (ValueError, OSError):
+                continue
+        return False
+
+    return Condition(name="path_in_session_mods", check=_check)
+
+
 def exec_signed() -> Condition:
     """True if the active contract has a valid script signature for this script.
 
@@ -175,26 +219,32 @@ VALID_ROOT_KEYS: frozenset[str] = frozenset({
 # Entry exists -> visible (subject to conditions). No entry -> not visible.
 # WA calls check_visibility() which evaluates conditions with context.
 #
-# Mod visibility is a GLOBAL PREDICATE, not a matrix entry:
-#   If mod_name is set, the mod must be in the active playset (session.mods).
-#   This is checked before the matrix is consulted. No per-subdirectory
-#   entries needed for mods — the root-level entry for their underlying
-#   infrastructure root (steam, user_docs) handles the rest.
+# Conditions on individual entries can further restrict visibility
+# (e.g., requiring a mod to be in session.mods). WA passes context
+# kwargs that conditions can inspect.
 # =============================================================================
 
 VisibilityKey = tuple[str, str, str | None]
 
 _V = VisibilityRule  # shorthand
 
+# Shared condition instance for mod path gating
+_PATH_IN_MODS = path_in_session_mods()
+
 VISIBILITY_MATRIX: dict[VisibilityKey, VisibilityRule] = {
 
     # =================================================================
     # ck3lens mode
+    #
+    # steam and user_docs/mod carry a path_in_session_mods condition:
+    # the resolved path must fall within a session.mods entry.
+    # Bare root:steam or root:user_docs → invisible (no entry / no match).
+    # root:user_docs without "mod" subdirectory → no entry → invisible.
     # =================================================================
 
     ("ck3lens", "game", None):              _V(),
-    ("ck3lens", "steam", None):             _V(),
-    ("ck3lens", "user_docs", None):         _V(),
+    ("ck3lens", "steam", None):             _V((_PATH_IN_MODS,)),
+    ("ck3lens", "user_docs", "mod"):        _V((_PATH_IN_MODS,)),
     ("ck3lens", "ck3raven_data", None):     _V(),
     ("ck3lens", "vscode", None):            _V(),
     ("ck3lens", "repo", None):              _V(),
@@ -218,32 +268,25 @@ def check_visibility(
     subdirectory: str | None,
     *,
     session: object | None = None,
-    mod_name: str | None = None,
+    host_abs: Path | None = None,
 ) -> tuple[bool, list[str]]:
     """
     Check if a location is visible.
 
-    Global mod predicate (applied first):
-        If mod_name is set, the mod must be in the active playset
-        (session.mods). If not, visibility fails immediately.
-
-    Then matrix lookup:
+    Matrix lookup:
         (mode, root_key, subdirectory) first, falls back to
         (mode, root_key, None). No entry → not visible.
+        If entry has conditions, they must all pass.
+
+    Args:
+        host_abs: Resolved host-absolute path. Passed to conditions
+                  that need path comparison (e.g. path_in_session_mods).
 
     Returns:
         (True, []) if visible.
         (False, [reason, ...]) with failure reasons.
     """
-    # Global mod predicate — mods must be in active playset
-    if mod_name is not None:
-        if session is None:
-            return (False, ["mod_not_in_playset"])
-        get_mod = getattr(session, 'get_mod', None)
-        if not get_mod or get_mod(mod_name) is None:
-            return (False, ["mod_not_in_playset"])
-
-    context = {"session": session, "mod_name": mod_name}
+    context: dict[str, object] = {"session": session, "host_abs": host_abs}
 
     # Subdirectory-specific lookup first
     if subdirectory:

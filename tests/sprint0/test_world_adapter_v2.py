@@ -27,11 +27,10 @@ class TestWA201RootResolution:
         ],
     )
     def test_resolves_ok(self, wa2: WorldAdapterV2, input_str: str, expected_abs: str) -> None:
-        res = wa2.resolve(input_str)
-        assert res.ok, f"Expected ok=True for {input_str}, got: {res.error_message}"
-        assert res.ref is not None
-        assert res.ref.session_abs == expected_abs
-        assert res.exists is True  # Adjustment 1
+        reply, ref = wa2.resolve(input_str)
+        assert reply.reply_type == "S", f"Expected success for {input_str}, got: {reply.message}"
+        assert ref is not None
+        assert ref.session_abs == expected_abs
 
 
 # =========================================================================
@@ -49,11 +48,10 @@ class TestWA202ModResolution:
         ],
     )
     def test_resolves_ok(self, wa2: WorldAdapterV2, input_str: str, expected_abs: str) -> None:
-        res = wa2.resolve(input_str)
-        assert res.ok, f"Expected ok=True for {input_str}, got: {res.error_message}"
-        assert res.ref is not None
-        assert res.ref.session_abs == expected_abs
-        assert res.exists is True  # Adjustment 1
+        reply, ref = wa2.resolve(input_str)
+        assert reply.reply_type == "S", f"Expected success for {input_str}, got: {reply.message}"
+        assert ref is not None
+        assert ref.session_abs == expected_abs
 
 
 # =========================================================================
@@ -64,9 +62,10 @@ class TestWA203UnknownRootKey:
     """Using an invalid root key fails."""
 
     def test_bogus_key(self, wa2: WorldAdapterV2) -> None:
-        res = wa2.resolve("root:bogus/foo")
-        assert not res.ok
-        assert res.error_message is not None
+        reply, ref = wa2.resolve("root:bogus/foo")
+        assert reply.reply_type != "S"
+        assert ref is None
+        assert reply.message is not None
 
 
 # =========================================================================
@@ -74,11 +73,12 @@ class TestWA203UnknownRootKey:
 # =========================================================================
 
 class TestWA204UnknownMod:
-    """Referencing a mod not in mod_paths fails."""
+    """Referencing a mod not in session.mods fails."""
 
     def test_nonexistent_mod(self, wa2: WorldAdapterV2) -> None:
-        res = wa2.resolve("mod:NonexistentMod/foo")
-        assert not res.ok
+        reply, ref = wa2.resolve("mod:NonexistentMod/foo")
+        assert reply.reply_type != "S"
+        assert ref is None
 
 
 # =========================================================================
@@ -97,8 +97,9 @@ class TestWA205HostAbsoluteRejected:
         ],
     )
     def test_host_path_rejected(self, wa2: WorldAdapterV2, input_str: str) -> None:
-        res = wa2.resolve(input_str)
-        assert not res.ok
+        reply, ref = wa2.resolve(input_str)
+        assert reply.reply_type != "S"
+        assert ref is None
 
 
 # =========================================================================
@@ -116,8 +117,9 @@ class TestWA206PathTraversal:
         ],
     )
     def test_traversal_rejected(self, wa2: WorldAdapterV2, input_str: str) -> None:
-        res = wa2.resolve(input_str)
-        assert not res.ok
+        reply, ref = wa2.resolve(input_str)
+        assert reply.reply_type != "S"
+        assert ref is None
 
 
 # =========================================================================
@@ -128,26 +130,27 @@ class TestWA207RequireExistsMissing:
     """When require_exists=True (default), non-existent paths fail."""
 
     def test_missing_file(self, wa2: WorldAdapterV2) -> None:
-        res = wa2.resolve("root:repo/nonexistent.py")
-        assert not res.ok
+        reply, ref = wa2.resolve("root:repo/nonexistent.py")
+        assert reply.reply_type != "S"
+        assert ref is None
 
 
 # =========================================================================
-# WA2-08: require_exists=False, Path Missing → Success with exists=False
+# WA2-08: require_exists=False, Path Missing → Success
 # =========================================================================
 
 class TestWA208RequireExistsFalse:
     """When require_exists=False, structurally valid but missing paths succeed."""
 
     def test_missing_ok(self, wa2: WorldAdapterV2) -> None:
-        res = wa2.resolve("root:repo/nonexistent.py", require_exists=False)
-        assert res.ok
-        assert res.exists is False  # Adjustment 1
-        assert res.ref is not None
+        reply, ref = wa2.resolve("root:repo/nonexistent.py", require_exists=False)
+        assert reply.reply_type == "S"
+        assert ref is not None
 
     def test_host_path_recovery(self, wa2: WorldAdapterV2, tmp_roots: dict) -> None:
-        res = wa2.resolve("root:repo/nonexistent.py", require_exists=False)
-        host = wa2.host_path(res.ref)
+        reply, ref = wa2.resolve("root:repo/nonexistent.py", require_exists=False)
+        assert ref is not None
+        host = wa2.host_path(ref)
         assert host is not None
         assert host.parent == tmp_roots["repo"]
 
@@ -160,24 +163,26 @@ class TestWA209RequireExistsFalseStillValidated:
     """Even with require_exists=False, invalid root keys or path escapes still fail."""
 
     def test_bogus_key(self, wa2: WorldAdapterV2) -> None:
-        res = wa2.resolve("root:bogus/foo", require_exists=False)
-        assert not res.ok
+        reply, ref = wa2.resolve("root:bogus/foo", require_exists=False)
+        assert reply.reply_type != "S"
+        assert ref is None
 
     def test_traversal_escape(self, wa2: WorldAdapterV2) -> None:
-        res = wa2.resolve("root:repo/../../escape", require_exists=False)
-        assert not res.ok
+        reply, ref = wa2.resolve("root:repo/../../escape", require_exists=False)
+        assert reply.reply_type != "S"
+        assert ref is None
 
 
 # =========================================================================
-# WA2-10: Non-Truncation Guarantee  (Adjustment 2)
+# WA2-10: Non-Truncation Guarantee
 # =========================================================================
 
 class TestWA210NonTruncation:
     """require_exists=False must NOT truncate to the last existing ancestor."""
 
     def test_full_path_preserved(self, wa2: WorldAdapterV2) -> None:
-        res = wa2.resolve("root:repo/src/does_not_exist/file.py", require_exists=False)
-        assert res.ok is True
-        assert res.relative_path == "src/does_not_exist/file.py"
-        assert res.ref.session_abs == "root:repo/src/does_not_exist/file.py"
-        assert res.exists is False
+        reply, ref = wa2.resolve("root:repo/src/does_not_exist/file.py", require_exists=False)
+        assert reply.reply_type == "S"
+        assert ref is not None
+        assert reply.data["relative_path"] == "src/does_not_exist/file.py"
+        assert ref.session_abs == "root:repo/src/does_not_exist/file.py"

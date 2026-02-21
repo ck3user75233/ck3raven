@@ -36,12 +36,12 @@ class TestE2E01ResolveListRoundTrip:
 
     def test_full_round_trip(self, wa2: WorldAdapterV2) -> None:
         # 1. Resolve
-        res = wa2.resolve("root:repo/src")
-        assert res.ok
-        assert res.exists is True
+        reply, ref = wa2.resolve("root:repo/src", require_exists=True)
+        assert reply.reply_type == "S"
+        assert ref is not None
 
         # 2. Host path recovery
-        host = wa2.host_path(res.ref)
+        host = wa2.host_path(ref)
         assert host is not None
         assert isinstance(host, Path)
 

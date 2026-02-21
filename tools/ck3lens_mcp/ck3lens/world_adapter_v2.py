@@ -261,7 +261,7 @@ class WorldAdapterV2:
         visible, failed_conditions = check_visibility(
             mode, parsed.root_key, subdirectory,
             session=self._session,
-            mod_name=parsed.mod_name,
+            host_abs=parsed.host_abs,
         )
         if not visible:
             return self._reply_invalid(rb, "WA-RES-I-001",
