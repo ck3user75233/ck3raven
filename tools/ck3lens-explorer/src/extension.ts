@@ -34,7 +34,6 @@ import { registerMcpServerProvider, CK3LensMcpServerProvider, McpProviderRegistr
 import { DiagnosticsServer } from './ipc/diagnosticsServer';
 import { TokenWatcher } from './tokens/tokenWatcher';
 import { Ck3RavenParticipant } from './chat/participant';
-import { registerSearchCommand } from './chat/search';
 import { runHealthCheck, formatHealthForChat } from './chat/diagnose';
 import { registerDoctorCommands } from './setup/doctor';
 
@@ -138,9 +137,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         instance_id: instanceId
     });
 
-    // Journal system removed (February 2026)
-
-    
     // CRITICAL: Per-instance mode blanking
     // Must happen AFTER mcpServerProvider is created so we have the instance ID
     // Each VS Code window only blanks its own mode file, not affecting other windows
@@ -335,7 +331,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         console.log('[CK3RAVEN] A11c participant created');
         context.subscriptions.push(chatParticipant);
 
-        // Journal search command removed (February 2026)
+        logger.info('CK3 Raven Chat Participant registered');
 
         // Health check command
         context.subscriptions.push(
@@ -367,12 +363,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
     console.log('[CK3RAVEN] A20 after registerDoctorCommands');
     logger.info('Doctor commands registered');
-
-    // ========================================================================
-    // Journal Tree View — REMOVED (February 2026)
-    // ========================================================================
-    console.log('[CK3RAVEN] A21 Journal system removed');
-    console.log('[CK3RAVEN] A22 after Journal removal');
 
     logger.info('CK3 Lens Explorer activated successfully');
     console.log('[CK3RAVEN] A23 ACTIVATE COMPLETE - returning from activate()');
@@ -1088,76 +1078,6 @@ function registerFileWatchers(context: vscode.ExtensionContext, lintingProvider:
 }
 
 /**
- * Clean up database state on shutdown.
- * 
- * This runs a quick Python command to:
- * 1. Checkpoint WAL file (flush uncommitted writes)
- * 2. Clean stale daemon lock files if daemon is dead
- * 
- * Runs synchronously to ensure cleanup before VS Code exits.
- */
-function cleanupDatabaseState(logger: Logger): void {
-    const { spawnSync } = require('child_process');
-    
-    // Get Python path - NO BARE 'python' FALLBACK
-    const config = vscode.workspace.getConfiguration('ck3lens');
-    const ck3ravenPath = config.get<string>('ck3ravenPath') || '';
-    
-    // Priority: configured path > venv discovery
-    let pythonPath = config.get<string>('pythonPath');
-    if (!pythonPath || !fs.existsSync(pythonPath)) {
-        // Try venv discovery
-        const venvPaths = [
-            path.join(ck3ravenPath, '.venv', 'Scripts', 'python.exe'),  // Windows
-            path.join(ck3ravenPath, '.venv', 'bin', 'python'),          // Unix
-        ];
-        for (const venvPython of venvPaths) {
-            if (fs.existsSync(venvPython)) {
-                pythonPath = venvPython;
-                break;
-            }
-        }
-    }
-    
-    // Skip cleanup if no Python found (don't use Windows Store stub)
-    if (!pythonPath || !fs.existsSync(pythonPath)) {
-        logger.debug('Skipping DB cleanup: No Python interpreter found');
-        return;
-    }
-    
-    // Quick inline cleanup script
-    const cleanupScript = `
-import sys
-sys.path.insert(0, r'${ck3ravenPath}')
-try:
-    from builder.db_health import check_and_recover
-    result = check_and_recover()
-    if result['actions_taken']:
-        print('Cleanup actions:', result['actions_taken'])
-except Exception as e:
-    print('Cleanup error:', e)
-`;
-    
-    try {
-        logger.info('Running database cleanup on shutdown...');
-        const result = spawnSync(pythonPath, ['-c', cleanupScript], {
-            timeout: 5000,  // 5 second timeout
-            encoding: 'utf8',
-            windowsHide: true
-        });
-        
-        if (result.stdout) {
-            logger.info(`DB cleanup: ${result.stdout.trim()}`);
-        }
-        if (result.stderr) {
-            logger.debug(`DB cleanup stderr: ${result.stderr.trim()}`);
-        }
-    } catch (err) {
-        logger.debug('DB cleanup failed: ' + (err as Error).message);
-    }
-}
-
-/**
  * Extension deactivation
  * 
  * ZOMBIE BUG FIX: The ordering here is critical for clean MCP server shutdown.
@@ -1174,11 +1094,6 @@ export async function deactivate(): Promise<void> {
     // Log deactivation start with structured logger (CANONICAL per docs/CANONICAL_LOGS.md)
     structuredLogger?.info('ext.deactivate', 'Extension deactivating');
     logger?.info('CK3 Lens Explorer deactivating...');
-    
-    // Clean up database state (checkpoint WAL, clean stale locks)
-    if (logger) {
-        cleanupDatabaseState(logger);
-    }
     
     // Stop IPC diagnostics server
     diagnosticsServer?.dispose();

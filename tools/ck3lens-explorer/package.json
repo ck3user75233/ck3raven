@@ -137,13 +137,6 @@
           "type": "tree",
           "icon": "$(issues)",
           "contextualTitle": "CK3 Lens"
-        },
-        {
-          "id": "ck3lens.journalExplorer",
-          "name": "Chat Journals",
-          "type": "tree",
-          "icon": "$(notebook)",
-          "contextualTitle": "CK3 Lens"
         }
       ]
     },
@@ -233,40 +226,6 @@
         "command": "ck3lens.contracts.viewBugReports",
         "title": "CK3 Lens: View Bug Reports",
         "icon": "$(bug)"
-      },
-      {
-        "command": "ck3lens.journal.refresh",
-        "title": "CK3 Lens: Refresh Journal Explorer",
-        "icon": "$(refresh)"
-      },
-      {
-        "command": "ck3lens.journal.openFolder",
-        "title": "CK3 Lens: Open Journals Folder",
-        "icon": "$(folder-opened)"
-      },
-      {
-        "command": "ck3raven.journal.startWindow",
-        "title": "Journal: Start Window",
-        "category": "CK3 Lens",
-        "icon": "$(notebook)"
-      },
-      {
-        "command": "ck3raven.journal.closeWindow",
-        "title": "Journal: Close Window",
-        "category": "CK3 Lens",
-        "icon": "$(notebook)"
-      },
-      {
-        "command": "ck3raven.journal.status",
-        "title": "Journal: Show Status",
-        "category": "CK3 Lens",
-        "icon": "$(info)"
-      },
-      {
-        "command": "ck3raven.journal.toggle",
-        "title": "Journal: Toggle Window",
-        "category": "CK3 Lens",
-        "icon": "$(notebook)"
       },
       {
         "command": "ck3lens.contracts.refresh",
@@ -454,16 +413,6 @@
         "icon": "$(info)"
       },
       {
-        "command": "ck3raven.chat.openJournalFolder",
-        "title": "CK3 Raven: Open Journal Folder",
-        "icon": "$(folder)"
-      },
-      {
-        "command": "ck3raven.chat.searchJournal",
-        "title": "CK3 Raven: Search Journal",
-        "icon": "$(search)"
-      },
-      {
         "command": "ck3raven.chat.health",
         "title": "CK3 Raven: Health Check",
         "icon": "$(heart)"
@@ -549,16 +498,6 @@
         {
           "command": "ck3lens.contracts.fileBugReport",
           "when": "view == ck3lens.contractsView",
-          "group": "navigation@2"
-        },
-        {
-          "command": "ck3lens.journal.refresh",
-          "when": "view == ck3lens.journalExplorer",
-          "group": "navigation@1"
-        },
-        {
-          "command": "ck3lens.journal.openFolder",
-          "when": "view == ck3lens.journalExplorer",
           "group": "navigation@2"
         }
       ],
@@ -729,14 +668,7 @@
           "default": "ck3lens",
           "description": "Default mode when starting CK3 Lens"
         },
-        "ck3raven.chatJournal.knownChatRecorderExtensions": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "description": "Extension IDs whose embedded chat recorders can conflict with ck3raven journaling. If non-empty, a warning is shown."
-        }
+
       }
     },
     "keybindings": [

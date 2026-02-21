@@ -36,12 +36,43 @@ export class PythonBridge implements vscode.Disposable {
     }
 
     /**
+     * Resolve VS Code variables in config strings.
+     * VS Code only auto-resolves ${workspaceFolder} in tasks.json/launch.json,
+     * NOT in extension settings. We must resolve them manually.
+     */
+    private resolveConfigVars(value: string): string {
+        if (!value || !value.includes('${workspaceFolder')) {
+            return value;
+        }
+        const folders = vscode.workspace.workspaceFolders;
+        if (!folders || folders.length === 0) {
+            return value;
+        }
+
+        // ${workspaceFolder:name} — resolve to named workspace folder
+        value = value.replace(/\$\{workspaceFolder:([^}]+)\}/g, (_match, name: string) => {
+            const folder = folders.find(f => f.name === name);
+            return folder ? folder.uri.fsPath : _match; // leave unresolved if not found
+        });
+
+        // ${workspaceFolder} — resolve to first workspace folder
+        value = value.replace(/\$\{workspaceFolder\}/g, folders[0].uri.fsPath);
+
+        return value;
+    }
+
+    /**
      * Start the Python backend process
      */
     private async startProcess(): Promise<void> {
         const config = vscode.workspace.getConfiguration('ck3lens');
         let pythonPath = config.get<string>('pythonPath') || '';
         let ck3ravenPath = config.get<string>('ck3ravenPath') || '';
+        
+        // Resolve ${workspaceFolder} and ${workspaceFolder:name} variables
+        // VS Code only resolves these in tasks.json/launch.json, NOT in extension settings
+        pythonPath = this.resolveConfigVars(pythonPath);
+        ck3ravenPath = this.resolveConfigVars(ck3ravenPath);
         
         this.logger.info(`Config pythonPath: '${pythonPath}'`);
         this.logger.info(`Config ck3ravenPath: '${ck3ravenPath}'`);
