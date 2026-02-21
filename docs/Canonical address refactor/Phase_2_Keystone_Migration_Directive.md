@@ -1,8 +1,8 @@
 # Phase 2 — Keystone Tool Migration Directive (Authoritative)
 
-> **Issued:** February 17, 2026 — Nate  
-> **Status:** Active  
-> **Supersedes:** Nothing (extends Sprint 0 Canonical Addressing Refactor)  
+> **Issued:** February 17, 2026 — Nate
+> **Status:** Active
+> **Supersedes:** Nothing (extends Sprint 0 Canonical Addressing Refactor)
 > **Prerequisite:** Sprint 0 formally verified (92/92, mutation-tested, clean git, purity gate standalone pass)
 
 ---
@@ -62,6 +62,8 @@ And:
 
 Migration is tool-by-tool, clean cutover.
 
+**Note (2026-02-21):** `enforcement.py` (v1) coexists with `enforcement_v2.py` until all tools are migrated. `ck3_file` and `ck3_git` currently use v1. Do not remove v1 modules except as part of designated tool migration work.
+
 ---
 
 ## 3) Migration Scope for Each Tool (ck3_file, ck3_exec, chosen keystone)
@@ -75,7 +77,7 @@ For each tool migration, implement the following:
 
   * `root:<key>/<path>`
   * `mod:<name>/<path>`
-* Legacy inputs are accepted only if Sprint 0 normalization rules already accept them; all outputs must emit canonical form only.
+* Legacy inputs: `ROOT_REPO:/...` (colon-slash) form is accepted and normalized. Bare relative paths are **rejected** — WA2 requires an explicit namespace prefix.
 
 ### 3.2 VisibilityRef usage requirements
 
@@ -149,9 +151,11 @@ Extend purity gate rules to enforce:
 
 ---
 
-## 5) ck3_exec Special Rule (because it is a loophole vector)
+## 5) ck3_exec Special Rule
 
-ck3_exec is inherently dangerous. For the WA2 migration, enforce:
+> **Note (2026-02-21):** This section provides the general addressing requirement. The **ck3_exec Migration Policy** (same directory) supersedes and extends this with additional mandatory constraints: inline execution ban, script location restriction to `root:ck3raven_data/wip/`, command whitelist as enforcement condition predicate, and HMAC approval token binding.
+
+For the WA2 migration, enforce:
 
 * Script path (if any) must be a `VisibilityRef`-resolved path under visible roots.
 * If ck3_exec supports inline `-c` code:

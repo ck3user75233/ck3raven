@@ -1,7 +1,7 @@
 # V2 Enforcement Architecture — Design Brief
 
 > **Date:** February 18, 2026
-> **Status:** In Progress — capability_matrix_v2, enforcement_v2, WA v2 on disk, not yet tested
+> **Status:** Partially implemented — see §9 for current status
 > **Author:** Agent (directed by Nate)
 > **Scope:** capability_matrix_v2.py, enforcement_v2.py, world_adapter_v2.py, tool layer changes
 > **Supersedes:** PROPOSAL_WA_Visibility_Matrix_2026-02-13.md (partial), deleted enforcement_v2.py
@@ -15,7 +15,7 @@
 3. **`session.mods` is the authoritative mod registry.** WA consults `session.mods` directly at resolution time. No `mod_paths` dict, no alias maps, no parallel data structures.
 4. **WA walks visibility. EN walks mutations.** Never cross the streams. Reads are resolved by WA visibility alone. EN only sees mutations.
 5. **Mod visibility is structural.** `session.mods` IS the playset-scoped list. If a mod isn't in `session.mods`, WA can't resolve it.
-6. **`VisibilityResolution` is removed from public API.** WA v2 `resolve()` returns `tuple[Reply, Optional[VisibilityRef]]`. No intermediate dataclass.
+6. **`resolve()` returns `tuple[Reply, Optional[VisibilityRef]]`.** No intermediate `VisibilityResolution` dataclass.
 7. **Reply.data["resolved"] is the session-absolute path.** For infrastructure roots: `root:<key>/<rel_path>`. For mod-addressed input: `mod:Name/<rel_path>`. Output namespace matches input namespace.
 8. **Host paths never appear in Reply.** Reply is semantic. VisibilityRef is capability.
 9. **No OperationType enum.** Tool+command pairs are classified explicitly — reads vs mutation categories. The matrix knows what's what.
@@ -29,7 +29,7 @@
 Tool Handler (server.py)
     │
     ├─ WA v2: resolve(input) → (Reply, Optional[VisibilityRef])
-    │   ├─ Accepts: root category paths, mod:Name/path, bare relative
+    │   ├─ Accepts: root category paths, mod:Name/path
     │   ├─ Walks VISIBILITY_MATRIX for root category gating
     │   ├─ Consults session.mods for mod name resolution
     │   ├─ Mode read dynamically via get_agent_mode() — not baked at construction
@@ -60,42 +60,35 @@ Three modules, three responsibilities:
 
 ## 2) VISIBILITY_MATRIX
 
-Pure data. Keyed by `(mode, root_key)`.
+Pure data. Keyed by `(mode, root_key, subdirectory | None)`.
 
-### Current State (root-level only, binary)
+### Current State (implemented)
 
 ```python
-VISIBILITY_MATRIX: dict[tuple[str, str], bool] = {
-    ("ck3lens", "game"):           True,
-    ("ck3lens", "steam"):          True,
-    ("ck3lens", "user_docs"):      True,
-    ("ck3lens", "ck3raven_data"):  True,
-    ("ck3lens", "vscode"):         True,
-    ("ck3lens", "repo"):           True,
+VISIBILITY_MATRIX: dict[VisibilityKey, VisibilityRule] = {
+    # ck3lens mode — steam and user_docs/mod require path_in_session_mods
+    ("ck3lens", "game", None):              VisibilityRule(),
+    ("ck3lens", "steam", None):             VisibilityRule((path_in_session_mods(),)),
+    ("ck3lens", "user_docs", "mod"):        VisibilityRule((path_in_session_mods(),)),
+    ("ck3lens", "ck3raven_data", None):     VisibilityRule(),
+    ("ck3lens", "vscode", None):            VisibilityRule(),
+    ("ck3lens", "repo", None):              VisibilityRule(),
 
-    ("ck3raven-dev", "game"):           True,
-    ("ck3raven-dev", "steam"):          True,
-    ("ck3raven-dev", "user_docs"):      True,
-    ("ck3raven-dev", "ck3raven_data"):  True,
-    ("ck3raven-dev", "vscode"):         True,
-    ("ck3raven-dev", "repo"):           True,
+    # ck3raven-dev mode — all roots visible without conditions
+    ("ck3raven-dev", "game", None):             VisibilityRule(),
+    ("ck3raven-dev", "steam", None):            VisibilityRule(),
+    ("ck3raven-dev", "user_docs", None):        VisibilityRule(),
+    ("ck3raven-dev", "ck3raven_data", None):    VisibilityRule(),
+    ("ck3raven-dev", "vscode", None):           VisibilityRule(),
+    ("ck3raven-dev", "repo", None):             VisibilityRule(),
 }
 ```
 
-### OPEN DESIGN ISSUE: Subfolder Visibility Gating
+### Subfolder Visibility Gating — RESOLVED
 
-The current VISIBILITY_MATRIX is root-level only. This is **insufficient**.
+The VISIBILITY_MATRIX uses `(mode, root_key, subdirectory)` 3-tuple keying with condition predicates. `check_visibility()` does subdirectory-specific lookup first, then root-level fallback.
 
-**Problem:** Some subfolders within a visible root need conditional visibility:
-- `user_docs` is visible, but mod registry files at the root level should NOT be visible — only the mod folders underneath (listed in session.mods) should be visible.  
-- ck3lens should only see mod paths that are in `session.mods`, not arbitrary subdirectories of `user_docs`.
-
-**Required (from v1 matrix, not yet ported to v2):**
-- VISIBILITY_MATRIX needs `(mode, root_key, subdirectory)` keying or subfolder conditions
-- Condition predicates on visibility entries (e.g., `MOD_IN_SESSION` condition that checks `session.mods`)
-- This was already working in v1 capability matrix — must be carried forward
-
-**Status:** Not yet designed for v2. Next sprint item.
+Key case: ck3lens `steam` and `user_docs/mod` carry a `path_in_session_mods` condition — the resolved host path must fall within a `session.mods` entry. This ensures ck3lens only sees mods in the active playset.
 
 ### Mod Visibility
 
@@ -108,7 +101,7 @@ Mods are NOT in the visibility matrix. Mod visibility is structural:
 
 ## 3) COMMAND CLASSIFICATION
 
-Commands are organized as named `frozenset` constants. Each `OperationRule` in the matrix carries its command set directly — no separate classification function is needed.
+Commands are organized as named `frozenset` constants. Each `OperationRule` in the matrix carries its command set directly. Enforcement walks the matrix to find the matching rule — there is no separate `classify_command()` function.
 
 ```python
 # Read command sets (no conditions — always allowed if visible)
@@ -134,10 +127,11 @@ FILE_DELETE_COMMANDS: frozenset[tuple[str, str]] = frozenset({("ck3_file", "dele
 GIT_MUTATE_COMMANDS: frozenset[tuple[str, str]] = frozenset({
     ("ck3_git", "add"), ("ck3_git", "commit"), ("ck3_git", "push"), ("ck3_git", "pull"),
 })
-EXEC_COMMANDS: frozenset[tuple[str, str]] = frozenset({})  # ck3_exec special-cased by tool name
 ```
 
-Each `OperationRule` carries its command frozenset + conditions. `find_operation_rule()` scans the rules for a matching (tool, command). No separate `classify_command()` function.
+### ck3_exec special case
+
+`ck3_exec` does not have sub-commands — its `command` parameter IS the shell string. Since there is no finite set of `("ck3_exec", "...")` pairs, `find_operation_rule()` uses an identity check: if `tool == "ck3_exec"` and `rule.commands is EXEC_COMMANDS`, the rule matches. This is an implementation detail — the EXEC rule still carries conditions (e.g., `exec_signed`) that enforcement evaluates normally.
 
 **Why file_write and file_delete are separate command sets:** Some locations allow write but not delete (e.g., config, artifacts — writable but not deletable).
 
@@ -164,14 +158,13 @@ OPERATIONS_MATRIX: dict[OperationKey, tuple[OperationRule, ...]] = {
     # ck3lens — user_docs/mod: reads + writes (with contract)
     ("ck3lens", "user_docs", "mod"): (
         OperationRule(ALL_READ_COMMANDS),
-        OperationRule(FILE_WRITE_COMMANDS, (_HAS_CONTRACT,)),
+        OperationRule(FILE_WRITE_COMMANDS, (has_contract(),)),
     ),
-    # ck3raven-dev — repo: reads + writes (with contract)
     # ck3raven-dev — repo: reads + writes (with contract)
     ("ck3raven-dev", "repo", None): (
         OperationRule(ALL_READ_COMMANDS),
-        OperationRule(FILE_WRITE_COMMANDS, (_HAS_CONTRACT,)),
-        OperationRule(GIT_MUTATE_COMMANDS, (_HAS_CONTRACT,)),
+        OperationRule(FILE_WRITE_COMMANDS, (has_contract(),)),
+        OperationRule(GIT_MUTATE_COMMANDS, (has_contract(),)),
     ),
     # ...
 }
@@ -197,29 +190,48 @@ def enforce(
 ) -> Reply:
     # 1. Look up (mode, root_key, subdirectory) in OPERATIONS_MATRIX
     # 2. Scan rules for one whose commands contain (tool, command)
-    # 3. No matching rule → rb.denied("EN-GATE-D-001")
-    # 4. Rule has no conditions (read) → rb.success("EN-READ-S-001")
-    # 5. Conditions check → rb.denied(denial_code) or rb.success("EN-WRITE-S-001")
+    # 3. No matching rule → rb.denied(denial_code)
+    # 4. Rule has no conditions (read) → rb.success(success_code)
+    # 5. Conditions check → rb.denied(denial_code) or rb.success(success_code)
 ```
 
 No `OperationType`. No `tool_cluster`. No `classify_command()`. The tool handler passes its real `tool` name and `command`. Enforcement scans rules and decides.
+
+### Outstanding: Denial code refactoring
+
+**Current state:** enforcement_v2.py uses `EN-GATE-D-001` uniformly for all denials, with varying detail strings in the data dict.
+
+**Required (post ck3_exec migration):** Denial codes should be area-specific to reflect what the user was trying to do (e.g., `EN-EXEC-D-001` for exec denials, `EN-WRITE-D-002` for write denials). Branching should be on the reply code, and messages should live in the ReplyBuilder registry. This aligns with the canonical reply system where code-based branching, not data-dict inspection, is the standard pattern.
 
 ---
 
 ## 6) Condition Predicates
 
-Standalone callables. Each has a name, a check function, and a denial code.
+Condition predicates are pure True/False checks. They are standalone factory functions that return `Condition` instances. Enforcement evaluates them — conditions do NOT deny, enforcement does.
 
 ```python
 @dataclass(frozen=True)
 class Condition:
     name: str
     check: Callable[..., bool]
-    denial: str
-
-VALID_CONTRACT = Condition("contract", lambda has_contract=False, **_: has_contract, "EN-WRITE-D-002")
-EXEC_SIGNED = Condition("exec_signed", lambda exec_signature_valid=False, **_: exec_signature_valid, "EN-EXEC-D-001")
 ```
+
+The `Condition` dataclass has only `name` and `check`. There is no `denial` field — conditions do not own denial codes. Enforcement makes the deny decision and produces the appropriate denial code.
+
+### Implemented condition predicates
+
+| Factory | Purpose | Context keys |
+|---------|---------|-------------|
+| `has_contract()` | True if `get_active_contract()` returns a contract | `has_contract` (bool) |
+| `exec_signed()` | True if active contract has valid script signature for this script. Internally calls `validate_script_signature()` for HMAC verification. | `script_host_path` (str), `content_sha256` (str) |
+| `path_in_session_mods()` | True if resolved host path falls within a `session.mods` entry | `session` (object), `host_abs` (Path) |
+| `mod_in_session()` | True if mod name is in `session.mods` | `session` (object), `mod_name` (str) |
+
+### Planned condition predicates
+
+| Factory | Purpose | Context keys |
+|---------|---------|-------------|
+| `command_whitelisted()` | True if ck3_exec command matches a pattern in the protected command whitelist file | `command` (str) |
 
 Conditions receive `**context` from `enforce()`. Tool handlers build the context dict.
 
@@ -232,10 +244,10 @@ Conditions receive `**context` from `enforce()`. Tool handlers build the context
 WA v2 does NOT store mode at construction. `resolve()` calls `get_agent_mode()` from `agent_mode.py` dynamically on every invocation.
 
 - Constructor: `__init__(*, session, roots)` — no mode parameter
-- Factory: `create(*, session)` — no mode parameter  
+- Factory: `create(*, session)` — no mode parameter
 - `mode` property: `return _get_mode() or "uninitiated"`
 - `_get_mode()`: module-level function that imports and calls `get_agent_mode()`
-- If mode is None → returns `WA-MODE-I-001` ("Agent mode not initialized")
+- If mode is None → returns `WA-SYS-I-001` ("Agent mode not initialized")
 - `_reset_world_cache()` does NOT clear v2 cache on mode change (v2 is mode-agnostic)
 
 ### resolve() Return Contract
@@ -256,8 +268,9 @@ Failure:
 
 ### Input Flexibility, Output Determinism
 
-Input forms: `root:<key>/<path>`, `mod:Name/<path>`, legacy `ROOT_REPO:/<path>`, bare relative.
+Input forms: `root:<key>/<path>`, `mod:Name/<path>`, legacy `ROOT_REPO:/<path>`.
 Output: Reply.data["resolved"] preserves input namespace.
+Rejected: bare relative paths, host-absolute paths, `root:ROOT_REPO/...`.
 
 ---
 
@@ -266,7 +279,8 @@ Output: Reply.data["resolved"] preserves input namespace.
 Tool handlers pass real tool+command to enforce:
 
 ```python
-# In ck3_exec handler (server.py) — IMPLEMENTED
+# In ck3_exec handler (server.py) — PARTIALLY IMPLEMENTED
+# Uses v2 enforce() but inline ban, script restriction, HMAC not yet enforced
 result = enforce(
     rb, mode=wa2.mode,
     tool="ck3_exec", command=command,
@@ -282,33 +296,28 @@ result = enforce(
 
 ## 9) Implementation Status
 
-### On Disk (written, not yet tested — stale module cache blocks testing)
+### On Disk (current as of 2026-02-21)
 
 | File | Status | Notes |
 |------|--------|-------|
-| `capability_matrix_v2.py` | **REWRITTEN** | OperationRule + OPERATIONS_MATRIX architecture. No OperationType, no Capability, no _RO, no classify_command |
-| `enforcement_v2.py` | **REWRITTEN** | Single enforce() with find_operation_rule() scan. No classify_command |
-| `world_adapter_v2.py` | **REWRITTEN** | Mode-agnostic: reads mode dynamically. No mode param in constructor/factory |
-| `server.py _ck3_exec_internal` | **PARTIALLY UPDATED** | Uses new enforce() signature, but ck3_exec is NOT yet functional end-to-end (inline ban, script location restriction, HMAC not implemented) |
-| `server.py _get_world_v2` | **UPDATED** | No mode param in create() call |
-| `server.py _reset_world_cache` | **UPDATED** | No longer clears v2 cache on mode change |
+| `capability_matrix_v2.py` | **DONE** | OperationRule + OPERATIONS_MATRIX + VISIBILITY_MATRIX with subfolder gating + conditions |
+| `enforcement_v2.py` | **DONE** | Single enforce() with find_operation_rule() scan. Denial codes need area-specific refactor. |
+| `world_adapter_v2.py` | **DONE** | Mode-agnostic: reads mode dynamically. No mode param in constructor/factory |
+| `server.py _ck3_exec_internal` | **PARTIALLY MIGRATED** | Uses WA2 + enforce_v2, but inline ban, script restriction, command whitelist, HMAC not implemented |
+| `server.py _get_world_v2` | **DONE** | No mode param in create() call |
+| `server.py _reset_world_cache` | **DONE** | No longer clears v2 cache on mode change |
 | `dir_ops.py` | **CLEAN** | Imports VALID_ROOT_KEYS (still valid), no OperationType import |
 | `unified_tools.py (ck3_file)` | **NOT MIGRATED** | Still uses v1 enforcement.py |
 | `unified_tools.py (ck3_git)` | **NOT MIGRATED** | Still uses v1 enforcement.py |
-
-### Must Be Done Before Testing
-
-1. **Reload VS Code window** — MCP server Python process has stale modules in `sys.modules`. Disk files are correct but the running process loaded old modules at startup. Only fix: Ctrl+Shift+P → "Developer: Reload Window"
-2. **Re-initialize mode** — `ck3_get_mode_instructions(mode="ck3raven-dev")` with HAT token after reload
+| Sprint 0 tests | **DONE** | 92/92 passing, committed (4ac8493) |
 
 ### Next Steps (Priority Order)
 
-1. **VISIBILITY_MATRIX subfolder gating** — Port v1 per-subfolder visibility with conditions to v2. Key case: ck3lens should only see mods in session.mods within user_docs, not arbitrary subdirectories.
-2. **Test v2 stack** — Reload window, re-init mode, test ck3_dir (pwd, list root, list mod), test ck3_exec enforcement.
+1. **ck3_exec completion** — Implement inline ban, script location restriction, command whitelist condition predicate, HMAC signing flow.
+2. **Denial code refactoring** — Area-specific codes (EN-EXEC-D-001, EN-WRITE-D-002, etc.) with ReplyBuilder registry messages.
 3. **Migrate ck3_file to v2** — unified_tools.py still uses v1 enforcement.py.
 4. **Migrate ck3_git to v2** — unified_tools.py still uses v1 enforcement.py.
 5. **Remove v1 modules** — After all tools migrated.
-6. **Commit** — All v2 changes as single coherent commit.
 
 ---
 
@@ -323,15 +332,20 @@ result = enforce(
 - **No OperationType enum** — `find_operation_rule()` scans OPERATIONS_MATRIX rules directly.
 - **No _RO entries** — reads and mutations both use `OperationRule` in the same OPERATIONS_MATRIX; reads have no conditions.
 - **No abstract tool clusters** — real tool+command pairs are the classification key.
+- **No `classify_command()` function** — enforcement walks the matrix to find matching rules. There has never been a separate classification function.
 
 ---
 
-## 11) Revision History
+## 11) Design Decisions from Implementation
 
-| Date | Change |
-|------|--------|
-| 2026-02-18 (initial) | Design brief created with OperationType + Capability + OPERATIONS_MATRIX |
-| 2026-02-18 (rev 1) | WA v2 made mode-agnostic (dynamic mode reads) |
-| 2026-02-18 (rev 2) | **Major rewrite:** Removed OperationType enum, Capability class, _RO. Introduced OperationRule + OPERATIONS_MATRIX with command frozensets. enforcement_v2 uses find_operation_rule() instead of classify_command. |
-| 2026-02-18 (rev 2, addendum) | Identified open design issue: VISIBILITY_MATRIX needs subfolder gating with conditions (from v1, not yet ported) |
-| 2026-02-20 (rev 3) | **Doc sync:** Updated all references from MutationRule/MUTATIONS_MATRIX/MutationKey to OperationRule/OPERATIONS_MATRIX/OperationKey to match actual code. Updated ck3_exec status to NOT FUNCTIONAL. Removed classify_command references. |
+| Date | Decision | Rationale |
+|------|----------|-----------|
+| 2026-02-18 | Design brief created with OperationType + Capability + OPERATIONS_MATRIX | Initial design |
+| 2026-02-18 | WA v2 made mode-agnostic (dynamic mode reads) | Mode changes shouldn't require WA recreation |
+| 2026-02-18 | Removed OperationType enum, Capability class, _RO entries. Introduced OperationRule with command frozensets. | Simpler: enforcement walks data instead of classifying commands separately |
+| 2026-02-18 | VISIBILITY_MATRIX uses 3-tuple keying with subfolder conditions | Ported from v1; enables per-subdirectory visibility gating |
+| 2026-02-20 | Doc sync: MutationRule/MUTATIONS_MATRIX → OperationRule/OPERATIONS_MATRIX | Naming alignment |
+| 2026-02-21 | `exec_signed` condition predicate calls `validate_script_signature()` internally for HMAC verification | Single public API surface (the condition), crypto validation is internal |
+| 2026-02-21 | `ck3_exec` matching uses identity check on EXEC_COMMANDS frozenset sentinel | Shell string as command param means no finite (tool, command) pairs — identity sentinel solves this |
+| 2026-02-21 | All failed conditions reported by name in denial Reply data | Provides diagnostics without per-condition denial codes — denial codes are enforcement's responsibility |
+| 2026-02-21 | `Condition` dataclass has `name` + `check` only, no `denial` field | Conditions are pure predicates; enforcement owns denial decisions |
