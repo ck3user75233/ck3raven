@@ -495,6 +495,56 @@ def _verify_contract_signature(contract: ContractV1) -> bool:
     return sigil_verify(payload, contract.session_signature)
 
 
+def sign_script_for_contract(
+    contract: ContractV1,
+    script_path: str,
+    content_sha256: str,
+) -> dict:
+    """
+    Sign a script for execution under a contract.
+
+    Produces a script_signature dict that can be stored on the contract
+    and later verified by validate_script_signature(). The signature
+    covers (contract_id, script_path, content_sha256) via Sigil HMAC,
+    so any change to the script content invalidates it.
+
+    This is the ONLY way to produce a valid script_signature.
+
+    Args:
+        contract: The active contract to bind the signature to.
+        script_path: Absolute host path to the script file.
+        content_sha256: SHA-256 hash of the script's current content.
+
+    Returns:
+        Dict with keys: script_path, content_sha256, signature, signed_at.
+
+    Raises:
+        RuntimeError: If Sigil is not available.
+        ValueError: If contract is not active.
+    """
+    from tools.compliance.sigil import sigil_sign, sigil_available
+
+    if not sigil_available():
+        raise RuntimeError("Sigil not available — cannot sign script")
+
+    if not contract.is_active():
+        raise ValueError(f"Contract {contract.contract_id} is not active (status={contract.status})")
+
+    payload = f"script:{contract.contract_id}|{script_path}|{content_sha256}"
+    signature = sigil_sign(payload)
+
+    sig_dict = {
+        "script_path": script_path,
+        "content_sha256": content_sha256,
+        "signature": signature,
+        "signed_at": datetime.now().isoformat(),
+    }
+
+    # Store on contract
+    contract.script_signature = sig_dict
+    return sig_dict
+
+
 def validate_script_signature(contract: ContractV1, script_path: str, content_sha256: str) -> bool:
     """
     Validate the script_signature on a contract.
@@ -502,7 +552,7 @@ def validate_script_signature(contract: ContractV1, script_path: str, content_sh
     Pure predicate — checks that the script_signature field has a valid
     Sigil HMAC for the given script_path and content_sha256.
 
-    Called by enforcement's exec_signed condition. No side effects.
+    Called by enforcement's exec_gate condition. No side effects.
 
     Args:
         contract: The contract to check.
