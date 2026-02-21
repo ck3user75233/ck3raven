@@ -71,7 +71,7 @@ def _make_contract(
         root_category="ROOT_REPO",
         intent="test script signing",
         operations=["EXEC_COMMANDS"],
-        targets=[ContractTarget(path="wip:/test.py", description="test script")],
+        targets=[ContractTarget(target_type="file", path="wip:/test.py", description="test script")],
         work_declaration=WorkDeclaration(
             work_summary="Execute test script",
             work_plan=["Run test.py"],
