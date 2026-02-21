@@ -21,6 +21,13 @@
       "sha256": "88981c1a5024a961da3e83d632fa7411c6ef0e8782cdc402003fb270de9ed0ea",
       "added_at": "2026-02-10T13:05:00",
       "reason": "ck3raven-dev agent instructions"
+    },
+    {
+      "path": "policy/command_whitelist.json",
+      "type": "file",
+      "sha256": "f68ec5df0c48cbe3fd9b97fef1c804fe9e640e9d2ca59424f7c34e12ba3321e1",
+      "added_at": "2026-02-21T12:54:58.722352",
+      "reason": "ck3_exec command whitelist - controls which commands bypass script signing"
     }
   ]
 }
