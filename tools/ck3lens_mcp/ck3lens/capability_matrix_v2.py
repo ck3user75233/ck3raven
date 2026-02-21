@@ -11,7 +11,7 @@ Two matrices, both with conditions:
    Each rule carries the exact (tool, command) pairs it governs, plus conditions.
    No entry = operation denied. Enforcement finds the matching rule and checks conditions.
    Reads are rules with no conditions (always allowed if visible).
-   Mutations carry conditions (e.g. has_contract, exec_signed).
+   Mutations carry conditions (e.g. has_contract, exec_gate).
 
 Plus:
 
@@ -138,40 +138,130 @@ def path_in_session_mods() -> Condition:
     return Condition(name="path_in_session_mods", check=_check)
 
 
-def exec_signed() -> Condition:
-    """True if the active contract has a valid script signature for this script.
+def exec_gate() -> Condition:
+    """Global predicate for ALL ck3_exec calls. Single decision tree:
 
-    Inline cryptographic validation:
-    1. Loads the active contract (get_active_contract)
-    2. Checks contract.script_signature exists
-    3. Validates script_path, content_sha256, and HMAC signature match
+    1. Whitelisted command? → True (fast path, no contract/signature needed)
+    2. Script execution detected?
+       a. Script in wip (subdirectory == "wip")? → no → False
+       b. Open contract exists? → no → False
+       c. Script signature valid (HMAC via validate_script_signature)? → no → False
+       d. All pass → True
+    3. Neither whitelisted nor valid script → False
 
     NOT a permission oracle — this is a predicate called BY enforcement
     as part of walking the capability matrix. Enforcement makes the
     allow/deny decision based on this predicate's True/False return.
 
     Context keys:
-        script_host_path: str | None — absolute host path to the script
+        exec_command: str — the shell command string
+        exec_subdirectory: str | None — subdirectory from WA2 resolution
+        has_contract: bool — whether an active contract exists
+        script_host_path: str | None — absolute host path to detected script
         content_sha256: str | None — current SHA-256 of script content
     """
     def _check(
         *,
+        exec_command: str = "",
+        exec_subdirectory: str | None = None,
+        has_contract: bool = False,
         script_host_path: str | None = None,
         content_sha256: str | None = None,
         **_: object,
     ) -> bool:
-        if not script_host_path or not content_sha256:
+        if not exec_command:
             return False
 
-        from ck3lens.policy.contract_v1 import get_active_contract, validate_script_signature
+        # --- Branch 1: Whitelisted commands (fast path) ---
+        if _is_command_whitelisted(exec_command):
+            return True
 
-        contract = get_active_contract()
-        if contract is None:
-            return False
+        # --- Branch 2: Script execution ---
+        if script_host_path and content_sha256:
+            # 2a. Script must be in wip
+            if exec_subdirectory != "wip":
+                return False
 
-        return validate_script_signature(contract, script_host_path, content_sha256)
+            # 2b. Open contract required
+            if not has_contract:
+                return False
 
-    return Condition(name="exec_signed", check=_check)
+            # 2c. Script signature valid (HMAC)
+            from ck3lens.policy.contract_v1 import get_active_contract, validate_script_signature
+
+            contract = get_active_contract()
+            if contract is None:
+                return False
+
+            return validate_script_signature(contract, script_host_path, content_sha256)
+
+        # --- Branch 3: Neither whitelisted nor valid script ---
+        return False
+
+    return Condition(name="exec_gate", check=_check)
+
+
+# =============================================================================
+# COMMAND WHITELIST — HAT-protected file at policy/command_whitelist.json
+#
+# Loaded once per process, cached. File is HAT-protected so only a human
+# can add entries. If file doesn't exist, no commands are whitelisted
+# (all exec requires script signing).
+# =============================================================================
+
+_WHITELIST_CACHE: list[str] | None = None
+
+
+def _load_command_whitelist() -> list[str]:
+    """Load command whitelist from policy/command_whitelist.json.
+
+    Returns list of allowed command patterns. Cached after first load.
+    If file doesn't exist, returns empty list (no whitelisted commands).
+    """
+    global _WHITELIST_CACHE
+    if _WHITELIST_CACHE is not None:
+        return _WHITELIST_CACHE
+
+    import json
+
+    # Find repo root (same approach as protected_files.py)
+    current = Path(__file__).resolve()
+    repo_root = None
+    for parent in [current] + list(current.parents):
+        if (parent / ".git").exists():
+            repo_root = parent
+            break
+    if repo_root is None:
+        # Fallback: ck3lens/ is under tools/ck3lens_mcp/ck3lens/
+        repo_root = current.parent.parent.parent.parent
+
+    whitelist_path = repo_root / "policy" / "command_whitelist.json"
+    if not whitelist_path.exists():
+        _WHITELIST_CACHE = []
+        return _WHITELIST_CACHE
+
+    try:
+        data = json.loads(whitelist_path.read_text(encoding="utf-8"))
+        _WHITELIST_CACHE = data.get("commands", [])
+    except (json.JSONDecodeError, OSError):
+        _WHITELIST_CACHE = []
+
+    return _WHITELIST_CACHE
+
+
+def _is_command_whitelisted(command: str) -> bool:
+    """Check if a shell command matches any whitelisted pattern.
+
+    Whitelist entries are exact prefix matches against the command string.
+    Example whitelist entry: "git status" matches "git status" and
+    "git status --short" but not "git statusx".
+    """
+    whitelist = _load_command_whitelist()
+    cmd_stripped = command.strip()
+    for pattern in whitelist:
+        if cmd_stripped == pattern or cmd_stripped.startswith(pattern + " "):
+            return True
+    return False
 
 
 # =============================================================================
@@ -196,7 +286,7 @@ class OperationRule:
     then checks conditions. Data only.
 
     Reads: rules with no conditions (always allowed if visible).
-    Mutations: rules with conditions (e.g. has_contract, exec_signed).
+    Mutations: rules with conditions (e.g. has_contract, exec_gate).
     """
     commands: frozenset[tuple[str, str]]
     conditions: tuple[Condition, ...] = ()
@@ -380,7 +470,7 @@ EXEC_COMMANDS: frozenset[tuple[str, str]] = frozenset({
 
 # Shared condition instances (created once from factories)
 _HAS_CONTRACT = has_contract()
-_EXEC_SIGNED = exec_signed()
+_EXEC_GATE = exec_gate()
 
 # Shared read rule — no conditions, always allowed if visible
 _READS = OperationRule(ALL_READ_COMMANDS)
@@ -424,7 +514,7 @@ OPERATIONS_MATRIX: dict[OperationKey, tuple[OperationRule, ...]] = {
     ("ck3lens", "ck3raven_data", "wip"): (
         _READS,
         _R(FILE_ALL_COMMANDS),          # no contract needed
-        _R(EXEC_COMMANDS, (_EXEC_SIGNED,)),
+        _R(EXEC_COMMANDS, (_EXEC_GATE,)),
     ),
 
     # ck3raven_data / playsets: reads + writes with contract
@@ -485,7 +575,7 @@ OPERATIONS_MATRIX: dict[OperationKey, tuple[OperationRule, ...]] = {
     ("ck3raven-dev", "ck3raven_data", "wip"): (
         _READS,
         _R(FILE_ALL_COMMANDS),
-        _R(EXEC_COMMANDS, (_EXEC_SIGNED,)),
+        _R(EXEC_COMMANDS, (_EXEC_GATE,)),
     ),
 
     # ck3raven_data per-subdirectory: full access with contract

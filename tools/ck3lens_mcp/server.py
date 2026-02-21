@@ -4085,8 +4085,8 @@ def _ck3_exec_internal(
     # ======================================================================
     # Data gathering (NOT a policy decision).
     # Detect script, hash content. Passed to enforce() as context kwargs.
-    # The exec_signed condition loads the active contract and validates
-    # the script signature.
+    # The exec_gate condition handles the full decision tree:
+    # whitelisted commands, script wip check, contract, and HMAC validation.
     # ======================================================================
     content_sha256 = None
 
@@ -4115,6 +4115,9 @@ def _ck3_exec_internal(
         command=command,
         root_key=root_key,
         subdirectory=subdirectory,
+        # Context for exec_gate condition predicate
+        exec_command=command,
+        exec_subdirectory=subdirectory,
         has_contract=has_contract,
         script_host_path=str(script_host_path) if script_host_path else None,
         content_sha256=content_sha256,
